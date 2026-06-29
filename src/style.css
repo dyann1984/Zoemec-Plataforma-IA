@@ -578,6 +578,8 @@ svg.ic{display:block;flex:none}
    ==================================================================== */
 .hero-logo.light img{background:transparent;border-radius:0;padding:0;height:74px;filter:none;opacity:1}
 .auth-form-side .auth-card button:not(.google):not(.back){background:linear-gradient(120deg,var(--teal),var(--petrol))}
+.auth-warning{margin-top:12px;border:1px solid #D9C7EA;background:#F7F1FC;color:var(--petrol);border-radius:12px;padding:10px 12px;font-size:.82rem;line-height:1.35}
+.auth-warning b{color:var(--ink)}
 
 /* ====================================================================
    PANEL "GENERAR CON IA" (pegar concepto / importar Excel)
@@ -603,6 +605,8 @@ svg.ic{display:block;flex:none}
 .apu-detect b{display:block;color:var(--ink);font-size:.82rem;line-height:1.25}
 .ai-decisions{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 14px}
 .ai-decisions span{font-size:.76rem;color:var(--petrol);background:#fff;border:1px solid var(--line);border-radius:20px;padding:6px 10px}
+.trial-banner{display:flex;align-items:center;gap:8px;background:linear-gradient(135deg,#FFF8E7,#F7F1FC);border:1px solid #D6B05A;border-left:4px solid var(--gold);border-radius:14px;padding:12px 16px;margin:0 0 16px;color:var(--ink);box-shadow:var(--shadow-sm)}
+.trial-banner b{color:var(--petrol)}
 
 /* ====================================================================
    ASISTENTE ZOEMIC
@@ -678,6 +682,11 @@ svg.ic{display:block;flex:none}
 .lib-trace{display:grid;grid-template-columns:1fr auto;gap:8px;border-top:1px solid var(--line);padding-top:12px}
 .lib-trace span{color:var(--muted);font-size:.78rem}
 .lib-trace b{font-family:var(--mono);font-size:.8rem;color:var(--ink)}
+.locked-panel{display:flex;align-items:center;gap:18px;margin-bottom:16px;background:linear-gradient(135deg,#fff,#F7F1FC);border-top:3px solid var(--teal)}
+.locked-panel>svg{color:var(--teal);flex:none}
+.locked-panel h2{margin:0 0 6px;color:var(--ink)}
+.locked-panel p{color:var(--muted);max-width:78ch;line-height:1.45}
+.locked-panel button{margin-top:8px}
 
 .community-layout{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px;align-items:start}
 .forum-new.pro{border-top:3px solid var(--teal)}

@@ -72,11 +72,41 @@ function useLocalState(key, fallback){
   const save = (next) => { const v = typeof next === 'function' ? next(value) : next; setValue(v); localStorage.setItem(key, JSON.stringify(v)); };
   return [value, save];
 }
+function getDeviceId(){
+  let id = localStorage.getItem('zoemec-device-id');
+  if(!id){
+    id = 'DEV-' + uid() + '-' + Date.now().toString(36).toUpperCase();
+    localStorage.setItem('zoemec-device-id', id);
+  }
+  return id;
+}
+function readLocal(key, fallback){
+  try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
+}
+function writeLocal(key, value){
+  localStorage.setItem(key, JSON.stringify(value));
+}
+function hasValidSession(user){
+  return Boolean(user?.email && user?.deviceId && user?.plan);
+}
+const PLAN_LIMITS = {
+  Gratis:{ apus:1, library:false, ai:false, exports:false, label:'Gratis - 1 APU' },
+  Inicial:{ apus:10, library:'limitada', ai:false, exports:true, label:'Inicial' },
+  Profesional:{ apus:999, library:true, ai:true, exports:true, label:'Profesional' },
+  Empresa:{ apus:9999, library:true, ai:true, exports:true, label:'Empresa' }
+};
+function canUse(user, feature, used=0){
+  const plan = PLAN_LIMITS[user?.plan || 'Gratis'] || PLAN_LIMITS.Gratis;
+  if(feature === 'apu') return used < plan.apus;
+  return Boolean(plan[feature]);
+}
 
 function App(){
-  const [screen, setScreen] = useState('landing');
+  const [screen, setScreen] = useState(()=>hasValidSession(readLocal('zoemec-user', null)) ? 'app' : 'landing');
   const [module, setModule] = useState('inicio');
   const [user, setUser] = useLocalState('zoemec-user', null);
+  const [accounts, setAccounts] = useLocalState('zoemec-accounts', []);
+  const [usage, setUsage] = useLocalState('zoemec-usage', {});
   const [company, setCompany] = useLocalState('zoemec-company', defaultCompany);
   const [apus, setApus] = useLocalState('zoemec-apus', []);
   const [clients, setClients] = useLocalState('zoemec-clients', sampleClients);
@@ -85,24 +115,51 @@ function App(){
   const [catalog, setCatalog] = useLocalState('zoemec-catalogo', []);
   const companyView = company?.logo === '/logo.png' ? {...company, logo:'/logo.png?v=zoemec-2026'} : company;
 
-  const login = (name='Usuario ZOEMEC', email='') => {
-    const displayName = (name || email.split('@')[0] || 'Usuario ZOEMEC').trim();
-    setUser({ name: displayName, email, plan:'Profesional', initials: displayName.split(' ').map(x=>x[0]).slice(0,2).join('').toUpperCase() });
+  const login = (name='Usuario ZOEMEC', email='', password='', mode='login') => {
+    const cleanEmail = email.trim().toLowerCase();
+    if(!cleanEmail || !password || password.length < 6){
+      alert('Captura un correo valido y una contrasena de minimo 6 caracteres.');
+      return false;
+    }
+    const deviceId = getDeviceId();
+    const existing = accounts.find(a=>a.email===cleanEmail);
+    if(mode === 'register'){
+      if(existing){ alert('Ese correo ya esta registrado. Inicia sesion.'); return false; }
+      if(accounts.some(a=>a.deviceId===deviceId && a.plan==='Gratis')){
+        alert('Este dispositivo ya uso la cuenta gratis. Para evitar cuentas duplicadas, solicita un plan o usa tu cuenta existente.');
+        return false;
+      }
+      const displayName = (name || cleanEmail.split('@')[0] || 'Usuario ZOEMEC').trim();
+      const account = { name:displayName, email:cleanEmail, password, plan:'Gratis', deviceId, createdAt:new Date().toISOString(), verified:false };
+      setAccounts([account, ...accounts]);
+      setUsage({...usage, [cleanEmail]:{apusCreated:0, deviceId}});
+      setUser({ name:displayName, email:cleanEmail, plan:'Gratis', initials:displayName.split(' ').map(x=>x[0]).slice(0,2).join('').toUpperCase(), deviceId });
+      setScreen('app'); setModule('apu');
+      return true;
+    }
+    if(!existing || existing.password !== password){
+      alert('Correo o contrasena incorrectos.');
+      return false;
+    }
+    const displayName = existing.name || cleanEmail.split('@')[0] || 'Usuario ZOEMEC';
+    setUser({ name:displayName, email:cleanEmail, plan:existing.plan || 'Gratis', initials:displayName.split(' ').map(x=>x[0]).slice(0,2).join('').toUpperCase(), deviceId });
     setScreen('app');
     setModule('inicio');
+    return true;
   };
   const logout = () => { setUser(null); setScreen('landing'); };
 
   if(screen === 'landing') return <Landing setScreen={setScreen} login={login} company={companyView} />;
   if(screen === 'login') return <Auth mode="login" setScreen={setScreen} login={login} company={companyView} />;
   if(screen === 'register') return <Auth mode="register" setScreen={setScreen} login={login} company={companyView} />;
-  return <Shell user={user || {name:'Diany', initials:'DI', plan:'Profesional'}} logout={logout} module={module} setModule={setModule} company={companyView}>
+  if(!hasValidSession(user)) return <Landing setScreen={setScreen} login={login} company={companyView} />;
+  return <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView}>
     {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} />}
-    {module === 'apu' && <APU company={companyView} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} />}
+    {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} />}
     {module === 'presupuestos' && <Budgets company={companyView} budgets={budgets} setBudgets={setBudgets} />}
     {module === 'proyectos' && <Projects projects={projects} setProjects={setProjects} />}
     {module === 'clientes' && <Clients clients={clients} setClients={setClients} />}
-    {module === 'biblioteca' && <Library />}
+    {module === 'biblioteca' && <Library user={user} />}
     {module === 'tecnico' && <TechnicalCenter />}
     {module === 'oficina' && <Office company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} />}
     {module === 'comunidad' && <Community />}
@@ -650,7 +707,7 @@ function Landing({setScreen, login, company}){
         <span className="eyebrow">Precios unitarios · APU · Presupuestos · Ingeniería</span>
         <h1>La plataforma inteligente para arquitectos, ingenieros y constructoras.</h1>
         <p>Genera APUs con IA, usa tu propio Excel, agrega tu logo, crea presupuestos profesionales, cuantificaciones, cálculos técnicos y reportes desde un solo lugar.</p>
-        <div className="hero-actions"><button onClick={()=>setScreen('register')}>Crear cuenta gratis</button><button className="secondary" onClick={()=>login('Diany')}>Entrar al sistema</button></div>
+        <div className="hero-actions"><button onClick={()=>setScreen('register')}>Crear cuenta gratis</button><button className="secondary" onClick={()=>setScreen('login')}>Entrar al sistema</button></div>
       </div>
       <div className="hero-apu-card">
         <span>Cédula · Análisis de P.U.</span>
@@ -679,7 +736,7 @@ function Auth({mode,setScreen,login,company}){
       alert('Captura correo y contraseña para continuar.');
       return;
     }
-    login(name, email.trim());
+    login(name, email.trim(), password, mode);
   };
   return <div className="auth-split">
     <div className="auth-brand">
@@ -697,16 +754,17 @@ function Auth({mode,setScreen,login,company}){
     </div>
     <div className="auth-form-side">
       <div className="auth-card">
-        <h1>{mode==='login'?'Iniciar sesión':'Crear cuenta'}</h1>
-        <p>{mode==='login'?'Accede a ZOEMEC y continúa con tus proyectos.':'Empieza gratis y cotiza en minutos.'}</p>
+        <h1>{mode==='login'?'Iniciar sesion':'Crear cuenta'}</h1>
+        <p>{mode==='login'?'Accede con tu cuenta registrada.':'Empieza con 1 APU gratis por dispositivo.'}</p>
         {mode==='register' && <><label>Nombre completo</label><input value={name} onChange={e=>setName(e.target.value)} placeholder="Tu nombre" /></>}
-        <label>Correo electrónico</label>
+        <label>Correo electronico</label>
         <input placeholder="correo@empresa.com" type="email" value={email} onChange={e=>setEmail(e.target.value)} />
-        <label>Contraseña</label>
-        <input placeholder="••••••••" type="password" value={password} onChange={e=>setPassword(e.target.value)} />
+        <label>Contrasena</label>
+        <input placeholder="minimo 6 caracteres" type="password" value={password} onChange={e=>setPassword(e.target.value)} />
         <button onClick={submit}>{mode==='login'?'Entrar':'Crear cuenta'}</button>
         <div className="auth-or"><span>o</span></div>
-        <button className="google" onClick={()=>login(name || 'Usuario ZOEMEC', email || 'demo@zoemec.local')}><Icon name="clientes" size={18}/> Continuar con Google</button>
+        <button className="google" onClick={()=>alert('Google Login se activa al conectar Firebase Auth. Por ahora usa correo y contrasena.')}><Icon name="clientes" size={18}/> Continuar con Google</button>
+        {mode==='register' && <div className="auth-warning"><b>Cuenta gratis:</b> 1 APU sin costo. Se registra el dispositivo para evitar multiples correos gratis.</div>}
         <small>{mode==='login'?'¿No tienes cuenta? ':'¿Ya tienes cuenta? '}<a onClick={()=>setScreen(mode==='login'?'register':'login')}>{mode==='login'?'Regístrate':'Inicia sesión'}</a></small>
         <a className="back" onClick={()=>setScreen('landing')}>← Volver al inicio</a>
       </div>
@@ -1014,7 +1072,7 @@ function aiServerUrl(path=''){
   return `http://${host}:8787${path}`;
 }
 
-function APU({company,apus,setApus,budgets,setBudgets,catalog,setCatalog}){
+function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog}){
   const [concept,setConcept]=useState('Muro de block hueco de concreto de 15 cm asentado con mortero cemento-arena');
   const [apu,setApu]=useState(()=>makeAPUFromConcept('Muro de block hueco de concreto de 15 cm asentado con mortero cemento-arena'));
   const [aiOpen,setAiOpen]=useState(false);
@@ -1022,6 +1080,13 @@ function APU({company,apus,setApus,budgets,setBudgets,catalog,setCatalog}){
   const [aiStatus,setAiStatus]=useState('');
   const [conceptBatch,setConceptBatch]=useState(null);
   const totals=calcAPU(apu);
+  const userUsage = usage?.[user?.email] || {apusCreated:0};
+  const isFree = (user?.plan || 'Gratis') === 'Gratis';
+  const requireApuAccess = () => {
+    if(canUse(user, 'apu', userUsage.apusCreated)) return true;
+    alert('Tu APU gratis ya fue usado. Para generar, guardar y exportar mas APUs activa un plan.');
+    return false;
+  };
 
   const updateRow=(kind,i,k,v)=>setApu({...apu,[kind]:apu[kind].map((r,idx)=>idx===i?r.map((x,j)=>j===k?v:x):r)});
   const addRow=(kind)=>{
@@ -1031,6 +1096,7 @@ function APU({company,apus,setApus,budgets,setBudgets,catalog,setCatalog}){
   const removeRow=(kind,i)=>setApu({...apu,[kind]:apu[kind].filter((_,idx)=>idx!==i)});
   const setParam=(k,v)=>setApu({...apu,[k]:v});
   const generate=()=>{
+    if(!requireApuAccess()) return;
     const parsed=parseConceptText(concept);
     const next=makeAPUFromConcept(parsed.concept, catalog);
     setConcept(parsed.concept);
@@ -1038,6 +1104,7 @@ function APU({company,apus,setApus,budgets,setBudgets,catalog,setCatalog}){
     setExcelInfo(parsed.referencePU ? {fileName:'Texto pegado',concept:parsed.concept,unit:parsed.unit,qty:parsed.qty,referencePU:parsed.referencePU,catalog:[]} : null);
   };
   const generateAI=async()=>{
+    if(!requireApuAccess()) return;
     const parsed=parseConceptText(concept);
     setAiStatus('Generando APU con IA...');
     try{
@@ -1133,10 +1200,14 @@ function APU({company,apus,setApus,budgets,setBudgets,catalog,setCatalog}){
     }
     exportConceptsAPUPDF(conceptBatch.concepts, catalog, company);
   };
-  const save=()=>{setApus([apu,...apus.filter(x=>x.id!==apu.id)]); alert('APU guardado');};
-  const addBudget=()=>{setBudgets([{id:'PRE-'+uid(), name:'Presupuesto desde APU', client:'Cliente por definir', items:[{concept:apu.concept, unit:apu.unit, qty:1, pu:totals.pu}], total:totals.pu, date:new Date().toLocaleDateString('es-MX')},...budgets]); alert('Agregado a presupuestos (PU sin IVA)');};
+  const markApuUsed=()=>setUsage({...usage,[user.email]:{...userUsage,apusCreated:(userUsage.apusCreated||0)+1,deviceId:user.deviceId}});
+  const save=()=>{ if(!requireApuAccess()) return; setApus([apu,...apus.filter(x=>x.id!==apu.id)]); markApuUsed(); alert('APU guardado');};
+  const addBudget=()=>{ if(!requireApuAccess()) return; setBudgets([{id:'PRE-'+uid(), name:'Presupuesto desde APU', client:'Cliente por definir', items:[{concept:apu.concept, unit:apu.unit, qty:1, pu:totals.pu}], total:totals.pu, date:new Date().toLocaleDateString('es-MX')},...budgets]); markApuUsed(); alert('Agregado a presupuestos (PU sin IVA)');};
+  const exportPDF=()=>{ if(isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; } exportAPUPDFPro(apu,totals,company); if(isFree) markApuUsed(); };
+  const exportExcel=()=>{ if(isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; } exportAPUExcel(apu,totals,company); if(isFree) markApuUsed(); };
 
   return <section><PageHead kicker="APU Inteligente" title="Análisis de Precio Unitario" desc="Metodología RLOPSRM: salario real con FSR, herramienta menor sobre mano de obra, indirectos de campo y oficina, financiamiento, utilidad y cargos adicionales." action={<div className="head-actions"><button className="secondary" onClick={generate}>Generar desarrollo</button><button className="ai-btn" onClick={()=>setAiOpen(o=>!o)}><Icon name="apu" size={17}/> Generar con IA</button></div>} />
+    {isFree && <div className="trial-banner"><b>Plan gratis activo:</b> tienes {Math.max(0,1-(userUsage.apusCreated||0))} APU disponible. Para exportar y crear mas APUs activa un plan.</div>}
     {aiOpen && <div className="panel ai-panel">
       <div className="ai-panel-head"><HardHat size={36}/><div><b>Generar con IA</b><small className="muted">Pega tu concepto y/o importa tu Excel de precios. Usaré tus precios reales donde coincidan los insumos.</small></div></div>
       <textarea className="ai-concept" value={concept} onChange={e=>setConcept(e.target.value)} placeholder="Pega aquí el concepto, ej. Muro de tabique rojo recocido asentado con mortero…"/>
@@ -1218,9 +1289,9 @@ function APU({company,apus,setApus,budgets,setBudgets,catalog,setCatalog}){
         <div className="actions-col">
           <button onClick={save}>Guardar</button>
           <button onClick={addBudget}>Agregar al presupuesto</button>
-          <button onClick={()=>exportAPUPDFPro(apu,totals,company)}>Descargar PDF con formato</button>
+          <button onClick={exportPDF}>Descargar PDF con formato</button>
           {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatchPDF}>PDF por concepto ({conceptBatch.concepts.length})</button>}
-          <button onClick={()=>exportAPUExcel(apu,totals,company)}>Descargar Excel</button>
+          <button onClick={exportExcel}>Descargar Excel</button>
         </div>
       </div>
     </div>
@@ -1949,7 +2020,7 @@ function Projects({projects,setProjects}){
 }
 function Clients({clients,setClients}){const [q,setQ]=useState('');const filtered=clients.filter(c=>c.name.toLowerCase().includes(q.toLowerCase()));return <section><PageHead kicker="CRM de obra" title="Clientes" desc="Cartera profesional con proyectos, presupuestos, contactos, RFC e historial." action={<button onClick={()=>setClients([{id:'CLI-'+uid(),name:'Nuevo cliente',type:'Empresa',contact:'Contacto',phone:'',email:'',rfc:'',projects:0,budgets:0,amount:0,status:'Prospecto'},...clients])}>+ Nuevo cliente</button>} /><div className="panel"><input className="search" placeholder="Buscar cliente..." value={q} onChange={e=>setQ(e.target.value)}/><div className="client-grid">{filtered.map(c=><div className="client-card" key={c.id}><div className="client-avatar">{c.name[0]}</div><div><h2>{c.name}</h2><p>{c.type} · {c.contact}</p><small>RFC: {c.rfc}</small><div className="client-stats"><span>{c.projects} proyectos</span><span>{c.budgets} presupuestos</span><b>{money(c.amount)}</b></div></div><em>{c.status}</em></div>)}</div></div></section>}
 
-function Library(){
+function Library({user}){
   const [files,setFiles]=useLocalState('zoemec-biblioteca',[]);
   const [q,setQ]=useState('');
   const [type,setType]=useState('Todos');
@@ -1972,6 +2043,12 @@ function Library(){
   const counts=types.slice(1).map(t=>[t,files.filter(f=>(f.cat||classify(f.name))===t).length]);
   const active=selected || visible[0] || files[0];
   const suggestions=['muro block 15','loseta porcelanato','rendimiento albanil','PTR lavabo','tablaroca durock','indirectos oficina'];
+  if(!canUse(user,'library')){
+    return <section><PageHead kicker="Biblioteca ZOEMEC" title="Centro inteligente de costos" desc="La biblioteca tecnica es una funcion premium porque permite consultar bases, matrices, documentos y fuentes para IA." />
+      <div className="locked-panel panel"><Icon name="biblioteca" size={42}/><div><h2>Biblioteca bloqueada para plan gratis</h2><p>Tu cuenta gratis incluye 1 APU. Para subir bases, indexar documentos, consultar matrices y usar la biblioteca como fuente de IA necesitas plan Inicial, Profesional o Empresa.</p><button onClick={()=>alert('Aqui se conectara Stripe o Mercado Pago para activar el plan automaticamente.')}>Activar plan</button></div></div>
+      <div className="library-grid">{[['Inicial','Biblioteca limitada y 10 APUs/mes','Para probar'],['Profesional','Biblioteca completa, IA y exportaciones','Recomendado'],['Empresa','Usuarios, permisos y biblioteca privada','Equipos']].map(f=><div className="folder" key={f[0]}><b>{f[0]}</b><p>{f[1]}</p><span>{f[2]}</span></div>)}</div>
+    </section>;
+  }
   return <section><PageHead kicker="Biblioteca ZOEMEC" title="Centro inteligente de costos" desc="Sube bases, matrices, rendimientos, normas y formatos. ZOEMEC los clasifica para busqueda tecnica e IA." />
     <div className="library-dashboard"><div className="lib-stat"><small>Documentos</small><b>{files.length}</b><span>{totalMb.toFixed(2)} MB cargados</span></div><div className="lib-stat"><small>Fuentes utiles</small><b>{counts.filter(x=>x[1]>0).length}</b><span>Clasificacion automatica</span></div><div className="lib-stat"><small>Motor IA</small><b>Indice</b><span>Listo para busqueda semantica</span></div></div>
     <div className="lib-up panel"><div className="lib-up-drop pro"><Icon name="biblioteca" size={30}/><div><b>Subida masiva inteligente</b><small className="muted">Excel, PDF, Word, ZIP y video. ZOEMEC detecta familia, tipo, fuente y uso para APU.</small></div><label className="up-btn">Subir archivos<input type="file" multiple onChange={e=>add(e.target.files)} hidden/></label></div><div className="lib-searchbar"><input className="search" placeholder="Buscar: muro block, loseta, rendimiento, matriz, norma..." value={q} onChange={e=>setQ(e.target.value)}/><button onClick={()=>alert('La busqueda con IA usara un indice tecnico de tus documentos al conectar Storage + base vectorial.')}>Buscar con IA</button></div><div className="lib-suggestions">{suggestions.map(s=><button key={s} onClick={()=>setQ(s)}>{s}</button>)}</div><div className="lib-toolbar"><div className="lib-tabs">{types.map(t=><button key={t} className={type===t?'active':''} onClick={()=>setType(t)}>{t}</button>)}</div></div>

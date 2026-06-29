@@ -1,0 +1,22 @@
+{
+  "name": "zoemec-plataforma",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "ai": "node server/openai-apu-server.mjs",
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^6.0.3",
+    "firebase": "^12.15.0",
+    "jspdf": "^4.2.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "read-excel-file": "^9.2.0",
+    "vite": "^8.1.0",
+    "write-excel-file": "^4.1.1"
+  }
+}

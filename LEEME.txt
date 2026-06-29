@@ -1,0 +1,24 @@
+ZOEMEC - Plataforma Integral de IngenierÃ­a y ConstrucciÃ³n
+
+1) Abre la carpeta en VS Code.
+2) Ejecuta:
+   npm install
+   npm run dev
+3) Abre la URL que indique Vite, normalmente:
+   http://localhost:5173
+
+Correcciones incluidas:
+- Landing profesional ZOEMEC.
+- Login / registro local.
+- Dashboard ejecutivo.
+- BotÃ³n Salir visible arriba y en sidebar.
+- Logo en public/logo.png.
+- APU inteligente con PDF y Excel.
+- Presupuestos con tabla, PDF y Excel.
+- Clientes tipo CRM.
+- Biblioteca unificada con recursos.
+- Centro TÃ©cnico con calculadora funcional.
+- Oficina TÃ©cnica para subir logo y datos de empresa.
+- Academia y Reportes explicados y visuales.
+
+Nota: Firebase queda preparado en src/firebase.js, pero la versiÃ³n funciona localmente con localStorage.

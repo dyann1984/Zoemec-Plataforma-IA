@@ -1,0 +1,25 @@
+REGLAS DE SEGURIDAD DE FIRESTORE
+================================
+Pégalas en: Consola Firebase > Firestore Database > pestaña "Reglas" (Rules) > Publicar.
+Cambia 'tu-correo@gmail.com' por tu correo de administradora (el mismo que pongas
+en ADMINS dentro de src/main.jsx).
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // BIBLIOTECA COMPARTIDA (Recursos):
+    // todos los que inician sesion la LEEN; solo administradores la EDITAN.
+    match /recursos/{doc} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+                   && request.auth.token.email in ['tu-correo@gmail.com'];
+    }
+
+    // DATOS PRIVADOS por usuario (clientes, proyectos, presupuestos):
+    // cada quien solo ve y edita lo suyo.
+    match /usuarios/{uid}/{col}/{docId} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+  }
+}

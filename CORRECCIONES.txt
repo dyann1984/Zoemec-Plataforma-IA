@@ -1,0 +1,30 @@
+ZOEMEC COTIZADOR - Correcciones aplicadas
+
+1. Se eliminÃ³ la dependencia xlsx por avisos de seguridad sin fix disponible.
+2. Se agregÃ³ read-excel-file para importar catÃ¡logos .xlsx/.csv.
+3. Se agregÃ³ write-excel-file para exportar presupuestos y APUs a .xlsx.
+4. Se actualizaron firebase, vite y jspdf a versiones sin vulnerabilidades reportadas por npm audit.
+5. Se quitÃ³ la contraseÃ±a demo visible del formulario de acceso.
+6. El botÃ³n de Google ahora avisa que requiere Firebase Authentication real.
+7. Se agregÃ³ .gitignore para no empaquetar node_modules, dist ni .env.
+8. Se confirmÃ³ que los archivos fuente estÃ¡n en UTF-8 y sin mojibake.
+9. Se reemplazÃ³ el logo pÃºblico por PROYECTOS.png de ZOEMEC.
+10. Se agregÃ³ importaciÃ³n de Excel completo para detectar concepto, unidad, cantidad, P.U. de referencia y catÃ¡logo.
+11. Se enriqueciÃ³ el motor APU con mÃ¡s materiales, mano de obra, equipo y alcances como resanes, acarreos, retiro, cortes y calafateo.
+12. Se rediseÃ±Ã³ la pantalla principal con mÃ©tricas, flujo Excel -> catÃ¡logo -> APU -> PDF y mejor jerarquÃ­a visual.
+13. Se mejorÃ³ el foro con categorÃ­as, filtros, mÃ©tricas, votos y respuestas mÃ¡s visibles.
+14. Se rediseÃ±Ã³ la landing principal con estilo fotogrÃ¡fico premium: header blanco, logo ZOEMEC grande, hero de obra, tarjeta de APU y barra inferior de beneficios.
+15. Se agregÃ³ public/landing-hero.png como imagen hero del sitio.
+16. Se agregÃ³ una familia tÃ©cnica para bases de lavabo con PTR + Durock para evitar que conceptos con "muro" caigan por error en block/mortero.
+17. Se aÃ±adieron familia detectada, confianza IA, clave SAT sugerida y cÃ³digos MAT/MO/EQ en PDF y Excel.
+18. Se agregÃ³ una familia tÃ©cnica para estructura metÃ¡lica ASTM A500 / Fy=46 KSI con acero, soldadura, primario, cuadrilla, grÃºa, herramienta y EPP.
+19. Se cambiÃ³ la prioridad de detecciÃ³n para que estructura metÃ¡lica no caiga por error en concreto cuando el concepto menciona columnas, trabes o placas.
+20. Se agregÃ³ servidor local server/openai-apu-server.mjs para generar APUs con OpenAI usando OPENAI_API_KEY en .env.
+21. Se agregÃ³ botÃ³n "IA real" y "Generar APU con IA real" en APU Inteligente.
+22. Se agregÃ³ .env.example y script npm run ai.
+
+Pendiente para producciÃ³n:
+- Conectar Firebase Authentication real.
+- Conectar Firestore por usuario.
+- Mover configuraciÃ³n sensible a variables .env.
+- Separar src/main.jsx en componentes y utilidades.

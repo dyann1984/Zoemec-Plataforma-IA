@@ -1,0 +1,22 @@
+ZOEMEC COTIZADOR - VERSIÃ“N CORREGIDA 10/10
+
+Cambios realizados:
+1. Logo corregido: ahora estÃ¡ en public/logo.png y public/assets/logo.png.
+2. Todas las pantallas usan la misma ruta de logo con respaldo.
+3. Login validado localmente: diana@email.com / 123456.
+4. Registro funcional en localStorage.
+5. Dashboard mÃ¡s completo.
+6. APU avanzado con desperdicio, FSR, herramienta menor, indirectos, financiamiento, utilidad, cargos e IVA.
+7. ExportaciÃ³n PDF con logo.
+8. ExportaciÃ³n Excel.
+9. CatÃ¡logo maestro de conceptos.
+10. Oficina tÃ©cnica para cambiar/restaurar logo.
+11. Clientes, proyectos, biblioteca, academia, comunidad, centro tÃ©cnico y reportes.
+12. DiseÃ±o responsive para celular.
+
+Para correr:
+npm install
+npm run dev
+
+Para compilar:
+npm run build

@@ -1,13 +1,27 @@
-import React, { useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import jsPDF from 'jspdf';
 import readXlsxFile from 'read-excel-file/browser';
 import writeXlsxFile from 'write-excel-file/browser';
+import { createUserWithEmailAndPassword, onAuthStateChanged, sendEmailVerification, signInWithEmailAndPassword, signOut, updateProfile } from 'firebase/auth';
+import { addDoc, collection, doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
+import { auth, db, firebaseReady, storage } from './firebase.js';
 import './style.css';
 
 const money = (n) => Number(n || 0).toLocaleString('es-MX', { style:'currency', currency:'MXN' });
 const num = (n) => Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits:2, maximumFractionDigits:2 });
 const uid = () => Math.random().toString(36).slice(2, 8).toUpperCase();
+async function apiPost(path, body){
+  const res = await fetch(path, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body || {})
+  });
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok) throw new Error(data.error || 'No se pudo completar la solicitud.');
+  return data;
+}
 
 /* Set de íconos de línea (engineering/drafting) — reemplaza emojis */
 const ICONS = {
@@ -87,7 +101,7 @@ function writeLocal(key, value){
   localStorage.setItem(key, JSON.stringify(value));
 }
 function hasValidSession(user){
-  return Boolean(user?.email && user?.deviceId && user?.plan);
+  return Boolean(user?.email && user?.plan && (user?.deviceId || user?.uid));
 }
 const PLAN_LIMITS = {
   Gratis:{ apus:1, library:false, ai:false, exports:false, label:'Gratis - 1 APU' },
@@ -96,9 +110,56 @@ const PLAN_LIMITS = {
   Empresa:{ apus:9999, library:true, ai:true, exports:true, label:'Empresa' }
 };
 function canUse(user, feature, used=0){
+  if(user?.role === 'admin') return true;
   const plan = PLAN_LIMITS[user?.plan || 'Gratis'] || PLAN_LIMITS.Gratis;
   if(feature === 'apu') return used < plan.apus;
   return Boolean(plan[feature]);
+}
+function userInitials(name='', email=''){
+  const base = (name || email?.split('@')?.[0] || 'Usuario ZOEMEC').trim();
+  return base.split(' ').map(x=>x[0]).filter(Boolean).slice(0,2).join('').toUpperCase() || 'UZ';
+}
+function firebaseMessage(error){
+  const code = error?.code || '';
+  if(code.includes('email-already-in-use')) return 'Ese correo ya esta registrado. Inicia sesion.';
+  if(code.includes('invalid-credential') || code.includes('wrong-password') || code.includes('user-not-found')) return 'Correo o contrasena incorrectos.';
+  if(code.includes('weak-password')) return 'La contrasena debe tener minimo 6 caracteres.';
+  if(code.includes('network')) return 'No hay conexion con Firebase. Revisa internet y vuelve a intentar.';
+  return error?.message || 'No se pudo conectar con Firebase.';
+}
+async function loadOrCreateProfile(fbUser, fallbackName='Usuario ZOEMEC'){
+  const userRef = doc(db, 'users', fbUser.uid);
+  const snap = await getDoc(userRef);
+  if(snap.exists()) return { uid: fbUser.uid, ...snap.data() };
+  const profile = {
+    uid: fbUser.uid,
+    name: fbUser.displayName || fallbackName || fbUser.email?.split('@')[0] || 'Usuario ZOEMEC',
+    email: fbUser.email,
+    role: 'user',
+    plan: 'Gratis',
+    active: true,
+    apusCreated: 0,
+    deviceId: getDeviceId(),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp()
+  };
+  await setDoc(userRef, profile, { merge:true });
+  return profile;
+}
+function buildSession(profile, fbUser){
+  const name = profile?.name || fbUser?.displayName || fbUser?.email?.split('@')?.[0] || 'Usuario ZOEMEC';
+  const role = profile?.role || 'user';
+  return {
+    uid: profile?.uid || fbUser?.uid,
+    name,
+    email: profile?.email || fbUser?.email,
+    role,
+    plan: role === 'admin' ? (profile?.plan || 'Empresa') : (profile?.plan || 'Gratis'),
+    active: profile?.active !== false,
+    initials: userInitials(name, profile?.email || fbUser?.email),
+    deviceId: profile?.deviceId || getDeviceId(),
+    apusCreated: Number(profile?.apusCreated || 0)
+  };
 }
 
 function App(){
@@ -115,39 +176,105 @@ function App(){
   const [catalog, setCatalog] = useLocalState('zoemec-catalogo', []);
   const companyView = company?.logo === '/logo.png' ? {...company, logo:'/logo.png?v=zoemec-2026'} : company;
 
-  const login = (name='Usuario ZOEMEC', email='', password='', mode='login') => {
+  useEffect(() => {
+    if(!firebaseReady) return undefined;
+    return onAuthStateChanged(auth, async (fbUser) => {
+      if(!fbUser) return;
+      try{
+        const profile = await loadOrCreateProfile(fbUser);
+        if(!fbUser.emailVerified && profile.role !== 'admin'){
+          setUser(null);
+          return;
+        }
+        if(profile.active === false){
+          await signOut(auth);
+          setUser(null);
+          setScreen('landing');
+          alert('Tu cuenta esta desactivada. Contacta al administrador de ZOEMEC.');
+          return;
+        }
+        const session = buildSession(profile, fbUser);
+        setUser(session);
+        setUsage(prev => ({...prev, [session.email]:{apusCreated:session.apusCreated || 0, deviceId:session.deviceId}}));
+      }catch(error){
+        console.error(error);
+      }
+    });
+  }, []);
+
+  const login = async (name='Usuario ZOEMEC', email='', password='', mode='login') => {
     const cleanEmail = email.trim().toLowerCase();
     if(!cleanEmail || !password || password.length < 6){
       alert('Captura un correo valido y una contrasena de minimo 6 caracteres.');
       return false;
     }
-    const deviceId = getDeviceId();
-    const existing = accounts.find(a=>a.email===cleanEmail);
-    if(mode === 'register'){
-      if(existing){ alert('Ese correo ya esta registrado. Inicia sesion.'); return false; }
-      if(accounts.some(a=>a.deviceId===deviceId && a.plan==='Gratis')){
-        alert('Este dispositivo ya uso la cuenta gratis. Para evitar cuentas duplicadas, solicita un plan o usa tu cuenta existente.');
-        return false;
-      }
-      const displayName = (name || cleanEmail.split('@')[0] || 'Usuario ZOEMEC').trim();
-      const account = { name:displayName, email:cleanEmail, password, plan:'Gratis', deviceId, createdAt:new Date().toISOString(), verified:false };
-      setAccounts([account, ...accounts]);
-      setUsage({...usage, [cleanEmail]:{apusCreated:0, deviceId}});
-      setUser({ name:displayName, email:cleanEmail, plan:'Gratis', initials:displayName.split(' ').map(x=>x[0]).slice(0,2).join('').toUpperCase(), deviceId });
-      setScreen('app'); setModule('apu');
-      return true;
-    }
-    if(!existing || existing.password !== password){
-      alert('Correo o contrasena incorrectos.');
+    if(!firebaseReady){
+      alert('Firebase no esta configurado. Revisa src/firebase.js.');
       return false;
     }
-    const displayName = existing.name || cleanEmail.split('@')[0] || 'Usuario ZOEMEC';
-    setUser({ name:displayName, email:cleanEmail, plan:existing.plan || 'Gratis', initials:displayName.split(' ').map(x=>x[0]).slice(0,2).join('').toUpperCase(), deviceId });
-    setScreen('app');
-    setModule('inicio');
-    return true;
+    const deviceId = getDeviceId();
+    try{
+      if(mode === 'register'){
+        const deviceRef = doc(db, 'devices', deviceId);
+        const deviceSnap = await getDoc(deviceRef);
+        if(deviceSnap.exists()){
+          alert('Este dispositivo ya uso la prueba gratis. Para evitar cuentas duplicadas, inicia sesion con tu cuenta o solicita un plan.');
+          return false;
+        }
+        const displayName = (name || cleanEmail.split('@')[0] || 'Usuario ZOEMEC').trim();
+        const credential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+        await updateProfile(credential.user, { displayName });
+        const profile = {
+          uid: credential.user.uid,
+          name: displayName,
+          email: cleanEmail,
+          role: 'user',
+          plan: 'Gratis',
+          active: true,
+          apusCreated: 0,
+          deviceId,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        };
+        await setDoc(doc(db, 'users', credential.user.uid), profile, { merge:true });
+        await setDoc(deviceRef, { uid: credential.user.uid, email: cleanEmail, createdAt: serverTimestamp() }, { merge:true });
+        setUsage({...usage, [cleanEmail]:{apusCreated:0, deviceId}});
+        await sendEmailVerification(credential.user);
+        await signOut(auth);
+        setUser(null);
+        setScreen('login');
+        alert('Cuenta creada. Te enviamos un correo de verificacion. Confirma tu email y luego inicia sesion.');
+        return true;
+      }
+      const credential = await signInWithEmailAndPassword(auth, cleanEmail, password);
+      const profile = await loadOrCreateProfile(credential.user);
+      if(!credential.user.emailVerified && profile.role !== 'admin'){
+        await sendEmailVerification(credential.user).catch(()=>{});
+        await signOut(auth);
+        alert('Tu correo aun no esta verificado. Te enviamos otro correo de verificacion.');
+        return false;
+      }
+      if(profile.active === false){
+        await signOut(auth);
+        alert('Tu cuenta esta desactivada. Contacta al administrador de ZOEMEC.');
+        return false;
+      }
+      const session = buildSession(profile, credential.user);
+      setUsage({...usage, [cleanEmail]:{apusCreated:session.apusCreated || 0, deviceId:session.deviceId}});
+      setUser(session);
+      setScreen('app');
+      setModule('inicio');
+      return true;
+    }catch(error){
+      alert(firebaseMessage(error));
+      return false;
+    }
   };
-  const logout = () => { setUser(null); setScreen('landing'); };
+  const logout = async () => {
+    try { if(firebaseReady) await signOut(auth); } catch {}
+    setUser(null);
+    setScreen('landing');
+  };
 
   if(screen === 'landing') return <Landing setScreen={setScreen} login={login} company={companyView} />;
   if(screen === 'login') return <Auth mode="login" setScreen={setScreen} login={login} company={companyView} />;
@@ -162,9 +289,10 @@ function App(){
     {module === 'biblioteca' && <Library user={user} />}
     {module === 'tecnico' && <TechnicalCenter />}
     {module === 'oficina' && <Office company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} />}
+    {module === 'visual' && <VisualAI user={user} />}
     {module === 'comunidad' && <Community />}
     {module === 'academia' && <Academy />}
-    {module === 'planes' && <PlansAccess />}
+    {module === 'planes' && <PlansAccess user={user} />}
     {module === 'reportes' && <Reports clients={clients} apus={apus} budgets={budgets} />}
   </Shell>;
 }
@@ -268,12 +396,12 @@ function normalizeSpreadsheetRows(rows){
 }
 function cleanText(v){
   return String(v ?? '')
-    .replace(/mÃ‚Â²|mÂ²/g, 'm²')
-    .replace(/mÃ‚Â³|mÂ³/g, 'm³')
-    .replace(/dÃƒÂ­a|dÃ­a/g, 'día')
-    .replace(/Ã¡/g, 'á').replace(/Ã©/g, 'é').replace(/Ã­/g, 'í').replace(/Ã³/g, 'ó').replace(/Ãº/g, 'ú')
-    .replace(/Ã±/g, 'ñ').replace(/Ã/g, 'Á').replace(/Ã‰/g, 'É').replace(/Ã/g, 'Í').replace(/Ã“/g, 'Ó').replace(/Ãš/g, 'Ú')
-    .replace(/Ã‘/g, 'Ñ');
+    .replace(/mÃƒâ€š²|m²/g, 'm²')
+    .replace(/mÃƒâ€š³|m³/g, 'm³')
+    .replace(/dÃƒÆ’Ã‚Â­a|día/g, 'día')
+    .replace(/á/g, 'á').replace(/é/g, 'é').replace(/í/g, 'í').replace(/ó/g, 'ó').replace(/ú/g, 'ú')
+    .replace(/ñ/g, 'ñ').replace(/Á/g, 'Á').replace(/É/g, 'É').replace(/Í/g, 'Í').replace(/Ó/g, 'Ó').replace(/Ú/g, 'Ú')
+    .replace(/Ñ/g, 'Ñ');
 }
 function normalizeUnitLabel(v){
   const raw = cleanText(v).trim();
@@ -380,12 +508,12 @@ async function parseRobustConceptCatalog(file){
   const normalized = normalizeSpreadsheetRows(rows);
   const clean = (v) => cleanText(v).trim();
   const norm = (v) => clean(v).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-  const unitRe = /^(m2|mÂ²|m²|m3|mÂ³|m³|kg|pza|pieza|pzas|ml|m|l|lt|lote|jgo|hr|hora|dia|dÃ­a|día|jor|jornal)$/i;
+  const unitRe = /^(m2|m²|m²|m3|m³|m³|kg|pza|pieza|pzas|ml|m|l|lt|lote|jgo|hr|hora|dia|día|día|jor|jornal)$/i;
   const normalizeUnit = (v) => {
     const raw = clean(v);
-    if(/^m2$/i.test(raw)) return 'mÂ²';
-    if(/^m3$/i.test(raw)) return 'mÂ³';
-    if(/^dia$/i.test(raw)) return 'dÃ­a';
+    if(/^m2$/i.test(raw)) return 'm²';
+    if(/^m3$/i.test(raw)) return 'm³';
+    if(/^dia$/i.test(raw)) return 'día';
     return raw || 'u';
   };
   const asNumber = (v) => {
@@ -704,16 +832,16 @@ function Landing({setScreen, login, company}){
     </header>
     <section className="hero-build">
       <div className="hero-copy">
-        <span className="eyebrow">Precios unitarios · APU · Presupuestos · Ingeniería</span>
+        <span className="eyebrow">Precios unitarios - APU - Presupuestos - Ingeniería</span>
         <h1>La plataforma inteligente para arquitectos, ingenieros y constructoras.</h1>
         <p>Genera APUs con IA, usa tu propio Excel, agrega tu logo, crea presupuestos profesionales, cuantificaciones, cálculos técnicos y reportes desde un solo lugar.</p>
         <div className="hero-actions"><button onClick={()=>setScreen('register')}>Crear cuenta gratis</button><button className="secondary" onClick={()=>setScreen('login')}>Entrar al sistema</button></div>
       </div>
       <div className="hero-apu-card">
-        <span>Cédula · Análisis de P.U.</span>
+        <span>Cédula - Análisis de P.U.</span>
         <h2>Muro de block de 15 cm</h2>
         <div className="apu-mini-row"><p>Materiales</p><b>$258.40</b></div>
-        <div className="apu-mini-row"><p>Mano de obra · FSR</p><b>$334.97</b></div>
+        <div className="apu-mini-row"><p>Mano de obra - FSR</p><b>$334.97</b></div>
         <div className="apu-mini-row"><p>Indirectos + utilidad</p><b>$112.18</b></div>
         <div className="apu-mini-total"><p>Precio unitario</p><b>$947.74</b></div>
       </div>
@@ -731,12 +859,15 @@ function Auth({mode,setScreen,login,company}){
   const [name,setName]=useState('');
   const [email,setEmail]=useState('');
   const [password,setPassword]=useState('');
-  const submit=()=>{
+  const [busy,setBusy]=useState(false);
+  const submit=async ()=>{
     if(!email.trim() || !password.trim()){
       alert('Captura correo y contraseña para continuar.');
       return;
     }
-    login(name, email.trim(), password, mode);
+    setBusy(true);
+    try{ await login(name, email.trim(), password, mode); }
+    finally{ setBusy(false); }
   };
   return <div className="auth-split">
     <div className="auth-brand">
@@ -761,9 +892,9 @@ function Auth({mode,setScreen,login,company}){
         <input placeholder="correo@empresa.com" type="email" value={email} onChange={e=>setEmail(e.target.value)} />
         <label>Contrasena</label>
         <input placeholder="minimo 6 caracteres" type="password" value={password} onChange={e=>setPassword(e.target.value)} />
-        <button onClick={submit}>{mode==='login'?'Entrar':'Crear cuenta'}</button>
+        <button onClick={submit} disabled={busy}>{busy?'Conectando...':(mode==='login'?'Entrar':'Crear cuenta')}</button>
         <div className="auth-or"><span>o</span></div>
-        <button className="google" onClick={()=>alert('Google Login se activa al conectar Firebase Auth. Por ahora usa correo y contrasena.')}><Icon name="clientes" size={18}/> Continuar con Google</button>
+        <button className="google" onClick={()=>alert('Activa Google en Firebase Authentication > Sign-in method para usar este boton.')}><Icon name="clientes" size={18}/> Continuar con Google</button>
         {mode==='register' && <div className="auth-warning"><b>Cuenta gratis:</b> 1 APU sin costo. Se registra el dispositivo para evitar multiples correos gratis.</div>}
         <small>{mode==='login'?'¿No tienes cuenta? ':'¿Ya tienes cuenta? '}<a onClick={()=>setScreen(mode==='login'?'register':'login')}>{mode==='login'?'Regístrate':'Inicia sesión'}</a></small>
         <a className="back" onClick={()=>setScreen('landing')}>← Volver al inicio</a>
@@ -774,7 +905,7 @@ function Auth({mode,setScreen,login,company}){
 
 function Shell({children,user,logout,module,setModule,company}){
   const menu = [
-    ['inicio','inicio','Inicio'], ['apu','apu','APU Inteligente'], ['presupuestos','presupuestos','Presupuestos'], ['proyectos','proyectos','Proyectos'], ['clientes','clientes','Clientes'], ['biblioteca','biblioteca','Biblioteca ZOEMEC'], ['tecnico','tecnico','Centro Técnico'], ['oficina','oficina','Oficina Técnica'], ['comunidad','comunidad','Comunidad'], ['academia','academia','Academia'], ['planes','fsr','Planes y acceso'], ['reportes','reportes','Reportes']
+    ['inicio','inicio','Inicio'], ['apu','apu','APU Inteligente'], ['presupuestos','presupuestos','Presupuestos'], ['proyectos','proyectos','Proyectos'], ['clientes','clientes','Clientes'], ['biblioteca','biblioteca','Biblioteca ZOEMEC'], ['tecnico','tecnico','Centro Técnico'], ['oficina','oficina','Oficina Técnica'], ['visual','play','Visual IA'], ['comunidad','comunidad','Comunidad'], ['academia','academia','Academia'], ['planes','fsr','Planes y acceso'], ['reportes','reportes','Reportes']
   ];
   return <div className="app-layout">
     <aside className="sidebar">
@@ -784,7 +915,7 @@ function Shell({children,user,logout,module,setModule,company}){
       <button className="logout-side" onClick={logout}>Salir</button>
     </aside>
     <main className="main">
-      <header className="topbar"><div><b>Buscar concepto, cliente o proyecto...</b></div><div className="user"><span className="bell"><Icon name="bell" size={19}/></span><span className="avatar">{user.initials}</span><div><b>{user.name}</b><small>{user.plan}</small></div><button onClick={logout}>Salir</button></div></header>
+      <header className="topbar"><div><b>Buscar concepto, cliente o proyecto...</b></div><div className="user"><span className="bell"><Icon name="bell" size={19}/></span><span className="avatar">{user.initials}</span><div><b>{user.name}</b><small>{user.role === 'admin' ? 'Administrador' : user.plan}</small></div><button onClick={logout}>Salir</button></div></header>
       {children}
     </main>
     <Assistant/>
@@ -830,10 +961,10 @@ function makeAPUFromConcept(concept, catalog){
   else if(/aplanado|repellado|enjarre|plaster|uniblock|resane|emboquillado|chukum/.test(t)) tipo='aplanado';
   else if(/pintura|pintar|esmalte|vinil|acril|epox|primario|sellador vin/.test(t)) tipo='pintura';
   else if(/plaf|fald|tablaroca|durock|tablacemento|trasdosado|cajillo|enchape|panel.*yeso|yeso|antimoho|anti moho/.test(t)) tipo='tablaroca';
-  else if(/porcelanato|loseta|azulejo|cer[aÃ¡]mic|lambr|piso|zoclo|boquilla|sardinel/.test(t)) tipo='piso';
-  else if(/marmol|m[aÃ¡]rmol|granito|cubierta|barra lavamanos/.test(t)) tipo='marmol_granito';
+  else if(/porcelanato|loseta|azulejo|cer[aá]mic|lambr|piso|zoclo|boquilla|sardinel/.test(t)) tipo='piso';
+  else if(/marmol|m[aá]rmol|granito|cubierta|barra lavamanos/.test(t)) tipo='marmol_granito';
   else if(/aplanado|repellado|enjarre|plaster|uniblock|resane|emboquillado|chukum/.test(t)) tipo='aplanado';
-  else if(/sellado|sello|silicon|silic[oÃ³]n|calafate|junta|espuma/.test(t)) tipo='sello';
+  else if(/sellado|sello|silicon|silic[oó]n|calafate|junta|espuma/.test(t)) tipo='sello';
   if(!tipo){
   if(/lavabo|durock|ptr|mueble.*bañ|mueble.*ban|base.*lavabo|cer[aá]mico/.test(t)) tipo='lavabo_ptr';
   else if(/estructura met[aá]lica|astm|a500|fy\s*=?\s*46|soldadur|perfil de acero|placa.*acero|grout|primario anticorrosivo|montaje.*estructura|fabricaci[oó]n.*estructura/.test(t)) tipo='estructura_metalica';
@@ -853,22 +984,22 @@ function makeAPUFromConcept(concept, catalog){
       materials:[['Perfil PTR de acero de 2" x 2" cal. 14',1.15,'m',92,0],['Tablero de cemento Durock 12.7 mm',0.65,'m²',210,0],['Anclajes, fijaciones, tornillería y soldadura',1,'lote',25,0],['Pasta, cinta y malla para juntas',0.18,'jgo',85,3],['Pintura anticorrosiva / primario',0.08,'L',98,3],['Materiales misceláneos de ajuste y protección',0.04,'jgo',120,0]],
       labor:[['Cuadrilla de herrero + ayudante',0.035,'jor',1400,1],['Trazo, nivelación y presentación',0.015,'jor',700,1],['Resanes, cortes y adecuaciones',0.02,'jor',700,1],['Limpieza, retiro y protección del área',0.02,'jor',470,1]],
       equipment:[['Equipo de protección y andamios (5% de M.O.)',0.05,'(%MO)',49],['Soldadora y herramienta de corte',0.03,'día',120]] },
-    tablaroca:{ unit:'mÂ²',
-      materials:[['Panel de yeso / tablacemento 12.7 mm segun especificacion',1.05,'mÂ²',210,5],['Poste o canal metalico galvanizado',1.25,'m',38,5],['Canal de amarre y refuerzos',0.55,'m',32,5],['Tornilleria, taquetes y fijaciones',0.18,'jgo',85,3],['Cinta y compuesto para juntas',0.22,'kg',42,5],['Pasta / sellador de acabado',0.12,'L',70,5],['Materiales miscelaneos y proteccion',0.04,'jgo',120,0]],
+    tablaroca:{ unit:'m²',
+      materials:[['Panel de yeso / tablacemento 12.7 mm segun especificacion',1.05,'m²',210,5],['Poste o canal metalico galvanizado',1.25,'m',38,5],['Canal de amarre y refuerzos',0.55,'m',32,5],['Tornilleria, taquetes y fijaciones',0.18,'jgo',85,3],['Cinta y compuesto para juntas',0.22,'kg',42,5],['Pasta / sellador de acabado',0.12,'L',70,5],['Materiales miscelaneos y proteccion',0.04,'jgo',120,0]],
       labor:[['Instalador de panel (oficial)',0.12,'jor',420,1.85],['Ayudante instalador',0.12,'jor',285,1.82],['Trazo, plomeo y nivelacion',0.025,'jor',420,1.85],['Tratamiento de juntas y resanes',0.05,'jor',380,1.85],['Limpieza y retiro de desperdicio',0.035,'jor',258,1.82]],
-      equipment:[['Andamio / escalera de trabajo',0.04,'dÃ­a',120],['Herramienta electrica de corte y fijacion',0.03,'dÃ­a',150],['Equipo de seguridad personal',0.02,'dÃ­a',90]] },
+      equipment:[['Andamio / escalera de trabajo',0.04,'día',120],['Herramienta electrica de corte y fijacion',0.03,'día',150],['Equipo de seguridad personal',0.02,'día',90]] },
     sello:{ unit:'ml',
       materials:[['Sellador elastomerico / silicon anti hongos',0.12,'cartucho',95,5],['Primer o limpiador de superficie',0.03,'L',85,3],['Cinta de respaldo o espuma de poliuretano',0.08,'m',18,5],['Material de limpieza y proteccion',0.03,'jgo',60,0]],
       labor:[['Oficial aplicador de sellos',0.035,'jor',380,1.85],['Ayudante',0.025,'jor',258,1.82],['Preparacion, limpieza y retiro',0.02,'jor',258,1.82]],
-      equipment:[['Pistola calafateadora y herramienta menor',0.02,'dÃ­a',60],['Escalera / andamio proporcional',0.02,'dÃ­a',120]] },
-    marmol_granito:{ unit:'mÂ²',
+      equipment:[['Pistola calafateadora y herramienta menor',0.02,'día',60],['Escalera / andamio proporcional',0.02,'día',120]] },
+    marmol_granito:{ unit:'m²',
       materials:[['Adhesivo flexible para piedra natural',0.22,'bulto',220,5],['Boquilla / resina de junta',0.28,'kg',85,5],['Anclajes, separadores y niveladores',0.12,'jgo',120,3],['Material de limpieza y proteccion',0.05,'jgo',90,0]],
       labor:[['Colocador especializado en marmol/granito',0.16,'jor',520,1.85],['Ayudante colocador',0.16,'jor',285,1.82],['Trazo, cortes y ajuste de piezas',0.06,'jor',520,1.85],['Limpieza final y proteccion',0.04,'jor',258,1.82]],
-      equipment:[['Cortadora con disco diamantado',0.05,'dÃ­a',180],['Pulidora / herramienta menor',0.04,'dÃ­a',150],['Equipo de izaje o apoyo proporcional',0.02,'dÃ­a',200]] },
+      equipment:[['Cortadora con disco diamantado',0.05,'día',180],['Pulidora / herramienta menor',0.04,'día',150],['Equipo de izaje o apoyo proporcional',0.02,'día',200]] },
     registro:{ unit:'pza',
-      materials:[['Marco y tapa de registro segun medida especificada',1,'pza',480,3],['Canal / perfil galvanizado para soporte',1.2,'m',38,5],['Tornilleria, taquetes y fijaciones',0.12,'jgo',85,3],['Panel de cierre o placa de ajuste',0.35,'mÂ²',210,5],['Pasta, cinta y resane perimetral',0.15,'kg',42,5],['Material de limpieza y proteccion',0.03,'jgo',60,0]],
+      materials:[['Marco y tapa de registro segun medida especificada',1,'pza',480,3],['Canal / perfil galvanizado para soporte',1.2,'m',38,5],['Tornilleria, taquetes y fijaciones',0.12,'jgo',85,3],['Panel de cierre o placa de ajuste',0.35,'m²',210,5],['Pasta, cinta y resane perimetral',0.15,'kg',42,5],['Material de limpieza y proteccion',0.03,'jgo',60,0]],
       labor:[['Oficial instalador',0.18,'jor',420,1.85],['Ayudante instalador',0.18,'jor',285,1.82],['Trazo, nivelacion y ajuste de vano',0.04,'jor',420,1.85],['Resane y limpieza final',0.04,'jor',258,1.82]],
-      equipment:[['Herramienta electrica de corte y fijacion',0.05,'dÃ­a',150],['Escalera / andamio proporcional',0.03,'dÃ­a',120],['Equipo de seguridad personal',0.02,'dÃ­a',90]] },
+      equipment:[['Herramienta electrica de corte y fijacion',0.05,'día',150],['Escalera / andamio proporcional',0.03,'día',120],['Equipo de seguridad personal',0.02,'día',90]] },
     estructura_metalica:{ unit:'kg',
       materials:[['Acero estructural ASTM A500 Fy=46 KSI (incl. desperdicio)',1.05,'kg',46.5,0],['Soldadura E-7018 y consumibles de taller',0.03,'kg',120,0],['Primario anticorrosivo alquidálico de alta resistencia',0.02,'L',110,0],['Grout, anclajes y placas base proporcionales',0.015,'jgo',180,0]],
       labor:[['Cuadrilla de montadores y soldadores calificados',0.012,'jor',1650,1],['Trazo, plomeo y verificación de montaje',0.004,'jor',900,1],['Habilitado, limpieza y protección de soldadura',0.004,'jor',780,1]],
@@ -1081,7 +1212,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   const [conceptBatch,setConceptBatch]=useState(null);
   const totals=calcAPU(apu);
   const userUsage = usage?.[user?.email] || {apusCreated:0};
-  const isFree = (user?.plan || 'Gratis') === 'Gratis';
+  const isFree = user?.role !== 'admin' && (user?.plan || 'Gratis') === 'Gratis';
   const requireApuAccess = () => {
     if(canUse(user, 'apu', userUsage.apusCreated)) return true;
     alert('Tu APU gratis ya fue usado. Para generar, guardar y exportar mas APUs activa un plan.');
@@ -1200,7 +1331,14 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     }
     exportConceptsAPUPDF(conceptBatch.concepts, catalog, company);
   };
-  const markApuUsed=()=>setUsage({...usage,[user.email]:{...userUsage,apusCreated:(userUsage.apusCreated||0)+1,deviceId:user.deviceId}});
+  const markApuUsed=()=>{
+    if(user?.role === 'admin') return;
+    const nextCount = (userUsage.apusCreated||0)+1;
+    setUsage({...usage,[user.email]:{...userUsage,apusCreated:nextCount,deviceId:user.deviceId}});
+    if(firebaseReady && user?.uid){
+      setDoc(doc(db, 'users', user.uid), { apusCreated:nextCount, updatedAt:serverTimestamp() }, { merge:true }).catch(console.error);
+    }
+  };
   const save=()=>{ if(!requireApuAccess()) return; setApus([apu,...apus.filter(x=>x.id!==apu.id)]); markApuUsed(); alert('APU guardado');};
   const addBudget=()=>{ if(!requireApuAccess()) return; setBudgets([{id:'PRE-'+uid(), name:'Presupuesto desde APU', client:'Cliente por definir', items:[{concept:apu.concept, unit:apu.unit, qty:1, pu:totals.pu}], total:totals.pu, date:new Date().toLocaleDateString('es-MX')},...budgets]); markApuUsed(); alert('Agregado a presupuestos (PU sin IVA)');};
   const exportPDF=()=>{ if(isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; } exportAPUPDFPro(apu,totals,company); if(isFree) markApuUsed(); };
@@ -1224,7 +1362,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       {excelInfo && <div className="excel-preview">
         <div><small>Archivo</small><b>{excelInfo.fileName}</b></div>
         <div><small>Concepto detectado</small><b>{excelInfo.concept}</b></div>
-        <div><small>Unidad / cantidad</small><b>{excelInfo.unit} · {num(excelInfo.qty)}</b></div>
+        <div><small>Unidad / cantidad</small><b>{excelInfo.unit} - {num(excelInfo.qty)}</b></div>
         <div><small>P.U. referencia</small><b>{excelInfo.referencePU ? money(excelInfo.referencePU) : 'No detectado'}</b></div>
       </div>}
       <div className="ai-note">El desarrollo se arma con tus precios importados + plantillas de metodología. La generación 100% automática (IA leyendo todo tu catálogo) se activa con Firebase AI Logic.</div>
@@ -1253,7 +1391,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         <MatrixTable kind="materials" rows={apu.materials} updateRow={updateRow} removeRow={removeRow}/>
         <button className="soft" onClick={()=>addRow('materials')}>+ Material</button>
 
-        <h2>Mano de obra <small className="hint">(salario real = base × FSR · Art. 191)</small></h2>
+        <h2>Mano de obra <small className="hint">(salario real = base x FSR - Art. 191)</small></h2>
         <MatrixTable kind="labor" rows={apu.labor} updateRow={updateRow} removeRow={removeRow}/>
         <button className="soft" onClick={()=>addRow('labor')}>+ Oficio</button>
 
@@ -1299,7 +1437,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     {apus.length>0 && <div className="panel" style={{marginTop:16}}>
       <h2>Mis APU guardados <small className="hint">({apus.length})</small></h2>
       <div className="saved-grid">{apus.map(a=>{const tt=calcAPU(a);return <div className="saved-card" key={a.id}>
-        <div className="sc-clave">{a.clave} · {a.unit} · {a.date}</div>
+        <div className="sc-clave">{a.clave} - {a.unit} - {a.date}</div>
         <div className="sc-concept">{a.concept}</div>
         <div className="sc-pu">{money(tt.pu)} <small>/ {a.unit}</small></div>
         <div className="sc-actions"><button onClick={()=>setApu(a)}>Abrir</button><button className="del" onClick={()=>setApus(apus.filter(x=>x.id!==a.id))}>Borrar</button></div>
@@ -1591,7 +1729,7 @@ function isExportableConceptItem(item){
   const unit = normalizeUnitLabel(item?.unit);
   const qty = Number(item?.qty || 0);
   if(!concept || concept.length < 12 || qty <= 0) return false;
-  if(!/^(m2|mÂ²|m²|m3|mÂ³|m³|kg|pza|pieza|pzas|ml|m|l|lt|lote|jgo|hr|hora|dia|dÃ­a|día|jor|jornal)$/i.test(unit)) return false;
+  if(!/^(m2|m²|m²|m3|m³|m³|kg|pza|pieza|pzas|ml|m|l|lt|lote|jgo|hr|hora|dia|día|día|jor|jornal)$/i.test(unit)) return false;
   if(/^(total|subtotal|gran total)\b/.test(concept)) return false;
   if(/\b(total partida|total zona|total area|total capitulo|subtotal partida|gran total)\b/.test(concept)) return false;
   return true;
@@ -1807,7 +1945,7 @@ function exportAPUPDF(apu, totals, company){
   tot(`Cargos adicionales (${apu.cargos}%)`, totals.cargos);
   tot('PRECIO UNITARIO (sin IVA)', totals.pu, true);
   tot(`IVA ${apu.iva}% (informativo)`, totals.iva);
-  y+=4; doc.setFontSize(8); doc.text('Generado por ZOEMEC IA · Versión 2.0 · Revisión técnica editable por el usuario',14,286);
+  y+=4; doc.setFontSize(8); doc.text('Generado por ZOEMEC IA - Version 2.0 - Revision tecnica editable por el usuario',14,286);
   doc.save(`${apu.clave}-APU-ZOEMEC.pdf`);
 }
 
@@ -2015,16 +2153,19 @@ function Projects({projects,setProjects}){
       <p><input value={p.client} onChange={e=>update(i,'client',e.target.value)} style={{border:0,padding:0,background:'transparent',color:'var(--muted)'}}/></p>
       <b>{money(p.budget)}</b>
       <progress value={p.progress} max="100"/>
-      <small>{p.progress}% de avance · <a onClick={()=>remove(i)} style={{color:'var(--danger)'}}>eliminar</a></small>
+      <small>{p.progress}% de avance - <a onClick={()=>remove(i)} style={{color:'var(--danger)'}}>eliminar</a></small>
     </div>)}</div></section>
 }
-function Clients({clients,setClients}){const [q,setQ]=useState('');const filtered=clients.filter(c=>c.name.toLowerCase().includes(q.toLowerCase()));return <section><PageHead kicker="CRM de obra" title="Clientes" desc="Cartera profesional con proyectos, presupuestos, contactos, RFC e historial." action={<button onClick={()=>setClients([{id:'CLI-'+uid(),name:'Nuevo cliente',type:'Empresa',contact:'Contacto',phone:'',email:'',rfc:'',projects:0,budgets:0,amount:0,status:'Prospecto'},...clients])}>+ Nuevo cliente</button>} /><div className="panel"><input className="search" placeholder="Buscar cliente..." value={q} onChange={e=>setQ(e.target.value)}/><div className="client-grid">{filtered.map(c=><div className="client-card" key={c.id}><div className="client-avatar">{c.name[0]}</div><div><h2>{c.name}</h2><p>{c.type} · {c.contact}</p><small>RFC: {c.rfc}</small><div className="client-stats"><span>{c.projects} proyectos</span><span>{c.budgets} presupuestos</span><b>{money(c.amount)}</b></div></div><em>{c.status}</em></div>)}</div></div></section>}
+function Clients({clients,setClients}){const [q,setQ]=useState('');const filtered=clients.filter(c=>c.name.toLowerCase().includes(q.toLowerCase()));return <section><PageHead kicker="CRM de obra" title="Clientes" desc="Cartera profesional con proyectos, presupuestos, contactos, RFC e historial." action={<button onClick={()=>setClients([{id:'CLI-'+uid(),name:'Nuevo cliente',type:'Empresa',contact:'Contacto',phone:'',email:'',rfc:'',projects:0,budgets:0,amount:0,status:'Prospecto'},...clients])}>+ Nuevo cliente</button>} /><div className="panel"><input className="search" placeholder="Buscar cliente..." value={q} onChange={e=>setQ(e.target.value)}/><div className="client-grid">{filtered.map(c=><div className="client-card" key={c.id}><div className="client-avatar">{c.name[0]}</div><div><h2>{c.name}</h2><p>{c.type} - {c.contact}</p><small>RFC: {c.rfc}</small><div className="client-stats"><span>{c.projects} proyectos</span><span>{c.budgets} presupuestos</span><b>{money(c.amount)}</b></div></div><em>{c.status}</em></div>)}</div></div></section>}
 
 function Library({user}){
   const [files,setFiles]=useLocalState('zoemec-biblioteca',[]);
+  const [uploading,setUploading]=useState(false);
   const [q,setQ]=useState('');
   const [type,setType]=useState('Todos');
   const [selected,setSelected]=useState(null);
+  const [view,setView]=useState('tabla');
+  const [page,setPage]=useState(1);
   const classify=(name='')=>{
     const n=name.toLowerCase();
     if(/matriz|matrices|precio unitario|analisis|apu/.test(n)) return 'Matrices APU';
@@ -2035,13 +2176,55 @@ function Library({user}){
     if(/curso|video|capacitacion/.test(n)) return 'Academia';
     return 'Documentos';
   };
-  const add=(fl)=>{ if(!fl||!fl.length) return; const arr=[...fl].map(f=>({name:f.name,size:(f.size/1048576).toFixed(2)+' MB',ext:(f.name.split('.').pop()||'').toUpperCase(),when:new Date().toLocaleDateString('es-MX'),cat:classify(f.name),status:'Indexado',uses:0})); setFiles([...arr,...files]); setSelected(arr[0]); };
+  const add=async(fl)=>{
+    if(!fl||!fl.length) return;
+    const picked=[...fl];
+    setUploading(true);
+    try{
+      const arr=[];
+      for(const f of picked){
+        const fileId='LIB-'+uid()+'-'+Date.now().toString(36);
+        const meta={name:f.name,size:(f.size/1048576).toFixed(2)+' MB',ext:(f.name.split('.').pop()||'').toUpperCase(),when:new Date().toLocaleDateString('es-MX'),cat:classify(f.name),status:'Pendiente de indice',uses:0};
+        if(firebaseReady && user?.uid){
+          const fileRef=ref(storage, `library/${user.uid}/${fileId}/${f.name}`);
+          await uploadBytes(fileRef, f, { customMetadata:{ ownerUid:user.uid, category:meta.cat } });
+          const downloadURL=await getDownloadURL(fileRef);
+          await addDoc(collection(db,'library'), {
+            ...meta,
+            ownerUid:user.uid,
+            visibility:user.role === 'admin' ? 'global' : 'private',
+            storagePath:fileRef.fullPath,
+            downloadURL,
+            indexed:false,
+            createdAt:serverTimestamp()
+          });
+          meta.downloadURL=downloadURL;
+          meta.storagePath=fileRef.fullPath;
+          meta.status='Subido a nube';
+        }
+        arr.push(meta);
+      }
+      setFiles([...arr,...files]);
+      setSelected(arr[0]);
+      alert(firebaseReady && user?.uid ? `Subi ${arr.length} archivo(s) a Firebase Storage.` : `Agregue ${arr.length} archivo(s) en modo local.`);
+    }catch(err){
+      alert(`No pude subir el lote: ${err?.message || 'revisa reglas de Storage/Firestore'}`);
+    }finally{
+      setUploading(false);
+    }
+  };
   const del=(i)=>setFiles(files.filter((_,idx)=>idx!==i));
   const types=['Todos','Costos','Matrices APU','Mano de obra','Normas','Formatos','Academia','Documentos'];
   const visible=files.filter(f=>(type==='Todos'||(f.cat||classify(f.name))===type) && f.name.toLowerCase().includes(q.toLowerCase()));
   const totalMb=files.reduce((a,f)=>a+(parseFloat(f.size)||0),0);
   const counts=types.slice(1).map(t=>[t,files.filter(f=>(f.cat||classify(f.name))===t).length]);
   const active=selected || visible[0] || files[0];
+  const pageSize = view === 'tablero' ? 12 : 25;
+  const pages = Math.max(1, Math.ceil(visible.length / pageSize));
+  const safePage = Math.min(page, pages);
+  const pageItems = visible.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const batch = pageItems;
+  const setFilterType=(next)=>{ setType(next); setPage(1); };
   const suggestions=['muro block 15','loseta porcelanato','rendimiento albanil','PTR lavabo','tablaroca durock','indirectos oficina'];
   if(!canUse(user,'library')){
     return <section><PageHead kicker="Biblioteca ZOEMEC" title="Centro inteligente de costos" desc="La biblioteca tecnica es una funcion premium porque permite consultar bases, matrices, documentos y fuentes para IA." />
@@ -2049,11 +2232,30 @@ function Library({user}){
       <div className="library-grid">{[['Inicial','Biblioteca limitada y 10 APUs/mes','Para probar'],['Profesional','Biblioteca completa, IA y exportaciones','Recomendado'],['Empresa','Usuarios, permisos y biblioteca privada','Equipos']].map(f=><div className="folder" key={f[0]}><b>{f[0]}</b><p>{f[1]}</p><span>{f[2]}</span></div>)}</div>
     </section>;
   }
-  return <section><PageHead kicker="Biblioteca ZOEMEC" title="Centro inteligente de costos" desc="Sube bases, matrices, rendimientos, normas y formatos. ZOEMEC los clasifica para busqueda tecnica e IA." />
-    <div className="library-dashboard"><div className="lib-stat"><small>Documentos</small><b>{files.length}</b><span>{totalMb.toFixed(2)} MB cargados</span></div><div className="lib-stat"><small>Fuentes utiles</small><b>{counts.filter(x=>x[1]>0).length}</b><span>Clasificacion automatica</span></div><div className="lib-stat"><small>Motor IA</small><b>Indice</b><span>Listo para busqueda semantica</span></div></div>
-    <div className="lib-up panel"><div className="lib-up-drop pro"><Icon name="biblioteca" size={30}/><div><b>Subida masiva inteligente</b><small className="muted">Excel, PDF, Word, ZIP y video. ZOEMEC detecta familia, tipo, fuente y uso para APU.</small></div><label className="up-btn">Subir archivos<input type="file" multiple onChange={e=>add(e.target.files)} hidden/></label></div><div className="lib-searchbar"><input className="search" placeholder="Buscar: muro block, loseta, rendimiento, matriz, norma..." value={q} onChange={e=>setQ(e.target.value)}/><button onClick={()=>alert('La busqueda con IA usara un indice tecnico de tus documentos al conectar Storage + base vectorial.')}>Buscar con IA</button></div><div className="lib-suggestions">{suggestions.map(s=><button key={s} onClick={()=>setQ(s)}>{s}</button>)}</div><div className="lib-toolbar"><div className="lib-tabs">{types.map(t=><button key={t} className={type===t?'active':''} onClick={()=>setType(t)}>{t}</button>)}</div></div>
-      <div className="lib-layout pro"><aside className="lib-folders">{counts.map(([name,count])=><button key={name} onClick={()=>setType(name)} className={type===name?'active':''}><Icon name="folder" size={15}/><span>{name}</span><b>{count}</b></button>)}</aside><div className="lib-list">{visible.length ? visible.map((f)=>{ const i=files.indexOf(f); return <div className={'lib-file '+(active===f?'active':'')} key={i} onClick={()=>setSelected(f)}><span className="lib-ext">{f.ext||'DOC'}</span><div className="lib-meta"><b>{f.name}</b><small>{f.cat||classify(f.name)} - {f.size} - {f.when}</small></div><div className="lib-actions"><button className="soft" onClick={(e)=>{e.stopPropagation();setSelected(f)}}>Ver</button><button className="row-del" onClick={(e)=>{e.stopPropagation();del(i)}}>x</button></div></div>}) : <div className="lib-empty">No hay documentos con ese filtro.</div>}</div><aside className="lib-preview"><small>Vista tecnica</small><h2>{active?.name || 'Sin archivo seleccionado'}</h2><p>{active ? (active.cat || classify(active.name))+' - '+(active.ext || 'DOC')+' - '+active.size : 'Sube documentos para crear una base consultable.'}</p><div className="lib-ai-card"><b>Acciones IA</b><button>Usar para generar APU</button><button>Buscar matrices similares</button><button>Extraer insumos</button><button>Crear indice</button></div><div className="lib-trace"><span>Estado</span><b>{active?.status || 'Pendiente'}</b><span>Permiso</span><b>Plan Profesional</b></div></aside></div></div>
-    <div className="panel"><h2>Flujo recomendado</h2><div className="library-grid">{[['1. Sube tus bases','Excel de precios, matrices, rendimientos y normas','Carga masiva'],['2. ZOEMEC indexa','Clasifica por familia, unidad, fuente y uso tecnico','IA + metadatos'],['3. Genera APU','La IA usa tus fuentes como evidencia, no solo texto inventado','Trazabilidad'],['4. Audita y exporta','Excel con formulas, PDF por concepto y presupuesto','Profesional']].map(f=><div className="folder" key={f[0]}><b><Icon name="folder" size={17}/> {f[0]}</b><p>{f[1]}</p><span>{f[2]}</span></div>)}</div></div>
+  return <section><PageHead kicker="Biblioteca ZOEMEC" title="Centro documental inteligente" desc="Organiza costos, matrices, mano de obra, normas y formatos. En produccion la fuente correcta es Firebase Storage + Firestore para que la IA consulte contenido real." />
+    <div className="lib-hero panel">
+      <div><small>Base tecnica</small><h2>{files.length ? `${files.length} documentos listos` : 'Sube tu primera base'}</h2><p>La biblioteca debe funcionar como buscador tecnico, no como bodega de archivos. Cada documento queda clasificado por uso y listo para IA.</p></div>
+      <div className="lib-hero-actions"><button className="secondary" onClick={()=>alert('Ya esta preparado para Firebase Storage + Firestore. Revisa que Storage este activo y que las reglas permitan escribir a usuarios autenticados.')}>Conectar nube</button><label className="up-btn">{uploading?'Subiendo...':'Subir lote'}<input type="file" multiple onChange={e=>add(e.target.files)} hidden disabled={uploading}/></label></div>
+    </div>
+    <div className="lib-cloud panel">
+      {[['1. Subida masiva','Puedes cargar lotes completos desde la plataforma. Para carpetas grandes conviene subir ZIP o seleccionar multiples archivos.'],['2. Nube privada','Los archivos reales deben vivir en Firebase Storage o Vercel Blob. Firestore guarda nombre, categoria, permiso, usuario y fuente.'],['3. Busqueda IA','Despues se indexa el contenido para buscar por insumo, concepto, unidad, precio, rendimiento o norma.']].map(x=><div key={x[0]}><b>{x[0]}</b><p>{x[1]}</p></div>)}
+    </div>
+    <div className="library-dashboard"><div className="lib-stat"><small>Documentos</small><b>{files.length}</b><span>{totalMb.toFixed(2)} MB cargados</span></div><div className="lib-stat"><small>Categorias activas</small><b>{counts.filter(x=>x[1]>0).length}</b><span>{type === 'Todos' ? 'Vista global' : type}</span></div><div className="lib-stat"><small>Seleccionados</small><b>{batch.length}</b><span>Lote visible para acciones IA</span></div></div>
+    <div className="lib-console panel">
+      <div className="lib-searchbar"><input className="search" placeholder="Buscar por concepto, insumo, familia, archivo o fuente..." value={q} onChange={e=>{setQ(e.target.value);setPage(1)}}/><button onClick={()=>alert('Siguiente paso: conectar busqueda semantica con embeddings + Storage para consultar contenido real, no solo nombres.')}>Buscar con IA</button></div>
+      <div className="lib-suggestions">{suggestions.map(s=><button key={s} onClick={()=>{setQ(s);setPage(1)}}>{s}</button>)}</div>
+      <div className="lib-toolbar pro"><div className="lib-tabs">{types.map(t=><button key={t} className={type===t?'active':''} onClick={()=>setFilterType(t)}>{t}</button>)}</div><div className="seg"><button className={view==='tabla'?'active':''} onClick={()=>setView('tabla')}>Tabla</button><button className={view==='tablero'?'active':''} onClick={()=>setView('tablero')}>Tarjetas</button></div></div>
+      <div className="lib-bulkbar"><b>{visible.length}</b><span>documentos encontrados</span><em>Pagina {safePage} de {pages}</em><label className="soft file-soft">Subida masiva<input type="file" multiple hidden onChange={e=>add(e.target.files)} disabled={uploading}/></label><button className="soft" onClick={()=>alert('Se creara un indice por familia, unidad, precio, insumo, fecha y fuente para busqueda rapida.')}>Indexar lote visible</button></div>
+      <div className="lib-workbench">
+        <aside className="lib-folders">{counts.map(([name,count])=><button key={name} onClick={()=>setFilterType(name)} className={type===name?'active':''}><Icon name="folder" size={15}/><span>{name}</span><b>{count}</b></button>)}</aside>
+        <div className={view==='tablero'?'lib-board':'lib-table'}>
+          {pageItems.length ? pageItems.map((f)=>{ const i=files.indexOf(f); const cat=f.cat||classify(f.name); return <div className={'lib-file '+(active===f?'active':'')} key={i} onClick={()=>setSelected(f)}><span className="lib-ext">{f.ext||'DOC'}</span><div className="lib-meta"><b>{f.name}</b><small>{cat} - {f.size} - {f.when}</small><em>{cat==='Matrices APU'?'Puede alimentar APUs':cat==='Mano de obra'?'Rendimientos y cuadrillas':cat==='Costos'?'Precios y catalogos':'Consulta tecnica'}</em></div><div className="lib-actions"><button className="soft" onClick={(e)=>{e.stopPropagation(); f.downloadURL ? window.open(f.downloadURL,'_blank') : setSelected(f)}}>{f.downloadURL?'Abrir':'Ver'}</button><button className="row-del" onClick={(e)=>{e.stopPropagation();del(i)}}>x</button></div></div>}) : <div className="lib-empty">No hay documentos con ese filtro. Sube archivos o cambia la busqueda.</div>}
+          {visible.length > pageSize && <div className="lib-pager"><button className="soft" disabled={safePage<=1} onClick={()=>setPage(safePage-1)}>Anterior</button><span>{(safePage-1)*pageSize+1}-{Math.min(safePage*pageSize,visible.length)} de {visible.length}</span><button className="soft" disabled={safePage>=pages} onClick={()=>setPage(safePage+1)}>Siguiente</button></div>}
+        </div>
+        <aside className="lib-preview pro"><small>Ficha tecnica</small><h2>{active?.name || 'Sin archivo seleccionado'}</h2><p>{active ? (active.cat || classify(active.name))+' - '+(active.ext || 'DOC')+' - '+active.size : 'Sube documentos para crear una base consultable.'}</p><div className="lib-ai-card"><b>Acciones IA</b><button onClick={()=>alert('Usara este archivo como fuente para sugerir materiales, MO, equipo y rendimientos.')}>Usar para generar APU</button><button onClick={()=>alert('Comparara nombre, categoria y contenido indexado cuando conectemos Storage + embeddings.')}>Buscar matrices similares</button><button onClick={()=>alert('Extraera descripciones, unidades, precios y rendimientos a una tabla auditable.')}>Extraer insumos</button><button onClick={()=>alert('Creara indice por familia, partida, unidad y palabras clave.')}>Crear indice</button></div><div className="lib-trace"><span>Estado</span><b>{active?.status || 'Pendiente'}</b><span>Permiso</span><b>{user?.role==='admin'?'Administrador':'Plan Profesional'}</b><span>Uso IA</span><b>{active ? 'Disponible' : 'Sin fuente'}</b></div></aside>
+      </div>
+    </div>
+    <div className="panel"><h2>Flujo recomendado</h2><div className="library-grid">{[['1. Carga masiva','Bases CMIC, matrices, MO, normas y formatos','Entrada'],['2. Clasificacion','Tipo, familia, unidad, fuente, fecha y confianza','Orden'],['3. Indice IA','Busqueda semantica y extraccion de insumos','IA'],['4. APU auditable','Fuente visible en Excel/PDF por cada insumo','Salida']].map(f=><div className="folder" key={f[0]}><b><Icon name="folder" size={17}/> {f[0]}</b><p>{f[1]}</p><span>{f[2]}</span></div>)}</div></div>
   </section>
 }
 
@@ -2155,7 +2357,7 @@ function FSRCalc(){
   const set=(k,v)=>setS({...s,[k]:v});
   const tp=+s.tp||0, tl=+s.tl||1, ps=+s.ps||0;
   const fsr=(ps*(tp/tl))+(tp/tl);
-  return <CalcCard icon="fsr" title="Factor de Salario Real" sub="Art. 191 RLOPSRM · Fsr = Ps·(Tp/Tl) + (Tp/Tl)"
+  return <CalcCard icon="fsr" title="Factor de Salario Real" sub="Art. 191 RLOPSRM - Fsr = Ps x (Tp/Tl) + (Tp/Tl)"
     out={<><ORow label="Relación pagado/laborado" val={(tp/tl).toFixed(4)}/><ORow label="FSR" val={fsr.toFixed(4)} total/></>}>
     <div className="calc-row"><NField label="Tp — días pagados/año" value={s.tp} on={v=>set('tp',v)}/><NField label="Tl — días laborados/año" value={s.tl} on={v=>set('tl',v)}/></div>
     <NField label="Ps — obligaciones obrero-patronales (fracción)" value={s.ps} on={v=>set('ps',v)} step="0.01"/>
@@ -2198,41 +2400,135 @@ function Academy(){
   return <section><PageHead kicker="Academia ZOEMEC" title="Centro de capacitacion" desc="Cursos para dominar precios unitarios, presupuestos, matrices, reportes e IA aplicada a construccion." /><div className="academy-hero panel"><div><small>Ruta recomendada</small><h2>De capturista a analista tecnico</h2><p>Aprende APU, FSR, catalogos, matrices, presupuesto y exportacion profesional.</p></div><div className="academy-meter"><b>{avg}%</b><span>avance promedio</span></div></div><div className="academy-path">{['APU base','FSR y cuadrillas','Matrices e insumos','Presupuesto','IA y auditoria'].map((x,i)=><div key={x} className={i<2?'done':''}><span>{i+1}</span><b>{x}</b></div>)}</div><div className="panel course-new pro"><div className="cn-fields"><div className="nf"><label>Titulo del curso</label><input value={t} onChange={e=>setT(e.target.value)} placeholder="Ej. Estimaciones y generadores"/></div><div className="nf"><label>Descripcion</label><input value={d} onChange={e=>setD(e.target.value)} placeholder="Que aprenderan"/></div></div><div className="nf"><label>Link del video</label><input value={link} onChange={e=>setLink(e.target.value)} placeholder="https://..."/></div><div className="cn-foot"><label className="up-btn ghost-up">Subir video<input type="file" accept="video/*" hidden onChange={()=>alert('La subida y alojamiento de video se habilita con Storage. Mientras tanto, pega el link del video.')}/></label><button onClick={add}>Crear curso</button></div></div><div className="cards-3 academy-grid">{list.map((c,i)=><div className="course-card pro" key={i}><div className="thumb"><button className="thumb-play" onClick={()=>c.link ? window.open(c.link,'_blank') : alert('Agrega un link o sube video para reproducirlo.')}><Icon name="play" size={30}/></button></div><div className="cc-body"><small className="course-pill">Modulo {i+1}</small><h2>{c.t}</h2><p>{c.d}</p>{c.link && <a className="cc-link" href={c.link} target="_blank" rel="noreferrer">Ver video</a>}<progress value={c.p} max="100"/><div className="cc-foot"><input type="range" min="0" max="100" value={c.p} onChange={e=>setList(list.map((x,idx)=>idx===i?{...x,p:+e.target.value}:x))}/><small>{c.p}%</small></div><a className="cc-del" onClick={()=>del(i)}>Eliminar</a></div></div>)}</div></section>
 }
 
-function PlansAccess(){
+function VisualAI({user}){
+  const [image,setImage]=useState('');
+  const [fileName,setFileName]=useState('');
+  const [mode,setMode]=useState('fachada');
+  const [prompt,setPrompt]=useState('Modernizar fachada con estilo contemporaneo, materiales aparentes, iluminacion arquitectonica y propuesta viable para obra.');
+  const [result,setResult]=useState('');
+  const [loading,setLoading]=useState(false);
+  const load=(file)=>{
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload=()=>{ setImage(reader.result); setFileName(file.name); };
+    reader.readAsDataURL(file);
+  };
+  const localBrief=()=>{
+    const modes = {
+      fachada:'Analisis de fachada: conservar estructura principal, proponer paleta de materiales, iluminacion, herreria, canceleria, textura, jardineria y mejoras de acceso.',
+      plano:'Plano a 3D: interpretar areas, volumenes, alturas aproximadas, circulaciones, estilo arquitectonico, materialidad y sugerir una volumetria inicial.',
+      interior:'Interiorismo: proponer distribucion, mobiliario, acabados, iluminacion, plafones, colores y puntos criticos de ejecucion.',
+      obra:'Revision de obra: detectar riesgos visuales, pendientes, seguridad, limpieza, avance y recomendaciones para reporte fotografico.'
+    };
+    return `${modes[mode]}\n\nInstruccion del usuario:\n${prompt}\n\nSalida esperada:\n1. Imagen o render propuesto.\n2. Lista de cambios visibles.\n3. Materiales sugeridos.\n4. Alcance preliminar para presupuesto.\n5. Observaciones tecnicas y supuestos.`;
+  };
+  const generate=async()=>{
+    setLoading(true);
+    try{
+      const data=await apiPost('/api/visual-ai', { image, fileName, mode, prompt, uid:user?.uid, email:user?.email });
+      setResult(data.result || localBrief());
+    }catch(err){
+      setResult(`${localBrief()}\n\nConexion IA pendiente:\n${err?.message || 'Configura OPENAI_API_KEY en Vercel para generar con IA real.'}`);
+    }finally{
+      setLoading(false);
+    }
+  };
+  return <section><PageHead kicker="Visual IA" title="Imagen, fachada y plano a propuesta" desc="Sube una fachada, avance de obra, interior o plano. ZOEMEC prepara un brief visual para generar propuestas, renders y alcances tecnicos." action={<button onClick={generate}>Generar propuesta</button>} />
+    <div className="visual-grid">
+      <div className="panel visual-uploader">
+        <label className="visual-drop">
+          {image ? <img src={image} alt="Referencia visual"/> : <div><Icon name="play" size={42}/><b>Subir imagen o plano</b><span>JPG, PNG o captura de plano</span></div>}
+          <input type="file" accept="image/*" hidden onChange={e=>load(e.target.files[0])}/>
+        </label>
+        <div className="visual-meta"><b>{fileName || 'Sin archivo cargado'}</b><span>{image ? 'Vista previa local lista' : 'La imagen real se guardara en Storage en produccion'}</span></div>
+      </div>
+      <div className="panel visual-form">
+        <h2>Que quieres generar</h2>
+        <div className="visual-modes">{[['fachada','Fachada'],['plano','Plano a 3D'],['interior','Interior'],['obra','Revision de obra']].map(x=><button key={x[0]} className={mode===x[0]?'active':''} onClick={()=>setMode(x[0])}>{x[1]}</button>)}</div>
+        <label>Instrucciones para la IA</label>
+        <textarea value={prompt} onChange={e=>setPrompt(e.target.value)} placeholder="Ej. Quiero ver esta fachada mas moderna, con piedra, luz calida y porton negro..." />
+        <div className="visual-actions"><button onClick={generate} disabled={loading}>{loading?'Generando...':'Generar brief visual'}</button><button className="secondary" onClick={()=>alert('La IA real queda conectada por /api/visual-ai. En Vercel agrega OPENAI_API_KEY y, si quieres guardar historial, FIREBASE_SERVICE_ACCOUNT_JSON.')}>Conectar IA real</button></div>
+      </div>
+      <div className="panel visual-result">
+        <h2>Salida tecnica</h2>
+        {result ? <pre>{result}</pre> : <p className="muted">Sube una imagen y genera el brief. La version real podra devolver imagen propuesta, descripcion, materiales y alcance para presupuesto.</p>}
+      </div>
+    </div>
+    <div className="visual-flow">{['Subir imagen a Storage','Guardar solicitud en Firestore','IA analiza referencia','Genera render o brief','Usuario aprueba y manda a presupuesto'].map((x,i)=><div key={x}><b>{i+1}</b><span>{x}</span></div>)}</div>
+  </section>
+}
+
+function PlansAccess({user}){
+  const [paying,setPaying]=useState('');
   const plans = [
-    {name:'Inicial', price:'$399/mes', note:'Para probar la plataforma', items:['10 APUs al mes', 'PDF básico con marca ZOEMEC', 'Biblioteca de consulta limitada', 'Sin IA real masiva']},
-    {name:'Profesional', price:'$899/mes', note:'Para oficina técnica activa', featured:true, items:['APUs con IA y Excel auditable', 'PDF y Excel con membrete', 'Biblioteca técnica completa', 'Presupuestos y reportes']},
-    {name:'Empresa', price:'$1,899/mes', note:'Para equipos y constructoras', items:['Usuarios por rol', 'Matriz, FSR, cuadrillas y explosiones', 'Carga masiva de catálogos', 'Soporte y configuración']},
-    {name:'Admin', price:'Interno', note:'Control ZOEMEC', items:['Alta de usuarios', 'Control de planes', 'Biblioteca global', 'Moderación de foro']}
+    {name:'Inicial', price:'$399/mes', note:'Para probar la plataforma', items:['10 APUs al mes', 'PDF basico con marca ZOEMEC', 'Biblioteca de consulta limitada', 'Sin IA real masiva']},
+    {name:'Profesional', price:'$899/mes', note:'Para oficina tecnica activa', featured:true, items:['APUs con IA y Excel auditable', 'PDF y Excel con membrete', 'Biblioteca tecnica completa', 'Presupuestos y reportes']},
+    {name:'Empresa', price:'$1,899/mes', note:'Para equipos y constructoras', items:['Usuarios por rol', 'Matriz, FSR, cuadrillas y explosiones', 'Carga masiva de catalogos', 'Soporte y configuracion']},
+    {name:'Admin', price:'Interno', note:'Control ZOEMEC', items:['Alta de usuarios', 'Control de planes', 'Biblioteca global', 'Moderacion de foro']}
+  ];
+  const payments = [
+    {name:'Mercado Pago', tag:'Recomendado MX', desc:'Tarjeta, SPEI, OXXO y meses segun configuracion. Ideal para cobrar en Mexico.', action:'Crear checkout Mercado Pago'},
+    {name:'Stripe', tag:'Internacional', desc:'Tarjetas, wallets y suscripciones. Bueno si despues venderas fuera de Mexico.', action:'Crear checkout Stripe'},
+    {name:'Transferencia', tag:'Manual', desc:'Pago por SPEI/factura. Un admin valida y activa el plan en Firestore.', action:'Registrar pago manual'}
   ];
   const features = [
     ['APU inteligente', '10/mes', 'Ilimitado razonable', 'Equipo completo'],
     ['Excel auditable', 'Basico', 'Completo', 'Completo + plantillas'],
-    ['Biblioteca técnica', 'Lectura limitada', 'Completa', 'Completa + privada'],
-    ['Foro y comunidad', 'Lectura', 'Publicar y responder', 'Moderación interna'],
-    ['IA real', 'No incluida', 'Incluida con límites', 'Mayor límite mensual'],
+    ['Biblioteca tecnica', 'Lectura limitada', 'Completa', 'Completa + privada'],
+    ['Foro y comunidad', 'Lectura', 'Publicar y responder', 'Moderacion interna'],
+    ['IA real', 'No incluida', 'Incluida con limites', 'Mayor limite mensual'],
     ['Usuarios', '1', '1', '5+']
   ];
   const production = [
-    ['Autenticación', 'Firebase Auth con correo, Google y roles por usuario.'],
+    ['Autenticacion', 'Firebase Auth con correo, Google y roles por usuario.'],
     ['Base de datos', 'Firestore para APUs, presupuestos, biblioteca, foro, planes y permisos.'],
     ['Archivos', 'Firebase Storage o Vercel Blob para Excel, PDF, cursos y documentos pesados.'],
-    ['Cobro', 'Stripe o Mercado Pago con webhooks para activar plan automáticamente.'],
+    ['Cobro', 'Mercado Pago o Stripe con webhooks para activar plan automaticamente.'],
     ['IA segura', 'Endpoint serverless en Vercel; la OPENAI_API_KEY nunca va en el navegador.'],
     ['Control de uso', 'Contadores mensuales por plan: APUs, tokens IA, descargas y usuarios.']
   ];
-  return <section><PageHead kicker="Planes y acceso" title="Modelo de cobro y permisos" desc="Define qué puede usar cada cliente y qué piezas faltan conectar para publicar ZOEMEC en producción." />
+  const payPlan=async(plan, method='Mercado Pago')=>{
+    if(plan === 'Admin'){
+      alert('El plan Admin se asigna manualmente desde Firestore para cuentas internas.');
+      return;
+    }
+    if(method === 'Transferencia'){
+      alert('Para transferencia: el usuario envia comprobante y un administrador activa el plan en Firestore. Siguiente paso: crear modulo de comprobantes.');
+      return;
+    }
+    if(!user?.uid){
+      alert('Inicia sesion para crear un checkout.');
+      return;
+    }
+    setPaying(`${method}-${plan}`);
+    try{
+      const data=await apiPost('/api/create-checkout', { plan, method, uid:user.uid, email:user.email, name:user.name });
+      if(data.url) window.location.href=data.url;
+      else alert('El checkout respondio sin URL. Revisa el endpoint de Vercel.');
+    }catch(err){
+      alert(`No pude crear el checkout: ${err?.message || 'configura Mercado Pago/Stripe en Vercel.'}`);
+    }finally{
+      setPaying('');
+    }
+  };
+  return <section><PageHead kicker="Planes y acceso" title="Modelo de cobro y permisos" desc="Define que puede usar cada cliente y que piezas faltan conectar para publicar ZOEMEC en produccion." />
     <div className="plans-grid">{plans.map(p=><div className={p.featured?'plan-card featured':'plan-card'} key={p.name}>
       <span>{p.name}</span><h2>{p.price}</h2><p>{p.note}</p>
       <ul>{p.items.map(x=><li key={x}>{x}</li>)}</ul>
-      <button>{p.featured?'Plan recomendado':'Configurar'}</button>
+      <button onClick={()=>payPlan(p.name)} disabled={Boolean(paying)}>{paying.endsWith(p.name)?'Conectando...':(p.featured?'Plan recomendado':'Configurar')}</button>
     </div>)}</div>
-    <div className="panel plan-matrix"><h2>Accesos por plan</h2><table><thead><tr><th>Función</th><th>Inicial</th><th>Profesional</th><th>Empresa</th></tr></thead><tbody>{features.map(r=><tr key={r[0]}>{r.map((c,i)=><td key={i}>{c}</td>)}</tr>)}</tbody></table></div>
-    <div className="prod-grid">{production.map(([t,d])=><div className="prod-step" key={t}><b>{t}</b><p>{d}</p><small>Pendiente de conectar para producción real</small></div>)}</div>
+    <div className="payment-panel panel">
+      <div className="payment-head"><div><small>Cobro real</small><h2>Metodos de pago para publicar</h2><p>El pago debe hacerse con un endpoint seguro. Las llaves secretas de Mercado Pago o Stripe nunca van dentro del React.</p></div><button onClick={()=>alert('En Vercel se configuran variables como MP_ACCESS_TOKEN, STRIPE_SECRET_KEY y WEBHOOK_SECRET.')}>Ver variables</button></div>
+      <div className="payment-grid">{payments.map(m=><div className="payment-card" key={m.name}>
+        <span>{m.tag}</span><h3>{m.name}</h3><p>{m.desc}</p>
+        <button onClick={()=>payPlan('Profesional',m.name)} disabled={Boolean(paying)}>{paying.startsWith(m.name)?'Conectando...':m.action}</button>
+      </div>)}</div>
+      <div className="pay-flow">{['Usuario elige plan','Checkout seguro','Webhook confirma pago','Firestore activa permisos','ZOEMEC libera funciones'].map((x,i)=><div key={x}><b>{i+1}</b><span>{x}</span></div>)}</div>
+    </div>
+    <div className="panel plan-matrix"><h2>Accesos por plan</h2><table><thead><tr><th>Funcion</th><th>Inicial</th><th>Profesional</th><th>Empresa</th></tr></thead><tbody>{features.map(r=><tr key={r[0]}>{r.map((c,i)=><td key={i}>{c}</td>)}</tr>)}</tbody></table></div>
+    <div className="prod-grid">{production.map(([t,d])=><div className="prod-step" key={t}><b>{t}</b><p>{d}</p><small>Pendiente de conectar para produccion real</small></div>)}</div>
   </section>
 }
-
-
 function Reports({clients,apus,budgets}){
   const total=budgets.reduce((a,b)=>a+(b.total||0),0);
   const segs=[{label:'Edificacion',value:42,color:'#9D6FD0'},{label:'Obra publica',value:33,color:'#2A1740'},{label:'Remodelacion',value:15,color:'#C7A35C'},{label:'Otros',value:10,color:'#B8A4CC'}];

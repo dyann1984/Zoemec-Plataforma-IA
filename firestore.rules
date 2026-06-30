@@ -1,0 +1,73 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    match /users/{uid} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow create: if isOwner(uid);
+      allow update: if isAdmin()
+        || (
+          isOwner(uid)
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.plan == resource.data.plan
+          && request.resource.data.active == resource.data.active
+        );
+      allow delete: if isAdmin();
+    }
+
+    match /devices/{deviceId} {
+      allow read, create: if signedIn();
+      allow update, delete: if isAdmin();
+    }
+
+    match /library/{docId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.visibility in ['private', 'global']
+        && (request.resource.data.visibility == 'private' || isAdmin());
+      allow update: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.ownerUid == request.auth.uid
+          && request.resource.data.ownerUid == resource.data.ownerUid
+          && request.resource.data.visibility == resource.data.visibility
+        );
+      allow delete: if isAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+    }
+
+    match /visual_requests/{docId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    match /payments/{docId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /forum/{docId} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update, delete: if isAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if isAdmin();
+    }
+  }
+}

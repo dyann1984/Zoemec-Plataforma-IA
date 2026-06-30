@@ -808,7 +808,7 @@ function assistantReply(q){
 }
 async function assistantReplyReal(q){
   try{
-    const response = await fetch('http://127.0.0.1:8787/api/assistant', {
+    const response = await fetch('/api/assistant', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({question:q})
@@ -1235,10 +1235,7 @@ function makeEmptyAPU(){
     aiNotes:[]
   };
 }
-function aiServerUrl(path=''){
-  const host = window.location.hostname === 'localhost' ? 'localhost' : '127.0.0.1';
-  return `http://${host}:8787${path}`;
-}
+function aiServerUrl(path=''){ return path; }
 
 function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog}){
   const [concept,setConcept]=useState('');
@@ -1280,7 +1277,6 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     try{
       const res=await fetch(aiServerUrl('/api/generate-apu'),{
         method:'POST',
-        mode:'cors',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({concept:parsed.concept,catalog})
       });

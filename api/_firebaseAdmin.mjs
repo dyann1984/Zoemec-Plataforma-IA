@@ -29,4 +29,9 @@ export function getAdminDb(){
   return admin.firestore();
 }
 
+export function getAdminAuth(){
+  getAdminDb();
+  return admin.auth();
+}
+
 export const FieldValue = admin.firestore.FieldValue;

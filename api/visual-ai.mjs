@@ -1,4 +1,5 @@
 import { FieldValue, getAdminDb } from './_firebaseAdmin.mjs';
+import { markFeatureUsed, requireFeature } from './_authGuard.mjs';
 
 const SYSTEM = `Eres ZOEMEC Visual IA, asistente tecnico para arquitectura, construccion y obra.
 Responde en espanol, con criterio profesional, supuestos claros y alcance presupuestable.
@@ -30,8 +31,9 @@ export default async function handler(req, res){
     return;
   }
   try{
+    const authz = await requireFeature(req, 'visual');
     if(!process.env.OPENAI_API_KEY) throw new Error('Falta OPENAI_API_KEY en Vercel.');
-    const { image, fileName, mode='fachada', prompt='', uid, email } = req.body || {};
+    const { image, fileName, mode='fachada', prompt='' } = req.body || {};
     if(!prompt.trim()) throw new Error('Escribe una instruccion para la IA.');
 
     const content = [
@@ -97,12 +99,12 @@ export default async function handler(req, res){
       imageError = err.message || 'No se pudo generar la imagen.';
     }
 
-    if(uid){
+    if(authz.uid){
       try{
         const db = getAdminDb();
         await db.collection('visual_requests').add({
-          uid,
-          email:email || '',
+          uid:authz.uid,
+          email:authz.email || '',
           fileName:fileName || '',
           mode,
           prompt,
@@ -113,9 +115,10 @@ export default async function handler(req, res){
         });
       }catch{}
     }
+    await markFeatureUsed(authz);
 
     res.status(200).json({ result: imageError ? `${result}\n\nImagen IA: ${imageError}` : result, imageUrl, imageB64, imageError });
   }catch(err){
-    res.status(400).json({ error:err.message || 'No se pudo usar Visual IA.' });
+    res.status(err.status || 400).json({ error:err.message || 'No se pudo usar Visual IA.' });
   }
 }

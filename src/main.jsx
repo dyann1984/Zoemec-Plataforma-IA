@@ -12,10 +12,16 @@ import './style.css';
 const money = (n) => Number(n || 0).toLocaleString('es-MX', { style:'currency', currency:'MXN' });
 const num = (n) => Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits:2, maximumFractionDigits:2 });
 const uid = () => Math.random().toString(36).slice(2, 8).toUpperCase();
+async function authHeaders(){
+  const headers = {'Content-Type':'application/json'};
+  const token = await auth?.currentUser?.getIdToken?.();
+  if(token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
 async function apiPost(path, body){
   const res = await fetch(path, {
     method:'POST',
-    headers:{'Content-Type':'application/json'},
+    headers:await authHeaders(),
     body:JSON.stringify(body || {})
   });
   const data = await res.json().catch(()=>({}));
@@ -810,7 +816,7 @@ async function assistantReplyReal(q){
   try{
     const response = await fetch('/api/assistant', {
       method:'POST',
-      headers:{'Content-Type':'application/json'},
+      headers:await authHeaders(),
       body:JSON.stringify({question:q})
     });
     const data = await response.json();
@@ -1277,7 +1283,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     try{
       const res=await fetch(aiServerUrl('/api/generate-apu'),{
         method:'POST',
-        headers:{'Content-Type':'application/json'},
+        headers:await authHeaders(),
         body:JSON.stringify({concept:parsed.concept,catalog})
       });
       const data=await res.json();
@@ -1290,7 +1296,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       setAiOpen(false);
     }catch(err){
       setAiStatus('');
-      alert(`No pude conectar con la IA: ${err?.message || 'servidor no disponible'}.\n\nArranca primero: npm run ai\nY revisa que .env tenga OPENAI_API_KEY.`);
+      alert(`No pude conectar con la IA: ${err?.message || 'servidor no disponible'}.\n\nRevisa tu sesion, tu plan y que OPENAI_API_KEY este configurada en Vercel.`);
     }
   };
   const importExcel=async(file)=>{ if(!file) return; if(/\.xls$/i.test(file.name)){alert('Este lector trabaja con .xlsx o .csv. Abre tu archivo en Excel y guárdalo como .xlsx.');return;} try{ const cat=await parseExcelToCatalog(file); if(!cat.length){alert('No detecté columnas de descripción y precio en el Excel. Revisa que tenga encabezados como "Descripción" y "Precio".');return;} setCatalog(cat); alert(`Catálogo importado: ${cat.length} insumos con precio. Al generar el APU usaré tus precios reales cuando coincidan.`); }catch(err){ alert(`No pude leer el archivo: ${err?.message || 'formato no compatible'}. Usa .xlsx o .csv.`); } };

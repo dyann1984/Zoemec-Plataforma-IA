@@ -590,6 +590,7 @@ svg.ic{display:block;flex:none}
 .lib-bulkbar em{margin-right:auto}
 .lib-bulkbar .soft,.lib-pager .soft{background:#fff;color:var(--petrol);border:1px solid var(--line);box-shadow:none;padding:7px 10px}
 .file-soft{display:inline-flex;align-items:center;justify-content:center;border-radius:10px;cursor:pointer;font-weight:700}
+.empty-state{border:1px dashed var(--line);border-radius:14px;background:#FBF8FD;color:var(--muted);padding:18px;line-height:1.45}
 .lib-pager{display:flex;align-items:center;justify-content:center;gap:12px;padding:12px;color:var(--muted);font-size:.82rem}
 .lib-pager button:disabled{opacity:.45;cursor:not-allowed}
 .lib-empty{border:1px dashed var(--line);border-radius:var(--r);padding:28px;text-align:center;color:var(--muted);background:#fff}
@@ -1087,6 +1088,7 @@ svg.ic{display:block;flex:none}
 .visual-form textarea{min-height:160px;margin-top:6px}
 .visual-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
 .visual-result{grid-column:1/3;border-top:3px solid var(--violet)}
+.visual-generated{width:100%;max-height:540px;object-fit:contain;border:1px solid var(--line);border-radius:14px;background:#fff;margin-bottom:14px;box-shadow:var(--shadow-sm)}
 .visual-result pre{white-space:pre-wrap;margin:0;background:#120C1C;color:#F7F1FC;border-radius:14px;padding:16px;line-height:1.45;font-size:.88rem;max-height:360px;overflow:auto}
 .visual-flow{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:16px}
 .visual-flow div{background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px;display:flex;align-items:center;gap:10px;box-shadow:var(--shadow-sm)}

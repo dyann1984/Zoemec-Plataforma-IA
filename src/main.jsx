@@ -170,11 +170,24 @@ function App(){
   const [usage, setUsage] = useLocalState('zoemec-usage', {});
   const [company, setCompany] = useLocalState('zoemec-company', defaultCompany);
   const [apus, setApus] = useLocalState('zoemec-apus', []);
-  const [clients, setClients] = useLocalState('zoemec-clients', sampleClients);
+  const [clients, setClients] = useLocalState('zoemec-clients', []);
   const [budgets, setBudgets] = useLocalState('zoemec-budgets', []);
-  const [projects, setProjects] = useLocalState('zoemec-projects', sampleProjects);
+  const [projects, setProjects] = useLocalState('zoemec-projects', []);
   const [catalog, setCatalog] = useLocalState('zoemec-catalogo', []);
   const companyView = company?.logo === '/logo.png' ? {...company, logo:'/logo.png?v=zoemec-2026'} : company;
+
+  useEffect(() => {
+    const demoClients = new Set(sampleClients.map(c => c.name));
+    const demoProjects = new Set(sampleProjects.map(p => p.name));
+    const demoCourses = new Set(courses.map(c => c[0]));
+    const demoForum = new Set(['Que rendimiento usan para muro de block 15 cm?','Proveedor de acero en zona centro','Formato de generadores para obra publica','Comparativo OPUS vs NEODATA']);
+    if(clients.some(c => demoClients.has(c.name))) setClients(clients.filter(c => !demoClients.has(c.name)));
+    if(projects.some(p => demoProjects.has(p.name))) setProjects(projects.filter(p => !demoProjects.has(p.name)));
+    const savedCourses = readLocal('zoemec-cursos', []);
+    if(Array.isArray(savedCourses) && savedCourses.some(c => demoCourses.has(c.t))) localStorage.setItem('zoemec-cursos', JSON.stringify(savedCourses.filter(c => !demoCourses.has(c.t))));
+    const savedForum = readLocal('zoemec-foro', []);
+    if(Array.isArray(savedForum) && savedForum.some(p => demoForum.has(p.q))) localStorage.setItem('zoemec-foro', JSON.stringify(savedForum.filter(p => !demoForum.has(p.q))));
+  }, []);
 
   useEffect(() => {
     if(!firebaseReady) return undefined;
@@ -927,20 +940,22 @@ function Stat({label,value,sub}){return <div className="stat-card"><p>{label}</p
 
 function Dashboard({setModule,apus,clients,budgets,projects}){
   const monto = budgets.reduce((a,b)=>a+(b.total||0),0);
-  const pr = projects||sampleProjects;
+  const pr = projects || [];
   const estados = pr.reduce((m,p)=>{m[p.status]=(m[p.status]||0)+1;return m;},{});
   const palette = ['#9D6FD0','#2A1740','#C7A35C','#B8A4CC','#B54A62'];
   const segs = Object.keys(estados).map((k,i)=>({label:k,value:estados[k],color:palette[i%palette.length]}));
+  const spark = budgets.length ? budgets.slice(-8).map((b,i)=>Math.max(1,(Number(b.total)||0)/1000+i)) : [0,0,0,0,0,0,0,0];
   return <section><PageHead kicker="Panel ejecutivo" title="Buenos días, Diany" desc="Controla tus proyectos, APUs, presupuestos y biblioteca técnica desde un solo lugar." />
-    <div className="stats"><Stat label="Clientes" value={clients.length} sub="Cartera activa"/><Stat label="APU creados" value={apus.length || 24} sub="Este mes"/><Stat label="Presupuestos" value={budgets.length || 8} sub="En seguimiento"/><Stat label="Monto cotizado" value={money(monto || 18450240)} sub="Acumulado"/></div>
+    <div className="stats"><Stat label="Clientes" value={clients.length} sub="Cartera activa"/><Stat label="APU creados" value={apus.length} sub="Este mes"/><Stat label="Presupuestos" value={budgets.length} sub="En seguimiento"/><Stat label="Monto cotizado" value={money(monto)} sub="Acumulado"/></div>
     <div className="quick"><button onClick={()=>setModule('apu')}><Icon name="apu"/> Crear APU</button><button onClick={()=>setModule('presupuestos')}><Icon name="presupuestos"/> Nuevo presupuesto</button><button onClick={()=>setModule('clientes')}><Icon name="clientes"/> Nuevo cliente</button><button onClick={()=>setModule('tecnico')}><Icon name="tecnico"/> Calculadoras</button></div>
     <div className="dash-charts">
-      <div className="panel"><h2>Tendencia de cotización</h2><Spark points={[6.4,7.1,6.8,8.3,9.6,11.2,10.4,12.8]}/><div className="chart-foot"><span>Últimos 8 meses</span><b>+18% vs. periodo anterior</b></div></div>
+      <div className="panel"><h2>Tendencia de cotización</h2><Spark points={spark}/><div className="chart-foot"><span>{budgets.length ? 'Últimos presupuestos' : 'Sin presupuestos reales todavía'}</span><b>{budgets.length ? 'Datos reales' : '0% acumulado'}</b></div></div>
       <div className="panel chart-donut"><h2>Estado de proyectos</h2><Donut segments={segs} center={pr.length} sub="obras"/><div className="donut-legend">{segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>)}</div></div>
     </div>
-    <div className="grid-2"><div className="panel"><h2>Proyectos recientes</h2>{pr.slice(0,4).map(p=><div className="project-row" key={p.name}><div><b>{p.name}</b><small>{p.client}</small></div><span>{p.progress}%</span><progress value={p.progress} max="100" /></div>)}</div><div className="panel"><h2>Actividad reciente</h2>{['APU muro de block exportado en PDF','Cliente Municipio actualizado','Presupuesto Local comercial guardado','Excel de precios importado'].map(x=><div className="activity" key={x}><Icon name="doc" size={15}/> {x}</div>)}</div></div>
+    <div className="grid-2"><div className="panel"><h2>Proyectos recientes</h2>{pr.length ? pr.slice(0,4).map(p=><div className="project-row" key={p.name}><div><b>{p.name}</b><small>{p.client}</small></div><span>{p.progress}%</span><progress value={p.progress} max="100" /></div>) : <EmptyState text="Aún no hay proyectos reales. Crea el primero para alimentar este tablero."/>}</div><div className="panel"><h2>Actividad reciente</h2>{apus.length || budgets.length ? [...apus.slice(0,2).map(a=>`APU ${a.clave || a.id} creado`), ...budgets.slice(0,2).map(b=>`Presupuesto ${b.name} guardado`)].map(x=><div className="activity" key={x}><Icon name="doc" size={15}/> {x}</div>) : <EmptyState text="La actividad aparecerá cuando guardes APUs, presupuestos, clientes o documentos."/>}</div></div>
   </section>
 }
+function EmptyState({text}){return <div className="empty-state">{text}</div>}
 
 /* ====================================================================
    MOTOR APU - Metodología mexicana (RLOPSRM Art. 191, 220)
@@ -1198,14 +1213,36 @@ function normalizeAIAPU(raw, fallbackConcept){
     date:new Date().toLocaleDateString('es-MX')
   };
 }
+function makeEmptyAPU(){
+  return {
+    id:'APU-'+uid(),
+    clave:'APU-'+uid(),
+    concept:'',
+    unit:'m²',
+    materials:[],
+    labor:[],
+    equipment:[],
+    herramienta:0,
+    indCampo:0,
+    indOficina:0,
+    finance:0,
+    utility:0,
+    cargos:0,
+    iva:16,
+    family:'pendiente',
+    confidence:0,
+    sat:'',
+    aiNotes:[]
+  };
+}
 function aiServerUrl(path=''){
   const host = window.location.hostname === 'localhost' ? 'localhost' : '127.0.0.1';
   return `http://${host}:8787${path}`;
 }
 
 function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog}){
-  const [concept,setConcept]=useState('Muro de block hueco de concreto de 15 cm asentado con mortero cemento-arena');
-  const [apu,setApu]=useState(()=>makeAPUFromConcept('Muro de block hueco de concreto de 15 cm asentado con mortero cemento-arena'));
+  const [concept,setConcept]=useState('');
+  const [apu,setApu]=useState(()=>makeEmptyAPU());
   const [aiOpen,setAiOpen]=useState(false);
   const [excelInfo,setExcelInfo]=useState(null);
   const [aiStatus,setAiStatus]=useState('');
@@ -1228,6 +1265,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   const setParam=(k,v)=>setApu({...apu,[k]:v});
   const generate=()=>{
     if(!requireApuAccess()) return;
+    if(!concept.trim()){ alert('Pega o sube un concepto real para generar el APU.'); return; }
     const parsed=parseConceptText(concept);
     const next=makeAPUFromConcept(parsed.concept, catalog);
     setConcept(parsed.concept);
@@ -1236,6 +1274,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   };
   const generateAI=async()=>{
     if(!requireApuAccess()) return;
+    if(!concept.trim()){ alert('Pega o sube un concepto real para generar con IA.'); return; }
     const parsed=parseConceptText(concept);
     setAiStatus('Generando APU con IA...');
     try{
@@ -2142,19 +2181,19 @@ function exportBudgetExcel(items,total,iva){const rows=[['PRESUPUESTO'],['Concep
 function exportBudgetPDF(items,total,iva,company){const doc=new jsPDF();let y=16;doc.setFontSize(16);doc.text(company.name||'ZOEMEC',14,y);doc.setFontSize(13);doc.text('PRESUPUESTO EJECUTIVO',14,y+14);y+=28;items.forEach(i=>{doc.text(i.concept,14,y,{maxWidth:100});doc.text(i.unit,118,y);doc.text(String(i.qty),135,y);doc.text(money(i.pu),152,y);doc.text(money(i.qty*i.pu),174,y);y+=10;if(y>270){doc.addPage();y=18;}});y+=6;doc.text('Subtotal',130,y);doc.text(money(total),170,y);y+=8;doc.text('IVA 16%',130,y);doc.text(money(iva),170,y);y+=8;doc.text('Total',130,y);doc.text(money(total+iva),170,y);doc.save('Presupuesto-ZOEMEC.pdf');}
 
 function Projects({projects,setProjects}){
-  const list = projects || sampleProjects;
+  const list = projects || [];
   const add = () => setProjects([{name:'Nuevo proyecto', client:'Cliente por definir', progress:0, budget:0, status:'Anteproyecto'}, ...list]);
   const update = (i,k,v) => setProjects(list.map((p,idx)=>idx===i?{...p,[k]:v}:p));
   const remove = (i) => setProjects(list.filter((_,idx)=>idx!==i));
   return <section><PageHead kicker="Proyectos" title="Control de obra y proyectos" desc="Vista ejecutiva de obras, avance, presupuesto, cliente y estado." action={<button onClick={add}>+ Nuevo proyecto</button>} />
-    <div className="cards-3">{list.map((p,i)=><div className="project-card" key={i}>
+    {list.length ? <div className="cards-3">{list.map((p,i)=><div className="project-card" key={i}>
       <span>{p.status}</span>
       <h2><input value={p.name} onChange={e=>update(i,'name',e.target.value)} style={{fontFamily:'var(--display)',fontWeight:700,border:0,padding:0,background:'transparent'}}/></h2>
       <p><input value={p.client} onChange={e=>update(i,'client',e.target.value)} style={{border:0,padding:0,background:'transparent',color:'var(--muted)'}}/></p>
       <b>{money(p.budget)}</b>
       <progress value={p.progress} max="100"/>
       <small>{p.progress}% de avance - <a onClick={()=>remove(i)} style={{color:'var(--danger)'}}>eliminar</a></small>
-    </div>)}</div></section>
+    </div>)}</div> : <div className="panel"><EmptyState text="No hay proyectos reales cargados. Usa “Nuevo proyecto” para iniciar tu cartera."/></div>}</section>
 }
 function Clients({clients,setClients}){const [q,setQ]=useState('');const filtered=clients.filter(c=>c.name.toLowerCase().includes(q.toLowerCase()));return <section><PageHead kicker="CRM de obra" title="Clientes" desc="Cartera profesional con proyectos, presupuestos, contactos, RFC e historial." action={<button onClick={()=>setClients([{id:'CLI-'+uid(),name:'Nuevo cliente',type:'Empresa',contact:'Contacto',phone:'',email:'',rfc:'',projects:0,budgets:0,amount:0,status:'Prospecto'},...clients])}>+ Nuevo cliente</button>} /><div className="panel"><input className="search" placeholder="Buscar cliente..." value={q} onChange={e=>setQ(e.target.value)}/><div className="client-grid">{filtered.map(c=><div className="client-card" key={c.id}><div className="client-avatar">{c.name[0]}</div><div><h2>{c.name}</h2><p>{c.type} - {c.contact}</p><small>RFC: {c.rfc}</small><div className="client-stats"><span>{c.projects} proyectos</span><span>{c.budgets} presupuestos</span><b>{money(c.amount)}</b></div></div><em>{c.status}</em></div>)}</div></div></section>}
 
@@ -2378,7 +2417,9 @@ function Office({company,setCompany,catalog,setCatalog}){
   return <section><PageHead kicker="Oficina Técnica" title="Empresa, logo y formatos" desc="Configura membretes, datos fiscales, firmas, plantillas y tu Excel de precios." /><div className="grid-2"><div className="panel form"><label>Logo</label><img className="logo-preview" src={company.logo}/><input type="file" accept="image/*" onChange={e=>uploadLogo(e.target.files[0])}/><label>Empresa</label><input value={company.name} onChange={e=>setCompany({...company,name:e.target.value})}/><label>RFC</label><input value={company.rfc} onChange={e=>setCompany({...company,rfc:e.target.value})}/><label>Teléfono</label><input value={company.phone} onChange={e=>setCompany({...company,phone:e.target.value})}/><label>Correo</label><input value={company.email} onChange={e=>setCompany({...company,email:e.target.value})}/></div><div className="panel"><h2>Plantillas</h2>{['Formato ZOEMEC','Formato gobierno','Formato CFE','Formato CONAGUA','Formato personalizado'].map(x=><div className="activity" key={x}><Icon name="doc" size={16}/> {x}</div>)}<h2>Mi Excel de precios</h2><label className="up-btn ghost-up" style={{display:'inline-block',marginTop:4}}>Importar catálogo (.xlsx/.csv)<input type="file" accept=".xlsx,.csv" hidden onChange={e=>importExcel(e.target.files[0])}/></label>{catalog&&catalog.length>0 && <p className="muted" style={{marginTop:10}}>✓ Catálogo cargado: <b>{catalog.length}</b> insumos. Se usan al generar APUs por coincidencia de nombre.</p>}<p className="muted">Detecto columnas de descripción, unidad y precio automáticamente.</p></div></div></section>}
 
 function Community(){
-  const [posts,setPosts]=useLocalState('zoemec-foro',[{q:'Que rendimiento usan para muro de block 15 cm?',who:'Laura S.',when:'hace 2 h',likes:7,cat:'Tecnico',status:'Resuelto',replies:['Yo manejo 0.35 jor de albanil por m2.','Depende del tipo de junta, pero ronda eso.']},{q:'Proveedor de acero en zona centro',who:'Diany',when:'hace 5 h',likes:3,cat:'Proveedores',status:'Abierto',replies:[]},{q:'Formato de generadores para obra publica',who:'Carlos M.',when:'ayer',likes:5,cat:'Formatos',status:'Con archivo',replies:['Te paso el mio en Excel.']},{q:'Comparativo OPUS vs NEODATA',who:'Ing. Perez',when:'hace 2 dias',likes:12,cat:'Software',status:'Debate',replies:[]}]);
+  const demoForum = ['Que rendimiento usan para muro de block 15 cm?','Proveedor de acero en zona centro','Formato de generadores para obra publica','Comparativo OPUS vs NEODATA'];
+  const [posts,setPosts]=useLocalState('zoemec-foro',[]);
+  useEffect(()=>{ if(posts.some(p=>demoForum.includes(p.q))) setPosts(posts.filter(p=>!demoForum.includes(p.q))); },[]);
   const [q,setQ]=useState(''); const [search,setSearch]=useState(''); const [cat,setCat]=useState('Tecnico'); const [filter,setFilter]=useState('Todos'); const [openReply,setOpenReply]=useState(-1); const [reply,setReply]=useState('');
   const cats=['Todos','Tecnico','Proveedores','Formatos','Software','Obra publica'];
   const visible=(filter==='Todos'?posts:posts.filter(p=>(p.cat||'Tecnico')===filter)).filter(p=>p.q.toLowerCase().includes(search.toLowerCase()) || (p.replies||[]).join(' ').toLowerCase().includes(search.toLowerCase()));
@@ -2392,7 +2433,7 @@ function Community(){
 
 
 function Academy(){
-  const [list,setList]=useLocalState('zoemec-cursos', courses.map(c=>({t:c[0],d:c[1],p:c[2],link:''})));
+  const [list,setList]=useLocalState('zoemec-cursos', []);
   const [t,setT]=useState(''); const [d,setD]=useState(''); const [link,setLink]=useState('');
   const add=()=>{ if(!t.trim()) return; setList([{t:t.trim(),d:d.trim()||'Curso nuevo',p:0,link:link.trim()},...list]); setT(''); setD(''); setLink(''); };
   const del=(i)=>setList(list.filter((_,idx)=>idx!==i));
@@ -2406,6 +2447,7 @@ function VisualAI({user}){
   const [mode,setMode]=useState('fachada');
   const [prompt,setPrompt]=useState('Modernizar fachada con estilo contemporaneo, materiales aparentes, iluminacion arquitectonica y propuesta viable para obra.');
   const [result,setResult]=useState('');
+  const [generatedImage,setGeneratedImage]=useState('');
   const [loading,setLoading]=useState(false);
   const load=(file)=>{
     if(!file) return;
@@ -2426,8 +2468,11 @@ function VisualAI({user}){
     setLoading(true);
     try{
       const data=await apiPost('/api/visual-ai', { image, fileName, mode, prompt, uid:user?.uid, email:user?.email });
+      const img = data.imageUrl || (data.imageB64 ? `data:image/png;base64,${data.imageB64}` : '');
+      setGeneratedImage(img);
       setResult(data.result || localBrief());
     }catch(err){
+      setGeneratedImage('');
       setResult(`${localBrief()}\n\nConexion IA pendiente:\n${err?.message || 'Configura OPENAI_API_KEY en Vercel para generar con IA real.'}`);
     }finally{
       setLoading(false);
@@ -2451,6 +2496,7 @@ function VisualAI({user}){
       </div>
       <div className="panel visual-result">
         <h2>Salida tecnica</h2>
+        {generatedImage && <img className="visual-generated" src={generatedImage} alt="Propuesta visual generada por ZOEMEC IA"/>}
         {result ? <pre>{result}</pre> : <p className="muted">Sube una imagen y genera el brief. La version real podra devolver imagen propuesta, descripcion, materiales y alcance para presupuesto.</p>}
       </div>
     </div>
@@ -2531,10 +2577,11 @@ function PlansAccess({user}){
 }
 function Reports({clients,apus,budgets}){
   const total=budgets.reduce((a,b)=>a+(b.total||0),0);
-  const segs=[{label:'Edificacion',value:42,color:'#9D6FD0'},{label:'Obra publica',value:33,color:'#2A1740'},{label:'Remodelacion',value:15,color:'#C7A35C'},{label:'Otros',value:10,color:'#B8A4CC'}];
-  const bars=[['Presupuestos enviados',78,'#9D6FD0'],['APU creados',64,'#2A1740'],['Clientes nuevos',42,'#C7A35C'],['Proyectos cerrados',36,'#B8A4CC']];
-  const alerts=['3 presupuestos sin seguimiento','12 APUs generados esta semana','Biblioteca lista para indexar IA','Meta comercial al 78%'];
-  return <section><PageHead kicker="Reportes" title="Tablero ejecutivo" desc="Ventas, presupuestos, clientes, APUs, avances, utilidad y rendimiento de la oficina." action={<button>Exportar reporte</button>} /><div className="report-hero"><div><small>Venta potencial</small><b>{money(total||18450240)}</b><span>acumulado</span></div><div><small>Pipeline</small><b>37%</b><span>tasa de cierre</span></div><div><small>Productividad</small><b>{apus.length||24}</b><span>APU generados</span></div><div><small>Clientes</small><b>{clients.length}</b><span>activos</span></div></div><div className="dash-charts report-grid"><div className="panel"><h2>Cotizacion mensual</h2><Spark points={[7.2,8.1,7.6,9.4,10.1,11.8,12.4,14.9]} h={110}/><div className="chart-foot"><span>Miles de pesos - 8 meses</span><b>+22% acumulado</b></div></div><div className="panel chart-donut"><h2>Cartera por tipo de obra</h2><Donut segments={segs} center="100%" sub="cartera"/><div className="donut-legend">{segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}%</b></span>)}</div></div></div><div className="report-bottom"><div className="panel"><h2>Resumen mensual</h2>{bars.map(([label,val,color])=><div className="bar-row" key={label}><span>{label}</span><i><b style={{width:val+'%',background:color}}></b></i><em className="bar-val">{val}%</em></div>)}</div><div className="panel"><h2>Alertas ejecutivas</h2>{alerts.map(a=><div className="activity" key={a}><Icon name="bell" size={15}/> {a}</div>)}</div></div></section>
+  const hasData = Boolean(clients.length || apus.length || budgets.length);
+  const segs=hasData ? [{label:'Presupuestos',value:budgets.length,color:'#9D6FD0'},{label:'APUs',value:apus.length,color:'#2A1740'},{label:'Clientes',value:clients.length,color:'#C7A35C'}].filter(s=>s.value>0) : [];
+  const bars=[['Presupuestos enviados',Math.min(100,budgets.length*10),'#9D6FD0'],['APU creados',Math.min(100,apus.length*10),'#2A1740'],['Clientes nuevos',Math.min(100,clients.length*10),'#C7A35C']];
+  const alerts=hasData ? [...apus.slice(0,2).map(a=>`APU ${a.clave || a.id} disponible para revisar`), ...budgets.slice(0,2).map(b=>`Presupuesto ${b.name} en cartera`)] : [];
+  return <section><PageHead kicker="Reportes" title="Tablero ejecutivo" desc="Ventas, presupuestos, clientes, APUs, avances, utilidad y rendimiento de la oficina." action={<button>Exportar reporte</button>} /><div className="report-hero"><div><small>Venta potencial</small><b>{money(total)}</b><span>acumulado</span></div><div><small>Pipeline</small><b>{budgets.length ? 'Activo' : '0%'}</b><span>tasa de cierre</span></div><div><small>Productividad</small><b>{apus.length}</b><span>APU generados</span></div><div><small>Clientes</small><b>{clients.length}</b><span>activos</span></div></div><div className="dash-charts report-grid"><div className="panel"><h2>Cotizacion mensual</h2><Spark points={budgets.length ? budgets.slice(-8).map(b=>Math.max(1,(Number(b.total)||0)/1000)) : [0,0,0,0,0,0,0,0]} h={110}/><div className="chart-foot"><span>{budgets.length ? 'Presupuestos reales' : 'Sin datos reales'}</span><b>{budgets.length ? 'Actualizado' : '0% acumulado'}</b></div></div><div className="panel chart-donut"><h2>Cartera por tipo de obra</h2><Donut segments={segs} center={hasData ? '100%' : '0%'} sub="cartera"/><div className="donut-legend">{segs.length ? segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>) : <EmptyState text="Sin datos para graficar."/>}</div></div></div><div className="report-bottom"><div className="panel"><h2>Resumen mensual</h2>{bars.map(([label,val,color])=><div className="bar-row" key={label}><span>{label}</span><i><b style={{width:val+'%',background:color}}></b></i><em className="bar-val">{val}%</em></div>)}</div><div className="panel"><h2>Alertas ejecutivas</h2>{alerts.length ? alerts.map(a=><div className="activity" key={a}><Icon name="bell" size={15}/> {a}</div>) : <EmptyState text="Sin alertas hasta que existan movimientos reales."/>}</div></div></section>
 }
 
 createRoot(document.getElementById('root')).render(<App />);

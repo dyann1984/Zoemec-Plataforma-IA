@@ -1,5 +1,7 @@
 import admin from 'firebase-admin';
 
+const DEFAULT_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'zoemec-plataforma-ia';
+
 function parseServiceAccount(){
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
   if(raw){
@@ -17,20 +19,30 @@ function parseServiceAccount(){
   return null;
 }
 
-export function getAdminDb(){
+function initAdminApp(){
   if(!admin.apps.length){
     const serviceAccount = parseServiceAccount();
     if(serviceAccount){
-      admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+      admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+        projectId: serviceAccount.project_id || DEFAULT_PROJECT_ID
+      });
     }else{
-      admin.initializeApp();
+      admin.initializeApp({ projectId: DEFAULT_PROJECT_ID });
     }
+  }
+}
+
+export function getAdminDb(){
+  initAdminApp();
+  if(!parseServiceAccount() && !process.env.GOOGLE_APPLICATION_CREDENTIALS){
+    throw new Error('Falta FIREBASE_SERVICE_ACCOUNT_JSON en Vercel para leer planes y permisos.');
   }
   return admin.firestore();
 }
 
 export function getAdminAuth(){
-  getAdminDb();
+  initAdminApp();
   return admin.auth();
 }
 

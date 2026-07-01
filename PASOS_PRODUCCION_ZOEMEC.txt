@@ -1,0 +1,198 @@
+PASOS PARA DEJAR ZOEMEC EN PRODUCCION
+====================================
+
+1. Firebase Authentication
+--------------------------
+- Entrar a Firebase Console > Authentication > Metodo de acceso.
+- Activar Email/password.
+- Activar Google si se va a permitir acceso con cuenta Google.
+- Crear la cuenta administradora:
+  correo: dianalopez161184@gmail.com
+- Verificar el correo desde el email que manda Firebase.
+
+
+2. Firestore
+------------
+- Crear la base de datos Cloud Firestore en modo produccion.
+- Crear el documento del admin:
+  coleccion: users
+  documento: UID real del usuario admin
+
+Campos recomendados:
+  uid: UID real del usuario
+  email: dianalopez161184@gmail.com
+  name: Diana Lopez
+  role: admin
+  plan: Empresa
+  active: true
+  apusCreated: 0
+  deviceId: admin
+
+- Publicar reglas de Firestore desde el archivo firestore.rules.
+
+
+3. Firebase Storage
+-------------------
+- Activar Firebase Storage.
+- Publicar reglas desde storage.rules.
+- La biblioteca sube archivos a:
+  library/{uid}/{fileId}/{nombreArchivo}
+
+
+4. Service Account para Vercel
+------------------------------
+- Firebase Console > Configuracion del proyecto > Cuentas de servicio.
+- Generar nueva clave privada.
+- Copiar TODO el JSON.
+- En Vercel > Project > Settings > Environment Variables crear:
+
+  FIREBASE_SERVICE_ACCOUNT_JSON = JSON completo de la cuenta de servicio
+  FIREBASE_PROJECT_ID = zoemec-plataforma-ia
+
+Importante:
+- No subir ese JSON al repositorio.
+- Debe estar solo como variable privada en Vercel.
+
+
+5. OpenAI en Vercel
+-------------------
+- En Vercel > Environment Variables agregar:
+
+  OPENAI_API_KEY = tu API key de OpenAI
+  OPENAI_MODEL = gpt-4.1-mini
+
+Opcional para Visual IA:
+  OPENAI_IMAGE_MODEL = gpt-image-1
+  OPENAI_IMAGE_SIZE = 1024x1024
+
+Despues de agregar variables:
+- Hacer redeploy en Vercel.
+- Probar generar APU desde la pagina publicada.
+
+
+6. Biblioteca tecnica
+---------------------
+- Subir archivos desde Biblioteca ZOEMEC.
+- Para muchos documentos, lo mejor es:
+  1. Organizar carpetas por Costos, Matrices APU, Mano de obra, Normas, Formatos.
+  2. Subir por lotes.
+  3. Usar "Indexar lote visible".
+
+La version actual indexa por metadata:
+- nombre del archivo
+- categoria
+- familia tecnica
+- tags
+- extension
+- usuario/permiso
+
+Siguiente mejora para que sea nivel 10:
+- Leer contenido interno de Excel/PDF.
+- Extraer insumos, unidades, precios, rendimientos y formulas.
+- Guardar embeddings/indice semantico para busqueda inteligente.
+
+
+7. OneDrive
+-----------
+- No se necesita entregar contrasena.
+- Si los documentos estan en OneDrive, deben estar sincronizados localmente.
+- Dar la ruta exacta, por ejemplo:
+  C:\Users\ANUNAKI\OneDrive\ZOEMEC\Bases
+
+Si no aparecen:
+- En OneDrive, clic derecho en la carpeta.
+- Seleccionar "Mantener siempre en este dispositivo".
+- Esperar a que se descarguen.
+
+
+8. Pagos
+--------
+Opcion recomendada para Mexico:
+- Mercado Pago.
+
+Flujo real:
+1. Usuario elige plan.
+2. ZOEMEC crea checkout seguro en endpoint de Vercel.
+3. Usuario paga en Mercado Pago.
+4. Mercado Pago manda webhook a Vercel.
+5. Vercel valida el pago.
+6. Vercel actualiza Firestore:
+   users/{uid}.plan = "Inicial" | "Profesional" | "Empresa"
+   users/{uid}.active = true
+
+Variables futuras en Vercel:
+  MP_ACCESS_TOKEN
+  MP_WEBHOOK_SECRET
+
+
+9. Planes y permisos
+--------------------
+Gratis:
+- 1 APU de prueba.
+- Sin biblioteca completa.
+- Sin carga masiva.
+
+Inicial:
+- APUs limitados al mes.
+- Biblioteca limitada.
+- PDF basico.
+
+Profesional:
+- APUs con IA.
+- Excel auditable.
+- PDF profesional.
+- Biblioteca completa.
+
+Empresa:
+- Usuarios por rol.
+- Biblioteca privada.
+- Carga masiva.
+- Reportes y control interno.
+
+Admin:
+- Acceso completo.
+- Control de usuarios.
+- Control de biblioteca.
+- Control de planes.
+
+
+10. Deploy
+----------
+Despues de cada cambio:
+
+  npm run build
+  git add .
+  git commit -m "mensaje del cambio"
+  git push origin main
+
+Vercel despliega automaticamente.
+
+
+11. Verificacion final
+----------------------
+Antes de compartir:
+- Entrar a https://zoemec-plataforma-ia.vercel.app
+- Probar registro nuevo.
+- Probar login admin.
+- Probar 1 APU gratis con usuario nuevo.
+- Probar que admin puede usar biblioteca.
+- Probar subir archivo a biblioteca.
+- Probar generar APU con IA.
+- Probar descargar PDF y Excel.
+- Probar en celular.
+
+
+12. Para llegar al 10
+---------------------
+Prioridad tecnica:
+1. Extractor real de Excel/PDF para biblioteca.
+2. Indice semantico de documentos.
+3. Motor de APU que cite fuente por insumo.
+4. Excel por concepto con formulas visibles.
+5. PDF profesional por concepto.
+6. Pagos Mercado Pago con webhook.
+7. Control de planes y limites por usuario.
+8. Visual IA con imagen real.
+9. Panel admin para usuarios, planes, consumo y biblioteca.
+10. Pruebas completas antes de venta.
+

@@ -171,7 +171,7 @@ function buildSession(profile, fbUser){
 function App(){
   const [screen, setScreen] = useState('landing');
   const [module, setModule] = useState('inicio');
-  const [user, setUser] = useLocalState('zoemec-user', null);
+  const [user, setUser] = useState(null);
   const [accounts, setAccounts] = useLocalState('zoemec-accounts', []);
   const [usage, setUsage] = useLocalState('zoemec-usage', {});
   const [company, setCompany] = useLocalState('zoemec-company', defaultCompany);
@@ -183,6 +183,7 @@ function App(){
   const companyView = company?.logo === '/logo.png' ? {...company, logo:'/logo.png?v=zoemec-2026'} : company;
 
   useEffect(() => {
+    localStorage.removeItem('zoemec-user');
     const demoClients = new Set(sampleClients.map(c => c.name));
     const demoProjects = new Set(sampleProjects.map(p => p.name));
     const demoCourses = new Set(courses.map(c => c[0]));
@@ -219,7 +220,6 @@ function App(){
         const session = buildSession(profile, fbUser);
         setUser(session);
         setUsage(prev => ({...prev, [session.email]:{apusCreated:session.apusCreated || 0, deviceId:session.deviceId}}));
-        setScreen('app');
       }catch(error){
         console.error(error);
       }
@@ -350,6 +350,7 @@ function App(){
   };
   const logout = async () => {
     try { if(firebaseReady) await signOut(auth); } catch {}
+    localStorage.removeItem('zoemec-user');
     setUser(null);
     setScreen('landing');
   };

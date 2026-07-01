@@ -738,17 +738,20 @@ function excelCell(value){
 }
 const XLS = {
   title:{fontWeight:'bold', fontSize:16, color:'#ffffff', backgroundColor:'#2A1740', align:'center', alignVertical:'center'},
-  subtitle:{fontWeight:'bold', color:'#6F3FA7', backgroundColor:'#F2ECF8'},
+  subtitle:{fontWeight:'bold', color:'#6F3FA7', backgroundColor:'#F2ECF8', align:'center'},
   head:{fontWeight:'bold', color:'#ffffff', backgroundColor:'#2A1740', align:'center'},
   section:{fontWeight:'bold', color:'#2A1740', backgroundColor:'#EDE3F6'},
   total:{fontWeight:'bold', color:'#2A1740', backgroundColor:'#F6F0FB'},
   grand:{fontWeight:'bold', color:'#ffffff', backgroundColor:'#2A1740'},
   label:{fontWeight:'bold', color:'#2A1740', backgroundColor:'#F7F2FA'},
   note:{color:'#6D6078', backgroundColor:'#FBF8FD', wrap:true},
+  input:{backgroundColor:'#FFFDF7', color:'#1F162A'},
   calc:{backgroundColor:'#F7F2FA', format:'$#,##0.00'},
   formula:{color:'#6D6078', backgroundColor:'#FBF8FD', wrap:true},
   money:{format:'$#,##0.00'},
-  pct:{format:'0.00%'}
+  qty:{format:'#,##0.0000'},
+  pct:{format:'0.00%'},
+  ok:{fontWeight:'bold', color:'#166534', backgroundColor:'#ECFDF3'}
 };
 const xcell = (value, style={}) => ({ value, ...style });
 const fcell = (formula, style={}) => ({ value:String(formula || '').replace(/^=/,''), type:'Formula', ...XLS.money, ...style });
@@ -1180,8 +1183,8 @@ function buildAuditModel(apu, totals){
     ['Herramienta menor', `Mano de obra x ${num(apu.herramienta)}%`, totals.herramienta],
     ['Costo directo', 'Materiales + Mano de obra + Equipo + Herramienta menor', totals.direct],
     ['Indirectos', `Costo directo x (${num(apu.indCampo)}% campo + ${num(apu.indOficina)}% oficina)`, totals.indirect],
-    ['Financiamiento', `Costo directo + indirectos x ${num(apu.finance)}%`, totals.finance],
-    ['Utilidad', `Costo directo + indirectos + financiamiento x ${num(apu.utility)}%`, totals.utility],
+    ['Financiamiento', `(Costo directo + indirectos) x ${num(apu.finance)}%`, totals.finance],
+    ['Utilidad', `(Costo directo + indirectos + financiamiento) x ${num(apu.utility)}%`, totals.utility],
     ['Cargos adicionales', `Subtotal x ${num(apu.cargos)}%`, totals.cargos],
     ['Precio unitario sin IVA', 'Costo directo + indirectos + financiamiento + utilidad + cargos', totals.pu],
     ['IVA informativo', `Precio unitario x ${num(apu.iva)}%`, totals.iva]
@@ -1992,7 +1995,7 @@ function exportAPUPDF(apu, totals, company){
 
 function buildCompleteAPUSheet(apu, totals, company, audit){
   const rows = [];
-  const widths = [13,48,12,12,14,12,30,16,24];
+  const widths = [13,52,12,13,15,12,34,17,28];
   const add = (row=[]) => {
     const full = [...row];
     while(full.length < widths.length) full.push(null);
@@ -2003,13 +2006,22 @@ function buildCompleteAPUSheet(apu, totals, company, audit){
   const section = (label) => add(span(label, XLS.section));
   const header = () => add(styleHeader(['Codigo','Descripcion','Unidad','Cantidad','P.U. / salario','Merma / FSR','Formula auditable','Importe','Fuente']));
   const moneyFormula = (formula) => fcell(formula, XLS.calc);
+  const sumRange = (col, start, end) => end >= start ? `=SUM(${col}${start}:${col}${end})` : '=0';
+  const formulaNote = (text) => xcell(text, XLS.formula);
+  const inputNumber = (value, style={}) => xcell(Number(value || 0), {...XLS.input, ...style});
 
   add(span(company.name || 'ZOEMEC', XLS.title));
-  add(span('CEDULA DE ANALISIS DE PRECIO UNITARIO', XLS.subtitle));
+  add(span('CEDULA DE ANALISIS DE PRECIO UNITARIO AUDITABLE', XLS.subtitle));
   add([xcell('Clave', XLS.label), apu.clave, xcell('Unidad', XLS.label), apu.unit, xcell('Fecha', XLS.label), apu.date, xcell('Confianza IA', XLS.label), `${apu.confidence || 88}%`]);
   add([xcell('Familia', XLS.label), apu.family || 'APU general', xcell('Clave SAT', XLS.label), apu.sat || '72100000', xcell('Cantidad base', XLS.label), Number(apu.sourceQty || 1) || 1, xcell('P.U. referencia', XLS.label), Number(apu.referencePU || 0) || 0]);
   add(span('CONCEPTO ANALIZADO', XLS.label));
   add([xcell(apu.concept, {...XLS.note, columnSpan:widths.length}), ...Array(widths.length-1).fill(null)]);
+  add([]);
+  section('RESUMEN EJECUTIVO');
+  add(styleHeader(['Partida','Base de calculo','Importe','','Partida','Base de calculo','Importe','','']));
+  add(['Materiales','Suma de insumos materiales',moneyFormula(`=${totals.mat || 0}`),null,'Herramienta menor',`${apu.herramienta}% sobre M.O.`,moneyFormula(`=${totals.herramienta || 0}`),null,null]);
+  add(['Mano de obra','Jornadas x salario base x FSR',moneyFormula(`=${totals.mo || 0}`),null,'Indirectos',`${Number(apu.indCampo || 0)+Number(apu.indOficina || 0)}% sobre C.D.`,moneyFormula(`=${totals.indirect || 0}`),null,null]);
+  add(['Equipo / maquinaria','Cantidad x costo horario',moneyFormula(`=${totals.equipo || 0}`),null,'Precio unitario sin IVA','Resultado auditable',moneyFormula(`=${totals.pu || 0}`),null,null]);
   add([]);
 
   section('MATERIALES');
@@ -2017,10 +2029,10 @@ function buildCompleteAPUSheet(apu, totals, company, audit){
   const matStart = rows.length + 1;
   audit.materials.forEach(r => {
     const n = rows.length + 1;
-    add([r.code,r.desc,r.unit,r.qty,r.base,r.factor,xcell(`=D${n}*E${n}*(1+F${n}/100)`, XLS.formula),moneyFormula(`=D${n}*E${n}*(1+F${n}/100)`),r.source]);
+    add([r.code,r.desc,r.unit,inputNumber(r.qty, XLS.qty),inputNumber(r.base, XLS.money),inputNumber(r.factor),formulaNote(`D${n} x E${n} x (1 + F${n}/100)`),moneyFormula(`=D${n}*E${n}*(1+F${n}/100)`),r.source]);
   });
   const matEnd = rows.length;
-  const matTotalRow = add([null,xcell('SUBTOTAL MATERIALES', XLS.total),null,null,null,null,null,moneyFormula(`=SUM(H${matStart}:H${matEnd})`),null]);
+  const matTotalRow = add([null,xcell('SUBTOTAL MATERIALES', XLS.total),null,null,null,null,null,moneyFormula(sumRange('H', matStart, matEnd)),null]);
   add([]);
 
   section('MANO DE OBRA  (salario real = salario base x FSR)');
@@ -2028,10 +2040,10 @@ function buildCompleteAPUSheet(apu, totals, company, audit){
   const laborStart = rows.length + 1;
   audit.labor.forEach(r => {
     const n = rows.length + 1;
-    add([r.code,r.desc,r.unit,r.qty,r.base,r.factor,xcell(`=D${n}*E${n}*F${n}`, XLS.formula),moneyFormula(`=D${n}*E${n}*F${n}`),r.source]);
+    add([r.code,r.desc,r.unit,inputNumber(r.qty, XLS.qty),inputNumber(r.base, XLS.money),inputNumber(r.factor),formulaNote(`D${n} x E${n} x F${n}`),moneyFormula(`=D${n}*E${n}*F${n}`),r.source]);
   });
   const laborEnd = rows.length;
-  const laborTotalRow = add([null,xcell('SUBTOTAL MANO DE OBRA', XLS.total),null,null,null,null,null,moneyFormula(`=SUM(H${laborStart}:H${laborEnd})`),null]);
+  const laborTotalRow = add([null,xcell('SUBTOTAL MANO DE OBRA', XLS.total),null,null,null,null,null,moneyFormula(sumRange('H', laborStart, laborEnd)),null]);
   add([]);
 
   section('EQUIPO / MAQUINARIA');
@@ -2039,34 +2051,44 @@ function buildCompleteAPUSheet(apu, totals, company, audit){
   const eqStart = rows.length + 1;
   audit.equipment.forEach(r => {
     const n = rows.length + 1;
-    add([r.code,r.desc,r.unit,r.qty,r.base,null,xcell(`=D${n}*E${n}`, XLS.formula),moneyFormula(`=D${n}*E${n}`),r.source]);
+    add([r.code,r.desc,r.unit,inputNumber(r.qty, XLS.qty),inputNumber(r.base, XLS.money),null,formulaNote(`D${n} x E${n}`),moneyFormula(`=D${n}*E${n}`),r.source]);
   });
   const eqEnd = rows.length;
-  const eqTotalRow = add([null,xcell('SUBTOTAL EQUIPO', XLS.total),null,null,null,null,null,moneyFormula(`=SUM(H${eqStart}:H${eqEnd})`),null]);
+  const eqTotalRow = add([null,xcell('SUBTOTAL EQUIPO', XLS.total),null,null,null,null,null,moneyFormula(sumRange('H', eqStart, eqEnd)),null]);
   add([]);
 
   section('INTEGRACION DEL PRECIO UNITARIO');
-  const hmRow = add([null,'Herramienta menor',null,null,`${apu.herramienta}% M.O.`,null,null,moneyFormula(`=H${laborTotalRow}*${Number(apu.herramienta || 0)}/100`),null]);
-  const directRow = add([null,xcell('COSTO DIRECTO', XLS.total),null,null,null,null,xcell('Materiales + Mano de obra + Equipo + Herramienta', XLS.formula),moneyFormula(`=H${matTotalRow}+H${laborTotalRow}+H${eqTotalRow}+H${hmRow}`),null]);
-  const indirectRow = add([null,'Indirectos',null,null,`${apu.indCampo}% campo + ${apu.indOficina}% oficina`,null,null,moneyFormula(`=H${directRow}*${Number(apu.indCampo || 0)+Number(apu.indOficina || 0)}/100`),null]);
-  const financeRow = add([null,'Financiamiento',null,null,`${apu.finance}%`,null,null,moneyFormula(`=(H${directRow}+H${indirectRow})*${Number(apu.finance || 0)}/100`),null]);
-  const utilityRow = add([null,'Utilidad',null,null,`${apu.utility}%`,null,null,moneyFormula(`=(H${directRow}+H${indirectRow}+H${financeRow})*${Number(apu.utility || 0)}/100`),null]);
-  const chargesRow = add([null,'Cargos adicionales',null,null,`${apu.cargos}%`,null,null,moneyFormula(`=(H${directRow}+H${indirectRow}+H${financeRow}+H${utilityRow})*${Number(apu.cargos || 0)}/100`),null]);
-  const puRow = add([null,xcell('PRECIO UNITARIO SIN IVA', XLS.grand),null,null,null,null,null,fcell(`=SUM(H${directRow}:H${chargesRow})`, XLS.grand),null]);
-  add([null,'IVA informativo',null,null,`${apu.iva}%`,null,null,moneyFormula(`=H${puRow}*${Number(apu.iva || 0)}/100`),null]);
+  add(styleHeader(['Concepto','Formula tecnica','Base / porcentaje','','','','Formula Excel','Importe','']));
+  const hmRow = add(['Herramienta menor',`H${laborTotalRow} x ${Number(apu.herramienta || 0)}%`,`${apu.herramienta}% M.O.`,null,null,null,formulaNote(`H${laborTotalRow} x ${Number(apu.herramienta || 0)}%`),moneyFormula(`=H${laborTotalRow}*${Number(apu.herramienta || 0)}/100`),null]);
+  const directRow = add([xcell('COSTO DIRECTO', XLS.total),'Materiales + Mano de obra + Equipo + Herramienta',null,null,null,null,formulaNote(`H${matTotalRow}+H${laborTotalRow}+H${eqTotalRow}+H${hmRow}`),moneyFormula(`=H${matTotalRow}+H${laborTotalRow}+H${eqTotalRow}+H${hmRow}`),null]);
+  const indirectPct = Number(apu.indCampo || 0)+Number(apu.indOficina || 0);
+  const indirectRow = add(['Indirectos',`Costo directo x (${apu.indCampo}% campo + ${apu.indOficina}% oficina)`,`${indirectPct}%`,null,null,null,formulaNote(`H${directRow} x ${indirectPct}%`),moneyFormula(`=H${directRow}*${indirectPct}/100`),null]);
+  const financeRow = add(['Financiamiento',`(Costo directo + indirectos) x ${apu.finance}%`,`${apu.finance}%`,null,null,null,formulaNote(`(H${directRow}+H${indirectRow}) x ${apu.finance}%`),moneyFormula(`=(H${directRow}+H${indirectRow})*${Number(apu.finance || 0)}/100`),null]);
+  const utilityRow = add(['Utilidad',`(Costo directo + indirectos + financiamiento) x ${apu.utility}%`,`${apu.utility}%`,null,null,null,formulaNote(`(H${directRow}+H${indirectRow}+H${financeRow}) x ${apu.utility}%`),moneyFormula(`=(H${directRow}+H${indirectRow}+H${financeRow})*${Number(apu.utility || 0)}/100`),null]);
+  const chargesRow = add(['Cargos adicionales',`Subtotal anterior x ${apu.cargos}%`,`${apu.cargos}%`,null,null,null,formulaNote(`(H${directRow}+H${indirectRow}+H${financeRow}+H${utilityRow}) x ${apu.cargos}%`),moneyFormula(`=(H${directRow}+H${indirectRow}+H${financeRow}+H${utilityRow})*${Number(apu.cargos || 0)}/100`),null]);
+  const puRow = add([xcell('PRECIO UNITARIO SIN IVA', XLS.grand),'Costo directo + sobrecostos',null,null,null,null,formulaNote(`SUM(H${directRow}:H${chargesRow})`),fcell(`=SUM(H${directRow}:H${chargesRow})`, XLS.grand),null]);
+  add(['IVA informativo',`Precio unitario x ${apu.iva}%`,`${apu.iva}%`,null,null,null,formulaNote(`H${puRow} x ${apu.iva}%`),moneyFormula(`=H${puRow}*${Number(apu.iva || 0)}/100`),null]);
   add([]);
 
   section('ANALISIS DE CUADRILLAS Y FSR');
-  add(styleHeader(['Oficio','Jornadas','Unidad','Salario base','FSR','Salario real','Importe','','']));
-  audit.labor.forEach(r => add([r.desc,r.qty,r.unit,r.base,r.factor,fcell(`=D${rows.length+1}*E${rows.length+1}`, XLS.money),fcell(`=B${rows.length+1}*D${rows.length+1}*E${rows.length+1}`, XLS.money),null,null]));
+  add(styleHeader(['Oficio','Jornadas','Unidad','Salario base','FSR','Salario real','Importe','Rendimiento','']));
+  audit.labor.forEach(r => {
+    const n = rows.length + 1;
+    add([r.desc,inputNumber(r.qty, XLS.qty),r.unit,inputNumber(r.base, XLS.money),inputNumber(r.factor),fcell(`=D${n}*E${n}`, XLS.money),fcell(`=B${n}*D${n}*E${n}`, XLS.money),r.rendimiento,null]);
+  });
   add([]);
 
   section('EXPLOSION DE INSUMOS DEL CONCEPTO');
-  add(styleHeader(['Codigo','Descripcion','Unidad','Cantidad por unidad','Cantidad concepto','P.U.','Importe','Fuente','']));
-  audit.explosion.forEach(r => add([r.code,r.desc,r.unit,r.qtyUnit,r.qtyTotal,r.pu,r.importeTotal,r.source,null]));
+  add(styleHeader(['Codigo','Descripcion','Unidad','Cantidad por unidad','Cantidad concepto','P.U.','Importe','Fuente','Formula']));
+  audit.explosion.forEach(r => {
+    const n = rows.length + 1;
+    add([r.code,r.desc,r.unit,inputNumber(r.qtyUnit, XLS.qty),inputNumber(r.qtyTotal, XLS.qty),inputNumber(r.pu, XLS.money),fcell(`=E${n}*F${n}`, XLS.money),r.source,formulaNote(`E${n} x F${n}`)]);
+  });
   add([]);
-  add([xcell('Notas de auditoria', XLS.label), xcell('Las celdas de importe contienen formulas visibles. Cada cantidad, merma, FSR y sobrecosto puede revisarse y editarse.', {...XLS.note, columnSpan:8}), ...Array(7).fill(null)]);
-  return { sheet:`APU-${apu.clave}`.slice(0,31), rows, widths, stickyRowsCount:9 };
+  section('SUPUESTOS Y TRAZABILIDAD');
+  add([xcell('Editable por el usuario', XLS.ok), xcell('Cantidades, precios, mermas, FSR, indirectos, financiamiento, utilidad y cargos se pueden modificar. Los importes se recalculan por formula.', {...XLS.note, columnSpan:8}), ...Array(7).fill(null)]);
+  add([xcell('Fuente principal', XLS.label), apu.sourceFile || 'Generacion IA ZOEMEC / captura del usuario', xcell('Revision requerida', XLS.label), 'Validar rendimientos y precios contra catalogo vigente', null, null, null, null, null]);
+  return { sheet:`APU-${apu.clave}`.slice(0,31), rows, widths, stickyRowsCount:13 };
 }
 
 function exportAPUExcel(apu, totals, company){

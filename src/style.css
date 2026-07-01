@@ -720,6 +720,8 @@ svg.ic{display:block;flex:none}
 .lib-preview>small{display:block;color:var(--muted);font-family:var(--mono);text-transform:uppercase;letter-spacing:.08em;font-size:.66rem}
 .lib-preview h2{font-size:1.05rem;line-height:1.25;margin:8px 0;color:var(--ink);word-break:break-word}
 .lib-preview p{color:var(--muted);font-size:.86rem;line-height:1.4}
+.lib-tags-mini{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 2px}
+.lib-tags-mini span{display:inline-flex;align-items:center;border:1px solid #D9C8E9;background:#F8F1FC;color:var(--violet);border-radius:999px;padding:5px 8px;font-size:.68rem;font-family:var(--mono);font-weight:800}
 .lib-ai-card{display:flex;flex-direction:column;gap:8px;margin:14px 0;padding:12px;border-radius:12px;background:linear-gradient(135deg,#F7F1FC,#fff);border:1px solid var(--line)}
 .lib-ai-card b{color:var(--ink);margin-bottom:2px}
 .lib-ai-card button{background:#fff;color:var(--petrol);border:1px solid var(--line);box-shadow:none;text-align:left;padding:9px 10px}

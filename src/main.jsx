@@ -2287,6 +2287,55 @@ function Projects({projects,setProjects}){
 }
 function Clients({clients,setClients}){const [q,setQ]=useState('');const filtered=clients.filter(c=>c.name.toLowerCase().includes(q.toLowerCase()));return <section><PageHead kicker="CRM de obra" title="Clientes" desc="Cartera profesional con proyectos, presupuestos, contactos, RFC e historial." action={<button onClick={()=>setClients([{id:'CLI-'+uid(),name:'Nuevo cliente',type:'Empresa',contact:'Contacto',phone:'',email:'',rfc:'',projects:0,budgets:0,amount:0,status:'Prospecto'},...clients])}>+ Nuevo cliente</button>} /><div className="panel"><input className="search" placeholder="Buscar cliente..." value={q} onChange={e=>setQ(e.target.value)}/><div className="client-grid">{filtered.map(c=><div className="client-card" key={c.id}><div className="client-avatar">{c.name[0]}</div><div><h2>{c.name}</h2><p>{c.type} - {c.contact}</p><small>RFC: {c.rfc}</small><div className="client-stats"><span>{c.projects} proyectos</span><span>{c.budgets} presupuestos</span><b>{money(c.amount)}</b></div></div><em>{c.status}</em></div>)}</div></div></section>}
 
+const LIBRARY_DISCIPLINES=[
+  ['Acabados',['acabado','piso','azulejo','loseta','porcelanato','ceramico','pintura','aplanado','recubrimiento','boquilla']],
+  ['Albanileria',['albanileria','muro','block','tabique','castillo','cadena','mortero','aplanado']],
+  ['Tablaroca y Durock',['tablaroca','durock','yeso','plafon','bastidor','panel']],
+  ['Electricidad',['electricidad','electrico','electrica','cfe','luminaria','cable','contacto','canalizacion','conduit']],
+  ['Hidrosanitaria',['hidrosanitario','hidraulica','sanitario','agua potable','drenaje','alcantarillado','tuberia','valvula']],
+  ['Aire acondicionado',['aire acondicionado','hvac','ducto','difusor','chiller','minisplit']],
+  ['Estructura metalica',['estructura','metalica','acero','ptr','perfil','soldadura','herrerias','herreria']],
+  ['Cimentacion',['cimentacion','zapata','losa','contratrabe','pilote','plantilla']],
+  ['Terracerias',['terraceria','excavacion','relleno','compactacion','acarreo','base hidraulica']],
+  ['Urbanizacion',['urbanizacion','pavimento','banqueta','guarnicion','asfalto','adoquin']],
+  ['Equipamiento',['equipamiento','mobiliario','senaletica','senalizacion','juego','equipo']],
+  ['Limpieza y preliminares',['limpieza','preliminar','trazo','nivelacion','demolicion','retiro']],
+  ['Gas e incendio',['gas','incendio','sprinkler','hidrante','extintor']]
+];
+function libKey(v=''){
+  return cleanText(v).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9.%/ -]/g,' ').replace(/\s+/g,' ').trim();
+}
+function detectLibraryFamily(name='', cat=''){
+  const key=libKey(`${name} ${cat}`);
+  const hit=LIBRARY_DISCIPLINES.find(([,terms])=>terms.some(t=>key.includes(libKey(t))));
+  return hit ? hit[0] : 'General';
+}
+function extractLibraryTags(name='', cat='', family=''){
+  const key=libKey(`${name} ${cat} ${family}`);
+  const tags=[
+    ['apu','APU'],['matriz','Matriz'],['matrices','Matriz'],['precio','Precio'],['costo','Costo'],
+    ['rendimiento','Rendimiento'],['mano de obra','Mano de obra'],['cuadrilla','Cuadrilla'],
+    ['fsr','FSR'],['catalogo','Catalogo'],['base','Base'],['norma','Norma'],['formato','Formato'],
+    ['excel','Excel'],['xlsx','Excel'],['pdf','PDF'],['obra publica','Obra publica'],['neodata','Neodata'],['opus','OPUS']
+  ].filter(([needle])=>key.includes(needle)).map(([,tag])=>tag);
+  const familyTags=family && family!=='General' ? [family] : [];
+  return [...new Set([...familyTags,...tags])].slice(0,7);
+}
+function enrichLibraryMeta(meta, classify){
+  const cat=meta.cat || classify(meta.name);
+  const family=meta.family || detectLibraryFamily(meta.name, cat);
+  const tags=meta.tags?.length ? meta.tags : extractLibraryTags(meta.name, cat, family);
+  const sourceType=['XLS','XLSX','CSV'].includes(meta.ext) ? 'Hoja de costos' : ['PDF'].includes(meta.ext) ? 'Documento tecnico' : ['JPG','JPEG','PNG','WEBP'].includes(meta.ext) ? 'Imagen tecnica' : 'Archivo tecnico';
+  return {...meta,cat,family,tags,sourceType,indexed:true,status:meta.status && meta.status!=='Pendiente de indice' ? meta.status : 'Indexado por metadata',confidence:Math.min(98,55+tags.length*7)};
+}
+function scoreLibraryFile(file,q=''){
+  const query=libKey(q);
+  if(!query) return 1;
+  const hay=libKey([file.name,file.cat,file.family,file.sourceType,...(file.tags||[])].join(' '));
+  const terms=query.split(' ').filter(Boolean);
+  return terms.reduce((n,t)=>n+(hay.includes(t)?2:0), hay.includes(query)?8:0);
+}
+
 function Library({user}){
   const [files,setFiles]=useLocalState('zoemec-biblioteca',[]);
   const [uploading,setUploading]=useState(false);
@@ -2296,10 +2345,10 @@ function Library({user}){
   const [view,setView]=useState('tabla');
   const [page,setPage]=useState(1);
   const classify=(name='')=>{
-    const n=name.toLowerCase();
+    const n=libKey(name);
     if(/matriz|matrices|precio unitario|analisis|apu/.test(n)) return 'Matrices APU';
     if(/rendimiento|mano de obra|mo |destajo|cuadrilla/.test(n)) return 'Mano de obra';
-    if(/base|precio|costo|catalogo|cat[a?]logo|opus|neodata/.test(n)) return 'Costos';
+    if(/base|precio|costo|catalogo|opus|neodata|cmic|tabulador/.test(n)) return 'Costos';
     if(/norma|sct|cfe|conagua|reglamento|ntc/.test(n)) return 'Normas';
     if(/formato|generador|estimacion|presupuesto|plantilla/.test(n)) return 'Formatos';
     if(/curso|video|capacitacion/.test(n)) return 'Academia';
@@ -2313,10 +2362,10 @@ function Library({user}){
       const arr=[];
       for(const f of picked){
         const fileId='LIB-'+uid()+'-'+Date.now().toString(36);
-        const meta={name:f.name,size:(f.size/1048576).toFixed(2)+' MB',ext:(f.name.split('.').pop()||'').toUpperCase(),when:new Date().toLocaleDateString('es-MX'),cat:classify(f.name),status:'Pendiente de indice',uses:0};
+        const meta=enrichLibraryMeta({name:cleanText(f.name),size:(f.size/1048576).toFixed(2)+' MB',ext:(f.name.split('.').pop()||'').toUpperCase(),when:new Date().toLocaleDateString('es-MX'),cat:classify(f.name),status:'Pendiente de indice',uses:0}, classify);
         if(firebaseReady && user?.uid){
           const fileRef=ref(storage, `library/${user.uid}/${fileId}/${f.name}`);
-          await uploadBytes(fileRef, f, { customMetadata:{ ownerUid:user.uid, category:meta.cat } });
+          await uploadBytes(fileRef, f, { customMetadata:{ ownerUid:user.uid, category:meta.cat, family:meta.family, tags:(meta.tags||[]).join(',') } });
           const downloadURL=await getDownloadURL(fileRef);
           await addDoc(collection(db,'library'), {
             ...meta,
@@ -2324,12 +2373,12 @@ function Library({user}){
             visibility:user.role === 'admin' ? 'global' : 'private',
             storagePath:fileRef.fullPath,
             downloadURL,
-            indexed:false,
+            indexed:meta.indexed,
             createdAt:serverTimestamp()
           });
           meta.downloadURL=downloadURL;
           meta.storagePath=fileRef.fullPath;
-          meta.status='Subido a nube';
+          meta.status='Subido e indexado';
         }
         arr.push(meta);
       }
@@ -2344,16 +2393,25 @@ function Library({user}){
   };
   const del=(i)=>setFiles(files.filter((_,idx)=>idx!==i));
   const types=['Todos','Costos','Matrices APU','Mano de obra','Normas','Formatos','Academia','Documentos'];
-  const visible=files.filter(f=>(type==='Todos'||(f.cat||classify(f.name))===type) && f.name.toLowerCase().includes(q.toLowerCase()));
+  const normalizedFiles=files.map((f,idx)=>({...enrichLibraryMeta(f, classify),__idx:idx}));
+  const visible=normalizedFiles
+    .filter(f=>(type==='Todos'||(f.cat||classify(f.name))===type) && scoreLibraryFile(f,q)>0)
+    .sort((a,b)=>scoreLibraryFile(b,q)-scoreLibraryFile(a,q));
   const totalMb=files.reduce((a,f)=>a+(parseFloat(f.size)||0),0);
-  const counts=types.slice(1).map(t=>[t,files.filter(f=>(f.cat||classify(f.name))===t).length]);
-  const active=selected || visible[0] || files[0];
+  const counts=types.slice(1).map(t=>[t,normalizedFiles.filter(f=>(f.cat||classify(f.name))===t).length]);
+  const active=selected ? enrichLibraryMeta(selected, classify) : visible[0] || normalizedFiles[0];
   const pageSize = view === 'tablero' ? 12 : 25;
   const pages = Math.max(1, Math.ceil(visible.length / pageSize));
   const safePage = Math.min(page, pages);
   const pageItems = visible.slice((safePage - 1) * pageSize, safePage * pageSize);
   const batch = pageItems;
   const setFilterType=(next)=>{ setType(next); setPage(1); };
+  const indexVisible=()=>{
+    const names=new Set(visible.map(f=>`${f.name}|${f.when}`));
+    const next=files.map(f=>names.has(`${f.name}|${f.when}`)?enrichLibraryMeta(f, classify):f);
+    setFiles(next);
+    alert(`Indice actualizado para ${visible.length} documento(s). Ya puedes buscar por familia, tags y tipo tecnico.`);
+  };
   const suggestions=['muro block 15','loseta porcelanato','rendimiento albanil','PTR lavabo','tablaroca durock','indirectos oficina'];
   if(!canUse(user,'library')){
     return <section><PageHead kicker="Biblioteca ZOEMEC" title="Centro inteligente de costos" desc="La biblioteca tecnica es una funcion premium porque permite consultar bases, matrices, documentos y fuentes para IA." />
@@ -2374,14 +2432,14 @@ function Library({user}){
       <div className="lib-searchbar"><input className="search" placeholder="Buscar por concepto, insumo, familia, archivo o fuente..." value={q} onChange={e=>{setQ(e.target.value);setPage(1)}}/><button onClick={()=>alert('Busqueda IA: usa el indice documental para encontrar matrices, insumos y referencias compatibles con tu concepto.')}>Buscar con IA</button></div>
       <div className="lib-suggestions">{suggestions.map(s=><button key={s} onClick={()=>{setQ(s);setPage(1)}}>{s}</button>)}</div>
       <div className="lib-toolbar pro"><div className="lib-tabs">{types.map(t=><button key={t} className={type===t?'active':''} onClick={()=>setFilterType(t)}>{t}</button>)}</div><div className="seg"><button className={view==='tabla'?'active':''} onClick={()=>setView('tabla')}>Tabla</button><button className={view==='tablero'?'active':''} onClick={()=>setView('tablero')}>Tarjetas</button></div></div>
-      <div className="lib-bulkbar"><b>{visible.length}</b><span>documentos encontrados</span><em>Pagina {safePage} de {pages}</em><label className="soft file-soft">Subida masiva<input type="file" multiple hidden onChange={e=>add(e.target.files)} disabled={uploading}/></label><button className="soft" onClick={()=>alert('Se creara un indice por familia, unidad, precio, insumo, fecha y fuente para busqueda rapida.')}>Indexar lote visible</button></div>
+      <div className="lib-bulkbar"><b>{visible.length}</b><span>documentos encontrados</span><em>Pagina {safePage} de {pages}</em><label className="soft file-soft">Subida masiva<input type="file" multiple hidden onChange={e=>add(e.target.files)} disabled={uploading}/></label><button className="soft" onClick={indexVisible}>Indexar lote visible</button></div>
       <div className="lib-workbench">
         <aside className="lib-folders">{counts.map(([name,count])=><button key={name} onClick={()=>setFilterType(name)} className={type===name?'active':''}><Icon name="folder" size={15}/><span>{name}</span><b>{count}</b></button>)}</aside>
         <div className={view==='tablero'?'lib-board':'lib-table'}>
-          {pageItems.length ? pageItems.map((f)=>{ const i=files.indexOf(f); const cat=f.cat||classify(f.name); return <div className={'lib-file '+(active===f?'active':'')} key={i} onClick={()=>setSelected(f)}><span className="lib-ext">{f.ext||'DOC'}</span><div className="lib-meta"><b>{f.name}</b><small>{cat} - {f.size} - {f.when}</small><em>{cat==='Matrices APU'?'Puede alimentar APUs':cat==='Mano de obra'?'Rendimientos y cuadrillas':cat==='Costos'?'Precios y catalogos':'Consulta tecnica'}</em></div><div className="lib-actions"><button className="soft" onClick={(e)=>{e.stopPropagation(); f.downloadURL ? window.open(f.downloadURL,'_blank') : setSelected(f)}}>{f.downloadURL?'Abrir':'Ver'}</button><button className="row-del" onClick={(e)=>{e.stopPropagation();del(i)}}>x</button></div></div>}) : <div className="lib-empty">No hay documentos con ese filtro. Sube archivos o cambia la busqueda.</div>}
+          {pageItems.length ? pageItems.map((f)=>{ const i=f.__idx ?? files.indexOf(f); const cat=f.cat||classify(f.name); const isActive=active?.name===f.name && active?.when===f.when; return <div className={'lib-file '+(isActive?'active':'')} key={i} onClick={()=>setSelected(f)}><span className="lib-ext">{f.ext||'DOC'}</span><div className="lib-meta"><b>{f.name}</b><small>{cat} - {f.family || 'General'} - {f.size} - {f.when}</small><em>{(f.tags||[]).length ? (f.tags||[]).slice(0,5).join(' · ') : cat==='Matrices APU'?'Puede alimentar APUs':cat==='Mano de obra'?'Rendimientos y cuadrillas':cat==='Costos'?'Precios y catalogos':'Consulta tecnica'}</em></div><div className="lib-actions"><button className="soft" onClick={(e)=>{e.stopPropagation(); f.downloadURL ? window.open(f.downloadURL,'_blank') : setSelected(f)}}>{f.downloadURL?'Abrir':'Ver'}</button><button className="row-del" onClick={(e)=>{e.stopPropagation();del(i)}}>x</button></div></div>}) : <div className="lib-empty">No hay documentos con ese filtro. Sube archivos o cambia la busqueda.</div>}
           {visible.length > pageSize && <div className="lib-pager"><button className="soft" disabled={safePage<=1} onClick={()=>setPage(safePage-1)}>Anterior</button><span>{(safePage-1)*pageSize+1}-{Math.min(safePage*pageSize,visible.length)} de {visible.length}</span><button className="soft" disabled={safePage>=pages} onClick={()=>setPage(safePage+1)}>Siguiente</button></div>}
         </div>
-        <aside className="lib-preview pro"><small>Ficha tecnica</small><h2>{active?.name || 'Sin archivo seleccionado'}</h2><p>{active ? (active.cat || classify(active.name))+' - '+(active.ext || 'DOC')+' - '+active.size : 'Sube documentos para crear una base consultable.'}</p><div className="lib-ai-card"><b>Acciones IA</b><button onClick={()=>alert('Usara este archivo como fuente para sugerir materiales, MO, equipo y rendimientos.')}>Usar para generar APU</button><button onClick={()=>alert('Comparara nombre, categoria y contenido indexado cuando conectemos Storage + embeddings.')}>Buscar matrices similares</button><button onClick={()=>alert('Extraera descripciones, unidades, precios y rendimientos a una tabla auditable.')}>Extraer insumos</button><button onClick={()=>alert('Creara indice por familia, partida, unidad y palabras clave.')}>Crear indice</button></div><div className="lib-trace"><span>Estado</span><b>{active?.status || 'Pendiente'}</b><span>Permiso</span><b>{user?.role==='admin'?'Administrador':'Plan Profesional'}</b><span>Uso IA</span><b>{active ? 'Disponible' : 'Sin fuente'}</b></div></aside>
+        <aside className="lib-preview pro"><small>Ficha tecnica</small><h2>{active?.name || 'Sin archivo seleccionado'}</h2><p>{active ? (active.cat || classify(active.name))+' - '+(active.family || 'General')+' - '+(active.ext || 'DOC')+' - '+active.size : 'Sube documentos para crear una base consultable.'}</p>{active?.tags?.length ? <div className="lib-tags-mini">{active.tags.map(t=><span key={t}>{t}</span>)}</div> : null}<div className="lib-ai-card"><b>Acciones IA</b><button onClick={()=>alert('Usara este archivo como fuente para sugerir materiales, MO, equipo y rendimientos.')}>Usar para generar APU</button><button onClick={()=>alert('Comparara nombre, categoria y familia tecnica para sugerir matrices compatibles.')}>Buscar matrices similares</button><button onClick={()=>alert('Extraera descripciones, unidades, precios y rendimientos a una tabla auditable cuando el extractor de contenido este conectado.')}>Extraer insumos</button><button onClick={indexVisible}>Crear indice</button></div><div className="lib-trace"><span>Estado</span><b>{active?.status || 'Pendiente'}</b><span>Permiso</span><b>{user?.role==='admin'?'Administrador':'Plan Profesional'}</b><span>Confianza</span><b>{active ? `${active.confidence || 50}%` : 'Sin fuente'}</b></div></aside>
       </div>
     </div>
     <div className="panel"><h2>Flujo recomendado</h2><div className="library-grid">{[['1. Carga masiva','Bases CMIC, matrices, MO, normas y formatos','Entrada'],['2. Clasificacion','Tipo, familia, unidad, fuente, fecha y confianza','Orden'],['3. Indice IA','Busqueda semantica y extraccion de insumos','IA'],['4. APU auditable','Fuente visible en Excel/PDF por cada insumo','Salida']].map(f=><div className="folder" key={f[0]}><b><Icon name="folder" size={17}/> {f[0]}</b><p>{f[1]}</p><span>{f[2]}</span></div>)}</div></div>

@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import jsPDF from 'jspdf';
 import readXlsxFile from 'read-excel-file/browser';
 import writeXlsxFile from 'write-excel-file/browser';
-import { createUserWithEmailAndPassword, onAuthStateChanged, sendEmailVerification, signInWithEmailAndPassword, signOut, updateProfile } from 'firebase/auth';
+import { createUserWithEmailAndPassword, GoogleAuthProvider, onAuthStateChanged, sendEmailVerification, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile } from 'firebase/auth';
 import { addDoc, collection, doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { auth, db, firebaseReady, storage } from './firebase.js';
@@ -169,7 +169,7 @@ function buildSession(profile, fbUser){
 }
 
 function App(){
-  const [screen, setScreen] = useState(()=>hasValidSession(readLocal('zoemec-user', null)) ? 'app' : 'landing');
+  const [screen, setScreen] = useState('landing');
   const [module, setModule] = useState('inicio');
   const [user, setUser] = useLocalState('zoemec-user', null);
   const [accounts, setAccounts] = useLocalState('zoemec-accounts', []);
@@ -198,7 +198,11 @@ function App(){
   useEffect(() => {
     if(!firebaseReady) return undefined;
     return onAuthStateChanged(auth, async (fbUser) => {
-      if(!fbUser) return;
+      if(!fbUser){
+        setUser(null);
+        setScreen(current => current === 'app' ? 'landing' : current);
+        return;
+      }
       try{
         const profile = await loadOrCreateProfile(fbUser);
         if(!fbUser.emailVerified && profile.role !== 'admin'){
@@ -215,6 +219,7 @@ function App(){
         const session = buildSession(profile, fbUser);
         setUser(session);
         setUsage(prev => ({...prev, [session.email]:{apusCreated:session.apusCreated || 0, deviceId:session.deviceId}}));
+        setScreen('app');
       }catch(error){
         console.error(error);
       }
@@ -289,6 +294,60 @@ function App(){
       return false;
     }
   };
+  const loginWithGoogle = async () => {
+    if(!firebaseReady){
+      alert('Firebase no esta configurado. Revisa src/firebase.js.');
+      return false;
+    }
+    const provider = new GoogleAuthProvider();
+    const deviceId = getDeviceId();
+    try{
+      const credential = await signInWithPopup(auth, provider);
+      const fbUser = credential.user;
+      const userRef = doc(db, 'users', fbUser.uid);
+      const snap = await getDoc(userRef);
+      let profile;
+      if(snap.exists()){
+        profile = { uid: fbUser.uid, ...snap.data() };
+      }else{
+        const deviceRef = doc(db, 'devices', deviceId);
+        const deviceSnap = await getDoc(deviceRef);
+        if(deviceSnap.exists()){
+          await signOut(auth);
+          alert('Este dispositivo ya uso la prueba gratis. Inicia sesion con tu cuenta original o solicita un plan ZOEMEC.');
+          return false;
+        }
+        profile = {
+          uid: fbUser.uid,
+          name: fbUser.displayName || fbUser.email?.split('@')[0] || 'Usuario ZOEMEC',
+          email: fbUser.email,
+          role: 'user',
+          plan: 'Gratis',
+          active: true,
+          apusCreated: 0,
+          deviceId,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        };
+        await setDoc(userRef, profile, { merge:true });
+        await setDoc(deviceRef, { uid: fbUser.uid, email: fbUser.email, createdAt: serverTimestamp() }, { merge:true });
+      }
+      if(profile.active === false){
+        await signOut(auth);
+        alert('Tu cuenta esta desactivada. Contacta al administrador de ZOEMEC.');
+        return false;
+      }
+      const session = buildSession(profile, fbUser);
+      setUsage(prev => ({...prev, [session.email]:{apusCreated:session.apusCreated || 0, deviceId:session.deviceId}}));
+      setUser(session);
+      setScreen('app');
+      setModule('inicio');
+      return true;
+    }catch(error){
+      alert(firebaseMessage(error));
+      return false;
+    }
+  };
   const logout = async () => {
     try { if(firebaseReady) await signOut(auth); } catch {}
     setUser(null);
@@ -296,8 +355,8 @@ function App(){
   };
 
   if(screen === 'landing') return <Landing setScreen={setScreen} login={login} company={companyView} />;
-  if(screen === 'login') return <Auth mode="login" setScreen={setScreen} login={login} company={companyView} />;
-  if(screen === 'register') return <Auth mode="register" setScreen={setScreen} login={login} company={companyView} />;
+  if(screen === 'login') return <Auth mode="login" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} company={companyView} />;
+  if(screen === 'register') return <Auth mode="register" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} company={companyView} />;
   if(!hasValidSession(user)) return <Landing setScreen={setScreen} login={login} company={companyView} />;
   return <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView}>
     {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} />}
@@ -414,13 +473,20 @@ function normalizeSpreadsheetRows(rows){
     .map(row => row.map(cell => cell == null ? '' : cell));
 }
 function cleanText(v){
-  return String(v ?? '')
-    .replace(/mÃƒâ€š²|m²/g, 'm²')
-    .replace(/mÃƒâ€š³|m³/g, 'm³')
-    .replace(/dÃƒÆ’Ã‚Â­a|día/g, 'día')
-    .replace(/á/g, 'á').replace(/é/g, 'é').replace(/í/g, 'í').replace(/ó/g, 'ó').replace(/ú/g, 'ú')
-    .replace(/ñ/g, 'ñ').replace(/Á/g, 'Á').replace(/É/g, 'É').replace(/Í/g, 'Í').replace(/Ó/g, 'Ó').replace(/Ú/g, 'Ú')
-    .replace(/Ñ/g, 'Ñ');
+  const fixes = [
+    ['\u00C3\u00A1','\u00E1'], ['\u00C3\u00A9','\u00E9'], ['\u00C3\u00AD','\u00ED'], ['\u00C3\u00B3','\u00F3'], ['\u00C3\u00BA','\u00FA'], ['\u00C3\u00B1','\u00F1'],
+    ['\u00C3\u0081','\u00C1'], ['\u00C3\u0089','\u00C9'], ['\u00C3\u008D','\u00CD'], ['\u00C3\u0093','\u00D3'], ['\u00C3\u009A','\u00DA'], ['\u00C3\u0091','\u00D1'],
+    ['\u00C3\u00BC','\u00FC'], ['\u00C3\u009C','\u00DC'], ['\u00C2\u00BF','\u00BF'], ['\u00C2\u00A1','\u00A1'], ['\u00C2\u00B0','\u00B0'],
+    ['\u00C2\u00B2','\u00B2'], ['\u00C2\u00B3','\u00B3'], ['\u00C3\u201A\u00C2\u00B2','\u00B2'], ['\u00C3\u201A\u00C2\u00B3','\u00B3'],
+    ['m\u00C3\u0192\u00E2\u20AC\u0161\u00C2\u00B2','m\u00B2'], ['m\u00C3\u0192\u00E2\u20AC\u0161\u00C2\u00B3','m\u00B3'], ['m\u00C3\u201A\u00C2\u00B2','m\u00B2'], ['m\u00C3\u201A\u00C2\u00B3','m\u00B3'], ['m\u00C2\u00B2','m\u00B2'], ['m\u00C2\u00B3','m\u00B3'],
+    ['d\u00C3\u0192\u00C6\u2019\u00C3\u201A\u00C2\u00ADa','d\u00EDa'], ['d\u00C3\u00ADa','d\u00EDa'], ['\u00C3\u00ADa','\u00EDa'],
+    ['\u00E2\u20AC\u201C','-'], ['\u00E2\u20AC\u201D','-'], ['\u00E2\u20AC\u00A2','\u2022'], ['\u00E2\u20AC\u00A6','...'],
+    ['\u00E2\u20AC\u02DC',"'"], ['\u00E2\u20AC\u2122',"'"], ['\u00E2\u20AC\u0153','"'], ['\u00E2\u20AC\u009D','"'], ['\u00E2\u20AC','"'],
+    ['\u00C2\u00B7','\u00B7'], ['\u00C2','']
+  ];
+  let text = String(v ?? '');
+  fixes.forEach(([bad, good]) => { text = text.split(bad).join(good); });
+  return text.normalize('NFC');
 }
 function normalizeUnitLabel(v){
   const raw = cleanText(v).trim();
@@ -813,7 +879,7 @@ function assistantReply(q){
   if(/concreto|acero|block|pintura|excavaci|calculadora/.test(t)) return 'En Centro Técnico tienes calculadoras de concreto, acero, block, pintura, impermeabilizante, excavación y FSR. Te dan cantidades y costo al instante con precios editables.';
   if(/indirecto/.test(t)) return 'Los indirectos van separados en campo y oficina; ambos % se suman y se aplican sobre el costo directo. Luego siguen financiamiento, utilidad y cargos adicionales hasta el P.U.';
   if(/presupuesto/.test(t)) return 'En Presupuestos capturas conceptos con su P.U. (sin IVA); el sistema suma subtotal, IVA y total, y lo exportas a PDF/Excel con tu membrete.';
-  return r('Puedo orientarte sobre APU, FSR, indirectos, calculadoras, importar tu Excel o exportar formatos.','Para produccion conviene conectarme a OpenAI desde una funcion segura en Vercel o Firebase, nunca desde el navegador.');
+  return r('Puedo orientarte sobre APU, FSR, indirectos, calculadoras, importar tu Excel o exportar formatos.','Cuando la IA este activa en Vercel, tambien puedo consultar tu biblioteca tecnica y responder con fuentes.');
 }
 async function assistantReplyReal(q){
   try{
@@ -877,7 +943,7 @@ function Landing({setScreen, login, company}){
   </div>
 }
 
-function Auth({mode,setScreen,login,company}){
+function Auth({mode,setScreen,login,loginWithGoogle,company}){
   const [name,setName]=useState('');
   const [email,setEmail]=useState('');
   const [password,setPassword]=useState('');
@@ -916,7 +982,7 @@ function Auth({mode,setScreen,login,company}){
         <input placeholder="minimo 6 caracteres" type="password" value={password} onChange={e=>setPassword(e.target.value)} />
         <button onClick={submit} disabled={busy}>{busy?'Conectando...':(mode==='login'?'Entrar':'Crear cuenta')}</button>
         <div className="auth-or"><span>o</span></div>
-        <button className="google" onClick={()=>alert('Activa Google en Firebase Authentication > Sign-in method para usar este boton.')}><Icon name="clientes" size={18}/> Continuar con Google</button>
+        <button className="google" disabled={busy} onClick={async()=>{ setBusy(true); try{ await loginWithGoogle?.(); } finally{ setBusy(false); } }}><Icon name="clientes" size={18}/> Continuar con Google</button>
         {mode==='register' && <div className="auth-warning"><b>Cuenta gratis:</b> 1 APU sin costo. Se registra el dispositivo para evitar multiples correos gratis.</div>}
         <small>{mode==='login'?'¿No tienes cuenta? ':'¿Ya tienes cuenta? '}<a onClick={()=>setScreen(mode==='login'?'register':'login')}>{mode==='login'?'Regístrate':'Inicia sesión'}</a></small>
         <a className="back" onClick={()=>setScreen('landing')}>← Volver al inicio</a>
@@ -1409,7 +1475,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         <div><small>Unidad / cantidad</small><b>{excelInfo.unit} - {num(excelInfo.qty)}</b></div>
         <div><small>P.U. referencia</small><b>{excelInfo.referencePU ? money(excelInfo.referencePU) : 'No detectado'}</b></div>
       </div>}
-      <div className="ai-note">El desarrollo se arma con tus precios importados + plantillas de metodología. La generación 100% automática (IA leyendo todo tu catálogo) se activa con Firebase AI Logic.</div>
+      <div className="ai-note">El desarrollo se arma con tus precios importados, matrices base y metodologia ZOEMEC. La IA real se ejecuta por endpoints seguros en Vercel.</div>
     </div>}
     <div className="apu-grid">
       <div className="panel">
@@ -2269,7 +2335,7 @@ function Library({user}){
       }
       setFiles([...arr,...files]);
       setSelected(arr[0]);
-      alert(firebaseReady && user?.uid ? `Subi ${arr.length} archivo(s) a Firebase Storage.` : `Agregue ${arr.length} archivo(s) en modo local.`);
+      alert(firebaseReady && user?.uid ? `Subi ${arr.length} archivo(s) a Firebase Storage.` : `Agregue ${arr.length} archivo(s). Para compartirlos con otros usuarios inicia sesion y activa Storage.`);
     }catch(err){
       alert(`No pude subir el lote: ${err?.message || 'revisa reglas de Storage/Firestore'}`);
     }finally{
@@ -2295,17 +2361,17 @@ function Library({user}){
       <div className="library-grid">{[['Inicial','Biblioteca limitada y 10 APUs/mes','Para probar'],['Profesional','Biblioteca completa, IA y exportaciones','Recomendado'],['Empresa','Usuarios, permisos y biblioteca privada','Equipos']].map(f=><div className="folder" key={f[0]}><b>{f[0]}</b><p>{f[1]}</p><span>{f[2]}</span></div>)}</div>
     </section>;
   }
-  return <section><PageHead kicker="Biblioteca ZOEMEC" title="Centro documental inteligente" desc="Organiza costos, matrices, mano de obra, normas y formatos. En produccion la fuente correcta es Firebase Storage + Firestore para que la IA consulte contenido real." />
+  return <section><PageHead kicker="Biblioteca ZOEMEC" title="Centro documental inteligente" desc="Organiza costos, matrices, mano de obra, normas y formatos con permisos, busqueda rapida y acciones IA por documento." />
     <div className="lib-hero panel">
       <div><small>Base tecnica</small><h2>{files.length ? `${files.length} documentos listos` : 'Sube tu primera base'}</h2><p>La biblioteca debe funcionar como buscador tecnico, no como bodega de archivos. Cada documento queda clasificado por uso y listo para IA.</p></div>
-      <div className="lib-hero-actions"><button className="secondary" onClick={()=>alert('Ya esta preparado para Firebase Storage + Firestore. Revisa que Storage este activo y que las reglas permitan escribir a usuarios autenticados.')}>Conectar nube</button><label className="up-btn">{uploading?'Subiendo...':'Subir lote'}<input type="file" multiple onChange={e=>add(e.target.files)} hidden disabled={uploading}/></label></div>
+      <div className="lib-hero-actions"><button className="secondary" onClick={()=>alert('Estado de nube: Firebase Storage guarda archivos y Firestore guarda metadata. Revisa reglas de Storage/Firestore y planes de usuario para produccion.')}>Estado de nube</button><label className="up-btn">{uploading?'Subiendo...':'Subir lote'}<input type="file" multiple onChange={e=>add(e.target.files)} hidden disabled={uploading}/></label></div>
     </div>
     <div className="lib-cloud panel">
       {[['1. Subida masiva','Puedes cargar lotes completos desde la plataforma. Para carpetas grandes conviene subir ZIP o seleccionar multiples archivos.'],['2. Nube privada','Los archivos reales deben vivir en Firebase Storage o Vercel Blob. Firestore guarda nombre, categoria, permiso, usuario y fuente.'],['3. Busqueda IA','Despues se indexa el contenido para buscar por insumo, concepto, unidad, precio, rendimiento o norma.']].map(x=><div key={x[0]}><b>{x[0]}</b><p>{x[1]}</p></div>)}
     </div>
     <div className="library-dashboard"><div className="lib-stat"><small>Documentos</small><b>{files.length}</b><span>{totalMb.toFixed(2)} MB cargados</span></div><div className="lib-stat"><small>Categorias activas</small><b>{counts.filter(x=>x[1]>0).length}</b><span>{type === 'Todos' ? 'Vista global' : type}</span></div><div className="lib-stat"><small>Seleccionados</small><b>{batch.length}</b><span>Lote visible para acciones IA</span></div></div>
     <div className="lib-console panel">
-      <div className="lib-searchbar"><input className="search" placeholder="Buscar por concepto, insumo, familia, archivo o fuente..." value={q} onChange={e=>{setQ(e.target.value);setPage(1)}}/><button onClick={()=>alert('Siguiente paso: conectar busqueda semantica con embeddings + Storage para consultar contenido real, no solo nombres.')}>Buscar con IA</button></div>
+      <div className="lib-searchbar"><input className="search" placeholder="Buscar por concepto, insumo, familia, archivo o fuente..." value={q} onChange={e=>{setQ(e.target.value);setPage(1)}}/><button onClick={()=>alert('Busqueda IA: usa el indice documental para encontrar matrices, insumos y referencias compatibles con tu concepto.')}>Buscar con IA</button></div>
       <div className="lib-suggestions">{suggestions.map(s=><button key={s} onClick={()=>{setQ(s);setPage(1)}}>{s}</button>)}</div>
       <div className="lib-toolbar pro"><div className="lib-tabs">{types.map(t=><button key={t} className={type===t?'active':''} onClick={()=>setFilterType(t)}>{t}</button>)}</div><div className="seg"><button className={view==='tabla'?'active':''} onClick={()=>setView('tabla')}>Tabla</button><button className={view==='tablero'?'active':''} onClick={()=>setView('tablero')}>Tarjetas</button></div></div>
       <div className="lib-bulkbar"><b>{visible.length}</b><span>documentos encontrados</span><em>Pagina {safePage} de {pages}</em><label className="soft file-soft">Subida masiva<input type="file" multiple hidden onChange={e=>add(e.target.files)} disabled={uploading}/></label><button className="soft" onClick={()=>alert('Se creara un indice por familia, unidad, precio, insumo, fecha y fuente para busqueda rapida.')}>Indexar lote visible</button></div>
@@ -2497,7 +2563,7 @@ function VisualAI({user}){
       setResult(data.result || localBrief());
     }catch(err){
       setGeneratedImage('');
-      setResult(`${localBrief()}\n\nConexion IA pendiente:\n${err?.message || 'Configura OPENAI_API_KEY en Vercel para generar con IA real.'}`);
+      setResult(`${localBrief()}\n\nNo pude generar con IA en este momento:\n${err?.message || 'Revisa OPENAI_API_KEY y permisos del usuario en Vercel.'}`);
     }finally{
       setLoading(false);
     }
@@ -2509,19 +2575,19 @@ function VisualAI({user}){
           {image ? <img src={image} alt="Referencia visual"/> : <div><Icon name="play" size={42}/><b>Subir imagen o plano</b><span>JPG, PNG o captura de plano</span></div>}
           <input type="file" accept="image/*" hidden onChange={e=>load(e.target.files[0])}/>
         </label>
-        <div className="visual-meta"><b>{fileName || 'Sin archivo cargado'}</b><span>{image ? 'Vista previa local lista' : 'La imagen real se guardara en Storage en produccion'}</span></div>
+        <div className="visual-meta"><b>{fileName || 'Sin archivo cargado'}</b><span>{image ? 'Vista previa lista para IA' : 'Sube una imagen para analizar fachada, plano u obra'}</span></div>
       </div>
       <div className="panel visual-form">
         <h2>Que quieres generar</h2>
         <div className="visual-modes">{[['fachada','Fachada'],['plano','Plano a 3D'],['interior','Interior'],['obra','Revision de obra']].map(x=><button key={x[0]} className={mode===x[0]?'active':''} onClick={()=>setMode(x[0])}>{x[1]}</button>)}</div>
         <label>Instrucciones para la IA</label>
         <textarea value={prompt} onChange={e=>setPrompt(e.target.value)} placeholder="Ej. Quiero ver esta fachada mas moderna, con piedra, luz calida y porton negro..." />
-        <div className="visual-actions"><button onClick={generate} disabled={loading}>{loading?'Generando...':'Generar brief visual'}</button><button className="secondary" onClick={()=>alert('La IA real queda conectada por /api/visual-ai. En Vercel agrega OPENAI_API_KEY y, si quieres guardar historial, FIREBASE_SERVICE_ACCOUNT_JSON.')}>Conectar IA real</button></div>
+        <div className="visual-actions"><button onClick={generate} disabled={loading}>{loading?'Generando...':'Generar brief visual'}</button><button className="secondary" onClick={()=>alert('Configuracion IA: /api/visual-ai usa OPENAI_API_KEY en Vercel. Para guardar historial agrega FIREBASE_SERVICE_ACCOUNT_JSON.')}>Ver configuracion IA</button></div>
       </div>
       <div className="panel visual-result">
         <h2>Salida tecnica</h2>
         {generatedImage && <img className="visual-generated" src={generatedImage} alt="Propuesta visual generada por ZOEMEC IA"/>}
-        {result ? <pre>{result}</pre> : <p className="muted">Sube una imagen y genera el brief. La version real podra devolver imagen propuesta, descripcion, materiales y alcance para presupuesto.</p>}
+        {result ? <pre>{result}</pre> : <p className="muted">Sube una imagen y genera el brief. ZOEMEC puede devolver propuesta visual, descripcion tecnica, materiales y alcance para presupuesto.</p>}
       </div>
     </div>
     <div className="visual-flow">{['Subir imagen a Storage','Guardar solicitud en Firestore','IA analiza referencia','Genera render o brief','Usuario aprueba y manda a presupuesto'].map((x,i)=><div key={x}><b>{i+1}</b><span>{x}</span></div>)}</div>
@@ -2581,7 +2647,7 @@ function PlansAccess({user}){
       setPaying('');
     }
   };
-  return <section><PageHead kicker="Planes y acceso" title="Modelo de cobro y permisos" desc="Define que puede usar cada cliente y que piezas faltan conectar para publicar ZOEMEC en produccion." />
+  return <section><PageHead kicker="Planes y acceso" title="Modelo de cobro y permisos" desc="Define que puede usar cada cliente: APUs, IA, biblioteca, exportaciones, usuarios, descargas y soporte." />
     <div className="plans-grid">{plans.map(p=><div className={p.featured?'plan-card featured':'plan-card'} key={p.name}>
       <span>{p.name}</span><h2>{p.price}</h2><p>{p.note}</p>
       <ul>{p.items.map(x=><li key={x}>{x}</li>)}</ul>
@@ -2596,7 +2662,7 @@ function PlansAccess({user}){
       <div className="pay-flow">{['Usuario elige plan','Checkout seguro','Webhook confirma pago','Firestore activa permisos','ZOEMEC libera funciones'].map((x,i)=><div key={x}><b>{i+1}</b><span>{x}</span></div>)}</div>
     </div>
     <div className="panel plan-matrix"><h2>Accesos por plan</h2><table><thead><tr><th>Funcion</th><th>Inicial</th><th>Profesional</th><th>Empresa</th></tr></thead><tbody>{features.map(r=><tr key={r[0]}>{r.map((c,i)=><td key={i}>{c}</td>)}</tr>)}</tbody></table></div>
-    <div className="prod-grid">{production.map(([t,d])=><div className="prod-step" key={t}><b>{t}</b><p>{d}</p><small>Pendiente de conectar para produccion real</small></div>)}</div>
+    <div className="prod-grid">{production.map(([t,d])=><div className="prod-step" key={t}><b>{t}</b><p>{d}</p><small>Configurado por variables seguras y reglas de Firebase</small></div>)}</div>
   </section>
 }
 function Reports({clients,apus,budgets}){

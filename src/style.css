@@ -907,23 +907,24 @@ svg.ic{display:block;flex:none}
   overflow:hidden;
 }
 .landing .nav-public{
-  height:124px;
-  padding:18px 4.8vw;
+  height:104px;
+  padding:14px 4.8vw;
   background:#fff;
   border-bottom:1px solid rgba(23,16,32,.08);
   box-shadow:0 2px 12px rgba(23,16,32,.05);
 }
 .landing .brand-mini{
-  gap:20px;
-  font-family:Georgia, 'Times New Roman', serif;
-  font-size:3.25rem;
-  letter-spacing:.08em;
+  gap:16px;
+  font-family:var(--display);
+  font-size:2.35rem;
+  font-weight:700;
+  letter-spacing:.03em;
   color:#5B2D86;
-  text-shadow:0 2px 12px rgba(91,45,134,.14);
+  text-shadow:none;
 }
 .landing .brand-mini img{
-  height:106px;
-  width:106px;
+  height:84px;
+  width:84px;
   padding:0;
   border:0;
   border-radius:0;
@@ -935,15 +936,15 @@ svg.ic{display:block;flex:none}
 }
 .landing .nav-public nav a{
   color:#171020;
-  font-size:1rem;
-  font-weight:700;
+  font-size:.95rem;
+  font-weight:650;
 }
 .landing .nav-actions button{
-  min-width:160px;
-  padding:16px 22px;
+  min-width:148px;
+  padding:14px 20px;
   border-radius:6px;
-  font-weight:700;
-  font-size:1rem;
+  font-weight:650;
+  font-size:.95rem;
 }
 .landing .nav-actions .ghost{
   color:#171020;
@@ -952,8 +953,8 @@ svg.ic{display:block;flex:none}
 }
 .hero-build{
   position:relative;
-  min-height:calc(100vh - 124px);
-  padding:76px 4.8vw 32px;
+  min-height:calc(100vh - 104px);
+  padding:68px 4.8vw 32px;
   display:grid;
   grid-template-columns:minmax(420px, 1.05fr) minmax(360px, .85fr);
   gap:48px;
@@ -978,27 +979,28 @@ svg.ic{display:block;flex:none}
 }
 .eyebrow{
   display:block;
-  margin-bottom:30px;
+  margin-bottom:24px;
   font-family:var(--mono);
-  font-size:.92rem;
-  letter-spacing:.18em;
+  font-size:.82rem;
+  letter-spacing:.16em;
   text-transform:uppercase;
   color:#D8C2F2;
 }
 .hero-build .hero-copy h1{
-  max-width:780px;
+  max-width:760px;
   color:#fff;
-  font-family:Georgia, 'Times New Roman', serif;
-  font-size:clamp(3rem,5.1vw,5.8rem);
-  line-height:1.08;
-  letter-spacing:-.025em;
-  text-shadow:0 3px 18px rgba(0,0,0,.28);
+  font-family:var(--display);
+  font-size:clamp(2.55rem,4.25vw,4.75rem);
+  font-weight:700;
+  line-height:1.04;
+  letter-spacing:0;
+  text-shadow:0 3px 16px rgba(0,0,0,.22);
 }
 .hero-build .hero-copy p{
-  max-width:640px;
-  margin:22px 0 28px;
+  max-width:620px;
+  margin:20px 0 28px;
   color:#fff;
-  font-size:1.14rem;
+  font-size:1.05rem;
   line-height:1.55;
   text-shadow:0 2px 12px rgba(0,0,0,.32);
 }
@@ -1007,11 +1009,11 @@ svg.ic{display:block;flex:none}
   margin:0;
 }
 .hero-build .hero-actions button{
-  min-width:250px;
-  padding:18px 26px;
+  min-width:230px;
+  padding:16px 24px;
   border-radius:8px;
-  font-size:1rem;
-  font-weight:800;
+  font-size:.96rem;
+  font-weight:700;
 }
 .hero-build .hero-actions button:first-child{
   background:linear-gradient(135deg,#7B43B0,#2A1740);
@@ -1032,30 +1034,31 @@ svg.ic{display:block;flex:none}
   position:relative;
   z-index:1;
   justify-self:end;
-  width:min(500px,100%);
+  width:min(480px,100%);
   background:rgba(255,255,255,.94);
   color:#111;
   border:1px solid rgba(255,255,255,.72);
   border-radius:22px;
-  padding:34px 34px 32px;
+  padding:30px 32px 30px;
   box-shadow:0 26px 70px rgba(0,0,0,.28);
   backdrop-filter:blur(10px);
 }
 .hero-apu-card>span{
   display:block;
-  margin-bottom:22px;
+  margin-bottom:18px;
   font-family:var(--mono);
   color:#563476;
-  font-size:.85rem;
-  letter-spacing:.28em;
+  font-size:.76rem;
+  letter-spacing:.22em;
   text-transform:uppercase;
-  font-weight:800;
+  font-weight:700;
 }
 .hero-apu-card h2{
-  margin-bottom:26px;
+  margin-bottom:22px;
   color:#111;
-  font-family:Georgia, 'Times New Roman', serif;
-  font-size:2rem;
+  font-family:var(--display);
+  font-size:1.55rem;
+  font-weight:700;
   letter-spacing:0;
 }
 .apu-mini-row{
@@ -1069,6 +1072,7 @@ svg.ic{display:block;flex:none}
 .apu-mini-row p,.apu-mini-total p{
   margin:0;
   font-weight:600;
+  font-size:.92rem;
 }
 .apu-mini-row b{
   font-family:var(--mono);
@@ -1076,7 +1080,7 @@ svg.ic{display:block;flex:none}
 }
 .apu-mini-total{
   margin-top:24px;
-  padding:20px 22px;
+  padding:18px 20px;
   border-radius:8px;
   background:linear-gradient(135deg,#F5EFFB,#E7DCF2);
   display:flex;
@@ -1092,7 +1096,7 @@ svg.ic{display:block;flex:none}
 .apu-mini-total b{
   color:#4D2C68;
   font-family:var(--mono);
-  font-size:2rem;
+  font-size:1.65rem;
 }
 .hero-benefits{
   position:relative;
@@ -1140,12 +1144,12 @@ svg.ic{display:block;flex:none}
 }
 @media (max-width:720px){
   .landing .nav-public{height:auto;gap:14px;flex-wrap:wrap}
-  .landing .brand-mini{font-size:2rem}
-  .landing .brand-mini img{height:72px;width:72px}
+  .landing .brand-mini{font-size:1.65rem}
+  .landing .brand-mini img{height:64px;width:64px}
   .landing .nav-actions{width:100%}
   .landing .nav-actions button{flex:1;min-width:0}
   .hero-build{min-height:auto;padding:44px 22px 26px}
-  .hero-build .hero-copy h1{font-size:2.65rem}
+  .hero-build .hero-copy h1{font-size:2.25rem}
   .hero-build .hero-actions button{min-width:100%}
   .hero-apu-card{padding:26px 22px}
   .hero-benefits{grid-template-columns:1fr;padding:16px}

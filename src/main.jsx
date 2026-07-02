@@ -168,6 +168,36 @@ function buildSession(profile, fbUser){
   };
 }
 
+function NoticeHost(){
+  const [notices,setNotices]=useState([]);
+  useEffect(()=>{
+    const nativeAlert = window.alert?.bind(window);
+    const push = (message, type='info') => {
+      const id = Date.now() + Math.random();
+      const text = String(message || 'Accion completada.');
+      setNotices(current => [{id,text,type}, ...current].slice(0,3));
+      window.setTimeout(() => setNotices(current => current.filter(n => n.id !== id)), 5600);
+    };
+    const onNotice = (event) => push(event.detail?.message, event.detail?.type || 'info');
+    window.addEventListener('zoemec-notice', onNotice);
+    window.alert = (message) => push(message);
+    window.zoemecNotify = push;
+    return () => {
+      window.removeEventListener('zoemec-notice', onNotice);
+      if(nativeAlert) window.alert = nativeAlert;
+      delete window.zoemecNotify;
+    };
+  }, []);
+  if(!notices.length) return null;
+  return <div className="notice-stack" aria-live="polite">
+    {notices.map(n=><div className={`notice-card ${n.type}`} key={n.id}>
+      <div className="notice-mark"></div>
+      <div><b>ZOEMEC</b><p>{n.text}</p></div>
+      <button type="button" onClick={()=>setNotices(current=>current.filter(x=>x.id!==n.id))}>Cerrar</button>
+    </div>)}
+  </div>;
+}
+
 function App(){
   const [screen, setScreen] = useState('landing');
   const [module, setModule] = useState('inicio');
@@ -355,11 +385,12 @@ function App(){
     setScreen('landing');
   };
 
-  if(screen === 'landing') return <Landing setScreen={setScreen} login={login} company={companyView} />;
-  if(screen === 'login') return <Auth mode="login" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} company={companyView} />;
-  if(screen === 'register') return <Auth mode="register" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} company={companyView} />;
-  if(!hasValidSession(user)) return <Landing setScreen={setScreen} login={login} company={companyView} />;
-  return <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView}>
+  let content;
+  if(screen === 'landing') content = <Landing setScreen={setScreen} login={login} company={companyView} />;
+  else if(screen === 'login') content = <Auth mode="login" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} company={companyView} />;
+  else if(screen === 'register') content = <Auth mode="register" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} company={companyView} />;
+  else if(!hasValidSession(user)) content = <Landing setScreen={setScreen} login={login} company={companyView} />;
+  else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView}>
     {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} />}
     {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} />}
     {module === 'presupuestos' && <Budgets company={companyView} budgets={budgets} setBudgets={setBudgets} />}
@@ -374,6 +405,7 @@ function App(){
     {module === 'planes' && <PlansAccess user={user} />}
     {module === 'reportes' && <Reports clients={clients} apus={apus} budgets={budgets} />}
   </Shell>;
+  return <><NoticeHost />{content}</>;
 }
 
 /* Fondo animado de construcción (line-art tipo plano) */

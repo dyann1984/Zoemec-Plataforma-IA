@@ -62,6 +62,67 @@ input:focus,textarea:focus{border-color:var(--teal);box-shadow:0 0 0 3px rgba(11
 textarea{min-height:74px;resize:vertical;font-family:var(--body)}
 label{display:block;font-size:.74rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin:10px 0 5px}
 
+/* ---------- Avisos internos ---------- */
+.notice-stack{
+  position:fixed;
+  top:18px;
+  right:18px;
+  z-index:120;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  width:min(430px,calc(100vw - 28px));
+  pointer-events:none;
+}
+.notice-card{
+  pointer-events:auto;
+  display:grid;
+  grid-template-columns:10px 1fr auto;
+  gap:12px;
+  align-items:flex-start;
+  background:rgba(255,255,255,.96);
+  border:1px solid rgba(202,187,216,.92);
+  border-radius:14px;
+  padding:14px;
+  box-shadow:0 22px 70px rgba(23,16,32,.22);
+  backdrop-filter:blur(14px);
+  animation:noticeIn .22s ease-out;
+}
+.notice-mark{
+  width:10px;
+  height:10px;
+  margin-top:4px;
+  border-radius:50%;
+  background:linear-gradient(135deg,var(--teal),var(--gold));
+  box-shadow:0 0 0 4px rgba(111,63,167,.12);
+}
+.notice-card b{
+  display:block;
+  margin-bottom:4px;
+  font-family:var(--display);
+  font-size:.9rem;
+  color:var(--ink);
+  letter-spacing:0;
+}
+.notice-card p{
+  margin:0;
+  color:var(--ink-text);
+  font-size:.88rem;
+  line-height:1.42;
+}
+.notice-card button{
+  background:#fff;
+  color:var(--petrol);
+  border:1px solid var(--line);
+  box-shadow:none;
+  border-radius:9px;
+  padding:7px 9px;
+  font-family:var(--body);
+  font-size:.75rem;
+}
+.notice-card button:hover{background:var(--mint);transform:none}
+@keyframes noticeIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+
 /* ====================================================================
    LANDING
    ==================================================================== */

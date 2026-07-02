@@ -900,14 +900,18 @@ function Assistant(){
   const [open,setOpen]=useState(false);
   const [msgs,setMsgs]=useState([{me:false,t:'Hola. Soy ZOEMIC, asistente tecnico de costos y obra. Preguntame sobre APU, FSR, catalogos, Excel, presupuestos o programa de obra.'}]);
   const [q,setQ]=useState('');
-  const send=async()=>{ if(!q.trim()) return; const user=q.trim(); setQ(''); setMsgs(m=>[...m,{me:true,t:user},{me:false,t:'Analizando...'}]); const answer=await assistantReplyReal(user); setMsgs(m=>[...m.slice(0,-1),{me:false,t:answer}]); };
+  const [busy,setBusy]=useState(false);
+  const send=async(text=q)=>{ if(!text.trim() || busy) return; const user=text.trim(); setQ(''); setBusy(true); setMsgs(m=>[...m,{me:true,t:user},{me:false,t:'Analizando tu consulta tecnica...'}]); const answer=await assistantReplyReal(user); setMsgs(m=>[...m.slice(0,-1),{me:false,t:answer}]); setBusy(false); };
+  const prompts=['Como armo un APU?','Calcular FSR','Importar Excel','Exportar PDF'];
   return <>
     <button className="asst-fab" onClick={()=>setOpen(o=>!o)} title="Asistente ZOEMIC"><img src="/zoemic-assistant.png" alt="ZOEMIC asistente"/></button>
     {open && <div className="asst-panel">
-      <div className="asst-head"><img className="asst-avatar" src="/zoemic-assistant.png" alt="ZOEMIC asistente"/><div><b>ZOEMIC</b><small>Asistente técnico real</small></div><button className="asst-x" onClick={()=>setOpen(false)}>×</button></div>
+      <div className="asst-head"><img className="asst-avatar" src="/zoemic-assistant.png" alt="ZOEMIC asistente"/><div><b>ZOEMIC</b><small><i></i> Asistente tecnico de obra</small></div><button className="asst-x" onClick={()=>setOpen(false)}>×</button></div>
+      <div className="asst-strip"><span>APU</span><span>FSR</span><span>Excel</span><span>Presupuestos</span></div>
       <div className="asst-body">{msgs.map((m,i)=><div key={i} className={'asst-msg'+(m.me?' me':'')}>{m.t}</div>)}</div>
-      <div className="asst-input"><input value={q} placeholder="Escribe tu pregunta…" onChange={e=>setQ(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()}/><button onClick={send}>Enviar</button></div>
-      <div className="asst-note">Responde con IA si el servidor esta activo; si no, usa guia tecnica local.</div>
+      <div className="asst-suggestions">{prompts.map(p=><button key={p} onClick={()=>send(p)} disabled={busy}>{p}</button>)}</div>
+      <div className="asst-input"><input value={q} placeholder="Pregunta por costos, obra o formatos..." onChange={e=>setQ(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()}/><button onClick={()=>send()} disabled={busy}>{busy?'...':'Enviar'}</button></div>
+      <div className="asst-note">Consulta tecnica local con conexion a IA cuando el servidor este activo.</div>
     </div>}
   </>;
 }
@@ -2273,20 +2277,85 @@ function exportBudgetPDF(items,total,iva,company){const doc=new jsPDF();let y=16
 
 function Projects({projects,setProjects}){
   const list = projects || [];
-  const add = () => setProjects([{name:'Nuevo proyecto', client:'Cliente por definir', progress:0, budget:0, status:'Anteproyecto'}, ...list]);
+  useEffect(()=>{
+    const cleaned=list.filter(p=>!(p?.name==='Nuevo proyecto' && p?.client==='Cliente por definir' && Number(p?.budget||0)===0 && Number(p?.progress||0)===0));
+    if(cleaned.length!==list.length) setProjects(cleaned);
+  }, []);
+  const [showForm,setShowForm]=useState(false);
+  const [draft,setDraft]=useState({name:'',client:'',budget:'',progress:0,status:'Anteproyecto'});
+  const add = () => setShowForm(true);
+  const save = () => {
+    if(!draft.name.trim() || !draft.client.trim()){
+      alert('Captura nombre del proyecto y cliente.');
+      return;
+    }
+    setProjects([{id:'PRO-'+uid(),name:draft.name.trim(),client:draft.client.trim(),progress:Number(draft.progress)||0,budget:Number(draft.budget)||0,status:draft.status||'Anteproyecto'}, ...list]);
+    setDraft({name:'',client:'',budget:'',progress:0,status:'Anteproyecto'});
+    setShowForm(false);
+  };
   const update = (i,k,v) => setProjects(list.map((p,idx)=>idx===i?{...p,[k]:v}:p));
   const remove = (i) => setProjects(list.filter((_,idx)=>idx!==i));
   return <section><PageHead kicker="Proyectos" title="Control de obra y proyectos" desc="Vista ejecutiva de obras, avance, presupuesto, cliente y estado." action={<button onClick={add}>+ Nuevo proyecto</button>} />
+    {showForm && <div className="record-modal" role="dialog" aria-modal="true">
+    <div className="record-backdrop" onClick={()=>setShowForm(false)}></div>
+    <div className="panel record-form project-form">
+      <div className="record-form-head"><div><span>Alta de proyecto</span><h2>Datos iniciales de obra</h2></div><button className="secondary" onClick={()=>setShowForm(false)}>Cancelar</button></div>
+      <div className="field-grid">
+        <div className="nf"><label>Nombre del proyecto</label><input value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})} placeholder="Ej. Remodelacion local comercial"/></div>
+        <div className="nf"><label>Cliente</label><input value={draft.client} onChange={e=>setDraft({...draft,client:e.target.value})} placeholder="Nombre del cliente o empresa"/></div>
+        <div className="nf"><label>Presupuesto estimado</label><input type="number" value={draft.budget} onChange={e=>setDraft({...draft,budget:e.target.value})} placeholder="0.00"/></div>
+        <div className="nf"><label>Estado</label><select value={draft.status} onChange={e=>setDraft({...draft,status:e.target.value})}><option>Anteproyecto</option><option>Cotizacion</option><option>En ejecucion</option><option>Pausado</option><option>Cerrado</option></select></div>
+        <div className="nf wide"><label>Avance inicial: {draft.progress}%</label><input type="range" min="0" max="100" value={draft.progress} onChange={e=>setDraft({...draft,progress:e.target.value})}/></div>
+      </div>
+      <div className="form-actions"><button className="secondary" onClick={()=>setDraft({name:'',client:'',budget:'',progress:0,status:'Anteproyecto'})}>Limpiar</button><button onClick={save}>Guardar proyecto</button></div>
+    </div></div>}
     {list.length ? <div className="cards-3">{list.map((p,i)=><div className="project-card" key={i}>
       <span>{p.status}</span>
-      <h2><input value={p.name} onChange={e=>update(i,'name',e.target.value)} style={{fontFamily:'var(--display)',fontWeight:700,border:0,padding:0,background:'transparent'}}/></h2>
-      <p><input value={p.client} onChange={e=>update(i,'client',e.target.value)} style={{border:0,padding:0,background:'transparent',color:'var(--muted)'}}/></p>
+      <h2><input value={p.name} onChange={e=>update(i,'name',e.target.value)} /></h2>
+      <p><input value={p.client} onChange={e=>update(i,'client',e.target.value)} /></p>
       <b>{money(p.budget)}</b>
       <progress value={p.progress} max="100"/>
       <small>{p.progress}% de avance - <a onClick={()=>remove(i)} style={{color:'var(--danger)'}}>eliminar</a></small>
     </div>)}</div> : <div className="panel"><EmptyState text="No hay proyectos reales cargados. Usa “Nuevo proyecto” para iniciar tu cartera."/></div>}</section>
 }
-function Clients({clients,setClients}){const [q,setQ]=useState('');const filtered=clients.filter(c=>c.name.toLowerCase().includes(q.toLowerCase()));return <section><PageHead kicker="CRM de obra" title="Clientes" desc="Cartera profesional con proyectos, presupuestos, contactos, RFC e historial." action={<button onClick={()=>setClients([{id:'CLI-'+uid(),name:'Nuevo cliente',type:'Empresa',contact:'Contacto',phone:'',email:'',rfc:'',projects:0,budgets:0,amount:0,status:'Prospecto'},...clients])}>+ Nuevo cliente</button>} /><div className="panel"><input className="search" placeholder="Buscar cliente..." value={q} onChange={e=>setQ(e.target.value)}/><div className="client-grid">{filtered.map(c=><div className="client-card" key={c.id}><div className="client-avatar">{c.name[0]}</div><div><h2>{c.name}</h2><p>{c.type} - {c.contact}</p><small>RFC: {c.rfc}</small><div className="client-stats"><span>{c.projects} proyectos</span><span>{c.budgets} presupuestos</span><b>{money(c.amount)}</b></div></div><em>{c.status}</em></div>)}</div></div></section>}
+function Clients({clients,setClients}){
+  const [q,setQ]=useState('');
+  const [showForm,setShowForm]=useState(false);
+  const [draft,setDraft]=useState({name:'',type:'Empresa',contact:'',phone:'',email:'',rfc:'',status:'Prospecto'});
+  useEffect(()=>{
+    const cleaned=clients.filter(c=>!(c?.name==='Nuevo cliente' && c?.contact==='Contacto' && !c?.phone && !c?.email && !c?.rfc && Number(c?.amount||0)===0));
+    if(cleaned.length!==clients.length) setClients(cleaned);
+  }, []);
+  const filtered=clients.filter(c=>(c.name||'').toLowerCase().includes(q.toLowerCase()) || (c.contact||'').toLowerCase().includes(q.toLowerCase()) || (c.email||'').toLowerCase().includes(q.toLowerCase()));
+  const save=()=>{
+    if(!draft.name.trim() || !draft.contact.trim()){
+      alert('Captura nombre del cliente y contacto principal.');
+      return;
+    }
+    const next={id:'CLI-'+uid(),name:draft.name.trim(),type:draft.type,contact:draft.contact.trim(),phone:draft.phone.trim(),email:draft.email.trim(),rfc:draft.rfc.trim().toUpperCase(),projects:0,budgets:0,amount:0,status:draft.status};
+    setClients([next,...clients]);
+    setDraft({name:'',type:'Empresa',contact:'',phone:'',email:'',rfc:'',status:'Prospecto'});
+    setShowForm(false);
+  };
+  return <section><PageHead kicker="CRM de obra" title="Clientes" desc="Cartera profesional con proyectos, presupuestos, contactos, RFC e historial." action={<button onClick={()=>setShowForm(true)}>+ Nuevo cliente</button>} />
+    {showForm && <div className="record-modal" role="dialog" aria-modal="true">
+    <div className="record-backdrop" onClick={()=>setShowForm(false)}></div>
+    <div className="panel record-form client-form">
+      <div className="record-form-head"><div><span>Alta de cliente</span><h2>Datos comerciales y contacto</h2></div><button className="secondary" onClick={()=>setShowForm(false)}>Cancelar</button></div>
+      <div className="field-grid">
+        <div className="nf"><label>Cliente o razon social</label><input value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})} placeholder="Ej. Constructora del Centro"/></div>
+        <div className="nf"><label>Tipo</label><select value={draft.type} onChange={e=>setDraft({...draft,type:e.target.value})}><option>Empresa</option><option>Gobierno</option><option>Particular</option><option>Proveedor</option></select></div>
+        <div className="nf"><label>Contacto principal</label><input value={draft.contact} onChange={e=>setDraft({...draft,contact:e.target.value})} placeholder="Nombre del responsable"/></div>
+        <div className="nf"><label>Telefono</label><input value={draft.phone} onChange={e=>setDraft({...draft,phone:e.target.value})} placeholder="55 0000 0000"/></div>
+        <div className="nf"><label>Correo</label><input type="email" value={draft.email} onChange={e=>setDraft({...draft,email:e.target.value})} placeholder="contacto@empresa.com"/></div>
+        <div className="nf"><label>RFC</label><input value={draft.rfc} onChange={e=>setDraft({...draft,rfc:e.target.value})} placeholder="RFC opcional"/></div>
+        <div className="nf"><label>Estado</label><select value={draft.status} onChange={e=>setDraft({...draft,status:e.target.value})}><option>Prospecto</option><option>Activo</option><option>En seguimiento</option><option>Inactivo</option></select></div>
+      </div>
+      <div className="form-actions"><button className="secondary" onClick={()=>setDraft({name:'',type:'Empresa',contact:'',phone:'',email:'',rfc:'',status:'Prospecto'})}>Limpiar</button><button onClick={save}>Guardar cliente</button></div>
+    </div></div>}
+    <div className="panel clients-panel"><input className="search" placeholder="Buscar cliente, contacto o correo..." value={q} onChange={e=>setQ(e.target.value)}/><div className="client-grid">{filtered.map(c=><div className="client-card" key={c.id}><div className="client-avatar">{(c.name||'C')[0]}</div><div><h2>{c.name}</h2><p>{c.type} - {c.contact}</p><small>{c.email || c.phone || 'Sin contacto registrado'}</small><small>RFC: {c.rfc || 'Pendiente'}</small><div className="client-stats"><span>{c.projects} proyectos</span><span>{c.budgets} presupuestos</span><b>{money(c.amount)}</b></div></div><em>{c.status}</em></div>)}</div>{!filtered.length && <EmptyState text="No hay clientes con ese criterio. Agrega un cliente con datos completos para iniciar la cartera."/>}</div>
+  </section>
+}
 
 const LIBRARY_DISCIPLINES=[
   ['Acabados',['acabado','piso','azulejo','loseta','porcelanato','ceramico','pintura','aplanado','recubrimiento','boquilla']],

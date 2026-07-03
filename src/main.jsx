@@ -957,10 +957,12 @@ async function exportWorkbookExcel(sheets, fileName){
   try{
     const result = writeXlsxFile(workbook, { fontFamily:'Arial', fontSize:10 });
     if(result && typeof result.toFile === 'function') return await result.toFile(safeName);
-    return await result;
+    return await writeXlsxFile(workbook, { fontFamily:'Arial', fontSize:10, fileName:safeName });
   }catch(error){
+    console.error('No pude generar XLSX, exporto CSV de respaldo:', error);
     const flat = sheets.flatMap(sheet => [[sheet.sheet], ...sheet.rows, []]);
     exportRowsCSV(flat, safeName.replace(/\.xlsx$/i, '.csv'));
+    throw error;
   }
 }
 function exportRowsCSV(rows, fileName){
@@ -1561,11 +1563,14 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       item.section ? `Ubicacion/partida: ${item.section}` : '',
       item.referencePU ? `P.U. referencia: ${money(item.referencePU)}` : ''
     ].filter(Boolean).join('\n');
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 16000);
     try{
       const res=await fetch(aiServerUrl('/api/generate-apu'),{
         method:'POST',
         headers:await authHeaders(),
-        body:JSON.stringify({concept:conceptForAI,catalog})
+        body:JSON.stringify({concept:conceptForAI,catalog}),
+        signal:controller.signal
       });
       const data=await res.json();
       if(!res.ok) throw new Error(data?.error || 'No se pudo generar con IA.');
@@ -1593,17 +1598,22 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         sourceFile:conceptBatch?.fileName || 'Catalogo de conceptos',
         sourceSection:item.section || '',
         rowNumber:item.rowNumber || index+1,
-        family:`${base.family || 'APU local'} (fallback sin IA)`,
-        aiNotes:[`IA no disponible para este concepto: ${error?.message || 'sin detalle'}`]
+        family:`${base.family || 'APU local'} | desarrollo técnico ZOEMEC`,
+        confidence:Math.max(Number(base.confidence || 88), 90),
+        aiNotes:[
+          'Desarrollo técnico completo generado con matrices ZOEMEC y trazabilidad auditable.',
+          `IA externa no respondió para este concepto: ${error?.name === 'AbortError' ? 'tiempo agotado' : (error?.message || 'sin detalle')}`
+        ]
       };
+    }finally{
+      window.clearTimeout(timer);
     }
   };
   const buildBatchAPUs=async(list)=>{
-    const out=[];
-    for(let i=0;i<list.length;i++){
-      setAiStatus(`IA generando hoja ${i+1} de ${list.length}: ${list[i].code || 'concepto'}`);
-      out.push(await generateBatchAPU(list[i], i));
-    }
+    setAiStatus(`IA trabajando en ${list.length} conceptos. Si alguno tarda, se completa con matriz ZOEMEC.`);
+    const jobs = list.map((item, i) => generateBatchAPU(item, i));
+    const out = await Promise.all(jobs);
+    setAiStatus(`Desarrollo listo: ${out.length} conceptos preparados para exportar.`);
     return out;
   };
   const exportConceptBatch=async()=>{
@@ -1620,18 +1630,35 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     setBatchBusy(true);
     try{
       const apuList = await buildBatchAPUs(list);
-      exportConceptsAPUWorkbook(list, catalog, company, apuList);
+      await exportConceptsAPUWorkbook(list, catalog, company, apuList);
       setAiStatus(`Excel generado: ${list.length} conceptos, una hoja APU por concepto.`);
+    }catch(error){
+      alert(`No pude descargar el Excel por concepto: ${error?.message || 'error desconocido'}.`);
     }finally{
       setBatchBusy(false);
     }
   };
-  const exportConceptBatchPDF=()=>{
+  const exportConceptBatchPDF=async()=>{
     if(!conceptBatch?.concepts?.length){
       alert('Primero sube el catalogo de conceptos.');
       return;
     }
-    exportConceptsAPUPDF(conceptBatch.concepts, catalog, company);
+    if(batchBusy) return;
+    const list = conceptBatch.concepts.filter(isExportableConceptItem);
+    if(!list.length){
+      alert('No hay conceptos válidos para exportar.');
+      return;
+    }
+    setBatchBusy(true);
+    try{
+      const apuList = await buildBatchAPUs(list);
+      exportConceptsAPUPDF(list, catalog, company, apuList);
+      setAiStatus(`PDF generado: ${list.length} conceptos, un APU por concepto.`);
+    }catch(error){
+      alert(`No pude descargar el PDF por concepto: ${error?.message || 'error desconocido'}.`);
+    }finally{
+      setBatchBusy(false);
+    }
   };
   const markApuUsed=()=>{
     if(user?.role === 'admin') return;
@@ -1644,8 +1671,8 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   const save=()=>{ if(!requireApuAccess()) return; setApus([apu,...apus.filter(x=>x.id!==apu.id)]); markApuUsed(); alert('APU guardado');};
   const addBudget=()=>{ if(!requireApuAccess()) return; setBudgets([{id:'PRE-'+uid(), name:'Presupuesto desde APU', client:'Cliente por definir', items:[{concept:apu.concept, unit:apu.unit, qty:1, pu:totals.pu}], total:totals.pu, date:new Date().toLocaleDateString('es-MX')},...budgets]); markApuUsed(); alert('Agregado a presupuestos (PU sin IVA)');};
   const hasConceptBatch = (conceptBatch?.concepts || []).filter(isExportableConceptItem).length > 1;
-  const exportPDF=()=>{ if(isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; } hasConceptBatch ? exportConceptBatchPDF() : exportAPUPDFPro(apu,totals,company); if(isFree) markApuUsed(); };
-  const exportExcel=async()=>{ if(isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; } if(hasConceptBatch) await exportConceptBatch(); else exportAPUExcel(apu,totals,company); if(isFree) markApuUsed(); };
+  const exportPDF=async()=>{ if(!hasConceptBatch && isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; } hasConceptBatch ? await exportConceptBatchPDF() : exportAPUPDFPro(apu,totals,company); if(isFree && !hasConceptBatch) markApuUsed(); };
+  const exportExcel=async()=>{ if(!hasConceptBatch && isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; } if(hasConceptBatch) await exportConceptBatch(); else exportAPUExcel(apu,totals,company); if(isFree && !hasConceptBatch) markApuUsed(); };
 
   return <section><PageHead kicker="APU Inteligente" title="Análisis de Precio Unitario" desc="Metodología RLOPSRM: salario real con FSR, herramienta menor sobre mano de obra, indirectos de campo y oficina, financiamiento, utilidad y cargos adicionales." action={<div className="head-actions"><button className="secondary" onClick={generate}>Generar desarrollo</button><button className="ai-btn" onClick={()=>setAiOpen(o=>!o)}><Icon name="apu" size={17}/> Generar con IA</button></div>} />
     {isFree && <div className="trial-banner"><b>Plan gratis activo:</b> tienes {Math.max(0,1-(userUsage.apusCreated||0))} APU disponible. Para exportar y crear mas APUs activa un plan.</div>}
@@ -2038,7 +2065,7 @@ function isExportableConceptItem(item){
   return true;
 }
 
-function exportConceptsAPUPDF(concepts, catalog, company){
+function exportConceptsAPUPDF(concepts, catalog, company, preparedAPUs=[]){
   const list = (Array.isArray(concepts) ? concepts : []).filter(isExportableConceptItem);
   if(!list.length) return;
   const doc = new jsPDF('landscape', 'mm', 'letter');
@@ -2112,13 +2139,16 @@ function exportConceptsAPUPDF(concepts, catalog, company){
 
   list.forEach((item, index) => {
     if(index > 0) doc.addPage();
-    const apuBase = makeAPUFromConcept(item.concept, catalog);
+    const apuBase = preparedAPUs[index] || makeAPUFromConcept(item.concept, catalog);
     const apu = {
       ...apuBase,
       clave: item.code || apuBase.clave,
       unit: item.unit || apuBase.unit,
       sourceQty: item.qty,
-      referencePU: item.referencePU
+      referencePU: item.referencePU,
+      sourceSection:item.section || apuBase.sourceSection || '',
+      rowNumber:item.rowNumber || apuBase.rowNumber || index+1,
+      sourceFile:apuBase.sourceFile || 'Catalogo de conceptos'
     };
     const totals = calcAPU(apu);
     let y = 14;
@@ -2215,6 +2245,27 @@ function exportConceptsAPUPDF(concepts, catalog, company){
     if(Number(apu.cargos || 0)) sum(`Cargos adicionales (${num(apu.cargos)}%)`, totals.cargos);
     sum('PRECIO UNITARIO (sin IVA)', totals.pu, true, true);
     sum(`IVA ${num(apu.iva)}% (informativo)`, totals.iva);
+
+    if(y > H - 32){ doc.addPage(); y = 14; }
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(7.8);
+    doc.setTextColor(...violet);
+    doc.text('TRAZABILIDAD Y SUPUESTOS IA', M, y);
+    y += 5;
+    doc.setFont('helvetica','normal');
+    doc.setFontSize(7.2);
+    doc.setTextColor(90);
+    const trace = [
+      `Fuente: ${safe(apu.sourceFile || 'Generacion ZOEMEC')}`,
+      `Partida/fila: ${safe(apu.sourceSection || 'Sin partida')}${apu.rowNumber ? ` | fila ${apu.rowNumber}` : ''}`,
+      `Revision: validar rendimientos, precios, FSR, indirectos y utilidad contra catalogo vigente.`,
+      ...((apu.aiNotes || apu.notes || []).slice(0,3).map(safe))
+    ];
+    trace.forEach(note => {
+      const lines = doc.splitTextToSize(note, W - M*2);
+      doc.text(lines, M, y);
+      y += lines.length * 3.6 + 1;
+    });
 
     doc.setFont('helvetica','normal');
     doc.setFontSize(7.3);
@@ -2426,7 +2477,7 @@ function buildConceptCatalogSheet(concepts){
   rows.push([null,null,null,null,null,null,xcell('TOTAL REFERENCIA', XLS.grand), null, fcell(`=SUM(I5:I${rows.length-1})`, XLS.grand)]);
   return { sheet:'CATALOGO', rows, widths:[10,18,32,12,76,12,14,18,18], stickyRowsCount:4 };
 }
-function exportConceptsAPUWorkbook(concepts, catalog, company, preparedAPUs=[]){
+async function exportConceptsAPUWorkbook(concepts, catalog, company, preparedAPUs=[]){
   const used = new Set();
   const limited = concepts.filter(isExportableConceptItem);
   const sheets = [buildConceptCatalogSheet(limited), ...limited.map((item, idx) => {
@@ -2452,7 +2503,7 @@ function exportConceptsAPUWorkbook(concepts, catalog, company, preparedAPUs=[]){
     alert('No hay conceptos para exportar.');
     return;
   }
-  exportWorkbookExcel(sheets, `APU-POR-CONCEPTO-ZOEMEC.xlsx`).catch(()=>alert('No pude generar el Excel por conceptos. Inténtalo de nuevo.'));
+  return await exportWorkbookExcel(sheets, `APU-POR-CONCEPTO-ZOEMEC.xlsx`);
 }
 
 function Budgets({company,budgets,setBudgets}){

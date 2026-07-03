@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import jsPDF from 'jspdf';
 import readXlsxFile from 'read-excel-file/browser';
 import writeXlsxFile from 'write-excel-file/browser';
+import { unzipSync, strFromU8 } from 'fflate';
 import { createUserWithEmailAndPassword, GoogleAuthProvider, onAuthStateChanged, sendEmailVerification, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile } from 'firebase/auth';
 import { addDoc, collection, doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
@@ -477,12 +478,69 @@ function parseExcelToCatalog(file){
   if(name.endsWith('.csv')){
     return file.text().then(text=>parseCatalogRows(parseCSV(text)));
   }
-  return readXlsxFile(file).then(parseCatalogRows);
+  return readSpreadsheetRows(file).then(parseCatalogRows);
+}
+function parseXml(text){
+  return new DOMParser().parseFromString(text, 'application/xml');
+}
+function xmlText(node){
+  if(!node) return '';
+  return Array.from(node.getElementsByTagName('t')).map(t=>t.textContent || '').join('');
+}
+function colIndexFromRef(ref=''){
+  const letters = String(ref).match(/[A-Z]+/i)?.[0]?.toUpperCase() || '';
+  let index = 0;
+  for(let i=0;i<letters.length;i++) index = index * 26 + (letters.charCodeAt(i) - 64);
+  return Math.max(0, index - 1);
+}
+function numericSheetSort(a,b){
+  const an = Number(a.match(/sheet(\d+)\.xml$/i)?.[1] || 0);
+  const bn = Number(b.match(/sheet(\d+)\.xml$/i)?.[1] || 0);
+  return an - bn || a.localeCompare(b);
+}
+async function readXlsxXmlRows(file){
+  const zip = unzipSync(new Uint8Array(await file.arrayBuffer()));
+  const readZipText = (path) => zip[path] ? strFromU8(zip[path]) : '';
+  const sharedDoc = readZipText('xl/sharedStrings.xml') ? parseXml(readZipText('xl/sharedStrings.xml')) : null;
+  const sharedStrings = sharedDoc
+    ? Array.from(sharedDoc.getElementsByTagName('si')).map(si => xmlText(si))
+    : [];
+  const sheetPaths = Object.keys(zip).filter(path => /^xl\/worksheets\/sheet\d+\.xml$/i.test(path)).sort(numericSheetSort);
+  const allRows = [];
+  sheetPaths.forEach((path, sheetIndex) => {
+    const doc = parseXml(readZipText(path));
+    const rows = Array.from(doc.getElementsByTagName('row'));
+    if(sheetIndex > 0 && allRows.some(row => row.some(cell => String(cell ?? '').trim()))) allRows.push([]);
+    rows.forEach(rowNode => {
+      const row = [];
+      Array.from(rowNode.getElementsByTagName('c')).forEach(cell => {
+        const ref = cell.getAttribute('r') || '';
+        const idx = colIndexFromRef(ref);
+        const type = cell.getAttribute('t') || '';
+        const vNode = cell.getElementsByTagName('v')[0];
+        const raw = vNode?.textContent ?? '';
+        let value = raw;
+        if(type === 's') value = sharedStrings[Number(raw)] ?? '';
+        else if(type === 'inlineStr') value = xmlText(cell);
+        else if(type === 'str') value = raw;
+        else if(raw !== ''){
+          const n = Number(raw);
+          value = Number.isFinite(n) ? n : raw;
+        }
+        row[idx] = cleanText(value);
+      });
+      allRows.push(row.map(cell => cell == null ? '' : cell));
+    });
+  });
+  return normalizeSpreadsheetRows(allRows);
 }
 async function readSpreadsheetRows(file){
   const name=(file?.name||'').toLowerCase();
   if(name.endsWith('.csv')) return normalizeSpreadsheetRows(parseCSV(await file.text()));
-  return readXlsxFile(file).then(normalizeSpreadsheetRows);
+  const primary = await readXlsxFile(file).then(normalizeSpreadsheetRows).catch(()=>[]);
+  const meaningful = primary.filter(row => (row || []).some(cell => String(cell ?? '').trim())).length;
+  if(meaningful > 5) return primary;
+  return readXlsxXmlRows(file);
 }
 function normalizeSpreadsheetRows(rows){
   const source = Array.isArray(rows) ? rows : [];
@@ -673,8 +731,26 @@ async function parseRobustConceptCatalog(file){
       unit,
       qty,
       referencePU,
-      importe
+      importe,
+      section: clean(item.section),
+      rowNumber: Number(item.rowNumber || 0) || list.length + 1
     });
+  };
+  const looksLikeItemRow = (row) => {
+    const code = clean(row[cCode]);
+    const concept = clean(row[cConcept]);
+    const unit = cUnit > -1 ? clean(row[cUnit]) : '';
+    const qty = cQty > -1 ? asNumber(row[cQty]) : 0;
+    return Boolean(concept && !isNoiseConcept(concept) && unitRe.test(unit) && qty > 0);
+  };
+  const looksLikeContinuationRow = (row) => {
+    const code = cCode > -1 ? clean(row[cCode]) : '';
+    const concept = cConcept > -1 ? clean(row[cConcept]) : '';
+    const unit = cUnit > -1 ? clean(row[cUnit]) : '';
+    const qty = cQty > -1 ? asNumber(row[cQty]) : 0;
+    const pu = cPU > -1 ? asNumber(row[cPU]) : 0;
+    const importe = cImporte > -1 ? asNumber(row[cImporte]) : 0;
+    return Boolean(!code && concept && concept.length > 4 && !unitRe.test(unit) && !qty && !pu && !importe && !isNoiseConcept(concept));
   };
   let header = -1;
   let cCode = -1, cConcept = -1, cUnit = -1, cQty = -1, cPU = -1, cImporte = -1;
@@ -698,6 +774,14 @@ async function parseRobustConceptCatalog(file){
   }
   const concepts = [];
   if(header >= 0){
+    let pending = null;
+    let section = '';
+    const flush = () => {
+      if(pending){
+        addConcept(concepts, pending);
+        pending = null;
+      }
+    };
     for(let i=header+1;i<normalized.length;i++){
       const row = normalized[i] || [];
       const concept = cConcept > -1 ? clean(row[cConcept]) : '';
@@ -706,10 +790,22 @@ async function parseRobustConceptCatalog(file){
       const qty = cQty > -1 ? asNumber(row[cQty]) : 0;
       const pu = cPU > -1 ? asNumber(row[cPU]) : 0;
       const importe = cImporte > -1 ? asNumber(row[cImporte]) : 0;
-      const looksLikeSection = !code && concept && concept.length < 50 && concept === concept.toUpperCase();
-      if(looksLikeSection) continue;
-      addConcept(concepts, { code, concept, unit, qty, referencePU:pu, importe });
+      const looksLikeSection = concept && !unitRe.test(unit) && !qty && !pu && !importe && concept.length < 80 && concept === concept.toUpperCase();
+      if(looksLikeItemRow(row)){
+        flush();
+        pending = { code, concept, unit, qty, referencePU:pu, importe, section, rowNumber:i+1 };
+        continue;
+      }
+      if(pending && looksLikeContinuationRow(row)){
+        pending.concept = `${pending.concept} ${concept}`;
+        continue;
+      }
+      if(looksLikeSection){
+        flush();
+        section = code ? `${code} ${concept}` : concept;
+      }
     }
+    flush();
   }
   if(!concepts.length){
     for(let i=0;i<normalized.length;i++){
@@ -740,13 +836,7 @@ async function parseRobustConceptCatalog(file){
       }
     }
   }
-  const seen = new Set();
-  const unique = concepts.filter(item=>{
-    const key = `${norm(item.code)}|${norm(item.concept).slice(0,140)}`;
-    if(seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  const unique = concepts;
   if(!unique.length) throw new Error('No encontre conceptos validos con descripcion, unidad y cantidad.');
   return { fileName:file?.name || 'Catalogo importado', rows:normalized, concepts:unique };
 }
@@ -1356,6 +1446,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   const [excelInfo,setExcelInfo]=useState(null);
   const [aiStatus,setAiStatus]=useState('');
   const [conceptBatch,setConceptBatch]=useState(null);
+  const [batchBusy,setBatchBusy]=useState(false);
   const totals=calcAPU(apu);
   const userUsage = usage?.[user?.email] || {apusCreated:0};
   const isFree = user?.role !== 'admin' && (user?.plan || 'Gratis') === 'Gratis';
@@ -1422,13 +1513,13 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         setApu({...next, clave:first.code, unit:first.unit || next.unit, sourceQty:first.qty, referencePU:first.referencePU, sourceFile:batch.fileName});
         setExcelInfo({fileName:batch.fileName, concept:first.concept, unit:first.unit, qty:first.qty, referencePU:first.referencePU, catalog});
         setAiStatus(batch.concepts.length > 1
-          ? `Excel completo leido: ${batch.concepts.length} conceptos. Se exportara CATALOGO + una hoja APU por concepto.`
-          : 'Concepto leido desde Excel. Puedes generar el APU y exportarlo con formato.');
+          ? `Excel completo leído: ${batch.concepts.length} conceptos. Cada concepto se desarrollará con IA y se exportará en su propia hoja.`
+          : 'Concepto leído desde Excel. Puedes generar el APU y exportarlo con formato.');
         setAiOpen(true);
         return;
       }
     }catch(_batchErr){
-      // Si no es presupuesto/cat?logo de conceptos, intenta leerlo como un solo APU.
+      // Si no es presupuesto/catalogo de conceptos, intenta leerlo como un solo APU.
     }
     try{
       const data=await parseExcelToAPU(file,catalog);
@@ -1458,18 +1549,82 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         setApu({...next, clave:first.code, unit:first.unit || next.unit, sourceQty:first.qty, referencePU:first.referencePU});
         setExcelInfo({fileName:data.fileName, concept:first.concept, unit:first.unit, qty:first.qty, referencePU:first.referencePU, catalog});
       }
-      setAiStatus(`Catálogo leído: ${data.concepts.length} conceptos listos para exportar en hojas separadas.`);
+      setAiStatus(`Catálogo leído: ${data.concepts.length} conceptos. Excel por concepto usará IA real por cada hoja.`);
       setAiOpen(true);
     }catch(err){
       alert(`No pude leer la lista de conceptos: ${err?.message || 'formato no compatible'}. Revisa que tenga columnas Codigo, Concepto, Unidad, Cantidad y P.U.`);
     }
   };
-  const exportConceptBatch=()=>{
+  const generateBatchAPU=async(item, index)=>{
+    const conceptForAI = [
+      item.concept,
+      item.section ? `Ubicacion/partida: ${item.section}` : '',
+      item.referencePU ? `P.U. referencia: ${money(item.referencePU)}` : ''
+    ].filter(Boolean).join('\n');
+    try{
+      const res=await fetch(aiServerUrl('/api/generate-apu'),{
+        method:'POST',
+        headers:await authHeaders(),
+        body:JSON.stringify({concept:conceptForAI,catalog})
+      });
+      const data=await res.json();
+      if(!res.ok) throw new Error(data?.error || 'No se pudo generar con IA.');
+      const next=normalizeAIAPU(data.apu, item.concept);
+      return {
+        ...next,
+        clave:String(item.code || next.clave || `APU-${index+1}`).slice(0,24),
+        concept:item.concept,
+        unit:item.unit || next.unit,
+        sourceQty:Number(item.qty || 1) || 1,
+        referencePU:Number(item.referencePU || 0) || 0,
+        sourceFile:conceptBatch?.fileName || 'Catalogo de conceptos',
+        sourceSection:item.section || '',
+        rowNumber:item.rowNumber || index+1
+      };
+    }catch(error){
+      const base=makeAPUFromConcept(item.concept, catalog);
+      return {
+        ...base,
+        clave:String(item.code || base.clave || `APU-${index+1}`).slice(0,24),
+        concept:item.concept,
+        unit:item.unit || base.unit,
+        sourceQty:Number(item.qty || 1) || 1,
+        referencePU:Number(item.referencePU || 0) || 0,
+        sourceFile:conceptBatch?.fileName || 'Catalogo de conceptos',
+        sourceSection:item.section || '',
+        rowNumber:item.rowNumber || index+1,
+        family:`${base.family || 'APU local'} (fallback sin IA)`,
+        aiNotes:[`IA no disponible para este concepto: ${error?.message || 'sin detalle'}`]
+      };
+    }
+  };
+  const buildBatchAPUs=async(list)=>{
+    const out=[];
+    for(let i=0;i<list.length;i++){
+      setAiStatus(`IA generando hoja ${i+1} de ${list.length}: ${list[i].code || 'concepto'}`);
+      out.push(await generateBatchAPU(list[i], i));
+    }
+    return out;
+  };
+  const exportConceptBatch=async()=>{
     if(!conceptBatch?.concepts?.length){
       alert('Primero sube el catálogo de conceptos.');
       return;
     }
-    exportConceptsAPUWorkbook(conceptBatch.concepts, catalog, company);
+    if(batchBusy) return;
+    const list = conceptBatch.concepts.filter(isExportableConceptItem);
+    if(!list.length){
+      alert('No hay conceptos válidos para exportar.');
+      return;
+    }
+    setBatchBusy(true);
+    try{
+      const apuList = await buildBatchAPUs(list);
+      exportConceptsAPUWorkbook(list, catalog, company, apuList);
+      setAiStatus(`Excel generado: ${list.length} conceptos, una hoja APU por concepto.`);
+    }finally{
+      setBatchBusy(false);
+    }
   };
   const exportConceptBatchPDF=()=>{
     if(!conceptBatch?.concepts?.length){
@@ -1499,10 +1654,10 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       <div className="ai-panel-foot">
         <label className="up-btn ghost-up">Importar catálogo de precios<input type="file" accept=".xlsx,.csv" hidden onChange={e=>importExcel(e.target.files[0])}/></label>
         <label className="up-btn">Generar desde Excel completo<input type="file" accept=".xlsx,.csv" hidden onChange={e=>importFullExcel(e.target.files[0])}/></label>
-        <label className="up-btn ghost-up">Subir cat?logo de conceptos<input type="file" accept=".xlsx,.csv" hidden onChange={e=>importConceptCatalog(e.target.files[0])}/></label>
+        <label className="up-btn ghost-up">Subir catálogo de conceptos<input type="file" accept=".xlsx,.csv" hidden onChange={e=>importConceptCatalog(e.target.files[0])}/></label>
         {catalog.length>0 && <span className="cat-badge"><Icon name="presupuestos" size={14}/> Catálogo: {catalog.length} insumos</span>}
         <button onClick={generateAI}>Generar APU con IA real</button>
-        {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatch}>Descargar Excel: {conceptBatch.concepts.length} hojas APU</button>}
+        {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatch} disabled={batchBusy}>{batchBusy?'Generando con IA...':`Descargar Excel: ${conceptBatch.concepts.length} hojas APU`}</button>}
         {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatchPDF}>Descargar PDF: {conceptBatch.concepts.length} APUs</button>}
       </div>
       {aiStatus && <div className="ai-note"><b>{aiStatus}</b></div>}
@@ -1523,7 +1678,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
           <button className="soft" onClick={generate}>Actualizar desarrollo</button>
           <button className="soft" onClick={generateAI}>IA real</button>
           {apu.referencePU>0 && <span className="cat-badge">P.U. Excel: {money(apu.referencePU)}</span>}
-          {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatch}>Excel por concepto ({conceptBatch.concepts.length})</button>}
+          {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatch} disabled={batchBusy}>{batchBusy?'IA generando hojas...':`Excel por concepto (${conceptBatch.concepts.length})`}</button>}
           {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatchPDF}>PDF por concepto ({conceptBatch.concepts.length})</button>}
         </div>
         <div className="apu-detect">
@@ -2190,7 +2345,7 @@ function buildCompleteAPUSheet(apu, totals, company, audit){
   add([]);
   section('SUPUESTOS Y TRAZABILIDAD');
   add([xcell('Editable por el usuario', XLS.ok), xcell('Cantidades, precios, mermas, FSR, indirectos, financiamiento, utilidad y cargos se pueden modificar. Los importes se recalculan por formula.', {...XLS.note, columnSpan:8}), ...Array(7).fill(null)]);
-  add([xcell('Fuente principal', XLS.label), apu.sourceFile || 'Generacion IA ZOEMEC / captura del usuario', xcell('Revision requerida', XLS.label), 'Validar rendimientos y precios contra catalogo vigente', null, null, null, null, null]);
+  add([xcell('Fuente principal', XLS.label), apu.sourceFile || 'Generacion IA ZOEMEC / captura del usuario', xcell('Partida / fila origen', XLS.label), `${apu.sourceSection || 'Sin partida'}${apu.rowNumber ? ` | fila ${apu.rowNumber}` : ''}`, xcell('Revision requerida', XLS.label), 'Validar rendimientos y precios contra catalogo vigente', null, null, null]);
   return { sheet:`APU-${apu.clave}`.slice(0,31), rows, widths, stickyRowsCount:13 };
 }
 
@@ -2247,32 +2402,34 @@ function uniqueSheetName(base, used){
 }
 function buildConceptCatalogSheet(concepts){
   const rows = [
-    [xcell('CATALOGO DE CONCEPTOS', XLS.title), null, null, null, null, null],
-    [xcell('El cliente puede subir el Excel completo. Esta hoja conserva el listado base y las hojas siguientes desarrollan un APU por concepto.', {...XLS.note, columnSpan:6}), null, null, null, null, null],
+    [xcell('CATALOGO DE CONCEPTOS', XLS.title), null, null, null, null, null, null, null, null],
+    [xcell('Esta hoja conserva el listado base. Cada renglon valido genera una hoja APU independiente con desarrollo de IA real cuando esta disponible.', {...XLS.note, columnSpan:9}), null, null, null, null, null, null, null, null],
     [],
-    styleHeader(['No.','Clave','Concepto','Unidad','Cantidad','P.U. referencia','Importe referencia'])
+    styleHeader(['No.','Clave','Partida / ubicacion','Fila origen','Concepto','Unidad','Cantidad','P.U. referencia','Importe referencia'])
   ];
   concepts.forEach((item, index) => {
     const row = rows.length + 1;
     rows.push([
       index + 1,
       item.code || `CON-${String(index+1).padStart(3,'0')}`,
+      item.section || '',
+      item.rowNumber || '',
       item.concept,
       item.unit || 'u',
       Number(item.qty || 1) || 1,
       Number(item.referencePU || 0) || 0,
-      item.importe ? Number(item.importe) : fcell(`=E${row}*F${row}`, XLS.money)
+      item.importe ? Number(item.importe) : fcell(`=G${row}*H${row}`, XLS.money)
     ]);
   });
   rows.push([]);
-  rows.push([null,null,null,null,xcell('TOTAL REFERENCIA', XLS.grand), null, fcell(`=SUM(G5:G${rows.length-1})`, XLS.grand)]);
-  return { sheet:'CATALOGO', rows, widths:[10,16,72,12,14,18,18], stickyRowsCount:4 };
+  rows.push([null,null,null,null,null,null,xcell('TOTAL REFERENCIA', XLS.grand), null, fcell(`=SUM(I5:I${rows.length-1})`, XLS.grand)]);
+  return { sheet:'CATALOGO', rows, widths:[10,18,32,12,76,12,14,18,18], stickyRowsCount:4 };
 }
-function exportConceptsAPUWorkbook(concepts, catalog, company){
+function exportConceptsAPUWorkbook(concepts, catalog, company, preparedAPUs=[]){
   const used = new Set();
   const limited = concepts.filter(isExportableConceptItem);
   const sheets = [buildConceptCatalogSheet(limited), ...limited.map((item, idx) => {
-    const base = makeAPUFromConcept(item.concept, catalog);
+    const base = preparedAPUs[idx] || makeAPUFromConcept(item.concept, catalog);
     const apu = {
       ...base,
       clave: String(item.code || base.clave || `APU-${idx+1}`).slice(0,24),
@@ -2280,12 +2437,14 @@ function exportConceptsAPUWorkbook(concepts, catalog, company){
       unit: item.unit || base.unit,
       sourceQty: Number(item.qty || 1) || 1,
       referencePU: Number(item.referencePU || 0) || 0,
-      sourceFile: 'Catalogo de conceptos'
+      sourceFile: base.sourceFile || 'Catalogo de conceptos',
+      sourceSection: item.section || base.sourceSection || '',
+      rowNumber: item.rowNumber || base.rowNumber || idx+1
     };
     const totals = calcAPU(apu);
     const audit = buildAuditModel(apu, totals);
     const sheet = buildCompleteAPUSheet(apu, totals, company, audit);
-    sheet.sheet = uniqueSheetName(apu.clave || `APU-${idx+1}`, used);
+    sheet.sheet = uniqueSheetName(`${String(idx+1).padStart(2,'0')}-${apu.clave || `APU-${idx+1}`}`, used);
     return sheet;
   })];
   if(!sheets.length){

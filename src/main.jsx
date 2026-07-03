@@ -1643,8 +1643,9 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   };
   const save=()=>{ if(!requireApuAccess()) return; setApus([apu,...apus.filter(x=>x.id!==apu.id)]); markApuUsed(); alert('APU guardado');};
   const addBudget=()=>{ if(!requireApuAccess()) return; setBudgets([{id:'PRE-'+uid(), name:'Presupuesto desde APU', client:'Cliente por definir', items:[{concept:apu.concept, unit:apu.unit, qty:1, pu:totals.pu}], total:totals.pu, date:new Date().toLocaleDateString('es-MX')},...budgets]); markApuUsed(); alert('Agregado a presupuestos (PU sin IVA)');};
-  const exportPDF=()=>{ if(isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; } exportAPUPDFPro(apu,totals,company); if(isFree) markApuUsed(); };
-  const exportExcel=()=>{ if(isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; } exportAPUExcel(apu,totals,company); if(isFree) markApuUsed(); };
+  const hasConceptBatch = (conceptBatch?.concepts || []).filter(isExportableConceptItem).length > 1;
+  const exportPDF=()=>{ if(isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; } hasConceptBatch ? exportConceptBatchPDF() : exportAPUPDFPro(apu,totals,company); if(isFree) markApuUsed(); };
+  const exportExcel=async()=>{ if(isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; } if(hasConceptBatch) await exportConceptBatch(); else exportAPUExcel(apu,totals,company); if(isFree) markApuUsed(); };
 
   return <section><PageHead kicker="APU Inteligente" title="Análisis de Precio Unitario" desc="Metodología RLOPSRM: salario real con FSR, herramienta menor sobre mano de obra, indirectos de campo y oficina, financiamiento, utilidad y cargos adicionales." action={<div className="head-actions"><button className="secondary" onClick={generate}>Generar desarrollo</button><button className="ai-btn" onClick={()=>setAiOpen(o=>!o)}><Icon name="apu" size={17}/> Generar con IA</button></div>} />
     {isFree && <div className="trial-banner"><b>Plan gratis activo:</b> tienes {Math.max(0,1-(userUsage.apusCreated||0))} APU disponible. Para exportar y crear mas APUs activa un plan.</div>}
@@ -1729,9 +1730,9 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         <div className="actions-col">
           <button onClick={save}>Guardar</button>
           <button onClick={addBudget}>Agregar al presupuesto</button>
-          <button onClick={exportPDF}>Descargar PDF con formato</button>
-          {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatchPDF}>PDF por concepto ({conceptBatch.concepts.length})</button>}
-          <button onClick={exportExcel}>Descargar Excel</button>
+          <button onClick={exportPDF}>{hasConceptBatch ? `Descargar PDF por concepto (${conceptBatch.concepts.length})` : 'Descargar PDF con formato'}</button>
+          {conceptBatch?.concepts?.length>0 && !hasConceptBatch && <button onClick={exportConceptBatchPDF}>PDF por concepto ({conceptBatch.concepts.length})</button>}
+          <button onClick={exportExcel} disabled={batchBusy}>{hasConceptBatch ? (batchBusy ? 'Generando Excel por concepto...' : `Descargar Excel por concepto (${conceptBatch.concepts.length})`) : 'Descargar Excel'}</button>
         </div>
       </div>
     </div>

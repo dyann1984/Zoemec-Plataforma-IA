@@ -1428,6 +1428,8 @@ function calcAPU(apu){
 }
 function auditSource(apu, kind, row){
   const desc = String(row?.[0] || '').toLowerCase();
+  const market = apu.marketSources?.[String(row?.[0] || '').trim()];
+  if(market) return `Precio de mercado (${market.date}): ${market.source}${market.url ? ' | ' + market.url : ''}`;
   if(apu.templateGenerated && apu.sourceFile) return `Plantilla ZOEMEC | partida de: ${apu.sourceFile}`;
   if(apu.templateGenerated) return 'Plantilla ZOEMEC / revisar precios';
   if(apu.sourceFile) return `Excel completo: ${apu.sourceFile}`;
@@ -1591,6 +1593,40 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   };
 
   const updateRow=(kind,i,k,v)=>setApu({...apu,[kind]:apu[kind].map((r,idx)=>idx===i?r.map((x,j)=>j===k?v:x):r)});
+  const [priceBusy,setPriceBusy]=useState(null);
+  const marketPrice=async(kind,i)=>{
+    const r = apu[kind]?.[i];
+    if(!r) return;
+    const desc = String(r[0]||'').trim();
+    if(!desc){ alert('Escribe la descripcion del insumo antes de consultar el precio.'); return; }
+    setPriceBusy(`${kind}-${i}`);
+    try{
+      const res = await fetch('/api/market-price',{
+        method:'POST',
+        headers:await authHeaders(),
+        body:JSON.stringify({description:desc,unit:r[2]||'',kind})
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data?.error||'No se pudo consultar el precio.');
+      const q = data.quote||{};
+      const nuevoPrecio = Number(q.price)||0;
+      if(!(nuevoPrecio>0)) throw new Error('La busqueda no encontro un precio confiable.');
+      setApu(prev=>({
+        ...prev,
+        [kind]: prev[kind].map((row,idx)=>idx===i?row.map((x,j)=>j===3?nuevoPrecio:x):row),
+        marketSources:{...(prev.marketSources||{}),[desc]:{
+          price:nuevoPrecio, min:Number(q.priceMin)||nuevoPrecio, max:Number(q.priceMax)||nuevoPrecio,
+          source:q.source||'Busqueda web', url:q.url||'', date:q.date||new Date().toLocaleDateString('es-MX'),
+          notes:q.notes||''
+        }}
+      }));
+      alert(`Precio de mercado aplicado: $${nuevoPrecio.toFixed(2)} MXN por ${r[2]||'unidad'}\nRango: $${(Number(q.priceMin)||nuevoPrecio).toFixed(2)} - $${(Number(q.priceMax)||nuevoPrecio).toFixed(2)}\nFuente: ${q.source||'busqueda web'}${q.url?`\n${q.url}`:''}${q.notes?`\nNota: ${q.notes}`:''}`);
+    }catch(err){
+      alert(`No pude consultar el precio de mercado: ${err?.message||'error de conexion'}`);
+    }finally{
+      setPriceBusy(null);
+    }
+  };
   const addRow=(kind)=>{
     const blank = kind==='materials' ? ['Nuevo material',1,'pza',0,0] : kind==='labor' ? ['Nuevo oficio',0,'jor',0,1.85] : ['Nuevo equipo',0,'hr',0];
     setApu({...apu,[kind]:[...apu[kind],blank]});
@@ -1855,15 +1891,15 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         <div className="form-row"><input value={apu.clave} onChange={e=>setApu({...apu,clave:e.target.value})} placeholder="Clave"/><input value={apu.unit} onChange={e=>setApu({...apu,unit:e.target.value})} placeholder="Unidad"/></div>
 
         <h2>Materiales <small className="hint">(incluye merma % puesto en obra)</small></h2>
-        <MatrixTable kind="materials" rows={apu.materials} updateRow={updateRow} removeRow={removeRow}/>
+        <MatrixTable kind="materials" rows={apu.materials} updateRow={updateRow} removeRow={removeRow} onMarketPrice={marketPrice} priceBusy={priceBusy}/>
         <button className="soft" onClick={()=>addRow('materials')}>+ Material</button>
 
         <h2>Mano de obra <small className="hint">(salario real = base x FSR - Art. 191)</small></h2>
-        <MatrixTable kind="labor" rows={apu.labor} updateRow={updateRow} removeRow={removeRow}/>
+        <MatrixTable kind="labor" rows={apu.labor} updateRow={updateRow} removeRow={removeRow} onMarketPrice={marketPrice} priceBusy={priceBusy}/>
         <button className="soft" onClick={()=>addRow('labor')}>+ Oficio</button>
 
         <h2>Equipo / maquinaria <small className="hint">(costo horario × cantidad)</small></h2>
-        <MatrixTable kind="equipment" rows={apu.equipment} updateRow={updateRow} removeRow={removeRow}/>
+        <MatrixTable kind="equipment" rows={apu.equipment} updateRow={updateRow} removeRow={removeRow} onMarketPrice={marketPrice} priceBusy={priceBusy}/>
         <button className="soft" onClick={()=>addRow('equipment')}>+ Equipo</button>
 
         <h2>Sobrecostos (%)</h2>
@@ -1924,18 +1960,19 @@ function Incidence({t}){
   </div>;
 }
 
-function MatrixTable({kind,rows,updateRow,removeRow}){
+function MatrixTable({kind,rows,updateRow,removeRow,onMarketPrice,priceBusy}){
   const headers = kind==='materials'
-    ? ['Descripción','Cant.','Unidad','P. base','Merma %','Importe','']
+    ? ['Descripción','Cant.','Unidad','P. base','Merma %','Importe','$','']
     : kind==='labor'
-    ? ['Descripción','Jornadas','Unidad','Salario base','FSR','Importe','']
-    : ['Descripción','Cant.','Unidad','Costo horario','Importe',''];
+    ? ['Descripción','Jornadas','Unidad','Salario base','FSR','Importe','$','']
+    : ['Descripción','Cant.','Unidad','Costo horario','Importe','$',''];
   const editIdx = kind==='equipment' ? [0,1,2,3] : [0,1,2,3,4];
   return <table className="data-table apu-table">
-    <thead><tr>{headers.map(h=><th key={h}>{h}</th>)}</tr></thead>
+    <thead><tr>{headers.map((h,hi)=><th key={hi}>{h}</th>)}</tr></thead>
     <tbody>{rows.map((r,i)=><tr key={i}>
       {editIdx.map(k=><td key={k}><input value={r[k]} onChange={e=>updateRow(kind,i,k,e.target.value)} /></td>)}
       <td className="imp">{money(rowImporte(kind,r))}</td>
+      <td className="del">{onMarketPrice ? <button className="row-del" title="Buscar precio real de mercado (busqueda web con IA)" disabled={priceBusy===`${kind}-${i}`} onClick={()=>onMarketPrice(kind,i)}>{priceBusy===`${kind}-${i}` ? '…' : '$'}</button> : null}</td>
       <td className="del"><button className="row-del" title="Eliminar" onClick={()=>removeRow(kind,i)}>×</button></td>
     </tr>)}</tbody>
   </table>

@@ -1708,7 +1708,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     const repeated = list.length - groups.size;
     setBatchAPUs(out);
     const first=out[0];
-    setAPU(first);
+    setApu(first);
     setConcept(first.concept);
     setAiStatus(`Desarrollo listo: ${out.length} conceptos (${groups.size} únicos, ${repeated} repetidos reutilizados).`);
     return out;

@@ -1248,8 +1248,11 @@ function standardAPUForConcept(item, catalog, index=0, sourceFile='Catalogo de c
 function makeAPUFromConcept(concept, catalog){
   const c = concept || 'Muro de block hueco de concreto de 15 cm asentado con mortero cemento-arena';
   const t = c.toLowerCase();
+  const isPaintingConcept = /pua\s*501|pua501|mapla|pintura|pintar|repint|esmalte|vinil|vin[ií]lic|acr[ií]l|ep[oó]x|primario|sellador vin|lavado/.test(t)
+    || (/(muro|muros|plaf[oó]n|plafones)/.test(t) && /(acabado|aplicaci[oó]n|recubrimiento|preparaci[oó]n|sellador|lija|lavado)/.test(t));
   let tipo;
-  if(/escalera|barandal|herrer|ptr|perfil tubular|estructura metal|soldadur|acero.*calibre|bastidor.*acero/.test(t)) tipo='estructura_metalica';
+  if(isPaintingConcept) tipo='pintura';
+  else if(/escalera|barandal|herrer|ptr|perfil tubular|estructura metal|soldadur|acero.*calibre|bastidor.*acero/.test(t)) tipo='estructura_metalica';
   else if(/plaf|fald|tablaroca|durock|tablacemento|trasdosado|cajillo|enchape|panel.*yeso|yeso|antimoho|anti moho/.test(t)) tipo='tablaroca';
   else if(/marmol|granito|cubierta|barra lavamanos/.test(t)) tipo='marmol_granito';
   else if(/registro|tapa de acceso|tapa registro|paso de instalaciones/.test(t)) tipo='registro';
@@ -1265,6 +1268,7 @@ function makeAPUFromConcept(concept, catalog){
   else if(/estructura met[aá]lica|astm|a500|fy\s*=?\s*46|soldadur|perfil de acero|placa.*acero|grout|primario anticorrosivo|montaje.*estructura|fabricaci[oó]n.*estructura/.test(t)) tipo='estructura_metalica';
   else if(/acero|varilla|castillo|cadena|armad|fierro|malla/.test(t)) tipo='acero';
   else if(/concreto|losa|zapata|firme|cimentaci|colado|columna de conc/.test(t)) tipo='concreto';
+  else if(isPaintingConcept) tipo='pintura';
   else if(/block|tabique|tabic[oó]n|muro|partici[oó]n|mamposter|junteo/.test(t)) tipo='block';
   else if(/pintura|pintar|esmalte|vinil/.test(t)) tipo='pintura';
   else if(/impermeabiliz/.test(t)) tipo='imper';
@@ -1308,9 +1312,9 @@ function makeAPUFromConcept(concept, catalog){
       labor:[['Fierrero (oficial)',0.018,'jor',400,1.85],['Ayudante',0.018,'jor',258,1.82]],
       equipment:[['Cizalla / dobladora',0.01,'día',180]] },
     pintura:{ unit:'m²',
-      materials:[['Pintura vinílica',0.2,'L',85,5],['Sellador 5x1',0.06,'L',70,5],['Lija / consumibles',0.05,'jgo',18,0]],
-      labor:[['Pintor (oficial)',0.06,'jor',360,1.85],['Ayudante',0.03,'jor',258,1.82]],
-      equipment:[['Andamio / rodillo',0.04,'día',120]] },
+      materials:[['Pintura vinílica / acrílica según especificación',0.18,'L',85,5],['Sellador vinílico 5x1 / primario según sustrato',0.06,'L',70,5],['Diluyente / agua limpia para aplicación',0.02,'L',28,0],['Lija fina para preparación de superficie',0.08,'pza',18,0],['Cinta masking para cortes y remates',0.05,'rollo',42,0],['Plástico, cartón y protección de áreas',0.08,'m²',12,0],['Rodillo, brocha y charola proporcional',0.035,'jgo',145,0]],
+      labor:[['Pintor oficial',0.055,'jor',360,1.85],['Ayudante de pintor',0.045,'jor',258,1.82],['Preparación, lavado ligero, lijado y limpieza de superficie',0.025,'jor',258,1.82],['Protección de áreas, cortes y limpieza final',0.02,'jor',258,1.82]],
+      equipment:[['Andamio / escalera de trabajo',0.04,'día',120],['Herramienta de aplicación: extensiones, rodillos y brochas',0.025,'día',75],['Equipo de seguridad personal',0.015,'día',90]] },
     imper:{ unit:'m²',
       materials:[['Impermeabilizante acrílico',1.6,'L',78,5],['Membrana de refuerzo',0.3,'m²',22,5],['Sellador / primario',0.15,'L',60,5]],
       labor:[['Aplicador (oficial)',0.05,'jor',360,1.85],['Ayudante',0.05,'jor',258,1.82]],
@@ -1360,9 +1364,9 @@ function makeAPUFromConcept(concept, catalog){
     id:standardClave, clave:standardClave, concept:cleanText(c), unit:normalizeUnitLabel(tpl.unit),
     materials, labor, equipment,
     herramienta:APU_STANDARD_FACTORS.herramienta, indCampo:APU_STANDARD_FACTORS.indCampo, indOficina:APU_STANDARD_FACTORS.indOficina, finance:APU_STANDARD_FACTORS.finance, utility:APU_STANDARD_FACTORS.utility, cargos:APU_STANDARD_FACTORS.cargos, iva:APU_STANDARD_FACTORS.iva,
-    family: tipo === 'lavabo_ptr' ? 'Mobiliario metálico ligero / base PTR con Durock' : tipo === 'estructura_metalica' ? 'Estructura metálica / fabricación y montaje' : tipo,
+    family: tipo === 'pintura' ? 'Acabados - Pintura en muros y plafones' : tipo === 'lavabo_ptr' ? 'Mobiliario metálico ligero / base PTR con Durock' : tipo === 'estructura_metalica' ? 'Estructura metálica / fabricación y montaje' : tipo,
     confidence: tipo === 'lavabo_ptr' ? 98 : tipo === 'estructura_metalica' ? 97 : 88,
-    sat: tipo === 'lavabo_ptr' ? '72101500' : tipo === 'estructura_metalica' ? '72101700' : '72100000',
+    sat: tipo === 'pintura' ? '72151300' : tipo === 'lavabo_ptr' ? '72101500' : tipo === 'estructura_metalica' ? '72101700' : '72100000',
     date:new Date().toLocaleDateString('es-MX')
   };
 }
@@ -1536,6 +1540,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     clearFileInputs();
     setConcept('');
     setApu(makeEmptyAPU());
+    setAiOpen(false);
     setExcelInfo(null);
     setConceptBatch(null);
     setBatchAPUs([]);

@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import jsPDF from 'jspdf';
 import readXlsxFile from 'read-excel-file/browser';
@@ -1114,7 +1114,7 @@ function Auth({mode,setScreen,login,loginWithGoogle,company}){
         <button className="google" disabled={busy} onClick={async()=>{ setBusy(true); try{ await loginWithGoogle?.(); } finally{ setBusy(false); } }}><Icon name="clientes" size={18}/> Continuar con Google</button>
         {mode==='register' && <div className="auth-warning"><b>Cuenta gratis:</b> 1 APU sin costo. Se registra el dispositivo para evitar multiples correos gratis.</div>}
         <small>{mode==='login'?'¿No tienes cuenta? ':'¿Ya tienes cuenta? '}<a onClick={()=>setScreen(mode==='login'?'register':'login')}>{mode==='login'?'Regístrate':'Inicia sesión'}</a></small>
-        <a className="back" onClick={()=>setScreen('landing')}>← Volver al inicio</a>
+        <a className="back" onClick={()=>setScreen('landing')}>? Volver al inicio</a>
       </div>
     </div>
   </div>
@@ -1169,6 +1169,82 @@ function EmptyState({text}){return <div className="empty-state">{text}</div>}
      equipment : [descripción, cantidad, unidad, costoHorario]
    ==================================================================== */
 
+const APU_STANDARD_FACTORS = Object.freeze({
+  herramienta:3,
+  indCampo:8,
+  indOficina:7,
+  finance:2,
+  utility:10,
+  cargos:0.5,
+  iva:16
+});
+function canonicalAPUText(value){
+  return cleanText(value ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim();
+}
+function stableHash(value){
+  const text = canonicalAPUText(value);
+  let hash = 2166136261;
+  for(let i=0;i<text.length;i++){
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36).toUpperCase().padStart(6,'0').slice(0,6);
+}
+function conceptApuKey(item={}){
+  return [
+    item.code || item.clave || '',
+    item.concept || item.description || '',
+    normalizeUnitLabel(item.unit || ''),
+    Number(item.referencePU || 0) ? Number(item.referencePU || 0).toFixed(4) : ''
+  ].map(canonicalAPUText).join('|');
+}
+function cloneApuRows(rows=[]){
+  return rows.map(row => Array.isArray(row) ? [...row] : row);
+}
+function cloneAPU(apu={}){
+  return {
+    ...apu,
+    materials:cloneApuRows(apu.materials),
+    labor:cloneApuRows(apu.labor),
+    equipment:cloneApuRows(apu.equipment),
+    aiNotes:[...(apu.aiNotes || [])]
+  };
+}
+function applyConceptMetadata(apu, item={}, index=0, sourceFile='Catalogo de conceptos'){
+  const next = cloneAPU(apu);
+  next.clave = String(item.code || item.clave || next.clave || `APU-${index+1}`).slice(0,24);
+  next.concept = cleanText(item.concept || item.description || next.concept).replace(/\s+/g,' ').trim();
+  next.unit = normalizeUnitLabel(item.unit || next.unit);
+  next.sourceQty = Number(item.qty || item.sourceQty || 1) || 1;
+  next.referencePU = Number(item.referencePU || 0) || 0;
+  next.sourceFile = sourceFile;
+  next.sourceSection = item.section || item.sourceSection || '';
+  next.rowNumber = item.rowNumber || index + 1;
+  next.cacheKey = conceptApuKey({...item, concept:next.concept, unit:next.unit});
+  return next;
+}
+function standardizeAPU(base, item={}, index=0, sourceFile='Catalogo de conceptos'){
+  const next = applyConceptMetadata(base, item, index, sourceFile);
+  next.herramienta = APU_STANDARD_FACTORS.herramienta;
+  next.indCampo = APU_STANDARD_FACTORS.indCampo;
+  next.indOficina = APU_STANDARD_FACTORS.indOficina;
+  next.finance = APU_STANDARD_FACTORS.finance;
+  next.utility = APU_STANDARD_FACTORS.utility;
+  next.cargos = APU_STANDARD_FACTORS.cargos;
+  next.iva = APU_STANDARD_FACTORS.iva;
+  next.materials = cloneApuRows(next.materials).map(r => [cleanText(r[0]), Number(r[1]) || 0, normalizeUnitLabel(r[2]), Number(r[3]) || 0, Number(r[4]) || 0]);
+  next.labor = cloneApuRows(next.labor).map(r => [cleanText(r[0]), Number(r[1]) || 0, normalizeUnitLabel(r[2]), Number(r[3]) || 0, Number(r[4]) || 1]);
+  next.equipment = cloneApuRows(next.equipment).map(r => [cleanText(r[0]), Number(r[1]) || 0, normalizeUnitLabel(r[2]), Number(r[3]) || 0]);
+  next.aiNotes = [
+    'APU estandarizado: insumos, rendimientos, precios, FSR e indirectos salen del catalogo base ZOEMEC.',
+    ...(next.aiNotes || [])
+  ].filter(Boolean);
+  return next;
+}
+function standardAPUForConcept(item, catalog, index=0, sourceFile='Catalogo de conceptos'){
+  const base = makeAPUFromConcept(item?.concept || item?.description || String(item || ''), catalog);
+  return standardizeAPU(base, item || {}, index, sourceFile);
+}
 function makeAPUFromConcept(concept, catalog){
   const c = concept || 'Muro de block hueco de concreto de 15 cm asentado con mortero cemento-arena';
   const t = c.toLowerCase();
@@ -1279,10 +1355,11 @@ function makeAPUFromConcept(concept, catalog){
   if(/resane|adecuacion|adecuaci[oó]n|corte|elevaci[oó]n/.test(t)) labor.push(['Cortes, elevaciones, resanes y adecuaciones',0.07,'jor',380,1.85]);
   if(/retiro|limpieza|termino|t[eé]rmino/.test(t)) labor.push(['Retiro al término, limpieza fina y carga manual',0.06,'jor',258,1.82]);
   if(/acarreo|acarreos/.test(t)) equipment.push(['Equipo menor para acarreos internos',0.04,'día',110]);
+  const standardClave = 'APU-' + stableHash(c);
   return {
-    id:'APU-'+uid(), clave:'APU-'+uid().slice(0,4), concept:cleanText(c), unit:normalizeUnitLabel(tpl.unit),
+    id:standardClave, clave:standardClave, concept:cleanText(c), unit:normalizeUnitLabel(tpl.unit),
     materials, labor, equipment,
-    herramienta:3, indCampo:8, indOficina:7, finance:2, utility:10, cargos:0.5, iva:16,
+    herramienta:APU_STANDARD_FACTORS.herramienta, indCampo:APU_STANDARD_FACTORS.indCampo, indOficina:APU_STANDARD_FACTORS.indOficina, finance:APU_STANDARD_FACTORS.finance, utility:APU_STANDARD_FACTORS.utility, cargos:APU_STANDARD_FACTORS.cargos, iva:APU_STANDARD_FACTORS.iva,
     family: tipo === 'lavabo_ptr' ? 'Mobiliario metálico ligero / base PTR con Durock' : tipo === 'estructura_metalica' ? 'Estructura metálica / fabricación y montaje' : tipo,
     confidence: tipo === 'lavabo_ptr' ? 98 : tipo === 'estructura_metalica' ? 97 : 88,
     sat: tipo === 'lavabo_ptr' ? '72101500' : tipo === 'estructura_metalica' ? '72101700' : '72100000',
@@ -1449,6 +1526,20 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   const [aiStatus,setAiStatus]=useState('');
   const [conceptBatch,setConceptBatch]=useState(null);
   const [batchBusy,setBatchBusy]=useState(false);
+  const priceCatalogInputRef = useRef(null);
+  const fullExcelInputRef = useRef(null);
+  const conceptCatalogInputRef = useRef(null);
+  const mainExcelInputRef = useRef(null);
+  const clearFileInputs = () => [priceCatalogInputRef, fullExcelInputRef, conceptCatalogInputRef, mainExcelInputRef].forEach(ref => { if(ref.current) ref.current.value = ''; });
+  const resetAPUForm = () => {
+    clearFileInputs();
+    setConcept('');
+    setApu(makeEmptyAPU());
+    setExcelInfo(null);
+    setConceptBatch(null);
+    setAiStatus('');
+    setBatchBusy(false);
+  };
   const totals=calcAPU(apu);
   const userUsage = usage?.[user?.email] || {apusCreated:0};
   const isFree = user?.role !== 'admin' && (user?.plan || 'Gratis') === 'Gratis';
@@ -1469,10 +1560,11 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     if(!requireApuAccess()) return;
     if(!concept.trim()){ alert('Pega o sube un concepto real para generar el APU.'); return; }
     const parsed=parseConceptText(concept);
-    const next=makeAPUFromConcept(parsed.concept, catalog);
+    const next=standardAPUForConcept({concept:parsed.concept, unit:parsed.unit, qty:parsed.qty, referencePU:parsed.referencePU}, catalog, 0, 'Texto pegado');
     setConcept(parsed.concept);
-    setApu({...next,unit:parsed.unit || next.unit, sourceQty:parsed.qty, referencePU:parsed.referencePU});
-    setExcelInfo(parsed.referencePU ? {fileName:'Texto pegado',concept:parsed.concept,unit:parsed.unit,qty:parsed.qty,referencePU:parsed.referencePU,catalog:[]} : null);
+    setApu(next);
+    setExcelInfo(parsed.referencePU ? {fileName:'Texto pegado',concept:parsed.concept,unit:next.unit,qty:parsed.qty,referencePU:parsed.referencePU,catalog:[]} : null);
+    setAiStatus('APU estandarizado desde catalogo base ZOEMEC.');
   };
   const generateAI=async()=>{
     if(!requireApuAccess()) return;
@@ -1487,11 +1579,14 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       });
       const data=await res.json();
       if(!res.ok) throw new Error(data?.error || 'No se pudo generar con IA.');
-      const next=normalizeAIAPU(data.apu, parsed.concept);
+      const aiDraft=normalizeAIAPU(data.apu, parsed.concept);
+      const next=standardAPUForConcept({concept:parsed.concept, unit:parsed.unit || aiDraft.unit, qty:parsed.qty, referencePU:parsed.referencePU}, catalog, 0, 'OpenAI API');
+      next.confidence = Math.max(Number(next.confidence || 0), Number(aiDraft.confidence || 92));
+      next.aiNotes = [...(next.aiNotes || []), 'IA aplicada como auditor tecnico; importes bloqueados al catalogo base para evitar variaciones en conceptos iguales.'];
       setConcept(next.concept);
-      setApu({...next, sourceQty:parsed.qty, referencePU:parsed.referencePU});
+      setApu(next);
       setExcelInfo({fileName:'OpenAI API',concept:next.concept,unit:next.unit,qty:parsed.qty,referencePU:parsed.referencePU,catalog});
-      setAiStatus(`IA lista: ${next.family} (${next.confidence}%)`);
+      setAiStatus(`IA lista y estandarizada: ${next.family} (${next.confidence}%)`);
       setAiOpen(false);
     }catch(err){
       setAiStatus('');
@@ -1510,9 +1605,9 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       if(batch.concepts.length > 0){
         setConceptBatch(batch);
         const first = batch.concepts[0];
-        const next = makeAPUFromConcept(first.concept, catalog);
+        const next = standardAPUForConcept(first, catalog, 0, batch.fileName);
         setConcept(first.concept);
-        setApu({...next, clave:first.code, unit:first.unit || next.unit, sourceQty:first.qty, referencePU:first.referencePU, sourceFile:batch.fileName});
+        setApu(next);
         setExcelInfo({fileName:batch.fileName, concept:first.concept, unit:first.unit, qty:first.qty, referencePU:first.referencePU, catalog});
         setAiStatus(batch.concepts.length > 1
           ? `Excel completo leído: ${batch.concepts.length} conceptos. Cada concepto se desarrollará con IA y se exportará en su propia hoja.`
@@ -1527,8 +1622,8 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       const data=await parseExcelToAPU(file,catalog);
       setCatalog(data.mergedCatalog);
       setConcept(data.concept);
-      const next=makeAPUFromConcept(data.concept,data.mergedCatalog);
-      setApu({...next,unit:data.unit || next.unit, sourceQty:data.qty, referencePU:data.referencePU, sourceFile:data.fileName});
+      const next=standardAPUForConcept({concept:data.concept, unit:data.unit, qty:data.qty, referencePU:data.referencePU}, data.mergedCatalog, 0, data.fileName);
+      setApu(next);
       setExcelInfo(data);
       setAiOpen(true);
     }catch(err){
@@ -1546,9 +1641,9 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       setConceptBatch(data);
       const first = data.concepts[0];
       if(first){
-        const next = makeAPUFromConcept(first.concept, catalog);
+        const next = standardAPUForConcept(first, catalog, 0, data.fileName);
         setConcept(first.concept);
-        setApu({...next, clave:first.code, unit:first.unit || next.unit, sourceQty:first.qty, referencePU:first.referencePU});
+        setApu(next);
         setExcelInfo({fileName:data.fileName, concept:first.concept, unit:first.unit, qty:first.qty, referencePU:first.referencePU, catalog});
       }
       setAiStatus(`Catálogo leído: ${data.concepts.length} conceptos. Excel por concepto usará IA real por cada hoja.`);
@@ -1559,63 +1654,64 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   };
   const generateBatchAPU=async(item, index)=>{
     const conceptForAI = [
-      item.concept,
-      item.section ? `Ubicacion/partida: ${item.section}` : '',
-      item.referencePU ? `P.U. referencia: ${money(item.referencePU)}` : ''
+      item.code ? `Clave: ${item.code}` : '',
+      `Concepto: ${item.concept}`,
+      `Unidad: ${item.unit}`,
+      item.referencePU ? `PU base de Excel: ${fmt(item.referencePU)}` : '',
+      item.section ? `Partida: ${item.section}` : ''
     ].filter(Boolean).join('\n');
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), 16000);
     try{
-      const res=await fetch(aiServerUrl('/api/generate-apu'),{
-        method:'POST',
-        headers:await authHeaders(),
-        body:JSON.stringify({concept:conceptForAI,catalog}),
-        signal:controller.signal
-      });
+      const res=await fetch(aiServerUrl('/api/generate-apu'),{method:'POST',headers:await authHeaders(),body:JSON.stringify({concept:conceptForAI,catalog,company,mode:'batch-concept',preserveOriginal:true}),signal:controller.signal});
       const data=await res.json();
-      if(!res.ok) throw new Error(data?.error || 'No se pudo generar con IA.');
-      const next=normalizeAIAPU(data.apu, item.concept);
-      return {
-        ...next,
-        clave:String(item.code || next.clave || `APU-${index+1}`).slice(0,24),
-        concept:item.concept,
-        unit:item.unit || next.unit,
-        sourceQty:Number(item.qty || 1) || 1,
-        referencePU:Number(item.referencePU || 0) || 0,
-        sourceFile:conceptBatch?.fileName || 'Catalogo de conceptos',
-        sourceSection:item.section || '',
-        rowNumber:item.rowNumber || index+1
-      };
+      if(!res.ok) throw new Error(data?.error || 'No fue posible generar con IA');
+      const aiDraft=normalizeAIAPU(data.apu, item.concept);
+      const next=standardAPUForConcept(item, catalog, index, conceptBatch?.fileName || 'Catalogo de conceptos');
+      next.confidence = Math.max(Number(aiDraft.confidence || 0), next.confidence || 92);
+      next.aiNotes = [
+        ...(next.aiNotes || []),
+        ...(aiDraft.aiNotes || []),
+        'APU estandarizado contra catalogo base ZOEMEC. Conceptos repetidos conservan la misma matriz y precio unitario.'
+      ];
+      return next;
     }catch(error){
-      const base=makeAPUFromConcept(item.concept, catalog);
-      return {
-        ...base,
-        clave:String(item.code || base.clave || `APU-${index+1}`).slice(0,24),
-        concept:item.concept,
-        unit:item.unit || base.unit,
-        sourceQty:Number(item.qty || 1) || 1,
-        referencePU:Number(item.referencePU || 0) || 0,
-        sourceFile:conceptBatch?.fileName || 'Catalogo de conceptos',
-        sourceSection:item.section || '',
-        rowNumber:item.rowNumber || index+1,
-        family:`${base.family || 'APU local'} | desarrollo técnico ZOEMEC`,
-        confidence:Math.max(Number(base.confidence || 88), 90),
-        aiNotes:[
-          'Desarrollo técnico completo generado con matrices ZOEMEC y trazabilidad auditable.',
-          `IA externa no respondió para este concepto: ${error?.name === 'AbortError' ? 'tiempo agotado' : (error?.message || 'sin detalle')}`
-        ]
-      };
+      const next=standardAPUForConcept(item, catalog, index, conceptBatch?.fileName || 'Catalogo de conceptos');
+      next.family = `${next.family || 'APU local'} | desarrollo técnico ZOEMEC`;
+      next.confidence = Math.max(Number(next.confidence || 88), 90);
+      next.aiNotes = [
+        ...(next.aiNotes || []),
+        'Desarrollo técnico completo generado con matrices ZOEMEC y trazabilidad auditable.',
+        `IA externa no respondió para este concepto: ${error?.name === 'AbortError' ? 'tiempo agotado' : (error?.message || 'sin detalle')}`
+      ];
+      return next;
     }finally{
       window.clearTimeout(timer);
     }
   };
+
   const buildBatchAPUs=async(list)=>{
-    setAiStatus(`IA trabajando en ${list.length} conceptos. Si alguno tarda, se completa con matriz ZOEMEC.`);
-    const jobs = list.map((item, i) => generateBatchAPU(item, i));
-    const out = await Promise.all(jobs);
-    setAiStatus(`Desarrollo listo: ${out.length} conceptos preparados para exportar.`);
+    setAiStatus(`Validando repetidos y estandarizando ${list.length} conceptos.`);
+    const groups = new Map();
+    list.forEach((item, index) => {
+      const key = conceptApuKey(item);
+      if(!groups.has(key)) groups.set(key, {item, index, count:0});
+      groups.get(key).count += 1;
+    });
+    setAiStatus(`IA trabajando en ${groups.size} conceptos únicos. Repetidos reutilizan el mismo APU y P.U.`);
+    const groupList = [...groups.values()];
+    const generated = await Promise.all(groupList.map(group => generateBatchAPU(group.item, group.index)));
+    const byKey = new Map(generated.map((apu, index) => [conceptApuKey(groupList[index].item), apu]));
+    const out = list.map((item, index) => applyConceptMetadata(byKey.get(conceptApuKey(item)), item, index, conceptBatch?.fileName || 'Catalogo de conceptos'));
+    const repeated = list.length - groups.size;
+    setBatchAPUs(out);
+    const first=out[0];
+    setAPU(first);
+    setConcept(first.concept);
+    setAiStatus(`Desarrollo listo: ${out.length} conceptos (${groups.size} únicos, ${repeated} repetidos reutilizados).`);
     return out;
   };
+
   const exportConceptBatch=async()=>{
     if(!conceptBatch?.concepts?.length){
       alert('Primero sube el catálogo de conceptos.');
@@ -1680,11 +1776,11 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       <div className="ai-panel-head"><HardHat size={36}/><div><b>Generar con IA</b><small className="muted">Pega tu concepto y/o importa tu Excel de precios. Usaré tus precios reales donde coincidan los insumos.</small></div></div>
       <textarea className="ai-concept" value={concept} onChange={e=>setConcept(e.target.value)} placeholder="Pega aquí el concepto, ej. Muro de tabique rojo recocido asentado con mortero…"/>
       <div className="ai-panel-foot">
-        <label className="up-btn ghost-up">Importar catálogo de precios<input type="file" accept=".xlsx,.csv" hidden onChange={e=>importExcel(e.target.files[0])}/></label>
-        <label className="up-btn">Generar desde Excel completo<input type="file" accept=".xlsx,.csv" hidden onChange={e=>importFullExcel(e.target.files[0])}/></label>
-        <label className="up-btn ghost-up">Subir catálogo de conceptos<input type="file" accept=".xlsx,.csv" hidden onChange={e=>importConceptCatalog(e.target.files[0])}/></label>
+        <label className="up-btn ghost-up">Importar catálogo de precios<input ref={priceCatalogInputRef} type="file" accept=".xlsx,.csv" hidden onChange={e=>importExcel(e.target.files[0])}/></label>
+        <label className="up-btn">Generar desde Excel completo<input ref={fullExcelInputRef} type="file" accept=".xlsx,.csv" hidden onChange={e=>importFullExcel(e.target.files[0])}/></label>
+        <label className="up-btn ghost-up">Subir catálogo de conceptos<input ref={conceptCatalogInputRef} type="file" accept=".xlsx,.csv" hidden onChange={e=>importConceptCatalog(e.target.files[0])}/></label>
         {catalog.length>0 && <span className="cat-badge"><Icon name="presupuestos" size={14}/> Catálogo: {catalog.length} insumos</span>}
-        <button onClick={generateAI}>Generar APU con IA real</button>
+        <button onClick={generateAI}>Generar APU con IA real</button><button className="soft" type="button" onClick={resetAPUForm}>Limpiar</button>
         {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatch} disabled={batchBusy}>{batchBusy?'Generando con IA...':`Descargar Excel: ${conceptBatch.concepts.length} hojas APU`}</button>}
         {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatchPDF}>Descargar PDF: {conceptBatch.concepts.length} APUs</button>}
       </div>
@@ -1702,9 +1798,9 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         <label>Concepto</label>
         <textarea value={concept} onChange={e=>setConcept(e.target.value)} />
         <div className="inline-tools">
-          <label className="up-btn ghost-up">Subir Excel completo<input type="file" accept=".xlsx,.csv" hidden onChange={e=>importFullExcel(e.target.files[0])}/></label>
+          <label className="up-btn ghost-up">Subir Excel completo<input ref={mainExcelInputRef} type="file" accept=".xlsx,.csv" hidden onChange={e=>importFullExcel(e.target.files[0])}/></label>
           <button className="soft" onClick={generate}>Actualizar desarrollo</button>
-          <button className="soft" onClick={generateAI}>IA real</button>
+          <button className="soft" onClick={generateAI}>IA real</button><button className="soft" type="button" onClick={resetAPUForm}>Limpiar</button>
           {apu.referencePU>0 && <span className="cat-badge">P.U. Excel: {money(apu.referencePU)}</span>}
           {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatch} disabled={batchBusy}>{batchBusy?'IA generando hojas...':`Excel por concepto (${conceptBatch.concepts.length})`}</button>}
           {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatchPDF}>PDF por concepto ({conceptBatch.concepts.length})</button>}
@@ -2875,7 +2971,7 @@ function TechnicalCenter(){
 function Office({company,setCompany,catalog,setCatalog}){
   const uploadLogo=(file)=>{if(!file)return;const r=new FileReader();r.onload=()=>setCompany({...company,logo:r.result});r.readAsDataURL(file)};
   const importExcel=async(file)=>{ if(!file) return; if(/\.xls$/i.test(file.name)){alert('Guarda el archivo como .xlsx o .csv para importarlo.');return;} try{ const cat=await parseExcelToCatalog(file); if(!cat.length){alert('No detecté columnas de descripción y precio. Revisa los encabezados del Excel.');return;} setCatalog(cat); alert(`Catálogo importado: ${cat.length} insumos. El APU usará estos precios al generar.`);}catch(err){ alert(`No pude leer el archivo: ${err?.message || 'formato no compatible'}. Usa .xlsx o .csv.`); } };
-  return <section><PageHead kicker="Oficina Técnica" title="Empresa, logo y formatos" desc="Configura membretes, datos fiscales, firmas, plantillas y tu Excel de precios." /><div className="grid-2"><div className="panel form"><label>Logo</label><img className="logo-preview" src={company.logo}/><input type="file" accept="image/*" onChange={e=>uploadLogo(e.target.files[0])}/><label>Empresa</label><input value={company.name} onChange={e=>setCompany({...company,name:e.target.value})}/><label>RFC</label><input value={company.rfc} onChange={e=>setCompany({...company,rfc:e.target.value})}/><label>Teléfono</label><input value={company.phone} onChange={e=>setCompany({...company,phone:e.target.value})}/><label>Correo</label><input value={company.email} onChange={e=>setCompany({...company,email:e.target.value})}/></div><div className="panel"><h2>Plantillas</h2>{['Formato ZOEMEC','Formato gobierno','Formato CFE','Formato CONAGUA','Formato personalizado'].map(x=><div className="activity" key={x}><Icon name="doc" size={16}/> {x}</div>)}<h2>Mi Excel de precios</h2><label className="up-btn ghost-up" style={{display:'inline-block',marginTop:4}}>Importar catálogo (.xlsx/.csv)<input type="file" accept=".xlsx,.csv" hidden onChange={e=>importExcel(e.target.files[0])}/></label>{catalog&&catalog.length>0 && <p className="muted" style={{marginTop:10}}>✓ Catálogo cargado: <b>{catalog.length}</b> insumos. Se usan al generar APUs por coincidencia de nombre.</p>}<p className="muted">Detecto columnas de descripción, unidad y precio automáticamente.</p></div></div></section>}
+  return <section><PageHead kicker="Oficina Técnica" title="Empresa, logo y formatos" desc="Configura membretes, datos fiscales, firmas, plantillas y tu Excel de precios." /><div className="grid-2"><div className="panel form"><label>Logo</label><img className="logo-preview" src={company.logo}/><input type="file" accept="image/*" onChange={e=>uploadLogo(e.target.files[0])}/><label>Empresa</label><input value={company.name} onChange={e=>setCompany({...company,name:e.target.value})}/><label>RFC</label><input value={company.rfc} onChange={e=>setCompany({...company,rfc:e.target.value})}/><label>Teléfono</label><input value={company.phone} onChange={e=>setCompany({...company,phone:e.target.value})}/><label>Correo</label><input value={company.email} onChange={e=>setCompany({...company,email:e.target.value})}/></div><div className="panel"><h2>Plantillas</h2>{['Formato ZOEMEC','Formato gobierno','Formato CFE','Formato CONAGUA','Formato personalizado'].map(x=><div className="activity" key={x}><Icon name="doc" size={16}/> {x}</div>)}<h2>Mi Excel de precios</h2><label className="up-btn ghost-up" style={{display:'inline-block',marginTop:4}}>Importar catálogo (.xlsx/.csv)<input type="file" accept=".xlsx,.csv" hidden onChange={e=>importExcel(e.target.files[0])}/></label>{catalog&&catalog.length>0 && <p className="muted" style={{marginTop:10}}>Catálogo cargado: <b>{catalog.length}</b> insumos. Se usan al generar APUs por coincidencia de nombre.</p>}<p className="muted">Detecto columnas de descripción, unidad y precio automáticamente.</p></div></div></section>}
 
 function Community(){
   const demoForum = ['Que rendimiento usan para muro de block 15 cm?','Proveedor de acero en zona centro','Formato de generadores para obra publica','Comparativo OPUS vs NEODATA'];

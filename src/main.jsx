@@ -1248,10 +1248,18 @@ function standardAPUForConcept(item, catalog, index=0, sourceFile='Catalogo de c
 function makeAPUFromConcept(concept, catalog){
   const c = concept || 'Muro de block hueco de concreto de 15 cm asentado con mortero cemento-arena';
   const t = c.toLowerCase();
-  const isPaintingConcept = /pua\s*501|pua501|mapla|pintura|pintar|repint|esmalte|vinil|vin[ií]lic|acr[ií]l|ep[oó]x|primario|sellador vin|lavado/.test(t)
-    || (/(muro|muros|plaf[oó]n|plafones)/.test(t) && /(acabado|aplicaci[oó]n|recubrimiento|preparaci[oó]n|sellador|lija|lavado)/.test(t));
+  // Plafon / tablaroca manda: menciones como "pintura anticorrosiva" dentro de las
+  // inclusiones de un falso plafon NO deben clasificar el concepto como pintura.
+  const isSuspendedCeiling = /falso\s*plaf|plaf[oó]n(d)?\s+de\s+(tablaroca|yeso|tablacemento)|suspensi[oó]n\s*oculta|colganter[ií]a|canal\s*list[oó]n|perfacinta|redimix/.test(t);
+  const isDrywallConcept = isSuspendedCeiling || /tablaroca|durock|tablacemento|trasdosado|cajillo|panel.*yeso/.test(t);
+  const isPaintingConcept = !isDrywallConcept && (
+    /pua\s*501|pua501|mapla|suministro y aplicaci[oó]n de pintura|pintar|repint|esmalte|vin[ií]lic|acr[ií]l|ep[oó]x|sellador vin/.test(t)
+    || (/(muro|muros|plaf[oó]n|plafones)/.test(t) && /(pintura|recubrimiento|preparaci[oó]n de la superficie|lija|lavado)/.test(t))
+  );
   let tipo;
-  if(isPaintingConcept) tipo='pintura';
+  if(isSuspendedCeiling) tipo='plafon_suspendido';
+  else if(isDrywallConcept) tipo='tablaroca';
+  else if(isPaintingConcept) tipo='pintura';
   else if(/escalera|barandal|herrer|ptr|perfil tubular|estructura metal|soldadur|acero.*calibre|bastidor.*acero/.test(t)) tipo='estructura_metalica';
   else if(/plaf|fald|tablaroca|durock|tablacemento|trasdosado|cajillo|enchape|panel.*yeso|yeso|antimoho|anti moho/.test(t)) tipo='tablaroca';
   else if(/marmol|granito|cubierta|barra lavamanos/.test(t)) tipo='marmol_granito';
@@ -1287,6 +1295,30 @@ function makeAPUFromConcept(concept, catalog){
       materials:[['Panel de yeso / tablacemento 12.7 mm segun especificacion',1.05,'m²',210,5],['Poste o canal metalico galvanizado',1.25,'m',38,5],['Canal de amarre y refuerzos',0.55,'m',32,5],['Tornilleria, taquetes y fijaciones',0.18,'jgo',85,3],['Cinta y compuesto para juntas',0.22,'kg',42,5],['Pasta / sellador de acabado',0.12,'L',70,5],['Materiales miscelaneos y proteccion',0.04,'jgo',120,0]],
       labor:[['Instalador de panel (oficial)',0.12,'jor',420,1.85],['Ayudante instalador',0.12,'jor',285,1.82],['Trazo, plomeo y nivelacion',0.025,'jor',420,1.85],['Tratamiento de juntas y resanes',0.05,'jor',380,1.85],['Limpieza y retiro de desperdicio',0.035,'jor',258,1.82]],
       equipment:[['Andamio / escalera de trabajo',0.04,'día',120],['Herramienta electrica de corte y fijacion',0.03,'día',150],['Equipo de seguridad personal',0.02,'día',90]] },
+    plafon_suspendido:{ unit:'m²',
+      materials:[
+        ['Panel de yeso (tablaroca) 12.7 mm segun especificacion',1.05,'m²',95,8],
+        ['Canaleta de carga 38 mm cal. 22 con pintura anticorrosiva',0.95,'m',38,5],
+        ['Canal liston para suspension oculta',2.3,'m',30,5],
+        ['Colganteria de alambre galvanizado No. 14',0.12,'kg',48,5],
+        ['Alambre recocido No. 16 para amarres',0.05,'kg',38,3],
+        ['Ancla de agujero tipo Ramset con fulminante',1.5,'pza',9,3],
+        ['Tornilleria S-1" y fijaciones para panel',0.18,'jgo',85,3],
+        ['Perfacinta para tratamiento de juntas',1.5,'m',3,5],
+        ['Compuesto Redimix para juntas y resanes',0.9,'kg',22,5]
+      ],
+      labor:[
+        ['Tablaroquero oficial (suspension oculta hasta 4.00 m)',0.1,'jor',420,1.85],
+        ['Ayudante instalador',0.1,'jor',285,1.82],
+        ['Trazo, nivelacion y balanceado de colganteria',0.03,'jor',420,1.85],
+        ['Tratamiento de juntas: perfacinta y Redimix',0.05,'jor',380,1.85],
+        ['Limpieza y retiro de desperdicio',0.03,'jor',258,1.82]
+      ],
+      equipment:[
+        ['Andamio de trabajo hasta 4.00 m de altura',0.06,'día',120],
+        ['Herramienta electrica: rotomartillo y atornillador',0.04,'día',150],
+        ['Equipo de seguridad personal',0.02,'día',90]
+      ] },
     sello:{ unit:'ml',
       materials:[['Sellador elastomerico / silicon anti hongos',0.12,'cartucho',95,5],['Primer o limpiador de superficie',0.03,'L',85,3],['Cinta de respaldo o espuma de poliuretano',0.08,'m',18,5],['Material de limpieza y proteccion',0.03,'jgo',60,0]],
       labor:[['Oficial aplicador de sellos',0.035,'jor',380,1.85],['Ayudante',0.025,'jor',258,1.82],['Preparacion, limpieza y retiro',0.02,'jor',258,1.82]],
@@ -1361,12 +1393,12 @@ function makeAPUFromConcept(concept, catalog){
   if(/acarreo|acarreos/.test(t)) equipment.push(['Equipo menor para acarreos internos',0.04,'día',110]);
   const standardClave = 'APU-' + stableHash(c);
   return {
-    id:standardClave, clave:standardClave, concept:cleanText(c), unit:normalizeUnitLabel(tpl.unit),
+    id:standardClave, clave:standardClave, concept:cleanText(c), unit:normalizeUnitLabel(tpl.unit), templateGenerated:true,
     materials, labor, equipment,
     herramienta:APU_STANDARD_FACTORS.herramienta, indCampo:APU_STANDARD_FACTORS.indCampo, indOficina:APU_STANDARD_FACTORS.indOficina, finance:APU_STANDARD_FACTORS.finance, utility:APU_STANDARD_FACTORS.utility, cargos:APU_STANDARD_FACTORS.cargos, iva:APU_STANDARD_FACTORS.iva,
-    family: tipo === 'pintura' ? 'Acabados - Pintura en muros y plafones' : tipo === 'lavabo_ptr' ? 'Mobiliario metálico ligero / base PTR con Durock' : tipo === 'estructura_metalica' ? 'Estructura metálica / fabricación y montaje' : tipo,
+    family: tipo === 'plafon_suspendido' ? 'Acabados - Falso plafon de tablaroca con suspension oculta' : tipo === 'pintura' ? 'Acabados - Pintura en muros y plafones' : tipo === 'lavabo_ptr' ? 'Mobiliario metálico ligero / base PTR con Durock' : tipo === 'estructura_metalica' ? 'Estructura metálica / fabricación y montaje' : tipo,
     confidence: tipo === 'lavabo_ptr' ? 98 : tipo === 'estructura_metalica' ? 97 : 88,
-    sat: tipo === 'pintura' ? '72151300' : tipo === 'lavabo_ptr' ? '72101500' : tipo === 'estructura_metalica' ? '72101700' : '72100000',
+    sat: tipo === 'plafon_suspendido' ? '72152400' : tipo === 'pintura' ? '72151300' : tipo === 'lavabo_ptr' ? '72101500' : tipo === 'estructura_metalica' ? '72101700' : '72100000',
     date:new Date().toLocaleDateString('es-MX')
   };
 }
@@ -1396,6 +1428,8 @@ function calcAPU(apu){
 }
 function auditSource(apu, kind, row){
   const desc = String(row?.[0] || '').toLowerCase();
+  if(apu.templateGenerated && apu.sourceFile) return `Plantilla ZOEMEC | partida de: ${apu.sourceFile}`;
+  if(apu.templateGenerated) return 'Plantilla ZOEMEC / revisar precios';
   if(apu.sourceFile) return `Excel completo: ${apu.sourceFile}`;
   if(apu.referencePU) return 'Concepto importado con P.U. de referencia';
   if(desc.includes('nuevo ')) return 'Usuario';
@@ -2432,9 +2466,9 @@ function buildCompleteAPUSheet(apu, totals, company, audit){
   add([]);
   section('RESUMEN EJECUTIVO');
   add(styleHeader(['Partida','Base de calculo','Importe','','Partida','Base de calculo','Importe','','']));
-  add(['Materiales','Suma de insumos materiales',moneyFormula(`=${totals.mat || 0}`),null,'Herramienta menor',`${apu.herramienta}% sobre M.O.`,moneyFormula(`=${totals.herramienta || 0}`),null,null]);
-  add(['Mano de obra','Jornadas x salario base x FSR',moneyFormula(`=${totals.mo || 0}`),null,'Indirectos',`${Number(apu.indCampo || 0)+Number(apu.indOficina || 0)}% sobre C.D.`,moneyFormula(`=${totals.indirect || 0}`),null,null]);
-  add(['Equipo / maquinaria','Cantidad x costo horario',moneyFormula(`=${totals.equipo || 0}`),null,'Precio unitario sin IVA','Resultado auditable',moneyFormula(`=${totals.pu || 0}`),null,null]);
+  const resRow1 = add(['Materiales','Suma de insumos materiales',null,null,'Herramienta menor',`${apu.herramienta}% sobre M.O.`,null,null,null]);
+  const resRow2 = add(['Mano de obra','Jornadas x salario base x FSR',null,null,'Indirectos',`${Number(apu.indCampo || 0)+Number(apu.indOficina || 0)}% sobre C.D.`,null,null,null]);
+  const resRow3 = add(['Equipo / maquinaria','Cantidad x costo horario',null,null,'Precio unitario sin IVA','Resultado auditable',null,null,null]);
   add([]);
 
   section('MATERIALES');
@@ -2481,6 +2515,13 @@ function buildCompleteAPUSheet(apu, totals, company, audit){
   const chargesRow = add(['Cargos adicionales',`Subtotal anterior x ${apu.cargos}%`,`${apu.cargos}%`,null,null,null,formulaNote(`(H${directRow}+H${indirectRow}+H${financeRow}+H${utilityRow}) x ${apu.cargos}%`),moneyFormula(`=(H${directRow}+H${indirectRow}+H${financeRow}+H${utilityRow})*${Number(apu.cargos || 0)}/100`),null]);
   const puRow = add([xcell('PRECIO UNITARIO SIN IVA', XLS.grand),'Costo directo + sobrecostos',null,null,null,null,formulaNote(`SUM(H${directRow}:H${chargesRow})`),fcell(`=SUM(H${directRow}:H${chargesRow})`, XLS.grand),null]);
   add(['IVA informativo',`Precio unitario x ${apu.iva}%`,`${apu.iva}%`,null,null,null,formulaNote(`H${puRow} x ${apu.iva}%`),moneyFormula(`=H${puRow}*${Number(apu.iva || 0)}/100`),null]);
+  // Resumen ejecutivo ligado por formula a los subtotales reales: recalcula al editar cualquier insumo
+  rows[resRow1-1][2] = moneyFormula(`=H${matTotalRow}`);
+  rows[resRow1-1][6] = moneyFormula(`=H${hmRow}`);
+  rows[resRow2-1][2] = moneyFormula(`=H${laborTotalRow}`);
+  rows[resRow2-1][6] = moneyFormula(`=H${indirectRow}`);
+  rows[resRow3-1][2] = moneyFormula(`=H${eqTotalRow}`);
+  rows[resRow3-1][6] = fcell(`=H${puRow}`, XLS.grand);
   add([]);
 
   section('ANALISIS DE CUADRILLAS Y FSR');

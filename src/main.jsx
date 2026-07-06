@@ -1525,6 +1525,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   const [excelInfo,setExcelInfo]=useState(null);
   const [aiStatus,setAiStatus]=useState('');
   const [conceptBatch,setConceptBatch]=useState(null);
+  const [batchAPUs,setBatchAPUs]=useState([]);
   const [batchBusy,setBatchBusy]=useState(false);
   const priceCatalogInputRef = useRef(null);
   const fullExcelInputRef = useRef(null);
@@ -1537,6 +1538,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     setApu(makeEmptyAPU());
     setExcelInfo(null);
     setConceptBatch(null);
+    setBatchAPUs([]);
     setAiStatus('');
     setBatchBusy(false);
   };

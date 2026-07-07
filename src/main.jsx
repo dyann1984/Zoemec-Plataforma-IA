@@ -1241,9 +1241,43 @@ function standardizeAPU(base, item={}, index=0, sourceFile='Catalogo de concepto
   ].filter(Boolean);
   return next;
 }
+const MARKET_PRICES_KEY = 'zoemec-market-prices';
+function readMarketPrices(){
+  try{ return JSON.parse(localStorage.getItem(MARKET_PRICES_KEY)) || {}; }catch{ return {}; }
+}
+function saveMarketPrice(desc, registro){
+  try{
+    const all = readMarketPrices();
+    all[String(desc).trim().toLowerCase()] = registro;
+    localStorage.setItem(MARKET_PRICES_KEY, JSON.stringify(all));
+  }catch{ /* almacenamiento no disponible */ }
+}
+function applyMarketPrices(apu){
+  const all = readMarketPrices();
+  if(!Object.keys(all).length) return apu;
+  const sources = { ...(apu.marketSources || {}) };
+  let touched = false;
+  const applyRows = (rows) => (rows || []).map(r => {
+    const key = String(r?.[0] || '').trim().toLowerCase();
+    const m = all[key];
+    if(m && Number(m.price) > 0){
+      const nr = [...r];
+      nr[3] = Number(m.price);
+      sources[String(r[0]).trim()] = m;
+      touched = true;
+      return nr;
+    }
+    return r;
+  });
+  const materials = applyRows(apu.materials);
+  const labor = applyRows(apu.labor);
+  const equipment = applyRows(apu.equipment);
+  if(!touched) return apu;
+  return { ...apu, materials, labor, equipment, marketSources: sources };
+}
 function standardAPUForConcept(item, catalog, index=0, sourceFile='Catalogo de conceptos'){
   const base = makeAPUFromConcept(item?.concept || item?.description || String(item || ''), catalog);
-  return standardizeAPU(base, item || {}, index, sourceFile);
+  return applyMarketPrices(standardizeAPU(base, item || {}, index, sourceFile));
 }
 function makeAPUFromConcept(concept, catalog){
   const c = concept || 'Muro de block hueco de concreto de 15 cm asentado con mortero cemento-arena';
@@ -1611,14 +1645,16 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       const q = data.quote||{};
       const nuevoPrecio = Number(q.price)||0;
       if(!(nuevoPrecio>0)) throw new Error('La busqueda no encontro un precio confiable.');
+      const registro = {
+        price:nuevoPrecio, min:Number(q.priceMin)||nuevoPrecio, max:Number(q.priceMax)||nuevoPrecio,
+        source:q.source||'Busqueda web', url:q.url||'', date:q.date||new Date().toLocaleDateString('es-MX'),
+        notes:q.notes||'', unit:r[2]||''
+      };
+      saveMarketPrice(desc, registro);
       setApu(prev=>({
         ...prev,
         [kind]: prev[kind].map((row,idx)=>idx===i?row.map((x,j)=>j===3?nuevoPrecio:x):row),
-        marketSources:{...(prev.marketSources||{}),[desc]:{
-          price:nuevoPrecio, min:Number(q.priceMin)||nuevoPrecio, max:Number(q.priceMax)||nuevoPrecio,
-          source:q.source||'Busqueda web', url:q.url||'', date:q.date||new Date().toLocaleDateString('es-MX'),
-          notes:q.notes||''
-        }}
+        marketSources:{...(prev.marketSources||{}),[desc]:registro}
       }));
       alert(`Precio de mercado aplicado: $${nuevoPrecio.toFixed(2)} MXN por ${r[2]||'unidad'}\nRango: $${(Number(q.priceMin)||nuevoPrecio).toFixed(2)} - $${(Number(q.priceMax)||nuevoPrecio).toFixed(2)}\nFuente: ${q.source||'busqueda web'}${q.url?`\n${q.url}`:''}${q.notes?`\nNota: ${q.notes}`:''}`);
     }catch(err){

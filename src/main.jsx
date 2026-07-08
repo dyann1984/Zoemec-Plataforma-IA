@@ -395,11 +395,9 @@ function App(){
     {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} />}
     {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} />}
     {module === 'presupuestos' && <Budgets company={companyView} budgets={budgets} setBudgets={setBudgets} />}
-    {module === 'proyectos' && <Projects projects={projects} setProjects={setProjects} />}
-    {module === 'clientes' && <Clients clients={clients} setClients={setClients} />}
+    {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} />}
     {module === 'biblioteca' && <Library user={user} />}
-    {module === 'tecnico' && <TechnicalCenter />}
-    {module === 'oficina' && <Office company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} />}
+    {module === 'tecnico' && <TechnicalOffice company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} />}
     {module === 'visual' && <VisualAI user={user} />}
     {module === 'comunidad' && <Community />}
     {module === 'planes' && <PlansAccess user={user} />}
@@ -1161,7 +1159,7 @@ function Auth({mode,setScreen,login,loginWithGoogle,company}){
 
 function Shell({children,user,logout,module,setModule,company}){
   const menu = [
-    ['inicio','inicio','Inicio'], ['apu','apu','APU Inteligente'], ['presupuestos','presupuestos','Presupuestos'], ['proyectos','proyectos','Proyectos'], ['clientes','clientes','Clientes'], ['biblioteca','biblioteca','Biblioteca y Academia'], ['tecnico','tecnico','Centro Técnico'], ['oficina','oficina','Oficina Técnica'], ['visual','play','Visual IA'], ['comunidad','comunidad','Comunidad'], ['planes','fsr','Planes y acceso'], ['reportes','reportes','Reportes']
+    ['inicio','inicio','Inicio'], ['apu','apu','APU Inteligente'], ['presupuestos','presupuestos','Presupuestos'], ['cartera','clientes','Clientes y Proyectos'], ['biblioteca','biblioteca','Biblioteca y Academia'], ['tecnico','tecnico','Centro y Oficina Técnica'], ['visual','play','Visual IA'], ['comunidad','comunidad','Comunidad'], ['planes','fsr','Planes y acceso'], ['reportes','reportes','Reportes']
   ];
   return <div className="app-layout">
     <aside className="sidebar">
@@ -1190,7 +1188,7 @@ function Dashboard({setModule,apus,clients,budgets,projects}){
   const spark = budgets.length ? budgets.slice(-8).map((b,i)=>Math.max(1,(Number(b.total)||0)/1000+i)) : [0,0,0,0,0,0,0,0];
   return <section><PageHead kicker="Panel ejecutivo" title="Buenos días, Diany" desc="Controla tus proyectos, APUs, presupuestos y biblioteca técnica desde un solo lugar." />
     <div className="stats"><Stat label="Clientes" value={clients.length} sub="Cartera activa"/><Stat label="APU creados" value={apus.length} sub="Este mes"/><Stat label="Presupuestos" value={budgets.length} sub="En seguimiento"/><Stat label="Monto cotizado" value={money(monto)} sub="Acumulado"/></div>
-    <div className="quick"><button onClick={()=>setModule('apu')}><Icon name="apu"/> Crear APU</button><button onClick={()=>setModule('presupuestos')}><Icon name="presupuestos"/> Nuevo presupuesto</button><button onClick={()=>setModule('clientes')}><Icon name="clientes"/> Nuevo cliente</button><button onClick={()=>setModule('tecnico')}><Icon name="tecnico"/> Calculadoras</button></div>
+    <div className="quick"><button onClick={()=>setModule('apu')}><Icon name="apu"/> Crear APU</button><button onClick={()=>setModule('presupuestos')}><Icon name="presupuestos"/> Nuevo presupuesto</button><button onClick={()=>setModule('cartera')}><Icon name="clientes"/> Cliente / proyecto</button><button onClick={()=>setModule('tecnico')}><Icon name="tecnico"/> Técnica y oficina</button></div>
     <div className="dash-charts">
       <div className="panel"><h2>Tendencia de cotización</h2><Spark points={spark}/><div className="chart-foot"><span>{budgets.length ? 'Últimos presupuestos' : 'Sin presupuestos reales todavía'}</span><b>{budgets.length ? 'Datos reales' : '0% acumulado'}</b></div></div>
       <div className="panel chart-donut"><h2>Estado de proyectos</h2><Donut segments={segs} center={pr.length} sub="obras"/><div className="donut-legend">{segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>)}</div></div>
@@ -2774,7 +2772,16 @@ function Budgets({company,budgets,setBudgets}){
 function exportBudgetExcel(items,total,iva){const rows=[['PRESUPUESTO'],['Concepto','Unidad','Cantidad','P.U. (sin IVA)','Importe'],...items.map(i=>[i.concept,i.unit,i.qty,i.pu,Number(i.qty)*Number(i.pu)]),[],['Subtotal',total],['IVA 16%',iva],['Total',total+iva]];exportRowsExcel(rows,'Presupuesto-ZOEMEC.xlsx').catch(()=>alert('No pude generar el Excel. Inténtalo de nuevo.'));}
 function exportBudgetPDF(items,total,iva,company){const doc=new jsPDF();let y=16;doc.setFontSize(16);doc.text(company.name||'ZOEMEC',14,y);doc.setFontSize(13);doc.text('PRESUPUESTO EJECUTIVO',14,y+14);y+=28;items.forEach(i=>{doc.text(i.concept,14,y,{maxWidth:100});doc.text(i.unit,118,y);doc.text(String(i.qty),135,y);doc.text(money(i.pu),152,y);doc.text(money(i.qty*i.pu),174,y);y+=10;if(y>270){doc.addPage();y=18;}});y+=6;doc.text('Subtotal',130,y);doc.text(money(total),170,y);y+=8;doc.text('IVA 16%',130,y);doc.text(money(iva),170,y);y+=8;doc.text('Total',130,y);doc.text(money(total+iva),170,y);doc.save('Presupuesto-ZOEMEC.pdf');}
 
-function Projects({projects,setProjects}){
+function ClientsProjects({clients,setClients,projects,setProjects}){
+  return <section><PageHead kicker="Cartera de obra" title="Clientes y proyectos" desc="Administra clientes, contactos, RFC, obras, avances y presupuestos desde un solo módulo." />
+    <div className="combined-stack">
+      <Projects projects={projects} setProjects={setProjects} embedded />
+      <Clients clients={clients} setClients={setClients} embedded />
+    </div>
+  </section>;
+}
+
+function Projects({projects,setProjects,embedded=false}){
   const list = projects || [];
   useEffect(()=>{
     const cleaned=list.filter(p=>!(p?.name==='Nuevo proyecto' && p?.client==='Cliente por definir' && Number(p?.budget||0)===0 && Number(p?.progress||0)===0));
@@ -2794,7 +2801,8 @@ function Projects({projects,setProjects}){
   };
   const update = (i,k,v) => setProjects(list.map((p,idx)=>idx===i?{...p,[k]:v}:p));
   const remove = (i) => setProjects(list.filter((_,idx)=>idx!==i));
-  return <section><PageHead kicker="Proyectos" title="Control de obra y proyectos" desc="Vista ejecutiva de obras, avance, presupuesto, cliente y estado." action={<button onClick={add}>+ Nuevo proyecto</button>} />
+  return <section>{!embedded && <PageHead kicker="Proyectos" title="Control de obra y proyectos" desc="Vista ejecutiva de obras, avance, presupuesto, cliente y estado." action={<button onClick={add}>+ Nuevo proyecto</button>} />}
+    {embedded && <div className="module-subhead"><div><small>Proyectos</small><h2>Control de obra y avance</h2></div><button onClick={add}>+ Nuevo proyecto</button></div>}
     {showForm && <div className="record-modal" role="dialog" aria-modal="true">
     <div className="record-backdrop" onClick={()=>setShowForm(false)}></div>
     <div className="panel record-form project-form">
@@ -2817,7 +2825,7 @@ function Projects({projects,setProjects}){
       <small>{p.progress}% de avance - <a onClick={()=>remove(i)} style={{color:'var(--danger)'}}>eliminar</a></small>
     </div>)}</div> : <div className="panel"><EmptyState text="No hay proyectos reales cargados. Usa “Nuevo proyecto” para iniciar tu cartera."/></div>}</section>
 }
-function Clients({clients,setClients}){
+function Clients({clients,setClients,embedded=false}){
   const [q,setQ]=useState('');
   const [showForm,setShowForm]=useState(false);
   const [draft,setDraft]=useState({name:'',type:'Empresa',contact:'',phone:'',email:'',rfc:'',status:'Prospecto'});
@@ -2836,7 +2844,8 @@ function Clients({clients,setClients}){
     setDraft({name:'',type:'Empresa',contact:'',phone:'',email:'',rfc:'',status:'Prospecto'});
     setShowForm(false);
   };
-  return <section><PageHead kicker="CRM de obra" title="Clientes" desc="Cartera profesional con proyectos, presupuestos, contactos, RFC e historial." action={<button onClick={()=>setShowForm(true)}>+ Nuevo cliente</button>} />
+  return <section>{!embedded && <PageHead kicker="CRM de obra" title="Clientes" desc="Cartera profesional con proyectos, presupuestos, contactos, RFC e historial." action={<button onClick={()=>setShowForm(true)}>+ Nuevo cliente</button>} />}
+    {embedded && <div className="module-subhead"><div><small>Clientes</small><h2>CRM de obra</h2></div><button onClick={()=>setShowForm(true)}>+ Nuevo cliente</button></div>}
     {showForm && <div className="record-modal" role="dialog" aria-modal="true">
     <div className="record-backdrop" onClick={()=>setShowForm(false)}></div>
     <div className="panel record-form client-form">
@@ -3136,17 +3145,27 @@ function FSRCalc(){
   </CalcCard>;
 }
 
-function TechnicalCenter(){
-  return <section><PageHead kicker="Centro Técnico" title="Calculadoras de obra" desc="Cuantifica y costea al instante. Todas las cantidades, rendimientos y precios son editables a tu criterio." />
+function TechnicalCenter({embedded=false}){
+  return <section>{!embedded && <PageHead kicker="Centro Técnico" title="Calculadoras de obra" desc="Cuantifica y costea al instante. Todas las cantidades, rendimientos y precios son editables a tu criterio." />}
+    {embedded && <div className="module-subhead"><div><small>Centro técnico</small><h2>Calculadoras de obra</h2></div></div>}
     <div className="calc-wrap">
       <ConcreteCalc/><SteelCalc/><BlockCalc/><PaintCalc/><WaterproofCalc/><ExcavationCalc/><FSRCalc/>
     </div></section>;
 }
 
-function Office({company,setCompany,catalog,setCatalog}){
+function TechnicalOffice({company,setCompany,catalog,setCatalog}){
+  return <section><PageHead kicker="Oficina Técnica" title="Centro técnico y configuración" desc="Calculadoras de obra, membrete, logo, plantillas y catálogo de precios en un solo módulo." />
+    <div className="combined-stack">
+      <Office company={company} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} embedded />
+      <TechnicalCenter embedded />
+    </div>
+  </section>;
+}
+
+function Office({company,setCompany,catalog,setCatalog,embedded=false}){
   const uploadLogo=(file)=>{if(!file)return;const r=new FileReader();r.onload=()=>setCompany({...company,logo:r.result});r.readAsDataURL(file)};
   const importExcel=async(file)=>{ if(!file) return; if(/\.xls$/i.test(file.name)){alert('Guarda el archivo como .xlsx o .csv para importarlo.');return;} try{ const cat=await parseExcelToCatalog(file); if(!cat.length){alert('No detecté columnas de descripción y precio. Revisa los encabezados del Excel.');return;} setCatalog(cat); alert(`Catálogo importado: ${cat.length} insumos. El APU usará estos precios al generar.`);}catch(err){ alert(`No pude leer el archivo: ${err?.message || 'formato no compatible'}. Usa .xlsx o .csv.`); } };
-  return <section><PageHead kicker="Oficina Técnica" title="Empresa, logo y formatos" desc="Configura membretes, datos fiscales, firmas, plantillas y tu Excel de precios." /><div className="grid-2"><div className="panel form"><label>Logo</label><img className="logo-preview" src={company.logo}/><input type="file" accept="image/*" onChange={e=>uploadLogo(e.target.files[0])}/><label>Empresa</label><input value={company.name} onChange={e=>setCompany({...company,name:e.target.value})}/><label>RFC</label><input value={company.rfc} onChange={e=>setCompany({...company,rfc:e.target.value})}/><label>Teléfono</label><input value={company.phone} onChange={e=>setCompany({...company,phone:e.target.value})}/><label>Correo</label><input value={company.email} onChange={e=>setCompany({...company,email:e.target.value})}/></div><div className="panel"><h2>Plantillas</h2>{['Formato ZOEMEC','Formato gobierno','Formato CFE','Formato CONAGUA','Formato personalizado'].map(x=><div className="activity" key={x}><Icon name="doc" size={16}/> {x}</div>)}<h2>Mi Excel de precios</h2><label className="up-btn ghost-up" style={{display:'inline-block',marginTop:4}}>Importar catálogo (.xlsx/.csv)<input type="file" accept=".xlsx,.csv" hidden onChange={e=>importExcel(e.target.files[0])}/></label>{catalog&&catalog.length>0 && <p className="muted" style={{marginTop:10}}>Catálogo cargado: <b>{catalog.length}</b> insumos. Se usan al generar APUs por coincidencia de nombre.</p>}<p className="muted">Detecto columnas de descripción, unidad y precio automáticamente.</p></div></div></section>}
+  return <section>{!embedded && <PageHead kicker="Oficina Técnica" title="Empresa, logo y formatos" desc="Configura membretes, datos fiscales, firmas, plantillas y tu Excel de precios." />}{embedded && <div className="module-subhead"><div><small>Oficina técnica</small><h2>Empresa, logo y formatos</h2></div></div>}<div className="grid-2"><div className="panel form"><label>Logo</label><img className="logo-preview" src={company.logo}/><input type="file" accept="image/*" onChange={e=>uploadLogo(e.target.files[0])}/><label>Empresa</label><input value={company.name} onChange={e=>setCompany({...company,name:e.target.value})}/><label>RFC</label><input value={company.rfc} onChange={e=>setCompany({...company,rfc:e.target.value})}/><label>Teléfono</label><input value={company.phone} onChange={e=>setCompany({...company,phone:e.target.value})}/><label>Correo</label><input value={company.email} onChange={e=>setCompany({...company,email:e.target.value})}/></div><div className="panel"><h2>Plantillas</h2>{['Formato ZOEMEC','Formato gobierno','Formato CFE','Formato CONAGUA','Formato personalizado'].map(x=><div className="activity" key={x}><Icon name="doc" size={16}/> {x}</div>)}<h2>Mi Excel de precios</h2><label className="up-btn ghost-up" style={{display:'inline-block',marginTop:4}}>Importar catálogo (.xlsx/.csv)<input type="file" accept=".xlsx,.csv" hidden onChange={e=>importExcel(e.target.files[0])}/></label>{catalog&&catalog.length>0 && <p className="muted" style={{marginTop:10}}>Catálogo cargado: <b>{catalog.length}</b> insumos. Se usan al generar APUs por coincidencia de nombre.</p>}<p className="muted">Detecto columnas de descripción, unidad y precio automáticamente.</p></div></div></section>}
 
 function Community(){
   const demoForum = ['Que rendimiento usan para muro de block 15 cm?','Proveedor de acero en zona centro','Formato de generadores para obra publica','Comparativo OPUS vs NEODATA'];

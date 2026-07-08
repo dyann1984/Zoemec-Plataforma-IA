@@ -273,6 +273,31 @@ section{padding:26px 28px 44px}
   justify-content:flex-start;font-weight:600;padding:14px 16px}
 .quick button:hover{border-color:var(--teal);color:var(--teal)}
 .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.combined-stack{display:grid;gap:18px}
+.combined-stack>section{display:block}
+.module-subhead{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+  margin:0 0 12px;
+  padding:14px 16px;
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:var(--r);
+  box-shadow:var(--shadow-sm);
+}
+.module-subhead small{
+  display:block;
+  color:var(--purple);
+  font-family:var(--mono);
+  font-size:.68rem;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+  margin-bottom:3px;
+}
+.module-subhead h2{margin:0;color:var(--ink);font-size:1.05rem}
+.module-subhead button{flex:none}
 
 .project-row{display:grid;grid-template-columns:1fr auto;gap:6px 12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}
 .project-row:last-child{border-bottom:0}

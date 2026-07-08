@@ -1836,7 +1836,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       item.code ? `Clave: ${item.code}` : '',
       `Concepto: ${item.concept}`,
       `Unidad: ${item.unit}`,
-      item.referencePU ? `PU base de Excel: ${fmt(item.referencePU)}` : '',
+      item.referencePU ? `PU base de Excel: ${money(item.referencePU)}` : '',
       item.section ? `Partida: ${item.section}` : ''
     ].filter(Boolean).join('\n');
     /* Un intento = una llamada con su propio timeout de 45 s (el reloj arranca

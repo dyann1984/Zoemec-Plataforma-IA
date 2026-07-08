@@ -1294,3 +1294,14 @@ svg.ic{display:block;flex:none}
 .budget-table .row-del{color:var(--danger);font-weight:700;padding:4px 8px;border-radius:8px}
 .budget-table .row-del:hover{background:#F7E4E9}
 @media (max-width:640px){.calc-row:has(.nf:nth-child(4)){grid-template-columns:1fr 1fr}}
+
+/* ---------- Insignia de sincronización en la nube ---------- */
+.cloud-badge{display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:999px;
+  border:1px solid var(--line);background:#fff;font-size:.76rem;color:var(--muted);white-space:nowrap}
+.cloud-badge i{width:8px;height:8px;border-radius:50%;background:#59B37A;flex:none;transition:.2s background}
+.cloud-badge.saving i{background:var(--gold);animation:cloudPulse 1s ease-in-out infinite}
+.cloud-badge.error i{background:var(--danger)}
+.cloud-badge.off i{background:var(--muted)}
+.cloud-badge em{font-style:normal;font-weight:600}
+@keyframes cloudPulse{50%{opacity:.35}}
+@media (max-width:900px){.cloud-badge em{display:none}.cloud-badge{padding:6px 8px}}

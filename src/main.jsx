@@ -8,6 +8,7 @@ import { createUserWithEmailAndPassword, GoogleAuthProvider, onAuthStateChanged,
 import { addDoc, collection, doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { auth, db, firebaseReady, storage } from './firebase.js';
+import { useCloudState } from './cloud.js';
 import './style.css';
 
 const money = (n) => Number(n || 0).toLocaleString('es-MX', { style:'currency', currency:'MXN' });
@@ -169,6 +170,24 @@ function buildSession(profile, fbUser){
   };
 }
 
+function CloudBadge(){
+  const [st,setSt]=useState({status:'ok',message:''});
+  const [online,setOnline]=useState(typeof navigator!=='undefined' ? navigator.onLine : true);
+  useEffect(()=>{
+    const onCloud=e=>setSt(e.detail||{status:'ok'});
+    const up=()=>setOnline(true), down=()=>setOnline(false);
+    window.addEventListener('zoemec-cloud',onCloud);
+    window.addEventListener('online',up); window.addEventListener('offline',down);
+    return ()=>{window.removeEventListener('zoemec-cloud',onCloud);window.removeEventListener('online',up);window.removeEventListener('offline',down);};
+  },[]);
+  const mode = !online ? 'off' : st.status;
+  const label = mode==='off' ? 'Sin conexión · guardado local'
+    : mode==='saving' ? 'Guardando en la nube...'
+    : mode==='error' ? 'Nube con detalle · datos seguros en local'
+    : 'Nube sincronizada';
+  return <span className={'cloud-badge '+mode} title={st.message||label}><i/><em>{label}</em></span>;
+}
+
 function NoticeHost(){
   const [notices,setNotices]=useState([]);
   useEffect(()=>{
@@ -205,12 +224,18 @@ function App(){
   const [user, setUser] = useState(null);
   const [accounts, setAccounts] = useLocalState('zoemec-accounts', []);
   const [usage, setUsage] = useLocalState('zoemec-usage', {});
-  const [company, setCompany] = useLocalState('zoemec-company', defaultCompany);
-  const [apus, setApus] = useLocalState('zoemec-apus', []);
-  const [clients, setClients] = useLocalState('zoemec-clients', []);
-  const [budgets, setBudgets] = useLocalState('zoemec-budgets', []);
-  const [projects, setProjects] = useLocalState('zoemec-projects', []);
-  const [catalog, setCatalog] = useLocalState('zoemec-catalogo', []);
+  const [company, setCompany] = useCloudState(user, 'zoemec-company', defaultCompany);
+  const [apus, setApus] = useCloudState(user, 'zoemec-apus', []);
+  const [clients, setClients] = useCloudState(user, 'zoemec-clients', []);
+  const [budgets, setBudgets] = useCloudState(user, 'zoemec-budgets', []);
+  const [projects, setProjects] = useCloudState(user, 'zoemec-projects', []);
+  const [catalog, setCatalog] = useCloudState(user, 'zoemec-catalogo', []);
+  const [budgetItems, setBudgetItems] = useCloudState(user, 'zoemec-budget-items', [{concept:'Muro de block 15 cm',unit:'m²',qty:120,pu:825.39},{concept:'Piso cerámico 30x30 cm',unit:'m²',qty:86,pu:384.51}]);
+  useEffect(() => {
+    const onAdd = (e) => { if(e?.detail) setBudgetItems(list => [...list, e.detail]); };
+    window.addEventListener('zoemec-budget-add', onAdd);
+    return () => window.removeEventListener('zoemec-budget-add', onAdd);
+  }, [setBudgetItems]);
   const companyView = company?.logo === '/logo.png' ? {...company, logo:'/logo.png?v=zoemec-2026'} : company;
 
   useEffect(() => {
@@ -394,7 +419,7 @@ function App(){
   else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView}>
     {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} />}
     {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} />}
-    {module === 'presupuestos' && <Budgets company={companyView} budgets={budgets} setBudgets={setBudgets} />}
+    {module === 'presupuestos' && <Budgets company={companyView} budgets={budgets} setBudgets={setBudgets} items={budgetItems} setItems={setBudgetItems} />}
     {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} />}
     {module === 'biblioteca' && <Library user={user} />}
     {module === 'tecnico' && <TechnicalOffice company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} />}
@@ -1173,7 +1198,7 @@ function Shell({children,user,logout,module,setModule,company}){
       <button className="logout-side" onClick={logout}>Salir</button>
     </aside>
     <main className="main">
-      <header className="topbar"><div><b>Buscar concepto, cliente o proyecto...</b></div><div className="user"><span className="bell"><Icon name="bell" size={19}/></span><span className="avatar">{user.initials}</span><div><b>{user.name}</b><small>{user.role === 'admin' ? 'Administrador' : user.plan}</small></div><button onClick={logout}>Salir</button></div></header>
+      <header className="topbar"><div><b>Buscar concepto, cliente o proyecto...</b></div><div className="user"><CloudBadge/><span className="bell"><Icon name="bell" size={19}/></span><span className="avatar">{user.initials}</span><div><b>{user.name}</b><small>{user.role === 'admin' ? 'Administrador' : user.plan}</small></div><button onClick={logout}>Salir</button></div></header>
       {children}
     </main>
     <Assistant/>
@@ -1814,12 +1839,28 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       item.referencePU ? `PU base de Excel: ${fmt(item.referencePU)}` : '',
       item.section ? `Partida: ${item.section}` : ''
     ].filter(Boolean).join('\n');
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 16000);
-    try{
-      const res=await fetch(aiServerUrl('/api/generate-apu'),{method:'POST',headers:await authHeaders(),body:JSON.stringify({concept:conceptForAI,catalog,company,mode:'batch-concept',preserveOriginal:true}),signal:controller.signal});
-      const data=await res.json();
-      if(!res.ok) throw new Error(data?.error || 'No fue posible generar con IA');
+    /* Un intento = una llamada con su propio timeout de 45 s (el reloj arranca
+       cuando la petición sale de verdad, ya no mientras espera en cola). */
+    const attempt = async () => {
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), 45000);
+      try{
+        const res=await fetch(aiServerUrl('/api/generate-apu'),{method:'POST',headers:await authHeaders(),body:JSON.stringify({concept:conceptForAI,catalog,company,mode:'batch-concept',preserveOriginal:true}),signal:controller.signal});
+        const data=await res.json();
+        if(!res.ok){ const err=new Error(data?.error || 'No fue posible generar con IA'); err.status=res.status; throw err; }
+        return data;
+      }finally{
+        window.clearTimeout(timer);
+      }
+    };
+    let data=null, lastError=null;
+    for(let tryNum=0; tryNum<2 && !data; tryNum++){
+      try{
+        if(tryNum>0) await new Promise(r=>setTimeout(r, 2500)); // espera antes de reintentar (429/red)
+        data = await attempt();
+      }catch(error){ lastError = error; }
+    }
+    if(data){
       const aiDraft=normalizeAIAPU(data.apu, item.concept);
       const next=standardAPUForConcept(item, catalog, index, conceptBatch?.fileName || 'Catalogo de conceptos');
       next.confidence = Math.max(Number(aiDraft.confidence || 0), next.confidence || 92);
@@ -1829,19 +1870,32 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         'APU estandarizado contra catalogo base ZOEMEC. Conceptos repetidos conservan la misma matriz y precio unitario.'
       ];
       return next;
-    }catch(error){
-      const next=standardAPUForConcept(item, catalog, index, conceptBatch?.fileName || 'Catalogo de conceptos');
-      next.family = `${next.family || 'APU local'} | desarrollo técnico ZOEMEC`;
-      next.confidence = Math.max(Number(next.confidence || 88), 90);
-      next.aiNotes = [
-        ...(next.aiNotes || []),
-        'Desarrollo técnico completo generado con matrices ZOEMEC y trazabilidad auditable.',
-        `IA externa no respondió para este concepto: ${error?.name === 'AbortError' ? 'tiempo agotado' : (error?.message || 'sin detalle')}`
-      ];
-      return next;
-    }finally{
-      window.clearTimeout(timer);
     }
+    const next=standardAPUForConcept(item, catalog, index, conceptBatch?.fileName || 'Catalogo de conceptos');
+    next.family = `${next.family || 'APU local'} | desarrollo técnico ZOEMEC`;
+    next.confidence = Math.max(Number(next.confidence || 88), 90);
+    next.aiNotes = [
+      ...(next.aiNotes || []),
+      'Desarrollo técnico completo generado con matrices ZOEMEC y trazabilidad auditable.',
+      `IA externa no respondió para este concepto tras 2 intentos: ${lastError?.name === 'AbortError' ? 'tiempo agotado' : (lastError?.message || 'sin detalle')}`
+    ];
+    return next;
+  };
+
+  /* Procesa la lista en una cola con máximo N llamadas simultáneas.
+     Evita saturar el navegador, Vercel y los límites de OpenAI. */
+  const mapWithConcurrency=async(items, worker, limit, onProgress)=>{
+    const out=new Array(items.length);
+    let next=0, done=0;
+    const lane=async()=>{
+      while(next<items.length){
+        const i=next++;
+        out[i]=await worker(items[i], i);
+        done++; onProgress?.(done, items.length);
+      }
+    };
+    await Promise.all(Array.from({length:Math.min(limit, items.length)}, lane));
+    return out;
   };
 
   const buildBatchAPUs=async(list)=>{
@@ -1852,9 +1906,14 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       if(!groups.has(key)) groups.set(key, {item, index, count:0});
       groups.get(key).count += 1;
     });
-    setAiStatus(`IA trabajando en ${groups.size} conceptos únicos. Repetidos reutilizan el mismo APU y P.U.`);
+    setAiStatus(`IA trabajando en ${groups.size} conceptos únicos (4 a la vez). Repetidos reutilizan el mismo APU y P.U.`);
     const groupList = [...groups.values()];
-    const generated = await Promise.all(groupList.map(group => generateBatchAPU(group.item, group.index)));
+    const generated = await mapWithConcurrency(
+      groupList,
+      (group) => generateBatchAPU(group.item, group.index),
+      4,
+      (done, total) => setAiStatus(`IA desarrollando APUs: ${done} de ${total} conceptos únicos...`)
+    );
     const byKey = new Map(generated.map((apu, index) => [conceptApuKey(groupList[index].item), apu]));
     const out = list.map((item, index) => applyConceptMetadata(byKey.get(conceptApuKey(item)), item, index, conceptBatch?.fileName || 'Catalogo de conceptos'));
     const repeated = list.length - groups.size;
@@ -2764,8 +2823,7 @@ async function exportConceptsAPUWorkbook(concepts, catalog, company, preparedAPU
   return await exportWorkbookExcel(sheets, `APU-POR-CONCEPTO-ZOEMEC.xlsx`);
 }
 
-function Budgets({company,budgets,setBudgets}){
-  const [items,setItems]=useLocalState('zoemec-budget-items',[{concept:'Muro de block 15 cm',unit:'m²',qty:120,pu:825.39},{concept:'Piso cerámico 30x30 cm',unit:'m²',qty:86,pu:384.51}]);
+function Budgets({company,budgets,setBudgets,items,setItems}){
   const total=items.reduce((a,i)=>a+Number(i.qty)*Number(i.pu),0), iva=total*.16;
   const update=(i,k,v)=>setItems(items.map((r,idx)=>idx===i?{...r,[k]:v}:r));
   const removeRow=(i)=>setItems(items.filter((_,idx)=>idx!==i));
@@ -3052,9 +3110,7 @@ function ORow({label,val,total}){return <div className={"o"+(total?" total":"")}
 function sendToBudget(p){
   const qty=Number(p?.qty)||0, pu=Number(p?.pu)||0;
   if(!p?.concept || qty<=0 || pu<=0 || !isFinite(pu)){ alert('Captura cantidades y precios válidos antes de enviar a presupuesto.'); return; }
-  const items=readLocal('zoemec-budget-items', []);
-  const next=[...(Array.isArray(items)?items:[]),{concept:p.concept,unit:p.unit||'lote',qty:+qty.toFixed(2),pu:+pu.toFixed(2)}];
-  localStorage.setItem('zoemec-budget-items', JSON.stringify(next));
+  window.dispatchEvent(new CustomEvent('zoemec-budget-add',{detail:{concept:p.concept,unit:p.unit||'lote',qty:+qty.toFixed(2),pu:+pu.toFixed(2)}}));
   alert(`"${p.concept}" se agregó a Presupuestos con cantidad y P.U. calculados.`);
 }
 function copyCalcResult(title,out){

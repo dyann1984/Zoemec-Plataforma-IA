@@ -1159,12 +1159,16 @@ function Auth({mode,setScreen,login,loginWithGoogle,company}){
 
 function Shell({children,user,logout,module,setModule,company}){
   const menu = [
-    ['inicio','inicio','Inicio'], ['apu','apu','APU Inteligente'], ['presupuestos','presupuestos','Presupuestos'], ['cartera','clientes','Clientes y Proyectos'], ['biblioteca','biblioteca','Biblioteca y Academia'], ['tecnico','tecnico','Centro y Oficina Técnica'], ['visual','play','Visual IA'], ['comunidad','comunidad','Comunidad'], ['planes','fsr','Planes y acceso'], ['reportes','reportes','Reportes']
+    ['inicio','inicio','Inicio'], ['apu','apu','APU Inteligente'], ['presupuestos','presupuestos','Presupuestos'],
+    ['cartera','clientes','Cartera','Clientes y proyectos'],
+    ['biblioteca','biblioteca','Biblioteca','Academia y documentos'],
+    ['tecnico','tecnico','Oficina técnica','Cálculos y formatos'],
+    ['visual','play','Visual IA'], ['comunidad','comunidad','Comunidad'], ['planes','fsr','Planes y acceso'], ['reportes','reportes','Reportes']
   ];
   return <div className="app-layout">
     <aside className="sidebar">
       <div className="brand"><img src={company.logo || '/logo.png'} onError={(e)=>e.currentTarget.style.display='none'} /><div><b>ZOEMEC</b><span>Ingeniería y construcción</span></div></div>
-      <div className="menu">{menu.map(m=><button key={m[0]} className={module===m[0]?'active':''} onClick={()=>setModule(m[0])}><span className="mi"><Icon name={m[1]}/></span>{m[2]}</button>)}</div>
+      <div className="menu">{menu.map(m=><button key={m[0]} className={module===m[0]?'active':''} onClick={()=>setModule(m[0])}><span className="mi"><Icon name={m[1]}/></span><span className="menu-copy"><b>{m[2]}</b>{m[3] && <small>{m[3]}</small>}</span></button>)}</div>
       <button className="plan-box" onClick={()=>setModule('planes')}><b>Plan Profesional</b><p>APU, PDF, Excel, IA y biblioteca técnica.</p><div><i style={{width:'68%'}}></i></div><small>Ver permisos y cobro</small></button>
       <button className="logout-side" onClick={logout}>Salir</button>
     </aside>
@@ -1188,7 +1192,7 @@ function Dashboard({setModule,apus,clients,budgets,projects}){
   const spark = budgets.length ? budgets.slice(-8).map((b,i)=>Math.max(1,(Number(b.total)||0)/1000+i)) : [0,0,0,0,0,0,0,0];
   return <section><PageHead kicker="Panel ejecutivo" title="Buenos días, Diany" desc="Controla tus proyectos, APUs, presupuestos y biblioteca técnica desde un solo lugar." />
     <div className="stats"><Stat label="Clientes" value={clients.length} sub="Cartera activa"/><Stat label="APU creados" value={apus.length} sub="Este mes"/><Stat label="Presupuestos" value={budgets.length} sub="En seguimiento"/><Stat label="Monto cotizado" value={money(monto)} sub="Acumulado"/></div>
-    <div className="quick"><button onClick={()=>setModule('apu')}><Icon name="apu"/> Crear APU</button><button onClick={()=>setModule('presupuestos')}><Icon name="presupuestos"/> Nuevo presupuesto</button><button onClick={()=>setModule('cartera')}><Icon name="clientes"/> Cliente / proyecto</button><button onClick={()=>setModule('tecnico')}><Icon name="tecnico"/> Técnica y oficina</button></div>
+    <div className="quick"><button onClick={()=>setModule('apu')}><Icon name="apu"/> Crear APU</button><button onClick={()=>setModule('presupuestos')}><Icon name="presupuestos"/> Presupuesto</button><button onClick={()=>setModule('cartera')}><Icon name="clientes"/> Cartera</button><button onClick={()=>setModule('tecnico')}><Icon name="tecnico"/> Oficina técnica</button></div>
     <div className="dash-charts">
       <div className="panel"><h2>Tendencia de cotización</h2><Spark points={spark}/><div className="chart-foot"><span>{budgets.length ? 'Últimos presupuestos' : 'Sin presupuestos reales todavía'}</span><b>{budgets.length ? 'Datos reales' : '0% acumulado'}</b></div></div>
       <div className="panel chart-donut"><h2>Estado de proyectos</h2><Donut segments={segs} center={pr.length} sub="obras"/><div className="donut-legend">{segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>)}</div></div>
@@ -3132,6 +3136,98 @@ function ExcavationCalc(){
   </CalcCard>;
 }
 
+function FoundationCalc(){
+  const [s,setS]=useState({l:12,a:0.6,h:0.25,exc:180,conc:2450,plantilla:0.05});
+  const set=(k,v)=>setS({...s,[k]:v});
+  const vol=(+s.l||0)*(+s.a||0)*(+s.h||0);
+  const excVol=(+s.l||0)*(+s.a||0)*((+s.h||0)+(+s.plantilla||0));
+  const plantVol=(+s.l||0)*(+s.a||0)*(+s.plantilla||0);
+  const cost=excVol*(+s.exc||0)+(vol+plantVol)*(+s.conc||0);
+  return <CalcCard icon="concreto" title="Cimentación" sub="Excavación, plantilla y concreto por tramo"
+    out={<><ORow label="Excavación" val={n2(excVol)+' m³'}/><ORow label="Plantilla" val={n2(plantVol)+' m³'}/><ORow label="Concreto cimentación" val={n2(vol)+' m³'}/><ORow label="Costo estimado" val={money(cost)} total/></>}>
+    <div className="calc-row"><NField label="Largo (m)" value={s.l} on={v=>set('l',v)}/><NField label="Ancho (m)" value={s.a} on={v=>set('a',v)}/><NField label="Peralte (m)" value={s.h} on={v=>set('h',v)}/></div>
+    <div className="calc-row"><NField label="Plantilla (m)" value={s.plantilla} on={v=>set('plantilla',v)} step="0.01"/><NField label="Excavación ($/m³)" value={s.exc} on={v=>set('exc',v)}/><NField label="Concreto ($/m³)" value={s.conc} on={v=>set('conc',v)}/></div>
+  </CalcCard>;
+}
+
+function StoneCalc(){
+  const [s,setS]=useState({l:10,a:0.6,h:0.8,piedra:520,cemento:225,arena:480,mo:650});
+  const set=(k,v)=>setS({...s,[k]:v});
+  const vol=(+s.l||0)*(+s.a||0)*(+s.h||0);
+  const piedra=vol*1.15, cem=vol*3.1, arena=vol*0.42;
+  const cost=piedra*(+s.piedra||0)+cem*(+s.cemento||0)+arena*(+s.arena||0)+vol*(+s.mo||0);
+  return <CalcCard icon="block" title="Piedra" sub="Mampostería de piedra braza con mortero"
+    out={<><ORow label="Volumen muro" val={n2(vol)+' m³'}/><ORow label="Piedra braza" val={n2(piedra)+' m³'}/><ORow label="Cemento" val={Math.ceil(cem)+' bultos'}/><ORow label="Arena" val={n2(arena)+' m³'}/><ORow label="Costo estimado" val={money(cost)} total/></>}>
+    <div className="calc-row"><NField label="Largo (m)" value={s.l} on={v=>set('l',v)}/><NField label="Ancho (m)" value={s.a} on={v=>set('a',v)}/><NField label="Altura (m)" value={s.h} on={v=>set('h',v)}/></div>
+    <div className="calc-row"><NField label="Piedra ($/m³)" value={s.piedra} on={v=>set('piedra',v)}/><NField label="Cemento ($/bulto)" value={s.cemento} on={v=>set('cemento',v)}/><NField label="M.O. ($/m³)" value={s.mo} on={v=>set('mo',v)}/></div>
+    <NField label="Arena ($/m³)" value={s.arena} on={v=>set('arena',v)}/>
+  </CalcCard>;
+}
+
+function ChainCalc(){
+  const [s,setS]=useState({l:12,b:0.15,h:0.2,varillas:4,diam:'3/8',sep:0.2,conc:2450,acero:26.5});
+  const set=(k,v)=>setS({...s,[k]:v});
+  const KGM={'3/8':0.560,'1/2':0.994,'5/8':1.552};
+  const vol=(+s.l||0)*(+s.b||0)*(+s.h||0);
+  const longKg=(+s.l||0)*(+s.varillas||0)*KGM[s.diam];
+  const estribos=Math.ceil((+s.l||0)/((+s.sep||0.2)||0.2))+1;
+  const per=Math.max(0,2*((+s.b||0)+(+s.h||0)-0.08));
+  const estrKg=estribos*per*0.25;
+  const kg=(longKg+estrKg)*1.05;
+  const cost=vol*(+s.conc||0)+kg*(+s.acero||0);
+  return <CalcCard icon="acero" title="Cadena" sub="Concreto, varillas longitudinales y estribos"
+    out={<><ORow label="Concreto" val={n2(vol)+' m³'}/><ORow label="Estribos" val={estribos+' pza'}/><ORow label="Acero estimado" val={n2(kg)+' kg'}/><ORow label="Costo material" val={money(cost)} total/></>}>
+    <div className="calc-row"><NField label="Largo (m)" value={s.l} on={v=>set('l',v)}/><NField label="Base (m)" value={s.b} on={v=>set('b',v)}/><NField label="Peralte (m)" value={s.h} on={v=>set('h',v)}/></div>
+    <div className="calc-row"><NField label="Varillas" value={s.varillas} on={v=>set('varillas',v)}/><div className="nf"><label>Diámetro</label><select value={s.diam} onChange={e=>set('diam',e.target.value)}>{Object.keys(KGM).map(k=><option key={k}>{k}</option>)}</select></div><NField label="Estribos cada (m)" value={s.sep} on={v=>set('sep',v)} step="0.05"/></div>
+    <div className="calc-row"><NField label="Concreto ($/m³)" value={s.conc} on={v=>set('conc',v)}/><NField label="Acero ($/kg)" value={s.acero} on={v=>set('acero',v)}/></div>
+  </CalcCard>;
+}
+
+function ColumnTieCalc(){
+  const [s,setS]=useState({pzas:4,h:2.6,b:0.15,d:0.15,varillas:4,diam:'3/8',sep:0.2,conc:2450,acero:26.5});
+  const set=(k,v)=>setS({...s,[k]:v});
+  const KGM={'3/8':0.560,'1/2':0.994,'5/8':1.552};
+  const vol=(+s.pzas||0)*(+s.h||0)*(+s.b||0)*(+s.d||0);
+  const longKg=(+s.pzas||0)*(+s.h||0)*(+s.varillas||0)*KGM[s.diam];
+  const estribos=(+s.pzas||0)*(Math.ceil((+s.h||0)/((+s.sep||0.2)||0.2))+1);
+  const per=Math.max(0,2*((+s.b||0)+(+s.d||0)-0.08));
+  const estrKg=estribos*per*0.25;
+  const kg=(longKg+estrKg)*1.05;
+  const cost=vol*(+s.conc||0)+kg*(+s.acero||0);
+  return <CalcCard icon="acero" title="Castillo" sub="Castillos de concreto armado por pieza"
+    out={<><ORow label="Concreto" val={n2(vol)+' m³'}/><ORow label="Estribos" val={estribos+' pza'}/><ORow label="Acero estimado" val={n2(kg)+' kg'}/><ORow label="Costo material" val={money(cost)} total/></>}>
+    <div className="calc-row"><NField label="Piezas" value={s.pzas} on={v=>set('pzas',v)}/><NField label="Altura c/u (m)" value={s.h} on={v=>set('h',v)}/><NField label="Sección b (m)" value={s.b} on={v=>set('b',v)}/><NField label="Sección d (m)" value={s.d} on={v=>set('d',v)}/></div>
+    <div className="calc-row"><NField label="Varillas" value={s.varillas} on={v=>set('varillas',v)}/><div className="nf"><label>Diámetro</label><select value={s.diam} onChange={e=>set('diam',e.target.value)}>{Object.keys(KGM).map(k=><option key={k}>{k}</option>)}</select></div><NField label="Estribos cada (m)" value={s.sep} on={v=>set('sep',v)} step="0.05"/></div>
+    <div className="calc-row"><NField label="Concreto ($/m³)" value={s.conc} on={v=>set('conc',v)}/><NField label="Acero ($/kg)" value={s.acero} on={v=>set('acero',v)}/></div>
+  </CalcCard>;
+}
+
+function PlasterCalc(){
+  const [s,setS]=useState({area:80,esp:1.5,cemento:225,arena:480,mo:95});
+  const set=(k,v)=>setS({...s,[k]:v});
+  const factor=(+s.esp||1.5)/1.5;
+  const cem=(+s.area||0)*0.09*factor, arena=(+s.area||0)*0.025*factor;
+  const cost=cem*(+s.cemento||0)+arena*(+s.arena||0)+(+s.area||0)*(+s.mo||0);
+  return <CalcCard icon="pintura" title="Aplanado" sub="Mortero cemento-arena por espesor"
+    out={<><ORow label="Área" val={n2(s.area)+' m²'}/><ORow label="Cemento" val={Math.ceil(cem)+' bultos'}/><ORow label="Arena" val={n2(arena)+' m³'}/><ORow label="Costo estimado" val={money(cost)} total/></>}>
+    <div className="calc-row"><NField label="Área (m²)" value={s.area} on={v=>set('area',v)}/><NField label="Espesor (cm)" value={s.esp} on={v=>set('esp',v)} step="0.1"/></div>
+    <div className="calc-row"><NField label="Cemento ($/bulto)" value={s.cemento} on={v=>set('cemento',v)}/><NField label="Arena ($/m³)" value={s.arena} on={v=>set('arena',v)}/><NField label="M.O. ($/m²)" value={s.mo} on={v=>set('mo',v)}/></div>
+  </CalcCard>;
+}
+
+function SlabCalc(){
+  const [s,setS]=useState({area:60,esp:0.1,conc:2450,malla:48,mo:85});
+  const set=(k,v)=>setS({...s,[k]:v});
+  const vol=(+s.area||0)*(+s.esp||0);
+  const malla=(+s.area||0)*1.05;
+  const cost=vol*(+s.conc||0)+malla*(+s.malla||0)+(+s.area||0)*(+s.mo||0);
+  return <CalcCard icon="concreto" title="Firme" sub="Firme de concreto con malla proporcional"
+    out={<><ORow label="Concreto" val={n2(vol)+' m³'}/><ORow label="Malla / refuerzo" val={n2(malla)+' m²'}/><ORow label="Área firme" val={n2(s.area)+' m²'}/><ORow label="Costo estimado" val={money(cost)} total/></>}>
+    <div className="calc-row"><NField label="Área (m²)" value={s.area} on={v=>set('area',v)}/><NField label="Espesor (m)" value={s.esp} on={v=>set('esp',v)} step="0.01"/></div>
+    <div className="calc-row"><NField label="Concreto ($/m³)" value={s.conc} on={v=>set('conc',v)}/><NField label="Malla/refuerzo ($/m²)" value={s.malla} on={v=>set('malla',v)}/><NField label="M.O. ($/m²)" value={s.mo} on={v=>set('mo',v)}/></div>
+  </CalcCard>;
+}
+
 function FSRCalc(){
   const [s,setS]=useState({tp:365,tl:250,ps:0.27});
   const set=(k,v)=>setS({...s,[k]:v});
@@ -3149,7 +3245,7 @@ function TechnicalCenter({embedded=false}){
   return <section>{!embedded && <PageHead kicker="Centro Técnico" title="Calculadoras de obra" desc="Cuantifica y costea al instante. Todas las cantidades, rendimientos y precios son editables a tu criterio." />}
     {embedded && <div className="module-subhead"><div><small>Centro técnico</small><h2>Calculadoras de obra</h2></div></div>}
     <div className="calc-wrap">
-      <ConcreteCalc/><SteelCalc/><BlockCalc/><PaintCalc/><WaterproofCalc/><ExcavationCalc/><FSRCalc/>
+      <FoundationCalc/><StoneCalc/><ChainCalc/><ColumnTieCalc/><PlasterCalc/><SlabCalc/><ConcreteCalc/><SteelCalc/><BlockCalc/><PaintCalc/><WaterproofCalc/><ExcavationCalc/><FSRCalc/>
     </div></section>;
 }
 

@@ -216,8 +216,12 @@ label{display:block;font-size:.74rem;font-weight:600;color:var(--muted);text-tra
 .brand span{font-size:.68rem;color:#B8A4CC;letter-spacing:.06em}
 .menu{display:flex;flex-direction:column;gap:3px;flex:1}
 .menu button{display:flex;align-items:center;gap:11px;background:transparent;color:#DED2EA;box-shadow:none;
-  font-family:var(--body);font-weight:500;font-size:.92rem;justify-content:flex-start;padding:10px 12px;border-radius:10px}
+  font-family:var(--body);font-weight:500;font-size:.9rem;justify-content:flex-start;padding:9px 12px;border-radius:10px;min-height:44px}
 .menu button span{font-size:1.05rem;width:20px;text-align:center}
+.menu button .menu-copy{display:flex;flex-direction:column;align-items:flex-start;gap:1px;width:auto;min-width:0;text-align:left;line-height:1.12}
+.menu button .menu-copy b{font-size:.9rem;font-weight:650;color:inherit;white-space:nowrap}
+.menu button .menu-copy small{font-size:.68rem;color:#B8A4CC;font-weight:500;white-space:nowrap}
+.menu button.active .menu-copy small{color:#E8DDF3}
 .menu button:hover{background:rgba(255,255,255,.06);color:#fff;transform:none}
 .menu button.active{background:rgba(157,111,208,.22);color:#fff;box-shadow:inset 3px 0 0 var(--gold)}
 .plan-box{display:block;width:100%;text-align:left;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);border-radius:var(--r);padding:14px;margin-top:8px;box-shadow:none;color:inherit}

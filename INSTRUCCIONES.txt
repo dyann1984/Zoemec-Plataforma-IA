@@ -1,0 +1,31 @@
+ZOEMEC — Parche 4 (ACUMULADO): incluye TODO lo anterior + fix "fmt is not defined"
+===================================================================================
+Este ZIP reemplaza a todos los anteriores.
+
+ARCHIVOS:
+  src\main.jsx        -> reemplazar  (fix del error de exportación masiva)
+  src\style.css       -> reemplazar
+  src\cloud.js        -> nuevo (si ya lo copiaste del parche 3, es el mismo)
+  vercel.json         -> reemplazar
+  firestore.rules     -> reemplazar (publicar en Firebase Console si no lo has hecho)
+
+FIX DE ESTE PARCHE
+"No pude descargar el Excel/PDF por concepto: fmt is not defined"
+- Causa: en la generación masiva se usaba una función fmt() que nunca
+  existió en el proyecto (bug original, anterior a los parches). Tronaba
+  en cuanto un concepto del Excel traía P.U. de referencia.
+- Corregido: ahora usa money() (el formateador real de la app).
+- Se escaneó TODO el código con detector de variables sin definir:
+  este era el único caso. No hay más errores de este tipo.
+
+CONTENIDO ACUMULADO
+1. Calculadoras v2: cimentación, piedra, cadena, castillo, aplanado y
+   firme + pestañas por categoría + botón "→ Presupuesto" y "Copiar".
+2. Presupuestos persistentes con eliminación por fila.
+3. Sincronización en la nube (Firestore) con respaldo local e insignia
+   de estado en la topbar. Requiere publicar firestore.rules.
+4. Generación masiva de APUs en cola de 4 con reintentos y progreso
+   en vivo (correcta para lotes de 200 conceptos).
+5. vercel.json con caché de assets y headers de seguridad.
+
+PASOS: copiar archivos -> git add . -> git commit -> git push.

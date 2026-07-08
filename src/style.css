@@ -1283,3 +1283,14 @@ svg.ic{display:block;flex:none}
   .payment-head{display:block}
   .visual-modes{grid-template-columns:1fr}
 }
+
+/* ---------- Centro Técnico v2: pestañas, acciones y filas de 4 campos ---------- */
+.calc-tabs{margin-bottom:16px;flex-wrap:wrap;justify-content:flex-start}
+.calc-tabs button{padding:8px 14px}
+.calc-row:has(.nf:nth-child(4)){grid-template-columns:repeat(4,1fr)}
+.calc-actions{display:flex;gap:8px;margin-top:12px;padding-top:12px;border-top:1px dashed var(--line)}
+.calc-actions button{flex:1;padding:9px 10px;font-size:.85rem}
+.calc-actions button.ghost{box-shadow:none}
+.budget-table .row-del{color:var(--danger);font-weight:700;padding:4px 8px;border-radius:8px}
+.budget-table .row-del:hover{background:#F7E4E9}
+@media (max-width:640px){.calc-row:has(.nf:nth-child(4)){grid-template-columns:1fr 1fr}}

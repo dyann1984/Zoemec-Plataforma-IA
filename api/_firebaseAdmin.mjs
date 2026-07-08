@@ -5,7 +5,11 @@ const DEFAULT_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'zoemec-plataforma
 function parseServiceAccount(){
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
   if(raw){
-    const json = JSON.parse(raw);
+    const clean = raw.trim();
+    const decoded = clean.startsWith('{')
+      ? clean
+      : Buffer.from(clean, 'base64').toString('utf8');
+    const json = JSON.parse(decoded);
     if(json.private_key) json.private_key = json.private_key.replace(/\\n/g, '\n');
     return json;
   }
@@ -17,6 +21,10 @@ function parseServiceAccount(){
     };
   }
   return null;
+}
+
+export function hasAdminCredentials(){
+  return Boolean(parseServiceAccount() || process.env.GOOGLE_APPLICATION_CREDENTIALS);
 }
 
 function initAdminApp(){
@@ -35,8 +43,8 @@ function initAdminApp(){
 
 export function getAdminDb(){
   initAdminApp();
-  if(!parseServiceAccount() && !process.env.GOOGLE_APPLICATION_CREDENTIALS){
-    throw new Error('Falta FIREBASE_SERVICE_ACCOUNT_JSON en Vercel para leer planes y permisos.');
+  if(!hasAdminCredentials()){
+    throw new Error('Falta FIREBASE_SERVICE_ACCOUNT_JSON en Vercel para leer planes, permisos y pagos. Puedes pegar el JSON completo o su version base64.');
   }
   return admin.firestore();
 }

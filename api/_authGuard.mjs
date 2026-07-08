@@ -1,4 +1,4 @@
-import { FieldValue, getAdminAuth, getAdminDb } from './_firebaseAdmin.mjs';
+import { FieldValue, getAdminAuth, getAdminDb, hasAdminCredentials } from './_firebaseAdmin.mjs';
 
 const PLAN_RULES = {
   Gratis: { apuLimit: 1, ai: false, visual: false, assistant: true },
@@ -23,6 +23,11 @@ function usageMonth(){
 }
 
 export async function requireFeature(req, feature){
+  if(!hasAdminCredentials()){
+    const error = new Error('Falta FIREBASE_SERVICE_ACCOUNT_JSON en Vercel para validar usuarios y planes.');
+    error.status = 500;
+    throw error;
+  }
   const token = bearerToken(req);
   if(!token){
     const error = new Error('Inicia sesion para usar la IA de ZOEMEC.');

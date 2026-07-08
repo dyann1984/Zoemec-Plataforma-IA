@@ -1030,74 +1030,83 @@ svg.ic{display:block;flex:none}
   border:1.5px solid rgba(255,255,255,.84);
   box-shadow:none;
 }
-.hero-apu-card{
+.hero-command{
   position:relative;
   z-index:1;
   justify-self:end;
-  width:min(480px,100%);
-  background:rgba(255,255,255,.94);
-  color:#111;
-  border:1px solid rgba(255,255,255,.72);
-  border-radius:22px;
-  padding:30px 32px 30px;
-  box-shadow:0 26px 70px rgba(0,0,0,.28);
-  backdrop-filter:blur(10px);
+  width:min(560px,100%);
+  color:#fff;
+  border:1px solid rgba(255,255,255,.28);
+  border-radius:10px;
+  padding:22px;
+  background:linear-gradient(145deg,rgba(13,18,28,.78),rgba(77,44,104,.56));
+  box-shadow:0 28px 80px rgba(0,0,0,.34);
+  backdrop-filter:blur(12px);
 }
-.hero-apu-card>span{
-  display:block;
-  margin-bottom:18px;
-  font-family:var(--mono);
-  color:#563476;
-  font-size:.76rem;
-  letter-spacing:.22em;
-  text-transform:uppercase;
-  font-weight:700;
-}
-.hero-apu-card h2{
-  margin-bottom:22px;
-  color:#111;
-  font-family:var(--display);
-  font-size:1.55rem;
-  font-weight:700;
-  letter-spacing:0;
-}
-.apu-mini-row{
+.command-strip,.command-total{
   display:flex;
   align-items:center;
   justify-content:space-between;
-  gap:18px;
-  padding:17px 0;
-  border-bottom:1px solid rgba(23,16,32,.14);
-}
-.apu-mini-row p,.apu-mini-total p{
-  margin:0;
-  font-weight:600;
-  font-size:.92rem;
-}
-.apu-mini-row b{
-  font-family:var(--mono);
-  font-size:1.02rem;
-}
-.apu-mini-total{
-  margin-top:24px;
-  padding:18px 20px;
+  gap:14px;
+  padding:14px 16px;
+  border:1px solid rgba(255,255,255,.18);
+  background:rgba(255,255,255,.09);
   border-radius:8px;
-  background:linear-gradient(135deg,#F5EFFB,#E7DCF2);
+}
+.command-strip span,.command-total span{
+  font-family:var(--mono);
+  font-size:.75rem;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+  color:#D8C2F2;
+}
+.command-strip b,.command-total b{
+  color:#fff;
+  font-size:1.05rem;
+}
+.command-flow{
   display:flex;
   align-items:center;
-  justify-content:space-between;
-  gap:16px;
+  gap:10px;
+  margin:18px 0;
 }
-.apu-mini-total p{
-  color:#4D2C68;
-  text-transform:uppercase;
-  font-weight:900;
+.command-flow span{
+  flex:none;
+  padding:9px 12px;
+  border-radius:6px;
+  background:rgba(255,255,255,.16);
+  color:#fff;
+  font-weight:800;
+  font-size:.8rem;
 }
-.apu-mini-total b{
-  color:#4D2C68;
+.command-flow i{
+  flex:1;
+  height:1px;
+  background:rgba(255,255,255,.42);
+}
+.command-table{
+  display:grid;
+  gap:10px;
+  margin-bottom:16px;
+}
+.command-table div{
+  display:grid;
+  grid-template-columns:34px 1fr 42px 90px;
+  align-items:center;
+  gap:10px;
+  min-height:54px;
+  padding:10px 12px;
+  border-radius:8px;
+  background:rgba(255,255,255,.92);
+  color:#171020;
+}
+.command-table b{
   font-family:var(--mono);
-  font-size:1.65rem;
+  color:#6F3FA7;
 }
+.command-table span{font-weight:800;line-height:1.25}
+.command-table em{color:#5B6470;font-style:normal;text-align:center}
+.command-table strong{font-family:var(--mono);text-align:right;color:#171020}
 .hero-benefits{
   position:relative;
   z-index:2;
@@ -1138,7 +1147,7 @@ svg.ic{display:block;flex:none}
 @media (max-width:1100px){
   .landing .nav-public nav{display:none}
   .hero-build{grid-template-columns:1fr;padding-top:52px}
-  .hero-apu-card{justify-self:start}
+  .hero-command{justify-self:start}
   .hero-benefits{grid-template-columns:1fr 1fr}
   .hero-benefits div:nth-child(2){border-right:0}
 }
@@ -1151,7 +1160,9 @@ svg.ic{display:block;flex:none}
   .hero-build{min-height:auto;padding:44px 22px 26px}
   .hero-build .hero-copy h1{font-size:2.25rem}
   .hero-build .hero-actions button{min-width:100%}
-  .hero-apu-card{padding:26px 22px}
+  .hero-command{padding:18px}
+  .command-table div{grid-template-columns:28px 1fr;gap:8px}
+  .command-table em,.command-table strong{text-align:left}
   .hero-benefits{grid-template-columns:1fr;padding:16px}
   .hero-benefits div{border-right:0;border-bottom:1px solid rgba(255,255,255,.16);padding:12px}
   .hero-benefits div:last-child{border-bottom:0}

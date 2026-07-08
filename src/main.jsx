@@ -402,7 +402,6 @@ function App(){
     {module === 'oficina' && <Office company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} />}
     {module === 'visual' && <VisualAI user={user} />}
     {module === 'comunidad' && <Community />}
-    {module === 'academia' && <Academy />}
     {module === 'planes' && <PlansAccess user={user} />}
     {module === 'reportes' && <Reports clients={clients} apus={apus} budgets={budgets} />}
   </Shell>;
@@ -684,7 +683,7 @@ async function parseRobustConceptCatalog(file){
   const normalized = normalizeSpreadsheetRows(rows);
   const clean = (v) => cleanText(v).trim();
   const norm = (v) => clean(v).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-  const unitRe = /^(m2|m²|m²|m3|m³|m³|kg|pza|pieza|pzas|ml|m|l|lt|lote|jgo|hr|hora|dia|día|día|jor|jornal)$/i;
+  const unitRe = /^(m2|m²|m3|m³|kg|ton|tonelada|pza|pieza|pzas|ml|m|l|lt|lote|jgo|hr|hora|dia|día|jor|jornal|serv|servicio|sal)$/i;
   const normalizeUnit = (v) => {
     const raw = clean(v);
     if(/^m2$/i.test(raw)) return 'm²';
@@ -725,7 +724,15 @@ async function parseRobustConceptCatalog(file){
     const importe = Number(item.importe) || 0;
     const derivedPU = importe && qty ? importe / qty : 0;
     if(derivedPU && (!referencePU || referencePU <= 1 || referencePU < derivedPU * 0.25)) referencePU = derivedPU;
+    const key = [
+      clean(item.code),
+      concept.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''),
+      unit,
+      qty.toFixed(4)
+    ].join('|');
+    if(list.some(x => x.__key === key)) return;
     list.push({
+      __key:key,
       code: clean(item.code) || `CON-${String(list.length+1).padStart(3,'0')}`,
       concept,
       unit,
@@ -758,9 +765,9 @@ async function parseRobustConceptCatalog(file){
     const row = normalized[i].map(norm);
     const conceptIdx = row.findIndex(x=>/concepto|descripcion|descrip/.test(x));
     const unitIdx = row.findIndex(x=>/^(und\.?|unidad|u\.?m\.?|um)$/.test(x));
-    const qtyIdx = row.findIndex(x=>/cantidad|cant\.?/.test(x));
-    const puIdx = row.findIndex(x=>/^(p\.?u\.?|pu|precio unitario|precio|p u)$/.test(x));
-    const importeIdx = row.findIndex(x=>/importe|total/.test(x));
+    const qtyIdx = row.findIndex(x=>/cantidad|cant\.?|volumen|cantid/.test(x));
+    const puIdx = row.findIndex(x=>/^(p\.?u\.?|pu|precio unitario|precio|p u|precio u\.?|costo unitario)$/.test(x));
+    const importeIdx = row.findIndex(x=>/importe|total|monto/.test(x));
     if(conceptIdx > -1 && (unitIdx > -1 || qtyIdx > -1)){
       header = i;
       cConcept = conceptIdx;
@@ -831,12 +838,38 @@ async function parseRobustConceptCatalog(file){
         }
         const previous = row.slice(Math.max(0,j-4), j).map(clean).filter(Boolean);
         const code = previous.find(v=>/^[A-Z0-9][A-Z0-9._\-\/]{1,20}$/i.test(v)) || '';
-        addConcept(concepts, { code, concept, unit:row[unitIndex], qty:asNumber(row[qtyIndex]), referencePU:pu, importe });
+        addConcept(concepts, { code, concept, unit:row[unitIndex], qty:asNumber(row[qtyIndex]), referencePU:pu, importe, rowNumber:i+1 });
         break;
       }
     }
   }
-  const unique = concepts;
+  const flattened = normalized.map((row, i) => ({
+    row,
+    rowNumber:i+1,
+    cells:(row || []).map(clean),
+    nonEmpty:(row || []).map(clean).filter(Boolean)
+  })).filter(r => r.nonEmpty.length);
+  const codeRe = /^[A-Z0-9][A-Z0-9._\-\/]{1,24}$/i;
+  flattened.forEach(({rowNumber, nonEmpty}) => {
+    for(let i=0;i<nonEmpty.length;i++){
+      const value = nonEmpty[i];
+      if(!unitRe.test(value)) continue;
+      const before = nonEmpty.slice(Math.max(0, i-6), i);
+      const after = nonEmpty.slice(i+1, i+8);
+      const qty = asNumber(after.find(v => asNumber(v) > 0));
+      if(!(qty > 0)) continue;
+      const conceptParts = before.filter(v => !unitRe.test(v) && !codeRe.test(v) && asNumber(v) === 0);
+      const concept = conceptParts.join(' ').replace(/\s+/g,' ').trim();
+      if(concept.length < 12 || isNoiseConcept(concept)) continue;
+      const code = before.find(v => codeRe.test(v)) || '';
+      const nums = after.map(asNumber).filter(n => n > 0);
+      const referencePU = nums[1] || 0;
+      const importe = nums[2] || (referencePU && qty ? referencePU * qty : 0);
+      addConcept(concepts, { code, concept, unit:value, qty, referencePU, importe, rowNumber });
+      break;
+    }
+  });
+  const unique = concepts.map(({__key, ...item}) => item);
   if(!unique.length) throw new Error('No encontre conceptos validos con descripcion, unidad y cantidad.');
   return { fileName:file?.name || 'Catalogo importado', rows:normalized, concepts:unique };
 }
@@ -1049,24 +1082,30 @@ function Landing({setScreen, login, company}){
     </header>
     <section className="hero-build">
       <div className="hero-copy">
-        <span className="eyebrow">Precios unitarios - APU - Presupuestos - Ingeniería</span>
-        <h1>La plataforma inteligente para arquitectos, ingenieros y constructoras.</h1>
-        <p>Genera APUs con IA, usa tu propio Excel, agrega tu logo, crea presupuestos profesionales, cuantificaciones, cálculos técnicos y reportes desde un solo lugar.</p>
+        <span className="eyebrow">APU - Excel - Presupuestos - Biblioteca técnica</span>
+        <h1>ZOEMEC</h1>
+        <p>Convierte catálogos de conceptos, bases de precios y documentos técnicos en APUs auditables, presupuestos y reportes listos para obra.</p>
         <div className="hero-actions"><button onClick={()=>setScreen('register')}>Crear cuenta gratis</button><button className="secondary" onClick={()=>setScreen('login')}>Entrar al sistema</button></div>
       </div>
-      <div className="hero-apu-card">
-        <span>Cédula - Análisis de P.U.</span>
-        <h2>Muro de block de 15 cm</h2>
-        <div className="apu-mini-row"><p>Materiales</p><b>$258.40</b></div>
-        <div className="apu-mini-row"><p>Mano de obra - FSR</p><b>$334.97</b></div>
-        <div className="apu-mini-row"><p>Indirectos + utilidad</p><b>$112.18</b></div>
-        <div className="apu-mini-total"><p>Precio unitario</p><b>$947.74</b></div>
+      <div className="hero-command">
+        <div className="command-strip"><span>Excel importado</span><b>48 conceptos</b></div>
+        <div className="command-flow">
+          <span>Catálogo</span><i />
+          <span>IA técnica</span><i />
+          <span>APU por hoja</span>
+        </div>
+        <div className="command-table">
+          <div><b>01</b><span>Falso plafón de tablaroca</span><em>m²</em><strong>$642.18</strong></div>
+          <div><b>02</b><span>Estructura metálica ASTM A500</span><em>kg</em><strong>$78.42</strong></div>
+          <div><b>03</b><span>Pintura vinílica en muros</span><em>m²</em><strong>$92.60</strong></div>
+        </div>
+        <div className="command-total"><span>Salida lista</span><b>Excel + PDF auditables</b></div>
       </div>
       <div className="hero-benefits">
-        <div><Icon name="apu" size={28}/><b>IA para ingeniería</b><span>APUs en segundos</span></div>
-        <div><Icon name="doc" size={28}/><b>100% personalizable</b><span>Usa tu Excel y tu logo</span></div>
-        <div><Icon name="biblioteca" size={28}/><b>Seguro y confiable</b><span>Protección de datos avanzada</span></div>
-        <div><Icon name="clientes" size={28}/><b>Soporte especializado</b><span>Acompañamiento real</span></div>
+        <div><Icon name="apu" size={28}/><b>APU masivo</b><span>Una hoja por concepto</span></div>
+        <div><Icon name="doc" size={28}/><b>Excel propio</b><span>Precios y partidas reales</span></div>
+        <div><Icon name="biblioteca" size={28}/><b>Biblioteca + Academia</b><span>Documentos, bases y cursos</span></div>
+        <div><Icon name="reportes" size={28}/><b>Reportes</b><span>PDF y Excel con membrete</span></div>
       </div>
     </section>
   </div>
@@ -1122,7 +1161,7 @@ function Auth({mode,setScreen,login,loginWithGoogle,company}){
 
 function Shell({children,user,logout,module,setModule,company}){
   const menu = [
-    ['inicio','inicio','Inicio'], ['apu','apu','APU Inteligente'], ['presupuestos','presupuestos','Presupuestos'], ['proyectos','proyectos','Proyectos'], ['clientes','clientes','Clientes'], ['biblioteca','biblioteca','Biblioteca ZOEMEC'], ['tecnico','tecnico','Centro Técnico'], ['oficina','oficina','Oficina Técnica'], ['visual','play','Visual IA'], ['comunidad','comunidad','Comunidad'], ['academia','academia','Academia'], ['planes','fsr','Planes y acceso'], ['reportes','reportes','Reportes']
+    ['inicio','inicio','Inicio'], ['apu','apu','APU Inteligente'], ['presupuestos','presupuestos','Presupuestos'], ['proyectos','proyectos','Proyectos'], ['clientes','clientes','Clientes'], ['biblioteca','biblioteca','Biblioteca y Academia'], ['tecnico','tecnico','Centro Técnico'], ['oficina','oficina','Oficina Técnica'], ['visual','play','Visual IA'], ['comunidad','comunidad','Comunidad'], ['planes','fsr','Planes y acceso'], ['reportes','reportes','Reportes']
   ];
   return <div className="app-layout">
     <aside className="sidebar">
@@ -2946,10 +2985,10 @@ function Library({user}){
   if(!canUse(user,'library')){
     return <section><PageHead kicker="Biblioteca ZOEMEC" title="Centro inteligente de costos" desc="La biblioteca tecnica es una funcion premium porque permite consultar bases, matrices, documentos y fuentes para IA." />
       <div className="locked-panel panel"><Icon name="biblioteca" size={42}/><div><h2>Biblioteca bloqueada para plan gratis</h2><p>Tu cuenta gratis incluye 1 APU. Para subir bases, indexar documentos, consultar matrices y usar la biblioteca como fuente de IA necesitas plan Inicial, Profesional o Empresa.</p><button onClick={()=>alert('Aqui se conectara Stripe o Mercado Pago para activar el plan automaticamente.')}>Activar plan</button></div></div>
-      <div className="library-grid">{[['Inicial','Biblioteca limitada y 10 APUs/mes','Para probar'],['Profesional','Biblioteca completa, IA y exportaciones','Recomendado'],['Empresa','Usuarios, permisos y biblioteca privada','Equipos']].map(f=><div className="folder" key={f[0]}><b>{f[0]}</b><p>{f[1]}</p><span>{f[2]}</span></div>)}</div>
+      <div className="library-grid">{[['Inicial','Biblioteca limitada, academia y 10 APUs/mes','Para probar'],['Profesional','Biblioteca completa, cursos, IA y exportaciones','Recomendado'],['Empresa','Usuarios, permisos y biblioteca privada','Equipos']].map(f=><div className="folder" key={f[0]}><b>{f[0]}</b><p>{f[1]}</p><span>{f[2]}</span></div>)}</div>
     </section>;
   }
-  return <section><PageHead kicker="Biblioteca ZOEMEC" title="Centro documental inteligente" desc="Organiza costos, matrices, mano de obra, normas y formatos con permisos, busqueda rapida y acciones IA por documento." />
+  return <section><PageHead kicker="Biblioteca ZOEMEC" title="Biblioteca y academia técnica" desc="Organiza costos, matrices, mano de obra, normas, formatos y cursos en un solo centro de conocimiento." />
     <div className="lib-hero panel">
       <div><small>Base tecnica</small><h2>{files.length ? `${files.length} documentos listos` : 'Sube tu primera base'}</h2><p>La biblioteca debe funcionar como buscador tecnico, no como bodega de archivos. Cada documento queda clasificado por uso y listo para IA.</p></div>
       <div className="lib-hero-actions"><button className="secondary" onClick={()=>alert('Estado de nube: Firebase Storage guarda archivos y Firestore guarda metadata. Revisa reglas de Storage/Firestore y planes de usuario para produccion.')}>Estado de nube</button><label className="up-btn">{uploading?'Subiendo...':'Subir lote'}<input type="file" multiple onChange={e=>add(e.target.files)} hidden disabled={uploading}/></label></div>
@@ -2972,8 +3011,23 @@ function Library({user}){
         <aside className="lib-preview pro"><small>Ficha tecnica</small><h2>{active?.name || 'Sin archivo seleccionado'}</h2><p>{active ? (active.cat || classify(active.name))+' - '+(active.family || 'General')+' - '+(active.ext || 'DOC')+' - '+active.size : 'Sube documentos para crear una base consultable.'}</p>{active?.tags?.length ? <div className="lib-tags-mini">{active.tags.map(t=><span key={t}>{t}</span>)}</div> : null}<div className="lib-ai-card"><b>Acciones IA</b><button onClick={()=>alert('Usara este archivo como fuente para sugerir materiales, MO, equipo y rendimientos.')}>Usar para generar APU</button><button onClick={()=>alert('Comparara nombre, categoria y familia tecnica para sugerir matrices compatibles.')}>Buscar matrices similares</button><button onClick={()=>alert('Extraera descripciones, unidades, precios y rendimientos a una tabla auditable cuando el extractor de contenido este conectado.')}>Extraer insumos</button><button onClick={indexVisible}>Crear indice</button></div><div className="lib-trace"><span>Estado</span><b>{active?.status || 'Pendiente'}</b><span>Permiso</span><b>{user?.role==='admin'?'Administrador':'Plan Profesional'}</b><span>Confianza</span><b>{active ? `${active.confidence || 50}%` : 'Sin fuente'}</b></div></aside>
       </div>
     </div>
+    <AcademyPanel />
     <div className="panel"><h2>Flujo recomendado</h2><div className="library-grid">{[['1. Carga masiva','Bases CMIC, matrices, MO, normas y formatos','Entrada'],['2. Clasificacion','Tipo, familia, unidad, fuente, fecha y confianza','Orden'],['3. Indice IA','Busqueda semantica y extraccion de insumos','IA'],['4. APU auditable','Fuente visible en Excel/PDF por cada insumo','Salida']].map(f=><div className="folder" key={f[0]}><b><Icon name="folder" size={17}/> {f[0]}</b><p>{f[1]}</p><span>{f[2]}</span></div>)}</div></div>
   </section>
+}
+
+function AcademyPanel(){
+  const [list,setList]=useLocalState('zoemec-cursos', []);
+  const [t,setT]=useState(''); const [d,setD]=useState(''); const [link,setLink]=useState('');
+  const add=()=>{ if(!t.trim()) return; setList([{t:t.trim(),d:d.trim()||'Curso nuevo',p:0,link:link.trim()},...list]); setT(''); setD(''); setLink(''); };
+  const del=(i)=>setList(list.filter((_,idx)=>idx!==i));
+  const avg=Math.round(list.reduce((a,c)=>a+(Number(c.p)||0),0)/(list.length||1));
+  return <div className="library-academy">
+    <div className="academy-hero panel"><div><small>Academia integrada</small><h2>Capacitación dentro de tu biblioteca</h2><p>Cursos, videos y rutas de aprendizaje viven junto a tus bases, normas y matrices para alimentar el trabajo técnico.</p></div><div className="academy-meter"><b>{avg}%</b><span>avance promedio</span></div></div>
+    <div className="academy-path">{['APU base','FSR y cuadrillas','Matrices e insumos','Presupuesto','IA y auditoria'].map((x,i)=><div key={x} className={i<2?'done':''}><span>{i+1}</span><b>{x}</b></div>)}</div>
+    <div className="panel course-new pro"><div className="cn-fields"><div className="nf"><label>Titulo del curso</label><input value={t} onChange={e=>setT(e.target.value)} placeholder="Ej. Estimaciones y generadores"/></div><div className="nf"><label>Descripcion</label><input value={d} onChange={e=>setD(e.target.value)} placeholder="Que aprenderan"/></div></div><div className="nf"><label>Link del video</label><input value={link} onChange={e=>setLink(e.target.value)} placeholder="https://..."/></div><div className="cn-foot"><label className="up-btn ghost-up">Subir video<input type="file" accept="video/*" hidden onChange={()=>alert('La subida y alojamiento de video se habilita con Storage. Mientras tanto, pega el link del video.')}/></label><button onClick={add}>Crear curso</button></div></div>
+    <div className="cards-3 academy-grid">{list.map((c,i)=><div className="course-card pro" key={i}><div className="thumb"><button className="thumb-play" onClick={()=>c.link ? window.open(c.link,'_blank') : alert('Agrega un link o sube video para reproducirlo.')}><Icon name="play" size={30}/></button></div><div className="cc-body"><small className="course-pill">Modulo {i+1}</small><h2>{c.t}</h2><p>{c.d}</p>{c.link && <a className="cc-link" href={c.link} target="_blank" rel="noreferrer">Ver video</a>}<progress value={c.p} max="100"/><div className="cc-foot"><input type="range" min="0" max="100" value={c.p} onChange={e=>setList(list.map((x,idx)=>idx===i?{...x,p:+e.target.value}:x))}/><small>{c.p}%</small></div><a className="cc-del" onClick={()=>del(i)}>Eliminar</a></div></div>)}</div>
+  </div>;
 }
 
 /* Centro Técnico: calculadora de block + calculadora de FSR real (Art. 191 RLOPSRM) */

@@ -4,13 +4,13 @@ import { getFirestore } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 
 export const firebaseConfig = {
-  apiKey: 'AIzaSyDDsrzynvKAAZKtGDm3Q6pBHrhCiMGMTKI',
-  authDomain: 'zoemec-plataforma-ia.firebaseapp.com',
-  projectId: 'zoemec-plataforma-ia',
-  storageBucket: 'zoemec-plataforma-ia.firebasestorage.app',
-  messagingSenderId: '129018954093',
-  appId: '1:129018954093:web:da5a1d98d4f9552b389a64',
-  measurementId: 'G-C5BXRBCQQ0'
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyDDsrzynvKAAZKtGDm3Q6pBHrhCiMGMTKI',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'zoemec-plataforma-ia.firebaseapp.com',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'zoemec-plataforma-ia',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || 'zoemec-plataforma-ia.firebasestorage.app',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '129018954093',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || '1:129018954093:web:da5a1d98d4f9552b389a64',
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || 'G-C5BXRBCQQ0'
 };
 
 export const firebaseReady = Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);

@@ -10,3 +10,5 @@ pnpm-debug.log*
 .DS_Store
 
 .vercel
+.tmp/
+samples/library/

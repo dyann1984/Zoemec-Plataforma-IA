@@ -60,43 +60,11 @@ function Icon({name,size=20}){return <svg className="ic" width={size} height={si
 const defaultCompany = {
   name: 'ZOEMEC', rfc: 'RFC pendiente', phone: '55 0000 0000', email: 'contacto@zoemec.mx', address: 'México', logo: '/images/logo-web.png?v=zoemec-2026'
 };
-const sampleClients = [
-  { id:'CLI-001', name:'Municipio de Tlalmanalco', type:'Gobierno', contact:'Dirección de Obras', phone:'55 1234 5678', email:'obras@municipio.gob.mx', rfc:'MTL000000XXX', projects:4, budgets:12, amount:18250000, status:'Activo' },
-  { id:'CLI-002', name:'Grupo Residencial Volcanes', type:'Empresa', contact:'Arq. Laura Sánchez', phone:'55 9876 5432', email:'contacto@volcanes.mx', rfc:'GRV240101AB1', projects:2, budgets:7, amount:6840000, status:'Activo' },
-  { id:'CLI-003', name:'Cliente particular', type:'Particular', contact:'Juan García', phone:'55 2222 1111', email:'juan@email.com', rfc:'XAXX010101000', projects:1, budgets:2, amount:1280000, status:'Prospecto' },
-  { id:'CLI-004', name:'Constructora del Centro', type:'Empresa', contact:'Ing. Marco Herrera', phone:'55 4455 6677', email:'contacto@constructoradelcentro.mx', rfc:'CDC220315KL2', projects:3, budgets:9, amount:9120000, status:'Activo' },
-  { id:'CLI-005', name:'Desarrollos Industriales del Valle', type:'Empresa', contact:'Lic. Paola Reyes', phone:'55 3344 5566', email:'compras@divalle.mx', rfc:'DIV210809MN4', projects:1, budgets:3, amount:4360000, status:'En seguimiento' }
-];
-const sampleProjects = [
-  { name:'Local comercial', client:'Grupo Residencial Volcanes', progress:72, budget:2450000, status:'En ejecución' },
-  { name:'Rehabilitación de plaza', client:'Municipio de Tlalmanalco', progress:38, budget:5120000, status:'Cotización' },
-  { name:'Casa habitación 180 m²', client:'Cliente particular', progress:16, budget:1850000, status:'Anteproyecto' }
-];
-const sampleLibraryDocs = [
-  { name:'Catalogo_ECOSTOS_2024.xlsx', cat:'Costos', family:'Precios base', ext:'XLSX', size:'2.10 MB', when:'01/07/2026', tags:['costos','catalogo'] },
-  { name:'Matriz_APU_Muro_Block.xlsx', cat:'Matrices APU', family:'Albañilería', ext:'XLSX', size:'0.34 MB', when:'02/07/2026', tags:['apu','block'] },
-  { name:'Rendimientos_Mano_Obra_CMIC.pdf', cat:'Mano de obra', family:'Cuadrillas', ext:'PDF', size:'1.05 MB', when:'03/07/2026', tags:['rendimientos','cuadrillas'] },
-  { name:'NTC_Concreto_Estructural.pdf', cat:'Normas', family:'Estructuras', ext:'PDF', size:'3.40 MB', when:'04/07/2026', tags:['normas','concreto'] },
-  { name:'Formato_Generador_Obra_Publica.xlsx', cat:'Formatos', family:'Generadores', ext:'XLSX', size:'0.18 MB', when:'05/07/2026', tags:['formato','obra publica'] },
-  { name:'Base_OPUS_Instalaciones.xlsx', cat:'Costos', family:'Instalaciones', ext:'XLSX', size:'4.20 MB', when:'06/07/2026', tags:['opus','instalaciones'] },
-  { name:'Curso_APU_desde_cero.mp4', cat:'Academia', family:'Capacitación', ext:'MP4', size:'85.00 MB', when:'07/07/2026', tags:['curso','capacitacion'] },
-  { name:'Matriz_APU_Acero_Estructural.xlsx', cat:'Matrices APU', family:'Estructura metálica', ext:'XLSX', size:'0.29 MB', when:'08/07/2026', tags:['apu','acero'] },
-  { name:'Especificaciones_CFE_Alumbrado.pdf', cat:'Normas', family:'Eléctrico', ext:'PDF', size:'2.75 MB', when:'09/07/2026', tags:['cfe','electrico'] },
-  { name:'Presupuesto_Modelo_Edificacion.xlsx', cat:'Formatos', family:'Presupuestos', ext:'XLSX', size:'0.52 MB', when:'10/07/2026', tags:['presupuesto','formato'] }
-];
-const sampleBudgets = [
-  { id:'DEMO-PRE-1', name:'Local comercial', client:'Grupo Residencial Volcanes', total:2450000, date:'12/07/2026' },
-  { id:'DEMO-PRE-2', name:'Rehabilitación de plaza', client:'Municipio de Tlalmanalco', total:5120000, date:'15/07/2026' },
-  { id:'DEMO-PRE-3', name:'Casa habitación 180 m²', client:'Cliente particular', total:1850000, date:'18/07/2026' }
-];
-const sampleApuConcepts = [
-  'Suministro e instalación de bomba centrífuga de 1 HP para sistema hidroneumático',
-  'Suministro e instalación de tubería PVC hidráulica de 1/2 pulgada',
-  'Aplicación de pintura vinílica en muros interiores, dos manos con sellador',
-  "Concreto premezclado f'c=250 kg/cm² colado en losa de entrepiso",
-  'Habilitado y colocado de acero de refuerzo fy=4200 kg/cm²',
-  'Muro de block hueco de concreto de 15x20x40 cm asentado con mortero cemento-arena'
-];
+// Nombres de registros sembrados en versiones anteriores del proyecto (antes de que
+// existiera cuenta real por usuario). Se usan solo para depurarlos de datos reales
+// preexistentes en el primer render; no se usan para mostrar contenido en la interfaz.
+const legacySeedClientNames = ['Municipio de Tlalmanalco','Grupo Residencial Volcanes','Cliente particular','Constructora del Centro','Desarrollos Industriales del Valle'];
+const legacySeedProjectNames = ['Local comercial','Rehabilitación de plaza','Casa habitación 180 m²'];
 const libraryFolders = [
   ['Bases OPUS', 'Importación y catálogos de precios unitarios', '124 archivos'],
   ['Bases NEODATA', 'Catálogos, presupuestos y formatos compatibles', '86 archivos'],
@@ -277,16 +245,16 @@ function App(){
 
   useEffect(() => {
     localStorage.removeItem('zoemec-user');
-    const demoClients = new Set(sampleClients.map(c => c.name));
-    const demoProjects = new Set(sampleProjects.map(p => p.name));
-    const demoCourses = new Set(courses.map(c => c[0]));
-    const demoForum = new Set(['Que rendimiento usan para muro de block 15 cm?','Proveedor de acero en zona centro','Formato de generadores para obra publica','Comparativo OPUS vs NEODATA']);
-    if(clients.some(c => demoClients.has(c.name))) setClients(clients.filter(c => !demoClients.has(c.name)));
-    if(projects.some(p => demoProjects.has(p.name))) setProjects(projects.filter(p => !demoProjects.has(p.name)));
+    const legacyClients = new Set(legacySeedClientNames);
+    const legacyProjects = new Set(legacySeedProjectNames);
+    const legacyCourses = new Set(courses.map(c => c[0]));
+    const legacyForumThreads = new Set(['Que rendimiento usan para muro de block 15 cm?','Proveedor de acero en zona centro','Formato de generadores para obra publica','Comparativo OPUS vs NEODATA']);
+    if(clients.some(c => legacyClients.has(c.name))) setClients(clients.filter(c => !legacyClients.has(c.name)));
+    if(projects.some(p => legacyProjects.has(p.name))) setProjects(projects.filter(p => !legacyProjects.has(p.name)));
     const savedCourses = readLocal('zoemec-cursos', []);
-    if(Array.isArray(savedCourses) && savedCourses.some(c => demoCourses.has(c.t))) localStorage.setItem('zoemec-cursos', JSON.stringify(savedCourses.filter(c => !demoCourses.has(c.t))));
+    if(Array.isArray(savedCourses) && savedCourses.some(c => legacyCourses.has(c.t))) localStorage.setItem('zoemec-cursos', JSON.stringify(savedCourses.filter(c => !legacyCourses.has(c.t))));
     const savedForum = readLocal('zoemec-foro', []);
-    if(Array.isArray(savedForum) && savedForum.some(p => demoForum.has(p.q))) localStorage.setItem('zoemec-foro', JSON.stringify(savedForum.filter(p => !demoForum.has(p.q))));
+    if(Array.isArray(savedForum) && savedForum.some(p => legacyForumThreads.has(p.q))) localStorage.setItem('zoemec-foro', JSON.stringify(savedForum.filter(p => !legacyForumThreads.has(p.q))));
   }, []);
 
   useEffect(() => {
@@ -453,31 +421,22 @@ function App(){
     setScreen('landing');
   };
 
-  // Entorno de demostracion: solo se activa cuando la cuenta real esta vacia (cero
-  // proyectos, clientes, APUs y presupuestos). Los arreglos demo* nunca se pasan a un
-  // setter de estado, asi que nunca se escriben en Firestore/localStorage del usuario.
-  const isFreshAccount = !projects.length && !clients.length && !apus.length && !budgets.length;
-  const dashboardApus = apus.length ? apus : sampleApus;
-  const dashboardClients = clients.length ? clients : sampleClients;
-  const dashboardBudgets = budgets.length ? budgets : sampleBudgets;
-  const dashboardProjects = projects.length ? projects : sampleProjects;
-
   let content;
   if(screen === 'landing') content = <Landing setScreen={setScreen} login={login} company={companyView} />;
   else if(screen === 'login') content = <Auth mode="login" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} company={companyView} />;
   else if(screen === 'register') content = <Auth mode="register" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} company={companyView} />;
   else if(!hasValidSession(user)) content = <Landing setScreen={setScreen} login={login} company={companyView} />;
   else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView}>
-    {module === 'inicio' && <Dashboard setModule={setModule} apus={dashboardApus} clients={dashboardClients} budgets={dashboardBudgets} projects={dashboardProjects} demo={isFreshAccount} />}
-    {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} demoApus={sampleApus} />}
+    {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} />}
+    {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} />}
     {module === 'presupuestos' && <Budgets company={companyView} budgets={budgets} setBudgets={setBudgets} items={budgetItems} setItems={setBudgetItems} />}
-    {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} demoClients={sampleClients} demoProjects={sampleProjects} />}
-    {module === 'biblioteca' && <Library user={user} demoDocs={sampleLibraryDocs} />}
+    {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} />}
+    {module === 'biblioteca' && <Library user={user} />}
     {module === 'tecnico' && <TechnicalOffice company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} />}
     {module === 'visual' && <VisualAI user={user} />}
     {module === 'comunidad' && <Community />}
     {module === 'planes' && <PlansAccess user={user} />}
-    {module === 'reportes' && <Reports clients={dashboardClients} apus={dashboardApus} budgets={dashboardBudgets} demo={isFreshAccount} />}
+    {module === 'reportes' && <Reports clients={clients} apus={apus} budgets={budgets} />}
   </Shell>;
   return <><NoticeHost />{content}</>;
 }
@@ -693,7 +652,7 @@ function Landing({setScreen, login, company}){
         <span className="eyebrow">Copiloto de IA para ingeniería de costos en construcción</span>
         <h1>Construye el modelo de costos antes de verter el concreto.</h1>
         <p>ZOEMEC convierte conceptos, Excel y evidencia tecnica en APUs trazables, presupuesto y entregables profesionales con una experiencia de copiloto visual para obra digital.</p>
-        <div className="hero-actions"><button onClick={()=>setScreen('register')}>Abrir centro de mando</button><button className="secondary" onClick={()=>setScreen('login')}>Continuar demo</button></div>
+        <div className="hero-actions"><button onClick={()=>setScreen('register')}>Abrir centro de mando</button><button className="secondary" onClick={()=>setScreen('login')}>Ya tengo cuenta</button></div>
         <div className="future-proof"><span>Documento</span><i/><span>Conceptos</span><i/><span>Evidencia</span><i/><span>APU</span><i/><span>PDF/XLSX</span></div>
       </div>
       <div className="future-stage" aria-label="Modelo digital de construcción">
@@ -798,7 +757,7 @@ function Shell({children,user,logout,module,setModule,company}){
 
 function PageHead({kicker,title,desc,action}){return <div className="page-head"><div><span>{kicker}</span><h1>{title}</h1><p>{desc}</p></div>{action}</div>}
 
-function Dashboard({setModule,apus,clients,budgets,projects,demo=false}){
+function Dashboard({setModule,apus,clients,budgets,projects}){
   const monto = budgets.reduce((a,b)=>a+(b.total||0),0);
   const pr = projects || [];
   const estados = pr.reduce((m,p)=>{m[p.status]=(m[p.status]||0)+1;return m;},{});
@@ -813,7 +772,7 @@ function Dashboard({setModule,apus,clients,budgets,projects,demo=false}){
     ['APU','Matriz editable',apus.length?'ready':'active'],
     ['Entregar','PDF / XLSX',budgets.length?'ready':'watch']
   ];
-  return <section className="ai-os"><PageHead kicker="ZOEMEC AI OS" title="Copiloto de costos de construcción" desc="Un centro visual donde documentos, modelos, evidencia y APUs viven en el mismo flujo tecnico." action={<>{demo && <DemoBadge/>}<button onClick={()=>setModule('apu')}>Pedir a ZOE que cotice</button></>} />
+  return <section className="ai-os"><PageHead kicker="ZOEMEC AI OS" title="Copiloto de costos de construcción" desc="Un centro visual donde documentos, modelos, evidencia y APUs viven en el mismo flujo tecnico." action={<button onClick={()=>setModule('apu')}>Pedir a ZOE que cotice</button>} />
     <div className="os-grid">
       <div className="os-command">
         <div className="os-command-head"><span>Inteligencia del proyecto en vivo</span><b>{monto ? money(monto) : 'Sin presupuesto aun'}</b></div>
@@ -840,8 +799,13 @@ function Dashboard({setModule,apus,clients,budgets,projects,demo=false}){
     <div className="grid-2"><div className="panel"><h2>Proyectos recientes</h2>{pr.length ? pr.slice(0,4).map(p=><div className="project-row" key={p.name}><div><b>{p.name}</b><small>{p.client}</small></div><span>{p.progress}%</span><progress value={p.progress} max="100" /></div>) : <EmptyState text="Aún no hay proyectos reales. Crea el primero para alimentar este tablero."/>}</div><div className="panel"><h2>Actividad reciente</h2>{apus.length || budgets.length ? [...apus.slice(0,2).map(a=>`APU ${a.clave || a.id} creado`), ...budgets.slice(0,2).map(b=>`Presupuesto ${b.name} guardado`)].map(x=><div className="activity" key={x}><Icon name="doc" size={15}/> {x}</div>) : <EmptyState text="La actividad aparecerá cuando guardes APUs, presupuestos, clientes o documentos."/>}</div></div>
   </section>
 }
-function EmptyState({text}){return <div className="empty-state">{text}</div>}
-function DemoBadge(){return <span className="cat-badge demo-flag" title="Datos de ejemplo para presentacion, no se guardan en tu cuenta."><Icon name="play" size={13}/> Entorno de demostración</span>}
+function EmptyState({icon,title,text,actionLabel,onAction}){
+  return <div className="empty-state">
+    {icon && <span className="empty-state-icon"><Icon name={icon} size={30}/></span>}
+    {title ? <><h3>{title}</h3><p>{text}</p></> : <p>{text}</p>}
+    {actionLabel && onAction && <button className="soft" onClick={onAction}>{actionLabel}</button>}
+  </div>;
+}
 
 /* ====================================================================
    MOTOR APU - Metodología mexicana (RLOPSRM Art. 191, 220)
@@ -943,21 +907,22 @@ function finalizeAIAPU(aiDraft={}, item={}, index=0, sourceFile='OpenAI API'){
   next.confidence = Number(aiDraft.confidence || 92);
   next.templateGenerated = false;
   next.aiGenerated = true;
-  next.demoMode = false;
+  next.templateFallback = false;
   next.aiNotes = [
     'Generado por IA (OpenAI) para este concepto exacto. Revisa y ajusta antes de aprobar.',
     ...(aiDraft.aiNotes || [])
   ].filter(Boolean);
   return applyMarketPrices(next);
 }
-/* Cuando la IA no responde (sin API key, sin conexion, timeout), se usa la
-   plantilla tecnica local como modo de demostracion explicito, para no romper el flujo. */
-function demoModeAPU(item={}, catalog, index=0, sourceFile='Modo demostracion (IA no disponible)', reason=''){
+/* Cuando la IA no responde (sin API key, sin conexion, timeout), se usa la matriz
+   tecnica real del catalogo base ZOEMEC como respaldo editable, para no romper el
+   flujo. No son datos inventados: son valores estandar del catalogo tecnico. */
+function templateFallbackAPU(item={}, catalog, index=0, sourceFile='Plantilla tecnica ZOEMEC', reason=''){
   const next = standardAPUForConcept(item, catalog, index, sourceFile);
-  next.demoMode = true;
+  next.templateFallback = true;
   next.aiGenerated = false;
   next.aiNotes = [
-    `Modo demostracion: IA no disponible en este entorno${reason ? ' (' + reason + ')' : ''}. Se genero una matriz tecnica estandar ZOEMEC editable.`,
+    `Plantilla tecnica aplicada: la IA no respondio en este entorno${reason ? ' (' + reason + ')' : ''}. Esta matriz usa el catalogo base ZOEMEC editable.`,
     ...(next.aiNotes || [])
   ].filter(Boolean);
   return next;
@@ -1338,14 +1303,8 @@ function makeEmptyAPU(){
   };
 }
 function aiServerUrl(path=''){ return path; }
-/* Vista previa de "Entorno de demostracion": matrices reales generadas con la misma
-   plantilla tecnica ZOEMEC (standardAPUForConcept), nunca se guardan via setApus. */
-const sampleApus = sampleApuConcepts.map((concept,i)=>({
-  ...standardAPUForConcept({concept}, [], i, 'Catálogo demo ZOEMEC'),
-  id:'DEMO-APU-'+(i+1), date:'20/07/2026'
-}));
 
-function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog,demoApus=[]}){
+function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog}){
   const [concept,setConcept]=useState('');
   const [apu,setApu]=useState(()=>makeEmptyAPU());
   const [aiOpen,setAiOpen]=useState(false);
@@ -1456,11 +1415,11 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       setAiStatus(`IA lista: ${next.family} (${next.confidence}%)`);
       setAiOpen(false);
     }catch(err){
-      const next = demoModeAPU({concept:parsed.concept, unit:parsed.unit, qty:parsed.qty, referencePU:parsed.referencePU}, catalog, 0, 'Modo demostracion (IA no disponible)', friendlyServiceError(err,'servidor no disponible'));
+      const next = templateFallbackAPU({concept:parsed.concept, unit:parsed.unit, qty:parsed.qty, referencePU:parsed.referencePU}, catalog, 0, 'Plantilla tecnica ZOEMEC', friendlyServiceError(err,'servidor no disponible'));
       setConcept(next.concept);
       setApu(next);
-      setExcelInfo({fileName:'Modo demostracion',concept:next.concept,unit:next.unit,qty:parsed.qty,referencePU:parsed.referencePU,catalog});
-      setAiStatus(`Modo demostracion activo (IA no disponible): ${next.family}`);
+      setExcelInfo({fileName:'Plantilla tecnica ZOEMEC',concept:next.concept,unit:next.unit,qty:parsed.qty,referencePU:parsed.referencePU,catalog});
+      setAiStatus(`Plantilla tecnica aplicada (IA no disponible): ${next.family}`);
       setAiOpen(false);
     }finally{
       setAiBusy(false);
@@ -1559,7 +1518,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       return finalizeAIAPU(aiDraft, item, index, conceptBatch?.fileName || 'Catalogo de conceptos');
     }
     const reason = lastError?.name === 'AbortError' ? 'tiempo agotado' : (lastError?.message || 'sin detalle');
-    return demoModeAPU(item, catalog, index, conceptBatch?.fileName || 'Catalogo de conceptos', `IA externa no respondio tras 2 intentos: ${reason}`);
+    return templateFallbackAPU(item, catalog, index, conceptBatch?.fileName || 'Catalogo de conceptos', `IA externa no respondio tras 2 intentos: ${reason}`);
   };
 
   /* Procesa la lista en una cola con máximo N llamadas simultáneas.
@@ -1715,9 +1674,9 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
           <div><small>Familia detectada</small><b>{apu.family || 'APU general'}</b></div>
           <div><small>Confianza IA</small><b>{apu.confidence || 88}%</b></div>
           <div><small>Clave SAT sugerida</small><b>{apu.sat || '72100000'}</b></div>
-          <div><small>Origen</small><b>{apu.demoMode ? 'Modo demostracion' : apu.aiGenerated ? 'IA real (OpenAI)' : 'Matriz base ZOEMEC'}</b></div>
+          <div><small>Origen</small><b>{apu.templateFallback ? 'Plantilla tecnica' : apu.aiGenerated ? 'IA real (OpenAI)' : 'Matriz base ZOEMEC'}</b></div>
         </div>
-        {apu.demoMode && <div className="demo-banner"><b>Modo demostracion:</b> el servicio de IA no esta disponible en este momento. Se muestra una matriz tecnica estandar ZOEMEC editable; vuelve a intentar en unos minutos para un desarrollo a la medida del concepto.</div>}
+        {apu.templateFallback && <div className="fallback-banner"><b>Plantilla tecnica aplicada:</b> el servicio de IA no esta disponible en este momento. Esta matriz usa el catalogo base ZOEMEC editable (no son datos inventados); vuelve a intentar en unos minutos para un desarrollo a la medida del concepto.</div>}
         {apu.aiNotes?.length>0 && <div className="ai-decisions">{apu.aiNotes.map((n,i)=><span key={i}>{n}</span>)}</div>}
         <div className="form-row"><input value={apu.clave} onChange={e=>setApu({...apu,clave:e.target.value})} placeholder="Clave"/><input value={apu.unit} onChange={e=>setApu({...apu,unit:e.target.value})} placeholder="Unidad"/></div>
 
@@ -1775,16 +1734,6 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         <div className="sc-concept">{a.concept}</div>
         <div className="sc-pu">{money(tt.pu)} <small>/ {a.unit}</small></div>
         <div className="sc-actions"><button onClick={()=>setApu(a)}>Abrir</button><button className="del" onClick={()=>setApus(apus.filter(x=>x.id!==a.id))}>Borrar</button></div>
-      </div>;})}</div>
-    </div>}
-    {apus.length===0 && demoApus.length>0 && <div className="panel" style={{marginTop:16}}>
-      <h2>Matrices de ejemplo <small className="hint">({demoApus.length})</small></h2>
-      <DemoBadge/>
-      <div className="saved-grid">{demoApus.map(a=>{const tt=calcAPU(a);return <div className="saved-card demo-card" key={a.id}>
-        <div className="sc-clave">{a.clave} - {a.unit} - {a.date}</div>
-        <div className="sc-concept">{a.concept}</div>
-        <div className="sc-pu">{money(tt.pu)} <small>/ {a.unit}</small></div>
-        <div className="sc-actions"><button onClick={()=>setApu(a)}>Abrir</button></div>
       </div>;})}</div>
     </div>}
   </section>
@@ -2513,16 +2462,16 @@ function Budgets({company,budgets,setBudgets,items,setItems}){
 function exportBudgetExcel(items,total,iva){const rows=[['PRESUPUESTO'],['Concepto','Unidad','Cantidad','P.U. (sin IVA)','Importe'],...items.map(i=>[i.concept,i.unit,i.qty,i.pu,Number(i.qty)*Number(i.pu)]),[],['Subtotal',total],['IVA 16%',iva],['Total',total+iva]];exportRowsExcel(rows,'Presupuesto-ZOEMEC.xlsx').catch(()=>alert('No pude generar el Excel. Inténtalo de nuevo.'));}
 function exportBudgetPDF(items,total,iva,company){const doc=new jsPDF();let y=16;doc.setFontSize(16);doc.text(company.name||'ZOEMEC',14,y);doc.setFontSize(13);doc.text('PRESUPUESTO EJECUTIVO',14,y+14);y+=28;items.forEach(i=>{doc.text(i.concept,14,y,{maxWidth:100});doc.text(i.unit,118,y);doc.text(String(i.qty),135,y);doc.text(money(i.pu),152,y);doc.text(money(i.qty*i.pu),174,y);y+=10;if(y>270){doc.addPage();y=18;}});y+=6;doc.text('Subtotal',130,y);doc.text(money(total),170,y);y+=8;doc.text('IVA 16%',130,y);doc.text(money(iva),170,y);y+=8;doc.text('Total',130,y);doc.text(money(total+iva),170,y);doc.save('Presupuesto-ZOEMEC.pdf');}
 
-function ClientsProjects({clients,setClients,projects,setProjects,demoClients=[],demoProjects=[]}){
-  return <section><PageHead kicker="Cartera de obra" title="Clientes y proyectos" desc="Administra clientes, contactos, RFC, obras, avances y presupuestos desde un solo módulo." />
+function ClientsProjects({clients,setClients,projects,setProjects}){
+  return <section><PageHead kicker="Centro de costos" title="Clientes y proyectos" desc="Administra clientes, contactos, RFC, obras, avances y presupuestos desde un solo módulo." />
     <div className="combined-stack">
-      <Projects projects={projects} setProjects={setProjects} demoProjects={demoProjects} embedded />
-      <Clients clients={clients} setClients={setClients} demoClients={demoClients} embedded />
+      <Projects projects={projects} setProjects={setProjects} embedded />
+      <Clients clients={clients} setClients={setClients} embedded />
     </div>
   </section>;
 }
 
-function Projects({projects,setProjects,demoProjects=[],embedded=false}){
+function Projects({projects,setProjects,embedded=false}){
   const list = projects || [];
   useEffect(()=>{
     const cleaned=list.filter(p=>!(p?.name==='Nuevo proyecto' && p?.client==='Cliente por definir' && Number(p?.budget||0)===0 && Number(p?.progress||0)===0));
@@ -2564,19 +2513,9 @@ function Projects({projects,setProjects,demoProjects=[],embedded=false}){
       <b>{money(p.budget)}</b>
       <progress value={p.progress} max="100"/>
       <small>{p.progress}% de avance - <a onClick={()=>remove(i)} style={{color:'var(--danger)'}}>eliminar</a></small>
-    </div>)}</div> : (demoProjects.length ? <div className="panel">
-      <DemoBadge/>
-      <div className="cards-3" style={{marginTop:12}}>{demoProjects.map((p,i)=><div className="project-card demo-card" key={i}>
-        <span>{p.status}</span>
-        <h2>{p.name}</h2>
-        <p>{p.client}</p>
-        <b>{money(p.budget)}</b>
-        <progress value={p.progress} max="100"/>
-        <small>{p.progress}% de avance</small>
-      </div>)}</div>
-    </div> : <div className="panel"><EmptyState text="No hay proyectos reales cargados. Usa “Nuevo proyecto” para iniciar tu cartera."/></div>)}</section>
+    </div>)}</div> : <div className="panel"><EmptyState icon="proyectos" title="Tu cartera de proyectos está vacía" text="Crea el primer proyecto para activar el seguimiento de avance y presupuesto." actionLabel="+ Nuevo proyecto" onAction={add}/></div>}</section>
 }
-function Clients({clients,setClients,demoClients=[],embedded=false}){
+function Clients({clients,setClients,embedded=false}){
   const [q,setQ]=useState('');
   const [showForm,setShowForm]=useState(false);
   const [draft,setDraft]=useState({name:'',type:'Empresa',contact:'',phone:'',email:'',rfc:'',status:'Prospecto'});
@@ -2612,10 +2551,7 @@ function Clients({clients,setClients,demoClients=[],embedded=false}){
       </div>
       <div className="form-actions"><button className="secondary" onClick={()=>setDraft({name:'',type:'Empresa',contact:'',phone:'',email:'',rfc:'',status:'Prospecto'})}>Limpiar</button><button onClick={save}>Guardar cliente</button></div>
     </div></div>}
-    <div className="panel clients-panel"><input className="search" placeholder="Buscar cliente, contacto o correo..." value={q} onChange={e=>setQ(e.target.value)}/><div className="client-grid">{filtered.map(c=><div className="client-card" key={c.id}><div className="client-avatar">{(c.name||'C')[0]}</div><div><h2>{c.name}</h2><p>{c.type} - {c.contact}</p><small>{c.email || c.phone || 'Sin contacto registrado'}</small><small>RFC: {c.rfc || 'Pendiente'}</small><div className="client-stats"><span>{c.projects} proyectos</span><span>{c.budgets} presupuestos</span><b>{money(c.amount)}</b></div></div><em>{c.status}</em></div>)}</div>{!filtered.length && !clients.length && demoClients.length>0 && <>
-      <DemoBadge/>
-      <div className="client-grid" style={{marginTop:12}}>{demoClients.map(c=><div className="client-card demo-card" key={c.id}><div className="client-avatar">{(c.name||'C')[0]}</div><div><h2>{c.name}</h2><p>{c.type} - {c.contact}</p><small>{c.email || c.phone || 'Sin contacto registrado'}</small><small>RFC: {c.rfc || 'Pendiente'}</small><div className="client-stats"><span>{c.projects} proyectos</span><span>{c.budgets} presupuestos</span><b>{money(c.amount)}</b></div></div><em>{c.status}</em></div>)}</div>
-    </>}{!filtered.length && (clients.length || !demoClients.length) && <EmptyState text="No hay clientes con ese criterio. Agrega un cliente con datos completos para iniciar la cartera."/>}</div>
+    <div className="panel clients-panel"><input className="search" placeholder="Buscar cliente, contacto o correo..." value={q} onChange={e=>setQ(e.target.value)}/><div className="client-grid">{filtered.map(c=><div className="client-card" key={c.id}><div className="client-avatar">{(c.name||'C')[0]}</div><div><h2>{c.name}</h2><p>{c.type} - {c.contact}</p><small>{c.email || c.phone || 'Sin contacto registrado'}</small><small>RFC: {c.rfc || 'Pendiente'}</small><div className="client-stats"><span>{c.projects} proyectos</span><span>{c.budgets} presupuestos</span><b>{money(c.amount)}</b></div></div><em>{c.status}</em></div>)}</div>{!filtered.length && !clients.length && <EmptyState icon="clientes" title="Aún no tienes clientes en tu Centro de costos" text="Agrega tu primer cliente con datos de contacto y RFC para iniciar la cartera." actionLabel="+ Nuevo cliente" onAction={()=>setShowForm(true)}/>}{!filtered.length && clients.length>0 && <EmptyState text="No hay clientes con ese criterio de búsqueda."/>}</div>
   </section>
 }
 
@@ -2668,7 +2604,8 @@ function scoreLibraryFile(file,q=''){
   return terms.reduce((n,t)=>n+(hay.includes(t)?2:0), hay.includes(query)?8:0);
 }
 
-function Library({user,demoDocs=[]}){
+function Library({user}){
+  const fileInputRef=useRef(null);
   const [files,setFiles]=useLocalState('zoemec-biblioteca',[]);
   const [uploading,setUploading]=useState(false);
   const [q,setQ]=useState('');
@@ -2745,22 +2682,16 @@ function Library({user,demoDocs=[]}){
     alert(`Indice actualizado para ${visible.length} documento(s). Ya puedes buscar por familia, tags y tipo tecnico.`);
   };
   const suggestions=['muro block 15','loseta porcelanato','rendimiento albanil','PTR lavabo','tablaroca durock','indirectos oficina'];
-  const showDemoLibrary = files.length===0 && demoDocs.length>0;
   if(!canUse(user,'library')){
     return <section><PageHead kicker="Biblioteca ZOEMEC" title="Centro inteligente de costos" desc="La biblioteca tecnica es una funcion premium porque permite consultar bases, matrices, documentos y fuentes para IA." />
       <div className="locked-panel panel"><Icon name="biblioteca" size={42}/><div><h2>Biblioteca bloqueada para plan gratis</h2><p>Tu cuenta gratis incluye 1 APU. Para subir bases, indexar documentos, consultar matrices y usar la biblioteca como fuente de IA necesitas plan Inicial, Profesional o Empresa.</p><button onClick={()=>alert('Aqui se conectara Stripe o Mercado Pago para activar el plan automaticamente.')}>Activar plan</button></div></div>
       <div className="library-grid">{[['Inicial','Biblioteca limitada, academia y 10 APUs/mes','Para probar'],['Profesional','Biblioteca completa, cursos, IA y exportaciones','Recomendado'],['Empresa','Usuarios, permisos y biblioteca privada','Equipos']].map(f=><div className="folder" key={f[0]}><b>{f[0]}</b><p>{f[1]}</p><span>{f[2]}</span></div>)}</div>
-      {demoDocs.length>0 && <div className="panel" style={{marginTop:16}}>
-        <h2>Vista previa de la biblioteca <small className="hint">({demoDocs.length})</small></h2>
-        <DemoBadge/>
-        <div className="lib-table" style={{marginTop:12}}>{demoDocs.map((f,i)=><div className="lib-file demo-card" key={'locked-demo-'+i}><span className="lib-ext">{f.ext||'DOC'}</span><div className="lib-meta"><b>{f.name}</b><small>{f.cat} - {f.family || 'General'} - {f.size} - {f.when}</small><em>{(f.tags||[]).slice(0,5).join(' · ')}</em></div></div>)}</div>
-      </div>}
     </section>;
   }
   return <section><PageHead kicker="Biblioteca ZOEMEC" title="Biblioteca y academia técnica" desc="Organiza costos, matrices, mano de obra, normas, formatos y cursos en un solo centro de conocimiento." />
     <div className="lib-hero panel">
-      <div><small>Base tecnica</small><h2>{files.length ? `${files.length} documentos listos` : 'Sube tu primera base'}</h2><p>La biblioteca debe funcionar como buscador tecnico, no como bodega de archivos. Cada documento queda clasificado por uso y listo para IA.</p>{showDemoLibrary && <DemoBadge/>}</div>
-      <div className="lib-hero-actions"><button className="secondary" onClick={()=>alert('Estado de nube: Firebase Storage guarda archivos y Firestore guarda metadata. Revisa reglas de Storage/Firestore y planes de usuario para produccion.')}>Estado de nube</button><label className="up-btn">{uploading?'Subiendo...':'Subir lote'}<input type="file" multiple onChange={e=>add(e.target.files)} hidden disabled={uploading}/></label></div>
+      <div><small>Base tecnica</small><h2>{files.length ? `${files.length} documentos listos` : 'Tu Workspace documental está vacío'}</h2><p>La biblioteca debe funcionar como buscador tecnico, no como bodega de archivos. Cada documento queda clasificado por uso y listo para IA.</p></div>
+      <div className="lib-hero-actions"><button className="secondary" onClick={()=>alert('Estado de nube: Firebase Storage guarda archivos y Firestore guarda metadata. Revisa reglas de Storage/Firestore y planes de usuario para produccion.')}>Estado de nube</button><label className="up-btn">{uploading?'Subiendo...':'Subir lote'}<input ref={fileInputRef} type="file" multiple onChange={e=>add(e.target.files)} hidden disabled={uploading}/></label></div>
     </div>
     <div className="lib-cloud panel">
       {[['1. Subida masiva','Puedes cargar lotes completos desde la plataforma. Para carpetas grandes conviene subir ZIP o seleccionar multiples archivos.'],['2. Nube privada','Los archivos reales deben vivir en Firebase Storage o Vercel Blob. Firestore guarda nombre, categoria, permiso, usuario y fuente.'],['3. Busqueda IA','Despues se indexa el contenido para buscar por insumo, concepto, unidad, precio, rendimiento o norma.']].map(x=><div key={x[0]}><b>{x[0]}</b><p>{x[1]}</p></div>)}
@@ -2774,7 +2705,7 @@ function Library({user,demoDocs=[]}){
       <div className="lib-workbench">
         <aside className="lib-folders">{counts.map(([name,count])=><button key={name} onClick={()=>setFilterType(name)} className={type===name?'active':''}><Icon name="folder" size={15}/><span>{name}</span><b>{count}</b></button>)}</aside>
         <div className={view==='tablero'?'lib-board':'lib-table'}>
-          {pageItems.length ? pageItems.map((f)=>{ const i=f.__idx ?? files.indexOf(f); const cat=f.cat||classify(f.name); const isActive=active?.name===f.name && active?.when===f.when; return <div className={'lib-file '+(isActive?'active':'')} key={i} onClick={()=>setSelected(f)}><span className="lib-ext">{f.ext||'DOC'}</span><div className="lib-meta"><b>{f.name}</b><small>{cat} - {f.family || 'General'} - {f.size} - {f.when}</small><em>{(f.tags||[]).length ? (f.tags||[]).slice(0,5).join(' · ') : cat==='Matrices APU'?'Puede alimentar APUs':cat==='Mano de obra'?'Rendimientos y cuadrillas':cat==='Costos'?'Precios y catalogos':'Consulta tecnica'}</em></div><div className="lib-actions"><button className="soft" onClick={(e)=>{e.stopPropagation(); f.downloadURL ? window.open(f.downloadURL,'_blank') : setSelected(f)}}>{f.downloadURL?'Abrir':'Ver'}</button><button className="row-del" onClick={(e)=>{e.stopPropagation();del(i)}}>x</button></div></div>}) : (showDemoLibrary ? demoDocs.map((f,i)=><div className="lib-file demo-card" key={'demo-'+i}><span className="lib-ext">{f.ext||'DOC'}</span><div className="lib-meta"><b>{f.name}</b><small>{f.cat} - {f.family || 'General'} - {f.size} - {f.when}</small><em>{(f.tags||[]).slice(0,5).join(' · ')}</em></div></div>) : <div className="lib-empty">No hay documentos con ese filtro. Sube archivos o cambia la busqueda.</div>)}
+          {pageItems.length ? pageItems.map((f)=>{ const i=f.__idx ?? files.indexOf(f); const cat=f.cat||classify(f.name); const isActive=active?.name===f.name && active?.when===f.when; return <div className={'lib-file '+(isActive?'active':'')} key={i} onClick={()=>setSelected(f)}><span className="lib-ext">{f.ext||'DOC'}</span><div className="lib-meta"><b>{f.name}</b><small>{cat} - {f.family || 'General'} - {f.size} - {f.when}</small><em>{(f.tags||[]).length ? (f.tags||[]).slice(0,5).join(' · ') : cat==='Matrices APU'?'Puede alimentar APUs':cat==='Mano de obra'?'Rendimientos y cuadrillas':cat==='Costos'?'Precios y catalogos':'Consulta tecnica'}</em></div><div className="lib-actions"><button className="soft" onClick={(e)=>{e.stopPropagation(); f.downloadURL ? window.open(f.downloadURL,'_blank') : setSelected(f)}}>{f.downloadURL?'Abrir':'Ver'}</button><button className="row-del" onClick={(e)=>{e.stopPropagation();del(i)}}>x</button></div></div>}) : (files.length===0 ? <EmptyState icon="biblioteca" title="Tu Workspace documental está vacío" text="Sube tu primera base técnica para que ZOE pueda consultarla al generar APUs." actionLabel="Subir lote" onAction={()=>fileInputRef.current?.click()}/> : <div className="lib-empty">No hay documentos con ese filtro. Sube archivos o cambia la busqueda.</div>)}
           {visible.length > pageSize && <div className="lib-pager"><button className="soft" disabled={safePage<=1} onClick={()=>setPage(safePage-1)}>Anterior</button><span>{(safePage-1)*pageSize+1}-{Math.min(safePage*pageSize,visible.length)} de {visible.length}</span><button className="soft" disabled={safePage>=pages} onClick={()=>setPage(safePage+1)}>Siguiente</button></div>}
         </div>
         <aside className="lib-preview pro"><small>Ficha tecnica</small><h2>{active?.name || 'Sin archivo seleccionado'}</h2><p>{active ? (active.cat || classify(active.name))+' - '+(active.family || 'General')+' - '+(active.ext || 'DOC')+' - '+active.size : 'Sube documentos para crear una base consultable.'}</p>{active?.tags?.length ? <div className="lib-tags-mini">{active.tags.map(t=><span key={t}>{t}</span>)}</div> : null}<div className="lib-ai-card"><b>Acciones IA</b><button onClick={()=>alert('Usara este archivo como fuente para sugerir materiales, MO, equipo y rendimientos.')}>Usar para generar APU</button><button onClick={()=>alert('Comparara nombre, categoria y familia tecnica para sugerir matrices compatibles.')}>Buscar matrices similares</button><button onClick={()=>alert('Extraera descripciones, unidades, precios y rendimientos a una tabla auditable cuando el extractor de contenido este conectado.')}>Extraer insumos</button><button onClick={indexVisible}>Crear indice</button></div><div className="lib-trace"><span>Estado</span><b>{active?.status || 'Pendiente'}</b><span>Permiso</span><b>{user?.role==='admin'?'Administrador':'Plan Profesional'}</b><span>Confianza</span><b>{active ? `${active.confidence || 50}%` : 'Sin fuente'}</b></div></aside>
@@ -3071,9 +3002,9 @@ function Office({company,setCompany,catalog,setCatalog,embedded=false}){
   return <section>{!embedded && <PageHead kicker="Oficina Técnica" title="Empresa, logo y formatos" desc="Configura membretes, datos fiscales, firmas, plantillas y tu Excel de precios." />}{embedded && <div className="module-subhead"><div><small>Oficina técnica</small><h2>Empresa, logo y formatos</h2></div></div>}<div className="grid-2"><div className="panel form"><label>Logo</label><img className="logo-preview" src={company.logo}/><input type="file" accept="image/*" onChange={e=>uploadLogo(e.target.files[0])}/><label>Empresa</label><input value={company.name} onChange={e=>setCompany({...company,name:e.target.value})}/><label>RFC</label><input value={company.rfc} onChange={e=>setCompany({...company,rfc:e.target.value})}/><label>Teléfono</label><input value={company.phone} onChange={e=>setCompany({...company,phone:e.target.value})}/><label>Correo</label><input value={company.email} onChange={e=>setCompany({...company,email:e.target.value})}/></div><div className="panel"><h2>Plantillas</h2>{['Formato ZOEMEC','Formato gobierno','Formato CFE','Formato CONAGUA','Formato personalizado'].map(x=><div className="activity" key={x}><Icon name="doc" size={16}/> {x}</div>)}<h2>Mi Excel de precios</h2><label className="up-btn ghost-up" style={{display:'inline-block',marginTop:4}}>Importar catálogo (.xlsx/.csv)<input type="file" accept=".xlsx,.csv" hidden onChange={e=>importExcel(e.target.files[0])}/></label>{catalog&&catalog.length>0 && <p className="muted" style={{marginTop:10}}>Catálogo cargado: <b>{catalog.length}</b> insumos. Se usan al generar APUs por coincidencia de nombre.</p>}<p className="muted">Detecto columnas de descripción, unidad y precio automáticamente.</p></div></div></section>}
 
 function Community(){
-  const demoForum = ['Que rendimiento usan para muro de block 15 cm?','Proveedor de acero en zona centro','Formato de generadores para obra publica','Comparativo OPUS vs NEODATA'];
+  const legacyForumThreads = ['Que rendimiento usan para muro de block 15 cm?','Proveedor de acero en zona centro','Formato de generadores para obra publica','Comparativo OPUS vs NEODATA'];
   const [posts,setPosts]=useLocalState('zoemec-foro',[]);
-  useEffect(()=>{ if(posts.some(p=>demoForum.includes(p.q))) setPosts(posts.filter(p=>!demoForum.includes(p.q))); },[]);
+  useEffect(()=>{ if(posts.some(p=>legacyForumThreads.includes(p.q))) setPosts(posts.filter(p=>!legacyForumThreads.includes(p.q))); },[]);
   const [q,setQ]=useState(''); const [search,setSearch]=useState(''); const [cat,setCat]=useState('Tecnico'); const [filter,setFilter]=useState('Todos'); const [openReply,setOpenReply]=useState(-1); const [reply,setReply]=useState('');
   const cats=['Todos','Tecnico','Proveedores','Formatos','Software','Obra publica'];
   const visible=(filter==='Todos'?posts:posts.filter(p=>(p.cat||'Tecnico')===filter)).filter(p=>p.q.toLowerCase().includes(search.toLowerCase()) || (p.replies||[]).join(' ').toLowerCase().includes(search.toLowerCase()));
@@ -3220,13 +3151,13 @@ function PlansAccess({user}){
     <div className="prod-grid">{production.map(([t,d])=><div className="prod-step" key={t}><b>{t}</b><p>{d}</p><small>Configurado por variables seguras y reglas de Firebase</small></div>)}</div>
   </section>
 }
-function Reports({clients,apus,budgets,demo=false}){
+function Reports({clients,apus,budgets}){
   const total=budgets.reduce((a,b)=>a+(b.total||0),0);
   const hasData = Boolean(clients.length || apus.length || budgets.length);
   const segs=hasData ? [{label:'Presupuestos',value:budgets.length,color:'#9D6FD0'},{label:'APUs',value:apus.length,color:'#2A1740'},{label:'Clientes',value:clients.length,color:'#C7A35C'}].filter(s=>s.value>0) : [];
   const bars=[['Presupuestos enviados',Math.min(100,budgets.length*10),'#9D6FD0'],['APU creados',Math.min(100,apus.length*10),'#2A1740'],['Clientes nuevos',Math.min(100,clients.length*10),'#C7A35C']];
   const alerts=hasData ? [...apus.slice(0,2).map(a=>`APU ${a.clave || a.id} disponible para revisar`), ...budgets.slice(0,2).map(b=>`Presupuesto ${b.name} en cartera`)] : [];
-  return <section><PageHead kicker="Reportes" title="Tablero ejecutivo" desc="Ventas, presupuestos, clientes, APUs, avances, utilidad y rendimiento de la oficina." action={<>{demo && <DemoBadge/>}<button>Exportar reporte</button></>} /><div className="report-hero"><div><small>Venta potencial</small><b>{money(total)}</b><span>acumulado</span></div><div><small>Pipeline</small><b>{budgets.length ? 'Activo' : '0%'}</b><span>tasa de cierre</span></div><div><small>Productividad</small><b>{apus.length}</b><span>APU generados</span></div><div><small>Clientes</small><b>{clients.length}</b><span>activos</span></div></div><div className="dash-charts report-grid"><div className="panel"><h2>Cotizacion mensual</h2><Spark points={budgets.length ? budgets.slice(-8).map(b=>Math.max(1,(Number(b.total)||0)/1000)) : [0,0,0,0,0,0,0,0]} h={110}/><div className="chart-foot"><span>{budgets.length ? 'Presupuestos reales' : 'Sin datos reales'}</span><b>{budgets.length ? 'Actualizado' : '0% acumulado'}</b></div></div><div className="panel chart-donut"><h2>Cartera por tipo de obra</h2><Donut segments={segs} center={hasData ? '100%' : '0%'} sub="cartera"/><div className="donut-legend">{segs.length ? segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>) : <EmptyState text="Sin datos para graficar."/>}</div></div></div><div className="report-bottom"><div className="panel"><h2>Resumen mensual</h2>{bars.map(([label,val,color])=><div className="bar-row" key={label}><span>{label}</span><i><b style={{width:val+'%',background:color}}></b></i><em className="bar-val">{val}%</em></div>)}</div><div className="panel"><h2>Alertas ejecutivas</h2>{alerts.length ? alerts.map(a=><div className="activity" key={a}><Icon name="bell" size={15}/> {a}</div>) : <EmptyState text="Sin alertas hasta que existan movimientos reales."/>}</div></div></section>
+  return <section><PageHead kicker="Reportes" title="Tablero ejecutivo" desc="Ventas, presupuestos, clientes, APUs, avances, utilidad y rendimiento de la oficina." action={<button>Exportar reporte</button>} /><div className="report-hero"><div><small>Venta potencial</small><b>{money(total)}</b><span>acumulado</span></div><div><small>Pipeline</small><b>{budgets.length ? 'Activo' : '0%'}</b><span>tasa de cierre</span></div><div><small>Productividad</small><b>{apus.length}</b><span>APU generados</span></div><div><small>Clientes</small><b>{clients.length}</b><span>activos</span></div></div><div className="dash-charts report-grid"><div className="panel"><h2>Cotizacion mensual</h2><Spark points={budgets.length ? budgets.slice(-8).map(b=>Math.max(1,(Number(b.total)||0)/1000)) : [0,0,0,0,0,0,0,0]} h={110}/><div className="chart-foot"><span>{budgets.length ? 'Presupuestos reales' : 'Sin datos reales'}</span><b>{budgets.length ? 'Actualizado' : '0% acumulado'}</b></div></div><div className="panel chart-donut"><h2>Cartera por tipo de obra</h2><Donut segments={segs} center={hasData ? '100%' : '0%'} sub="cartera"/><div className="donut-legend">{segs.length ? segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>) : <EmptyState text="Sin datos para graficar."/>}</div></div></div><div className="report-bottom"><div className="panel"><h2>Resumen mensual</h2>{bars.map(([label,val,color])=><div className="bar-row" key={label}><span>{label}</span><i><b style={{width:val+'%',background:color}}></b></i><em className="bar-val">{val}%</em></div>)}</div><div className="panel"><h2>Alertas ejecutivas</h2>{alerts.length ? alerts.map(a=><div className="activity" key={a}><Icon name="bell" size={15}/> {a}</div>) : <EmptyState text="Sin alertas hasta que existan movimientos reales."/>}</div></div></section>
 }
 
 createRoot(document.getElementById('root')).render(<App />);

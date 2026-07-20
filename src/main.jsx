@@ -53,7 +53,12 @@ const ICONS = {
   folder:<><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></>,
   doc:<><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></>,
   bell:<><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></>,
-  play:<><path d="M6 4l14 8-14 8z"/></>
+  play:<><path d="M6 4l14 8-14 8z"/></>,
+  mic:<><path d="M12 2a3 3 0 00-3 3v6a3 3 0 006 0V5a3 3 0 00-3-3z"/><path d="M5 10v1a7 7 0 0014 0v-1M12 18v3M9 21h6"/></>,
+  micStop:<><rect x="7" y="7" width="10" height="10" rx="2"/></>,
+  speakerOn:<><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 8.5a4 4 0 010 7M19 6a7.5 7.5 0 010 12"/></>,
+  speakerOff:<><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 9l5 6M21 9l-5 6"/></>,
+  history:<><path d="M3 12a9 9 0 109-9 9 9 0 00-8 5"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></>
 };
 function Icon({name,size=20}){return <svg className="ic" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{ICONS[name]||ICONS.doc}</svg>;}
 
@@ -84,7 +89,15 @@ function useLocalState(key, fallback){
   const [value, setValue] = useState(() => {
     try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
   });
-  const save = (next) => { const v = typeof next === 'function' ? next(value) : next; setValue(v); localStorage.setItem(key, JSON.stringify(v)); };
+  // setValue(prev=>...) en vez de cerrar sobre `value`: dos llamadas funcionales
+  // seguidas dentro del mismo handler (ej. agregar el turno del usuario y luego
+  // el de la respuesta) deben encadenarse sobre el estado mas reciente, no sobre
+  // el que existia cuando este closure se creo.
+  const save = (next) => setValue(prev => {
+    const v = typeof next === 'function' ? next(prev) : next;
+    localStorage.setItem(key, JSON.stringify(v));
+    return v;
+  });
   return [value, save];
 }
 function getDeviceId(){
@@ -596,7 +609,7 @@ function HardHat({size=46}){
 function assistantReply(q){
   const t=q.toLowerCase();
   const r=(...m)=>m.join(' ');
-  if(/hola|buenas|hey|saludos/.test(t)) return 'Hola. Soy ZOEMIC, asistente tecnico de costos y obra. Te ayudo con APU, FSR, rendimientos, catalogos, presupuestos, explosiones de insumos y programa de obra.';
+  if(/hola|buenas|hey|saludos/.test(t)) return 'Hola. Soy ZOE, copiloto tecnico de costos y obra. Te ayudo con APU, FSR, rendimientos, catalogos, presupuestos, explosiones de insumos y programa de obra.';
   if(/fsr|salario real|fasar/.test(t)) return r('El FSR (Factor de Salario Real, Art. 191 RLOPSRM) convierte el salario base en salario real: Salario real = base × FSR.','Calcúlalo en Centro Técnico con Tp (días pagados), Tl (días laborados) y Ps (cargas obrero-patronales). Suele andar entre 1.6 y 1.9.');
   if(/apu|precio unitario/.test(t)) return r('Para un APU: ve a "APU Inteligente", pega tu concepto y pulsa "Generar desarrollo".','Edita insumos, ajusta indirectos de campo/oficina, utilidad y cargos, y exporta a PDF o Excel. La herramienta menor se calcula como % de la mano de obra.');
   if(/excel|importar|catalogo|catálogo|precios/.test(t)) return r('Importa tu Excel de precios en Oficina Técnica o desde "Generar con IA".','Detecto las columnas de descripción, unidad y precio, y al generar un APU uso tus precios reales cuando coinciden con los insumos.');
@@ -606,36 +619,113 @@ function assistantReply(q){
   if(/presupuesto/.test(t)) return 'En Presupuestos capturas conceptos con su P.U. (sin IVA); el sistema suma subtotal, IVA y total, y lo exportas a PDF/Excel con tu membrete.';
   return r('Puedo orientarte sobre APU, FSR, indirectos, calculadoras, importar tu Excel o exportar formatos.','Cuando la IA este activa en Vercel, tambien puedo consultar tu biblioteca tecnica y responder con fuentes.');
 }
-async function assistantReplyReal(q){
+async function assistantReplyReal(q, history=[]){
   try{
     const response = await fetch('/api/assistant', {
       method:'POST',
       headers:await authHeaders(),
-      body:JSON.stringify({question:q})
+      body:JSON.stringify({question:q, history})
     });
     const data = await response.json();
     if(!response.ok) throw new Error(data?.error || 'IA no disponible');
-    return data.answer || assistantReply(q);
+    if(!data.answer) return {answer:assistantReply(q), source:'local'};
+    return {answer:data.answer, source:'ai'};
   }catch{
-    return assistantReply(q);
+    return {answer:assistantReply(q), source:'local'};
   }
 }
+const ZOE_SEED_MSG = {me:false,t:'Soy ZOE. Leo conceptos, APUs, costos y evidencia para ayudarte a decidir como ingeniero, no como chatbot generico.'};
+const ZOE_VOICE_SUPPORTED = typeof window!=='undefined' && Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
+const ZOE_SPEECH_SUPPORTED = typeof window!=='undefined' && Boolean(window.speechSynthesis);
 function Assistant(){
   const [open,setOpen]=useState(false);
-  const [msgs,setMsgs]=useState([{me:false,t:'Soy ZOE. Leo conceptos, APUs, costos y evidencia para ayudarte a decidir como ingeniero, no como chatbot generico.'}]);
+  const [msgs,setMsgs]=useLocalState('zoemec-zoe-thread', [ZOE_SEED_MSG]);
+  const [threads,setThreads]=useLocalState('zoemec-zoe-history', []);
+  const [showHistory,setShowHistory]=useState(false);
   const [q,setQ]=useState('');
   const [busy,setBusy]=useState(false);
-  const send=async(text=q)=>{ if(!text.trim() || busy) return; const user=text.trim(); setQ(''); setBusy(true); setMsgs(m=>[...m,{me:true,t:user},{me:false,t:'Leyendo contexto tecnico, matriz y entregables...'}]); const answer=await assistantReplyReal(user); setMsgs(m=>[...m.slice(0,-1),{me:false,t:answer}]); setBusy(false); };
+  const [listening,setListening]=useState(false);
+  const [speakOn,setSpeakOn]=useState(false);
+  const [speaking,setSpeaking]=useState(false);
+  const recognitionRef=useRef(null);
+  const bodyRef=useRef(null);
+
+  useEffect(()=>{ if(bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight; }, [msgs, busy]);
+
+  const speak=(text)=>{
+    if(!ZOE_SPEECH_SUPPORTED || !speakOn || !text) return;
+    try{
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang='es-MX'; utter.rate=1.02;
+      utter.onstart=()=>setSpeaking(true);
+      utter.onend=()=>setSpeaking(false);
+      utter.onerror=()=>setSpeaking(false);
+      window.speechSynthesis.speak(utter);
+    }catch{ setSpeaking(false); }
+  };
+
+  const send=async(text=q)=>{
+    if(!text.trim() || busy) return;
+    const user=text.trim(); setQ(''); setBusy(true);
+    setMsgs(m=>[...m,{me:true,t:user}]);
+    const history = msgs.slice(-6).map(m=>({role:m.me?'user':'assistant', content:m.t}));
+    const {answer, source} = await assistantReplyReal(user, history);
+    setMsgs(m=>[...m,{me:false,t:answer,source}]);
+    setBusy(false);
+    speak(answer);
+  };
+  const startNewConversation=()=>{
+    if(msgs.length>1) setThreads(t=>[{id:'ZOE-'+uid(), startedAt:new Date().toLocaleString('es-MX'), msgs}, ...t].slice(0,20));
+    setMsgs([ZOE_SEED_MSG]);
+    setShowHistory(false);
+  };
+  const openThread=(thread)=>{ setMsgs(thread.msgs); setShowHistory(false); };
+  const toggleListen=()=>{
+    if(!ZOE_VOICE_SUPPORTED) return;
+    if(listening){ recognitionRef.current?.stop(); return; }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const rec = new SR();
+    rec.lang='es-MX'; rec.interimResults=false; rec.maxAlternatives=1;
+    rec.onstart=()=>setListening(true);
+    rec.onend=()=>setListening(false);
+    rec.onerror=()=>setListening(false);
+    rec.onresult=(e)=>{ const transcript=e.results?.[0]?.[0]?.transcript; if(transcript) send(transcript); };
+    recognitionRef.current=rec;
+    rec.start();
+  };
   const prompts=['Revisa este APU','Detecta riesgos','Explica evidencia','Prepara entregables'];
   return <>
-    <button className="asst-fab" onClick={()=>setOpen(o=>!o)} title="Copiloto ZOE"><img src="/images/zoemic-assistant-web.webp" alt="ZOE copiloto"/></button>
+    <button className={'asst-fab'+(busy?' thinking':'')+(speaking?' speaking':'')} onClick={()=>setOpen(o=>!o)} title="Copiloto ZOE"><img src="/images/zoemic-assistant-web.webp" alt="ZOE copiloto"/></button>
     {open && <div className="asst-panel">
-      <div className="asst-head"><img className="asst-avatar" src="/images/zoemic-assistant-web.webp" alt="ZOE copiloto"/><div><b>Copiloto ZOE</b><small><i></i> Inteligencia de costos en linea</small></div><button className="asst-x" onClick={()=>setOpen(false)} aria-label="Cerrar chat de ZOE">×</button></div>
+      <div className="asst-head">
+        <img className={'asst-avatar'+(busy?' thinking':'')+(speaking?' speaking':'')} src="/images/zoemic-assistant-web.webp" alt="ZOE copiloto"/>
+        <div><b>Copiloto ZOE</b><small><i className={busy?'pulse':''}></i> {busy?'ZOE esta analizando...':'Inteligencia de costos en linea'}</small></div>
+        <div className="asst-head-actions">
+          {ZOE_SPEECH_SUPPORTED && <button className={'asst-icon-btn'+(speakOn?' active':'')} title={speakOn?'Silenciar respuestas':'Leer respuestas en voz alta'} onClick={()=>{ setSpeakOn(v=>!v); if(speakOn) window.speechSynthesis.cancel(); }} aria-label="Alternar voz"><Icon name={speakOn?'speakerOn':'speakerOff'} size={16}/></button>}
+          <button className="asst-icon-btn" title="Historial de conversaciones" onClick={()=>setShowHistory(v=>!v)} aria-label="Historial"><Icon name="history" size={16}/></button>
+          <button className="asst-x" onClick={()=>setOpen(false)} aria-label="Cerrar chat de ZOE">×</button>
+        </div>
+      </div>
       <div className="asst-strip"><span>Contexto</span><span>APU</span><span>BIM</span><span>Entrega</span></div>
-      <div className="asst-body">{msgs.map((m,i)=><div key={i} className={'asst-msg'+(m.me?' me':'')}>{m.t}</div>)}</div>
-      <div className="asst-suggestions">{prompts.map(p=><button key={p} onClick={()=>send(p)} disabled={busy}>{p}</button>)}</div>
-      <div className="asst-input"><input value={q} placeholder="Pregunta por costos, obra, evidencia..." onChange={e=>setQ(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()}/><button onClick={()=>send()} disabled={busy}>{busy?'...':'Enviar'}</button></div>
-      <div className="asst-note">Copiloto visual conectado al flujo tecnico existente.</div>
+      {showHistory ? <div className="asst-history">
+        <button className="soft asst-new-thread" onClick={startNewConversation}>+ Nueva conversación</button>
+        {threads.length ? threads.map(th=><button key={th.id} className="asst-thread-item" onClick={()=>openThread(th)}>
+          <b>{th.msgs.find(m=>m.me)?.t?.slice(0,48) || 'Conversación'}</b><small>{th.startedAt} · {th.msgs.length} mensajes</small>
+        </button>) : <p className="asst-history-empty">Aún no tienes conversaciones anteriores guardadas.</p>}
+      </div> : <>
+        <div className="asst-body" ref={bodyRef}>
+          {msgs.map((m,i)=><div key={i} className={'asst-msg'+(m.me?' me':'')}>{m.t}{!m.me && m.source==='local' && <em className="asst-offline-tag">Respuesta local (IA no disponible)</em>}</div>)}
+          {busy && <div className="asst-msg asst-thinking-msg"><span className="asst-dots"><i/><i/><i/></span></div>}
+        </div>
+        <div className="asst-suggestions">{prompts.map(p=><button key={p} onClick={()=>send(p)} disabled={busy}>{p}</button>)}</div>
+        <div className="asst-input">
+          <input value={q} placeholder="Pregunta por costos, obra, evidencia..." onChange={e=>setQ(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()}/>
+          {ZOE_VOICE_SUPPORTED && <button className={'asst-icon-btn'+(listening?' active listening':'')} title={listening?'Detener grabación':'Hablar con ZOE'} onClick={toggleListen} aria-label="Entrada por voz"><Icon name={listening?'micStop':'mic'} size={16}/></button>}
+          <button onClick={()=>send()} disabled={busy}>{busy?'...':'Enviar'}</button>
+        </div>
+        <div className="asst-note">Copiloto visual conectado al flujo tecnico existente.</div>
+      </>}
     </div>}
   </>;
 }

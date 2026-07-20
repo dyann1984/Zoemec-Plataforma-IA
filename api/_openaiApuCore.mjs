@@ -74,10 +74,16 @@ Reglas obligatorias:
   return sanitizeAPU(JSON.parse(content), cleanConcept);
 }
 
-export async function answerAssistant({ question='' }){
+export async function answerAssistant({ question='', history=[] }){
   if(!process.env.OPENAI_API_KEY) throw new Error('Falta OPENAI_API_KEY en Vercel.');
   const cleanQuestion = String(question || '').trim();
   if(!cleanQuestion) return 'Escribe una pregunta tecnica para poder ayudarte.';
+  // Ultimos turnos de la conversacion real, para que ZOE responda con contexto
+  // en vez de tratar cada pregunta como si fuera la primera (conversacion persistente).
+  const priorTurns = (Array.isArray(history) ? history : [])
+    .filter(m => m && typeof m.content === 'string' && m.content.trim() && (m.role === 'user' || m.role === 'assistant'))
+    .slice(-6)
+    .map(m => ({ role: m.role, content: String(m.content).trim().slice(0, 2000) }));
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method:'POST',
     headers:{
@@ -88,7 +94,8 @@ export async function answerAssistant({ question='' }){
       model:MODEL,
       temperature:0.25,
       messages:[
-        { role:'system', content:'Eres ZOEMIC, asistente tecnico de una plataforma mexicana de costos de construccion. Responde en espanol claro, directo y util. Ayudas con APU, matrices de precios unitarios, FSR, rendimientos, catalogos de conceptos, presupuestos, explosion de insumos, programa de obra, planes de usuario y preparacion para produccion.' },
+        { role:'system', content:'Eres ZOE, copiloto tecnico de ZOEMEC, una plataforma mexicana de costos de construccion. Responde en espanol claro, directo y util. Ayudas con APU, matrices de precios unitarios, FSR, rendimientos, catalogos de conceptos, presupuestos, explosion de insumos, programa de obra, planes de usuario y preparacion para produccion. Recuerda el contexto de los mensajes previos de esta conversacion.' },
+        ...priorTurns,
         { role:'user', content:cleanQuestion }
       ]
     })

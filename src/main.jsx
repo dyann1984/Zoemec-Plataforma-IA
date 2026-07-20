@@ -63,12 +63,39 @@ const defaultCompany = {
 const sampleClients = [
   { id:'CLI-001', name:'Municipio de Tlalmanalco', type:'Gobierno', contact:'Dirección de Obras', phone:'55 1234 5678', email:'obras@municipio.gob.mx', rfc:'MTL000000XXX', projects:4, budgets:12, amount:18250000, status:'Activo' },
   { id:'CLI-002', name:'Grupo Residencial Volcanes', type:'Empresa', contact:'Arq. Laura Sánchez', phone:'55 9876 5432', email:'contacto@volcanes.mx', rfc:'GRV240101AB1', projects:2, budgets:7, amount:6840000, status:'Activo' },
-  { id:'CLI-003', name:'Cliente particular', type:'Particular', contact:'Juan García', phone:'55 2222 1111', email:'juan@email.com', rfc:'XAXX010101000', projects:1, budgets:2, amount:1280000, status:'Prospecto' }
+  { id:'CLI-003', name:'Cliente particular', type:'Particular', contact:'Juan García', phone:'55 2222 1111', email:'juan@email.com', rfc:'XAXX010101000', projects:1, budgets:2, amount:1280000, status:'Prospecto' },
+  { id:'CLI-004', name:'Constructora del Centro', type:'Empresa', contact:'Ing. Marco Herrera', phone:'55 4455 6677', email:'contacto@constructoradelcentro.mx', rfc:'CDC220315KL2', projects:3, budgets:9, amount:9120000, status:'Activo' },
+  { id:'CLI-005', name:'Desarrollos Industriales del Valle', type:'Empresa', contact:'Lic. Paola Reyes', phone:'55 3344 5566', email:'compras@divalle.mx', rfc:'DIV210809MN4', projects:1, budgets:3, amount:4360000, status:'En seguimiento' }
 ];
 const sampleProjects = [
   { name:'Local comercial', client:'Grupo Residencial Volcanes', progress:72, budget:2450000, status:'En ejecución' },
   { name:'Rehabilitación de plaza', client:'Municipio de Tlalmanalco', progress:38, budget:5120000, status:'Cotización' },
   { name:'Casa habitación 180 m²', client:'Cliente particular', progress:16, budget:1850000, status:'Anteproyecto' }
+];
+const sampleLibraryDocs = [
+  { name:'Catalogo_ECOSTOS_2024.xlsx', cat:'Costos', family:'Precios base', ext:'XLSX', size:'2.10 MB', when:'01/07/2026', tags:['costos','catalogo'] },
+  { name:'Matriz_APU_Muro_Block.xlsx', cat:'Matrices APU', family:'Albañilería', ext:'XLSX', size:'0.34 MB', when:'02/07/2026', tags:['apu','block'] },
+  { name:'Rendimientos_Mano_Obra_CMIC.pdf', cat:'Mano de obra', family:'Cuadrillas', ext:'PDF', size:'1.05 MB', when:'03/07/2026', tags:['rendimientos','cuadrillas'] },
+  { name:'NTC_Concreto_Estructural.pdf', cat:'Normas', family:'Estructuras', ext:'PDF', size:'3.40 MB', when:'04/07/2026', tags:['normas','concreto'] },
+  { name:'Formato_Generador_Obra_Publica.xlsx', cat:'Formatos', family:'Generadores', ext:'XLSX', size:'0.18 MB', when:'05/07/2026', tags:['formato','obra publica'] },
+  { name:'Base_OPUS_Instalaciones.xlsx', cat:'Costos', family:'Instalaciones', ext:'XLSX', size:'4.20 MB', when:'06/07/2026', tags:['opus','instalaciones'] },
+  { name:'Curso_APU_desde_cero.mp4', cat:'Academia', family:'Capacitación', ext:'MP4', size:'85.00 MB', when:'07/07/2026', tags:['curso','capacitacion'] },
+  { name:'Matriz_APU_Acero_Estructural.xlsx', cat:'Matrices APU', family:'Estructura metálica', ext:'XLSX', size:'0.29 MB', when:'08/07/2026', tags:['apu','acero'] },
+  { name:'Especificaciones_CFE_Alumbrado.pdf', cat:'Normas', family:'Eléctrico', ext:'PDF', size:'2.75 MB', when:'09/07/2026', tags:['cfe','electrico'] },
+  { name:'Presupuesto_Modelo_Edificacion.xlsx', cat:'Formatos', family:'Presupuestos', ext:'XLSX', size:'0.52 MB', when:'10/07/2026', tags:['presupuesto','formato'] }
+];
+const sampleBudgets = [
+  { id:'DEMO-PRE-1', name:'Local comercial', client:'Grupo Residencial Volcanes', total:2450000, date:'12/07/2026' },
+  { id:'DEMO-PRE-2', name:'Rehabilitación de plaza', client:'Municipio de Tlalmanalco', total:5120000, date:'15/07/2026' },
+  { id:'DEMO-PRE-3', name:'Casa habitación 180 m²', client:'Cliente particular', total:1850000, date:'18/07/2026' }
+];
+const sampleApuConcepts = [
+  'Suministro e instalación de bomba centrífuga de 1 HP para sistema hidroneumático',
+  'Suministro e instalación de tubería PVC hidráulica de 1/2 pulgada',
+  'Aplicación de pintura vinílica en muros interiores, dos manos con sellador',
+  "Concreto premezclado f'c=250 kg/cm² colado en losa de entrepiso",
+  'Habilitado y colocado de acero de refuerzo fy=4200 kg/cm²',
+  'Muro de block hueco de concreto de 15x20x40 cm asentado con mortero cemento-arena'
 ];
 const libraryFolders = [
   ['Bases OPUS', 'Importación y catálogos de precios unitarios', '124 archivos'],
@@ -133,6 +160,17 @@ function firebaseMessage(error){
   if(code.includes('network')) return 'No hay conexion con Firebase. Revisa internet y vuelve a intentar.';
   if(code.includes('permission-denied')) return 'No se pudo completar la operacion por permisos de Firestore. Intenta de nuevo o contacta al administrador.';
   return error?.message || 'No se pudo conectar con Firebase.';
+}
+/* Los endpoints /api/* devuelven a veces el detalle tecnico exacto (nombre de la
+   variable de entorno faltante) para facilitar el diagnostico en Vercel. Esa cadena
+   nunca debe llegar al usuario final: se sustituye por un mensaje comercial. */
+function friendlyServiceError(err, fallback='Servicio temporalmente no disponible. Intenta de nuevo en unos minutos.'){
+  const msg = String(err?.message || '').trim();
+  if(!msg) return fallback;
+  if(/API_KEY|ACCESS_TOKEN|SERVICE_ACCOUNT|PRIVATE_KEY|CLIENT_EMAIL|process\.env|\bVercel\b|\.env\b/i.test(msg)){
+    return 'Servicio temporalmente no configurado. Intenta mas tarde o contacta a soporte.';
+  }
+  return msg;
 }
 async function loadOrCreateProfile(fbUser, fallbackName='Usuario ZOEMEC'){
   const userRef = doc(db, 'users', fbUser.uid);
@@ -415,22 +453,31 @@ function App(){
     setScreen('landing');
   };
 
+  // Entorno de demostracion: solo se activa cuando la cuenta real esta vacia (cero
+  // proyectos, clientes, APUs y presupuestos). Los arreglos demo* nunca se pasan a un
+  // setter de estado, asi que nunca se escriben en Firestore/localStorage del usuario.
+  const isFreshAccount = !projects.length && !clients.length && !apus.length && !budgets.length;
+  const dashboardApus = apus.length ? apus : sampleApus;
+  const dashboardClients = clients.length ? clients : sampleClients;
+  const dashboardBudgets = budgets.length ? budgets : sampleBudgets;
+  const dashboardProjects = projects.length ? projects : sampleProjects;
+
   let content;
   if(screen === 'landing') content = <Landing setScreen={setScreen} login={login} company={companyView} />;
   else if(screen === 'login') content = <Auth mode="login" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} company={companyView} />;
   else if(screen === 'register') content = <Auth mode="register" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} company={companyView} />;
   else if(!hasValidSession(user)) content = <Landing setScreen={setScreen} login={login} company={companyView} />;
   else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView}>
-    {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} />}
-    {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} />}
+    {module === 'inicio' && <Dashboard setModule={setModule} apus={dashboardApus} clients={dashboardClients} budgets={dashboardBudgets} projects={dashboardProjects} demo={isFreshAccount} />}
+    {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} demoApus={sampleApus} />}
     {module === 'presupuestos' && <Budgets company={companyView} budgets={budgets} setBudgets={setBudgets} items={budgetItems} setItems={setBudgetItems} />}
-    {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} />}
-    {module === 'biblioteca' && <Library user={user} />}
+    {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} demoClients={sampleClients} demoProjects={sampleProjects} />}
+    {module === 'biblioteca' && <Library user={user} demoDocs={sampleLibraryDocs} />}
     {module === 'tecnico' && <TechnicalOffice company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} />}
     {module === 'visual' && <VisualAI user={user} />}
     {module === 'comunidad' && <Community />}
     {module === 'planes' && <PlansAccess user={user} />}
-    {module === 'reportes' && <Reports clients={clients} apus={apus} budgets={budgets} />}
+    {module === 'reportes' && <Reports clients={dashboardClients} apus={dashboardApus} budgets={dashboardBudgets} demo={isFreshAccount} />}
   </Shell>;
   return <><NoticeHost />{content}</>;
 }
@@ -622,9 +669,9 @@ function Assistant(){
   const send=async(text=q)=>{ if(!text.trim() || busy) return; const user=text.trim(); setQ(''); setBusy(true); setMsgs(m=>[...m,{me:true,t:user},{me:false,t:'Leyendo contexto tecnico, matriz y entregables...'}]); const answer=await assistantReplyReal(user); setMsgs(m=>[...m.slice(0,-1),{me:false,t:answer}]); setBusy(false); };
   const prompts=['Revisa este APU','Detecta riesgos','Explica evidencia','Prepara entregables'];
   return <>
-    <button className="asst-fab" onClick={()=>setOpen(o=>!o)} title="ZOE Copilot"><img src="/images/zoemic-assistant-web.webp" alt="ZOE copilot"/></button>
+    <button className="asst-fab" onClick={()=>setOpen(o=>!o)} title="Copiloto ZOE"><img src="/images/zoemic-assistant-web.webp" alt="ZOE copiloto"/></button>
     {open && <div className="asst-panel">
-      <div className="asst-head"><img className="asst-avatar" src="/images/zoemic-assistant-web.webp" alt="ZOE copilot"/><div><b>ZOE Copilot</b><small><i></i> Cost intelligence online</small></div><button className="asst-x" onClick={()=>setOpen(false)} aria-label="Cerrar chat de ZOE">×</button></div>
+      <div className="asst-head"><img className="asst-avatar" src="/images/zoemic-assistant-web.webp" alt="ZOE copiloto"/><div><b>Copiloto ZOE</b><small><i></i> Inteligencia de costos en linea</small></div><button className="asst-x" onClick={()=>setOpen(false)} aria-label="Cerrar chat de ZOE">×</button></div>
       <div className="asst-strip"><span>Contexto</span><span>APU</span><span>BIM</span><span>Entrega</span></div>
       <div className="asst-body">{msgs.map((m,i)=><div key={i} className={'asst-msg'+(m.me?' me':'')}>{m.t}</div>)}</div>
       <div className="asst-suggestions">{prompts.map(p=><button key={p} onClick={()=>send(p)} disabled={busy}>{p}</button>)}</div>
@@ -638,39 +685,39 @@ function Landing({setScreen, login, company}){
   return <div className="landing">
     <header className="nav-public">
       <div className="brand-mini"><img src={company?.logo || '/images/logo-web.png'} onError={(e)=>e.currentTarget.style.display='none'} /><b>ZOEMEC</b></div>
-      <nav><a>Copilot</a><a>Digital Twin</a><a>APU AI</a><a>Entregables</a></nav>
-      <div className="nav-actions"><button className="ghost" onClick={()=>setScreen('login')}>Iniciar sesión</button><button onClick={()=>setScreen('register')}>Launch ZOEMEC</button></div>
+      <nav><a>Copiloto</a><a>Gemelo Digital</a><a>APU con IA</a><a>Entregables</a></nav>
+      <div className="nav-actions"><button className="ghost" onClick={()=>setScreen('login')}>Iniciar sesión</button><button onClick={()=>setScreen('register')}>Comenzar gratis</button></div>
     </header>
     <section className="hero-build">
       <div className="hero-copy">
-        <span className="eyebrow">AI Copilot for Construction Cost Intelligence</span>
-        <h1>Build the cost model before the concrete is poured.</h1>
+        <span className="eyebrow">Copiloto de IA para ingeniería de costos en construcción</span>
+        <h1>Construye el modelo de costos antes de verter el concreto.</h1>
         <p>ZOEMEC convierte conceptos, Excel y evidencia tecnica en APUs trazables, presupuesto y entregables profesionales con una experiencia de copiloto visual para obra digital.</p>
-        <div className="hero-actions"><button onClick={()=>setScreen('register')}>Open command center</button><button className="secondary" onClick={()=>setScreen('login')}>Continue demo</button></div>
-        <div className="future-proof"><span>Document</span><i/><span>Concepts</span><i/><span>Evidence</span><i/><span>APU</span><i/><span>PDF/XLSX</span></div>
+        <div className="hero-actions"><button onClick={()=>setScreen('register')}>Abrir centro de mando</button><button className="secondary" onClick={()=>setScreen('login')}>Continuar demo</button></div>
+        <div className="future-proof"><span>Documento</span><i/><span>Conceptos</span><i/><span>Evidencia</span><i/><span>APU</span><i/><span>PDF/XLSX</span></div>
       </div>
-      <div className="future-stage" aria-label="Digital construction model">
+      <div className="future-stage" aria-label="Modelo digital de construcción">
         <img className="stage-photo" src="/images/hero/zoemec-hero-web.webp" alt="Obra de construccion con overlays de IA mostrando APU, presupuestos, licitaciones y costos en tiempo real" />
         <div className="stage-status">
-          <span>LIVE MODEL</span>
-          <b>Cost intelligence overlay</b>
+          <span>MODELO EN VIVO</span>
+          <b>Panel de inteligencia de costos</b>
         </div>
         <div className="ai-console">
-          <div className="command-strip"><span>ZOE is reading</span><b>48 concepts</b></div>
-          <div className="command-flow"><span>Excel</span><i/><span>BIM context</span><i/><span>APU</span></div>
+          <div className="command-strip"><span>ZOE está leyendo</span><b>48 conceptos</b></div>
+          <div className="command-flow"><span>Excel</span><i/><span>Contexto BIM</span><i/><span>APU</span></div>
           <div className="command-table">
             <div><b>01</b><span>Falso plafón de tablaroca</span><em>m²</em><strong>94%</strong></div>
             <div><b>02</b><span>Estructura metálica ASTM A500</span><em>kg</em><strong>91%</strong></div>
             <div><b>03</b><span>Pintura vinílica en muros</span><em>m²</em><strong>88%</strong></div>
           </div>
-          <div className="command-total"><span>Ready for engineer review</span><b>Excel + PDF</b></div>
+          <div className="command-total"><span>Listo para revisión del ingeniero</span><b>Excel + PDF</b></div>
         </div>
       </div>
       <div className="hero-benefits">
-        <div><Icon name="apu" size={28}/><b>AI APU engine</b><span>Cost matrices with review</span></div>
-        <div><Icon name="doc" size={28}/><b>Excel ingestion</b><span>Multi-sheet construction catalogs</span></div>
-        <div><Icon name="biblioteca" size={28}/><b>Evidence graph</b><span>Source, sheet and row trace</span></div>
-        <div><Icon name="reportes" size={28}/><b>Deliverables</b><span>Professional PDF and XLSX</span></div>
+        <div><Icon name="apu" size={28}/><b>Motor de APU con IA</b><span>Matrices de costo con revisión</span></div>
+        <div><Icon name="doc" size={28}/><b>Importación de Excel</b><span>Catálogos de construcción multi-hoja</span></div>
+        <div><Icon name="biblioteca" size={28}/><b>Trazabilidad de evidencia</b><span>Rastreo de fuente, hoja y fila</span></div>
+        <div><Icon name="reportes" size={28}/><b>Entregables</b><span>PDF y Excel profesionales</span></div>
       </div>
     </section>
   </div>
@@ -725,12 +772,14 @@ function Auth({mode,setScreen,login,loginWithGoogle,company}){
 }
 
 function Shell({children,user,logout,module,setModule,company}){
+  // Comunidad, Planes y acceso y Visual IA se ocultan temporalmente del menu principal
+  // (fase de concurso: se mantienen en el codigo, solo no se muestran en la navegacion).
   const menu = [
     ['inicio','inicio','Inicio'], ['apu','apu','APU Inteligente'], ['presupuestos','presupuestos','Presupuestos'],
-    ['cartera','clientes','Cartera','Clientes y proyectos'],
+    ['cartera','clientes','Proyectos y clientes','Cartera de obra'],
     ['biblioteca','biblioteca','Biblioteca','Academia y documentos'],
     ['tecnico','tecnico','Oficina técnica','Cálculos y formatos'],
-    ['visual','play','Visual IA'], ['comunidad','comunidad','Comunidad'], ['planes','fsr','Planes y acceso'], ['reportes','reportes','Reportes']
+    ['reportes','reportes','Reportes']
   ];
   return <div className="app-layout">
     <aside className="sidebar">
@@ -749,7 +798,7 @@ function Shell({children,user,logout,module,setModule,company}){
 
 function PageHead({kicker,title,desc,action}){return <div className="page-head"><div><span>{kicker}</span><h1>{title}</h1><p>{desc}</p></div>{action}</div>}
 
-function Dashboard({setModule,apus,clients,budgets,projects}){
+function Dashboard({setModule,apus,clients,budgets,projects,demo=false}){
   const monto = budgets.reduce((a,b)=>a+(b.total||0),0);
   const pr = projects || [];
   const estados = pr.reduce((m,p)=>{m[p.status]=(m[p.status]||0)+1;return m;},{});
@@ -764,7 +813,7 @@ function Dashboard({setModule,apus,clients,budgets,projects}){
     ['APU','Matriz editable',apus.length?'ready':'active'],
     ['Entregar','PDF / XLSX',budgets.length?'ready':'watch']
   ];
-  return <section className="ai-os"><PageHead kicker="ZOEMEC AI OS" title="Copiloto de costos de construcción" desc="Un centro visual donde documentos, modelos, evidencia y APUs viven en el mismo flujo tecnico." action={<button onClick={()=>setModule('apu')}>Pedir a ZOE que cotice</button>} />
+  return <section className="ai-os"><PageHead kicker="ZOEMEC AI OS" title="Copiloto de costos de construcción" desc="Un centro visual donde documentos, modelos, evidencia y APUs viven en el mismo flujo tecnico." action={<>{demo && <DemoBadge/>}<button onClick={()=>setModule('apu')}>Pedir a ZOE que cotice</button></>} />
     <div className="os-grid">
       <div className="os-command">
         <div className="os-command-head"><span>Inteligencia del proyecto en vivo</span><b>{monto ? money(monto) : 'Sin presupuesto aun'}</b></div>
@@ -783,7 +832,7 @@ function Dashboard({setModule,apus,clients,budgets,projects}){
         <div><small>Clientes</small><b>{clients.length}</b><span>cartera conectada</span></div>
       </div>
     </div>
-    <div className="quick os-actions"><button onClick={()=>setModule('apu')}><Icon name="apu"/> Generar APU</button><button onClick={()=>setModule('biblioteca')}><Icon name="biblioteca"/> Abrir evidencia</button><button onClick={()=>setModule('visual')}><Icon name="play"/> Visualizar obra</button><button onClick={()=>setModule('presupuestos')}><Icon name="presupuestos"/> Exportar entregables</button></div>
+    <div className="quick os-actions"><button onClick={()=>setModule('apu')}><Icon name="apu"/> Generar APU</button><button onClick={()=>setModule('biblioteca')}><Icon name="biblioteca"/> Abrir evidencia</button><button onClick={()=>setModule('cartera')}><Icon name="clientes"/> Ver proyectos y clientes</button><button onClick={()=>setModule('presupuestos')}><Icon name="presupuestos"/> Exportar entregables</button></div>
     <div className="dash-charts">
       <div className="panel future-panel"><h2>Tendencia de costo</h2><Spark points={spark}/><div className="chart-foot"><span>{budgets.length ? 'Datos de presupuesto' : 'Esperando primer presupuesto real'}</span><b>{budgets.length ? 'Sincronizado' : 'Standby'}</b></div></div>
       <div className="panel chart-donut future-panel"><h2>Mapa de proyecto</h2><Donut segments={segs} center={pr.length || 'IA'} sub="nodos"/><div className="donut-legend">{segs.length ? segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>) : <span><i style={{background:'#C7A35C'}}/>Sin proyectos: crea uno o genera APU</span>}</div></div>
@@ -792,6 +841,7 @@ function Dashboard({setModule,apus,clients,budgets,projects}){
   </section>
 }
 function EmptyState({text}){return <div className="empty-state">{text}</div>}
+function DemoBadge(){return <span className="cat-badge demo-flag" title="Datos de ejemplo para presentacion, no se guardan en tu cuenta."><Icon name="play" size={13}/> Entorno de demostración</span>}
 
 /* ====================================================================
    MOTOR APU - Metodología mexicana (RLOPSRM Art. 191, 220)
@@ -907,7 +957,7 @@ function demoModeAPU(item={}, catalog, index=0, sourceFile='Modo demostracion (I
   next.demoMode = true;
   next.aiGenerated = false;
   next.aiNotes = [
-    `Modo demostracion: IA no disponible en este entorno${reason ? ' (' + reason + ')' : ''}. Se genero una matriz tecnica estandar ZOEMEC; configura OPENAI_API_KEY para IA real.`,
+    `Modo demostracion: IA no disponible en este entorno${reason ? ' (' + reason + ')' : ''}. Se genero una matriz tecnica estandar ZOEMEC editable.`,
     ...(next.aiNotes || [])
   ].filter(Boolean);
   return next;
@@ -1288,8 +1338,14 @@ function makeEmptyAPU(){
   };
 }
 function aiServerUrl(path=''){ return path; }
+/* Vista previa de "Entorno de demostracion": matrices reales generadas con la misma
+   plantilla tecnica ZOEMEC (standardAPUForConcept), nunca se guardan via setApus. */
+const sampleApus = sampleApuConcepts.map((concept,i)=>({
+  ...standardAPUForConcept({concept}, [], i, 'Catálogo demo ZOEMEC'),
+  id:'DEMO-APU-'+(i+1), date:'20/07/2026'
+}));
 
-function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog}){
+function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog,demoApus=[]}){
   const [concept,setConcept]=useState('');
   const [apu,setApu]=useState(()=>makeEmptyAPU());
   const [aiOpen,setAiOpen]=useState(false);
@@ -1355,7 +1411,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       }));
       alert(`Precio de mercado aplicado: $${nuevoPrecio.toFixed(2)} MXN por ${r[2]||'unidad'}\nRango: $${(Number(q.priceMin)||nuevoPrecio).toFixed(2)} - $${(Number(q.priceMax)||nuevoPrecio).toFixed(2)}\nFuente: ${q.source||'busqueda web'}${q.url?`\n${q.url}`:''}${q.notes?`\nNota: ${q.notes}`:''}`);
     }catch(err){
-      alert(`No pude consultar el precio de mercado: ${err?.message||'error de conexion'}`);
+      alert(`No pude consultar el precio de mercado: ${friendlyServiceError(err,'error de conexion')}`);
     }finally{
       setPriceBusy(null);
     }
@@ -1400,7 +1456,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       setAiStatus(`IA lista: ${next.family} (${next.confidence}%)`);
       setAiOpen(false);
     }catch(err){
-      const next = demoModeAPU({concept:parsed.concept, unit:parsed.unit, qty:parsed.qty, referencePU:parsed.referencePU}, catalog, 0, 'Modo demostracion (IA no disponible)', err?.message || 'servidor no disponible');
+      const next = demoModeAPU({concept:parsed.concept, unit:parsed.unit, qty:parsed.qty, referencePU:parsed.referencePU}, catalog, 0, 'Modo demostracion (IA no disponible)', friendlyServiceError(err,'servidor no disponible'));
       setConcept(next.concept);
       setApu(next);
       setExcelInfo({fileName:'Modo demostracion',concept:next.concept,unit:next.unit,qty:parsed.qty,referencePU:parsed.referencePU,catalog});
@@ -1604,8 +1660,21 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   const save=()=>{ if(!requireApuAccess()) return; setApus([apu,...apus.filter(x=>x.id!==apu.id)]); markApuUsed(); alert('APU guardado');};
   const addBudget=()=>{ if(!requireApuAccess()) return; setBudgets([{id:'PRE-'+uid(), name:'Presupuesto desde APU', client:'Cliente por definir', items:[{concept:apu.concept, unit:apu.unit, qty:1, pu:totals.pu}], total:totals.pu, date:new Date().toLocaleDateString('es-MX')},...budgets]); markApuUsed(); alert('Agregado a presupuestos (PU sin IVA)');};
   const hasConceptBatch = (conceptBatch?.concepts || []).filter(isExportableConceptItem).length > 1;
-  const exportPDF=async()=>{ if(!hasConceptBatch && isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; } hasConceptBatch ? await exportConceptBatchPDF() : exportAPUPDFPro(apu,totals,company); if(isFree && !hasConceptBatch) markApuUsed(); };
-  const exportExcel=async()=>{ if(!hasConceptBatch && isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; } if(hasConceptBatch) await exportConceptBatch(); else exportAPUExcel(apu,totals,company); if(isFree && !hasConceptBatch) markApuUsed(); };
+  const [exportBusy,setExportBusy]=useState(false);
+  const exportPDF=async()=>{
+    if(!hasConceptBatch && isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; }
+    setExportBusy(true);
+    try{ hasConceptBatch ? await exportConceptBatchPDF() : exportAPUPDFPro(apu,totals,company); }
+    finally{ setExportBusy(false); }
+    if(isFree && !hasConceptBatch) markApuUsed();
+  };
+  const exportExcel=async()=>{
+    if(!hasConceptBatch && isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; }
+    setExportBusy(true);
+    try{ if(hasConceptBatch) await exportConceptBatch(); else await exportAPUExcel(apu,totals,company); }
+    finally{ setExportBusy(false); }
+    if(isFree && !hasConceptBatch) markApuUsed();
+  };
 
   return <section><PageHead kicker="APU Inteligente" title="Análisis de Precio Unitario" desc="Metodología RLOPSRM: salario real con FSR, herramienta menor sobre mano de obra, indirectos de campo y oficina, financiamiento, utilidad y cargos adicionales." action={<div className="head-actions"><button className="secondary" onClick={generate}>Generar desarrollo</button><button className="ai-btn" onClick={()=>setAiOpen(o=>!o)}><Icon name="apu" size={17}/> Generar con IA</button></div>} />
     {isFree && <div className="trial-banner"><b>Plan gratis activo:</b> tienes {Math.max(0,1-(userUsage.apusCreated||0))} APU disponible. Para exportar y crear mas APUs activa un plan.</div>}
@@ -1648,7 +1717,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
           <div><small>Clave SAT sugerida</small><b>{apu.sat || '72100000'}</b></div>
           <div><small>Origen</small><b>{apu.demoMode ? 'Modo demostracion' : apu.aiGenerated ? 'IA real (OpenAI)' : 'Matriz base ZOEMEC'}</b></div>
         </div>
-        {apu.demoMode && <div className="demo-banner"><b>Modo demostracion:</b> la IA no esta disponible en este entorno (falta OPENAI_API_KEY o no hay conexion). Se muestra una matriz tecnica estandar ZOEMEC editable; conecta la IA para un desarrollo a la medida del concepto.</div>}
+        {apu.demoMode && <div className="demo-banner"><b>Modo demostracion:</b> el servicio de IA no esta disponible en este momento. Se muestra una matriz tecnica estandar ZOEMEC editable; vuelve a intentar en unos minutos para un desarrollo a la medida del concepto.</div>}
         {apu.aiNotes?.length>0 && <div className="ai-decisions">{apu.aiNotes.map((n,i)=><span key={i}>{n}</span>)}</div>}
         <div className="form-row"><input value={apu.clave} onChange={e=>setApu({...apu,clave:e.target.value})} placeholder="Clave"/><input value={apu.unit} onChange={e=>setApu({...apu,unit:e.target.value})} placeholder="Unidad"/></div>
 
@@ -1692,9 +1761,9 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         <div className="actions-col">
           <button onClick={save}>Guardar</button>
           <button onClick={addBudget}>Agregar al presupuesto</button>
-          <button onClick={exportPDF}>{hasConceptBatch ? `Descargar PDF por concepto (${conceptBatch.concepts.length})` : 'Descargar PDF con formato'}</button>
+          <button onClick={exportPDF} disabled={exportBusy || batchBusy}>{exportBusy ? 'Generando PDF...' : hasConceptBatch ? `Descargar PDF por concepto (${conceptBatch.concepts.length})` : 'Descargar PDF con formato'}</button>
           {conceptBatch?.concepts?.length>0 && !hasConceptBatch && <button onClick={exportConceptBatchPDF}>PDF por concepto ({conceptBatch.concepts.length})</button>}
-          <button onClick={exportExcel} disabled={batchBusy}>{hasConceptBatch ? (batchBusy ? 'Generando Excel por concepto...' : `Descargar Excel por concepto (${conceptBatch.concepts.length})`) : 'Descargar Excel'}</button>
+          <button onClick={exportExcel} disabled={exportBusy || batchBusy}>{exportBusy ? 'Generando Excel...' : hasConceptBatch ? (batchBusy ? 'Generando Excel por concepto...' : `Descargar Excel por concepto (${conceptBatch.concepts.length})`) : 'Descargar Excel'}</button>
         </div>
       </div>
     </div>
@@ -1706,6 +1775,16 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         <div className="sc-concept">{a.concept}</div>
         <div className="sc-pu">{money(tt.pu)} <small>/ {a.unit}</small></div>
         <div className="sc-actions"><button onClick={()=>setApu(a)}>Abrir</button><button className="del" onClick={()=>setApus(apus.filter(x=>x.id!==a.id))}>Borrar</button></div>
+      </div>;})}</div>
+    </div>}
+    {apus.length===0 && demoApus.length>0 && <div className="panel" style={{marginTop:16}}>
+      <h2>Matrices de ejemplo <small className="hint">({demoApus.length})</small></h2>
+      <DemoBadge/>
+      <div className="saved-grid">{demoApus.map(a=>{const tt=calcAPU(a);return <div className="saved-card demo-card" key={a.id}>
+        <div className="sc-clave">{a.clave} - {a.unit} - {a.date}</div>
+        <div className="sc-concept">{a.concept}</div>
+        <div className="sc-pu">{money(tt.pu)} <small>/ {a.unit}</small></div>
+        <div className="sc-actions"><button onClick={()=>setApu(a)}>Abrir</button></div>
       </div>;})}</div>
     </div>}
   </section>
@@ -1729,7 +1808,7 @@ function MatrixTable({kind,rows,updateRow,removeRow,onMarketPrice,priceBusy}){
     ? ['Descripción','Jornadas','Unidad','Salario base','FSR','Importe','$','']
     : ['Descripción','Cant.','Unidad','Costo horario','Importe','$',''];
   const editIdx = kind==='equipment' ? [0,1,2,3] : [0,1,2,3,4];
-  return <table className="data-table apu-table">
+  return <div className="apu-table-scroll"><table className="data-table apu-table">
     <thead><tr>{headers.map((h,hi)=><th key={hi}>{h}</th>)}</tr></thead>
     <tbody>{rows.map((r,i)=><tr key={i}>
       {editIdx.map(k=><td key={k}><input value={r[k]} onChange={e=>updateRow(kind,i,k,e.target.value)} /></td>)}
@@ -1737,7 +1816,7 @@ function MatrixTable({kind,rows,updateRow,removeRow,onMarketPrice,priceBusy}){
       <td className="del">{onMarketPrice ? <button className="row-del" title="Buscar precio real de mercado (busqueda web con IA)" aria-label="Buscar precio real de mercado" disabled={priceBusy===`${kind}-${i}`} onClick={()=>onMarketPrice(kind,i)}>{priceBusy===`${kind}-${i}` ? '…' : '$'}</button> : null}</td>
       <td className="del"><button className="row-del" title="Eliminar" aria-label="Eliminar renglon" onClick={()=>removeRow(kind,i)}>×</button></td>
     </tr>)}</tbody>
-  </table>
+  </table></div>
 }
 
 function Param({label,v,on}){return <div className="param"><label>{label}</label><input type="number" step="0.1" value={v} onChange={e=>on(e.target.value)}/></div>}
@@ -2317,7 +2396,7 @@ function buildCompleteAPUSheet(apu, totals, company, audit){
   return { sheet:`APU-${apu.clave}`.slice(0,31), rows, widths, stickyRowsCount:13 };
 }
 
-function exportAPUExcel(apu, totals, company){
+async function exportAPUExcel(apu, totals, company){
   const audit = buildAuditModel(apu, totals);
   const meta = [
     [xcell(company.name || 'ZOEMEC', XLS.title)],
@@ -2354,7 +2433,7 @@ function exportAPUExcel(apu, totals, company){
     ...((apu.notes || []).length ? apu.notes.map(n=>[n]) : [['Sin notas adicionales']])
   ];
   const sheets = [buildCompleteAPUSheet(apu, totals, company, audit)];
-  exportWorkbookExcel(sheets, `${apu.clave}-APU-AUDITABLE-ZOEMEC.xlsx`).catch(()=>alert('No pude generar el Excel. Inténtalo de nuevo.'));
+  await exportWorkbookExcel(sheets, `${apu.clave}-APU-AUDITABLE-ZOEMEC.xlsx`).catch(()=>alert('No pude generar el Excel. Inténtalo de nuevo.'));
 }
 
 function uniqueSheetName(base, used){
@@ -2428,22 +2507,22 @@ function Budgets({company,budgets,setBudgets,items,setItems}){
   const removeRow=(i)=>setItems(items.filter((_,idx)=>idx!==i));
   const save=()=>{setBudgets([{id:'PRE-'+uid(),name:'Presupuesto ejecutivo',client:'Cliente por definir',items,total:total+iva,date:new Date().toLocaleDateString('es-MX')},...budgets]); alert('Presupuesto guardado');};
   return <section><PageHead kicker="Presupuestos" title="Presupuesto profesional" desc="Captura conceptos con su precio unitario (sin IVA), calcula totales con IVA y exporta con membrete. Las calculadoras del Centro Técnico pueden enviar conceptos directo aquí." action={<button onClick={save}>Guardar presupuesto</button>} />
-    <div className="panel"><table className="budget-table"><thead><tr><th>Concepto</th><th>Unidad</th><th>Cantidad</th><th>P.U. (sin IVA)</th><th>Importe</th><th></th></tr></thead><tbody>{items.map((it,i)=><tr key={i}><td><input value={it.concept} onChange={e=>update(i,'concept',e.target.value)}/></td><td><input value={it.unit} onChange={e=>update(i,'unit',e.target.value)}/></td><td><input type="number" value={it.qty} onChange={e=>update(i,'qty',e.target.value)}/></td><td><input type="number" value={it.pu} onChange={e=>update(i,'pu',e.target.value)}/></td><td>{money(it.qty*it.pu)}</td><td><a className="row-del" title="Eliminar concepto" onClick={()=>removeRow(i)}>✕</a></td></tr>)}</tbody></table><button className="soft" onClick={()=>setItems([...items,{concept:'Nuevo concepto',unit:'m²',qty:1,pu:0}])}>+ Agregar concepto</button><div className="totals"><Cost label="Subtotal" v={total}/><Cost label="IVA 16%" v={iva}/><div className="grand"><span>Total</span><b>{money(total+iva)}</b></div></div><div className="export-row"><button onClick={()=>exportBudgetExcel(items,total,iva)}>Exportar Excel</button><button onClick={()=>exportBudgetPDF(items,total,iva,company)}>Exportar PDF</button></div></div>
+    <div className="panel"><div className="apu-table-scroll"><table className="budget-table"><thead><tr><th>Concepto</th><th>Unidad</th><th>Cantidad</th><th>P.U. (sin IVA)</th><th>Importe</th><th></th></tr></thead><tbody>{items.map((it,i)=><tr key={i}><td><input value={it.concept} onChange={e=>update(i,'concept',e.target.value)}/></td><td><input value={it.unit} onChange={e=>update(i,'unit',e.target.value)}/></td><td><input type="number" value={it.qty} onChange={e=>update(i,'qty',e.target.value)}/></td><td><input type="number" value={it.pu} onChange={e=>update(i,'pu',e.target.value)}/></td><td>{money(it.qty*it.pu)}</td><td><a className="row-del" title="Eliminar concepto" onClick={()=>removeRow(i)}>✕</a></td></tr>)}</tbody></table></div><button className="soft" onClick={()=>setItems([...items,{concept:'Nuevo concepto',unit:'m²',qty:1,pu:0}])}>+ Agregar concepto</button><div className="totals"><Cost label="Subtotal" v={total}/><Cost label="IVA 16%" v={iva}/><div className="grand"><span>Total</span><b>{money(total+iva)}</b></div></div><div className="export-row"><button onClick={()=>exportBudgetExcel(items,total,iva)}>Exportar Excel</button><button onClick={()=>exportBudgetPDF(items,total,iva,company)}>Exportar PDF</button></div></div>
   </section>
 }
 function exportBudgetExcel(items,total,iva){const rows=[['PRESUPUESTO'],['Concepto','Unidad','Cantidad','P.U. (sin IVA)','Importe'],...items.map(i=>[i.concept,i.unit,i.qty,i.pu,Number(i.qty)*Number(i.pu)]),[],['Subtotal',total],['IVA 16%',iva],['Total',total+iva]];exportRowsExcel(rows,'Presupuesto-ZOEMEC.xlsx').catch(()=>alert('No pude generar el Excel. Inténtalo de nuevo.'));}
 function exportBudgetPDF(items,total,iva,company){const doc=new jsPDF();let y=16;doc.setFontSize(16);doc.text(company.name||'ZOEMEC',14,y);doc.setFontSize(13);doc.text('PRESUPUESTO EJECUTIVO',14,y+14);y+=28;items.forEach(i=>{doc.text(i.concept,14,y,{maxWidth:100});doc.text(i.unit,118,y);doc.text(String(i.qty),135,y);doc.text(money(i.pu),152,y);doc.text(money(i.qty*i.pu),174,y);y+=10;if(y>270){doc.addPage();y=18;}});y+=6;doc.text('Subtotal',130,y);doc.text(money(total),170,y);y+=8;doc.text('IVA 16%',130,y);doc.text(money(iva),170,y);y+=8;doc.text('Total',130,y);doc.text(money(total+iva),170,y);doc.save('Presupuesto-ZOEMEC.pdf');}
 
-function ClientsProjects({clients,setClients,projects,setProjects}){
+function ClientsProjects({clients,setClients,projects,setProjects,demoClients=[],demoProjects=[]}){
   return <section><PageHead kicker="Cartera de obra" title="Clientes y proyectos" desc="Administra clientes, contactos, RFC, obras, avances y presupuestos desde un solo módulo." />
     <div className="combined-stack">
-      <Projects projects={projects} setProjects={setProjects} embedded />
-      <Clients clients={clients} setClients={setClients} embedded />
+      <Projects projects={projects} setProjects={setProjects} demoProjects={demoProjects} embedded />
+      <Clients clients={clients} setClients={setClients} demoClients={demoClients} embedded />
     </div>
   </section>;
 }
 
-function Projects({projects,setProjects,embedded=false}){
+function Projects({projects,setProjects,demoProjects=[],embedded=false}){
   const list = projects || [];
   useEffect(()=>{
     const cleaned=list.filter(p=>!(p?.name==='Nuevo proyecto' && p?.client==='Cliente por definir' && Number(p?.budget||0)===0 && Number(p?.progress||0)===0));
@@ -2485,9 +2564,19 @@ function Projects({projects,setProjects,embedded=false}){
       <b>{money(p.budget)}</b>
       <progress value={p.progress} max="100"/>
       <small>{p.progress}% de avance - <a onClick={()=>remove(i)} style={{color:'var(--danger)'}}>eliminar</a></small>
-    </div>)}</div> : <div className="panel"><EmptyState text="No hay proyectos reales cargados. Usa “Nuevo proyecto” para iniciar tu cartera."/></div>}</section>
+    </div>)}</div> : (demoProjects.length ? <div className="panel">
+      <DemoBadge/>
+      <div className="cards-3" style={{marginTop:12}}>{demoProjects.map((p,i)=><div className="project-card demo-card" key={i}>
+        <span>{p.status}</span>
+        <h2>{p.name}</h2>
+        <p>{p.client}</p>
+        <b>{money(p.budget)}</b>
+        <progress value={p.progress} max="100"/>
+        <small>{p.progress}% de avance</small>
+      </div>)}</div>
+    </div> : <div className="panel"><EmptyState text="No hay proyectos reales cargados. Usa “Nuevo proyecto” para iniciar tu cartera."/></div>)}</section>
 }
-function Clients({clients,setClients,embedded=false}){
+function Clients({clients,setClients,demoClients=[],embedded=false}){
   const [q,setQ]=useState('');
   const [showForm,setShowForm]=useState(false);
   const [draft,setDraft]=useState({name:'',type:'Empresa',contact:'',phone:'',email:'',rfc:'',status:'Prospecto'});
@@ -2523,7 +2612,10 @@ function Clients({clients,setClients,embedded=false}){
       </div>
       <div className="form-actions"><button className="secondary" onClick={()=>setDraft({name:'',type:'Empresa',contact:'',phone:'',email:'',rfc:'',status:'Prospecto'})}>Limpiar</button><button onClick={save}>Guardar cliente</button></div>
     </div></div>}
-    <div className="panel clients-panel"><input className="search" placeholder="Buscar cliente, contacto o correo..." value={q} onChange={e=>setQ(e.target.value)}/><div className="client-grid">{filtered.map(c=><div className="client-card" key={c.id}><div className="client-avatar">{(c.name||'C')[0]}</div><div><h2>{c.name}</h2><p>{c.type} - {c.contact}</p><small>{c.email || c.phone || 'Sin contacto registrado'}</small><small>RFC: {c.rfc || 'Pendiente'}</small><div className="client-stats"><span>{c.projects} proyectos</span><span>{c.budgets} presupuestos</span><b>{money(c.amount)}</b></div></div><em>{c.status}</em></div>)}</div>{!filtered.length && <EmptyState text="No hay clientes con ese criterio. Agrega un cliente con datos completos para iniciar la cartera."/>}</div>
+    <div className="panel clients-panel"><input className="search" placeholder="Buscar cliente, contacto o correo..." value={q} onChange={e=>setQ(e.target.value)}/><div className="client-grid">{filtered.map(c=><div className="client-card" key={c.id}><div className="client-avatar">{(c.name||'C')[0]}</div><div><h2>{c.name}</h2><p>{c.type} - {c.contact}</p><small>{c.email || c.phone || 'Sin contacto registrado'}</small><small>RFC: {c.rfc || 'Pendiente'}</small><div className="client-stats"><span>{c.projects} proyectos</span><span>{c.budgets} presupuestos</span><b>{money(c.amount)}</b></div></div><em>{c.status}</em></div>)}</div>{!filtered.length && !clients.length && demoClients.length>0 && <>
+      <DemoBadge/>
+      <div className="client-grid" style={{marginTop:12}}>{demoClients.map(c=><div className="client-card demo-card" key={c.id}><div className="client-avatar">{(c.name||'C')[0]}</div><div><h2>{c.name}</h2><p>{c.type} - {c.contact}</p><small>{c.email || c.phone || 'Sin contacto registrado'}</small><small>RFC: {c.rfc || 'Pendiente'}</small><div className="client-stats"><span>{c.projects} proyectos</span><span>{c.budgets} presupuestos</span><b>{money(c.amount)}</b></div></div><em>{c.status}</em></div>)}</div>
+    </>}{!filtered.length && (clients.length || !demoClients.length) && <EmptyState text="No hay clientes con ese criterio. Agrega un cliente con datos completos para iniciar la cartera."/>}</div>
   </section>
 }
 
@@ -2576,7 +2668,7 @@ function scoreLibraryFile(file,q=''){
   return terms.reduce((n,t)=>n+(hay.includes(t)?2:0), hay.includes(query)?8:0);
 }
 
-function Library({user}){
+function Library({user,demoDocs=[]}){
   const [files,setFiles]=useLocalState('zoemec-biblioteca',[]);
   const [uploading,setUploading]=useState(false);
   const [q,setQ]=useState('');
@@ -2653,15 +2745,21 @@ function Library({user}){
     alert(`Indice actualizado para ${visible.length} documento(s). Ya puedes buscar por familia, tags y tipo tecnico.`);
   };
   const suggestions=['muro block 15','loseta porcelanato','rendimiento albanil','PTR lavabo','tablaroca durock','indirectos oficina'];
+  const showDemoLibrary = files.length===0 && demoDocs.length>0;
   if(!canUse(user,'library')){
     return <section><PageHead kicker="Biblioteca ZOEMEC" title="Centro inteligente de costos" desc="La biblioteca tecnica es una funcion premium porque permite consultar bases, matrices, documentos y fuentes para IA." />
       <div className="locked-panel panel"><Icon name="biblioteca" size={42}/><div><h2>Biblioteca bloqueada para plan gratis</h2><p>Tu cuenta gratis incluye 1 APU. Para subir bases, indexar documentos, consultar matrices y usar la biblioteca como fuente de IA necesitas plan Inicial, Profesional o Empresa.</p><button onClick={()=>alert('Aqui se conectara Stripe o Mercado Pago para activar el plan automaticamente.')}>Activar plan</button></div></div>
       <div className="library-grid">{[['Inicial','Biblioteca limitada, academia y 10 APUs/mes','Para probar'],['Profesional','Biblioteca completa, cursos, IA y exportaciones','Recomendado'],['Empresa','Usuarios, permisos y biblioteca privada','Equipos']].map(f=><div className="folder" key={f[0]}><b>{f[0]}</b><p>{f[1]}</p><span>{f[2]}</span></div>)}</div>
+      {demoDocs.length>0 && <div className="panel" style={{marginTop:16}}>
+        <h2>Vista previa de la biblioteca <small className="hint">({demoDocs.length})</small></h2>
+        <DemoBadge/>
+        <div className="lib-table" style={{marginTop:12}}>{demoDocs.map((f,i)=><div className="lib-file demo-card" key={'locked-demo-'+i}><span className="lib-ext">{f.ext||'DOC'}</span><div className="lib-meta"><b>{f.name}</b><small>{f.cat} - {f.family || 'General'} - {f.size} - {f.when}</small><em>{(f.tags||[]).slice(0,5).join(' · ')}</em></div></div>)}</div>
+      </div>}
     </section>;
   }
   return <section><PageHead kicker="Biblioteca ZOEMEC" title="Biblioteca y academia técnica" desc="Organiza costos, matrices, mano de obra, normas, formatos y cursos en un solo centro de conocimiento." />
     <div className="lib-hero panel">
-      <div><small>Base tecnica</small><h2>{files.length ? `${files.length} documentos listos` : 'Sube tu primera base'}</h2><p>La biblioteca debe funcionar como buscador tecnico, no como bodega de archivos. Cada documento queda clasificado por uso y listo para IA.</p></div>
+      <div><small>Base tecnica</small><h2>{files.length ? `${files.length} documentos listos` : 'Sube tu primera base'}</h2><p>La biblioteca debe funcionar como buscador tecnico, no como bodega de archivos. Cada documento queda clasificado por uso y listo para IA.</p>{showDemoLibrary && <DemoBadge/>}</div>
       <div className="lib-hero-actions"><button className="secondary" onClick={()=>alert('Estado de nube: Firebase Storage guarda archivos y Firestore guarda metadata. Revisa reglas de Storage/Firestore y planes de usuario para produccion.')}>Estado de nube</button><label className="up-btn">{uploading?'Subiendo...':'Subir lote'}<input type="file" multiple onChange={e=>add(e.target.files)} hidden disabled={uploading}/></label></div>
     </div>
     <div className="lib-cloud panel">
@@ -2676,7 +2774,7 @@ function Library({user}){
       <div className="lib-workbench">
         <aside className="lib-folders">{counts.map(([name,count])=><button key={name} onClick={()=>setFilterType(name)} className={type===name?'active':''}><Icon name="folder" size={15}/><span>{name}</span><b>{count}</b></button>)}</aside>
         <div className={view==='tablero'?'lib-board':'lib-table'}>
-          {pageItems.length ? pageItems.map((f)=>{ const i=f.__idx ?? files.indexOf(f); const cat=f.cat||classify(f.name); const isActive=active?.name===f.name && active?.when===f.when; return <div className={'lib-file '+(isActive?'active':'')} key={i} onClick={()=>setSelected(f)}><span className="lib-ext">{f.ext||'DOC'}</span><div className="lib-meta"><b>{f.name}</b><small>{cat} - {f.family || 'General'} - {f.size} - {f.when}</small><em>{(f.tags||[]).length ? (f.tags||[]).slice(0,5).join(' · ') : cat==='Matrices APU'?'Puede alimentar APUs':cat==='Mano de obra'?'Rendimientos y cuadrillas':cat==='Costos'?'Precios y catalogos':'Consulta tecnica'}</em></div><div className="lib-actions"><button className="soft" onClick={(e)=>{e.stopPropagation(); f.downloadURL ? window.open(f.downloadURL,'_blank') : setSelected(f)}}>{f.downloadURL?'Abrir':'Ver'}</button><button className="row-del" onClick={(e)=>{e.stopPropagation();del(i)}}>x</button></div></div>}) : <div className="lib-empty">No hay documentos con ese filtro. Sube archivos o cambia la busqueda.</div>}
+          {pageItems.length ? pageItems.map((f)=>{ const i=f.__idx ?? files.indexOf(f); const cat=f.cat||classify(f.name); const isActive=active?.name===f.name && active?.when===f.when; return <div className={'lib-file '+(isActive?'active':'')} key={i} onClick={()=>setSelected(f)}><span className="lib-ext">{f.ext||'DOC'}</span><div className="lib-meta"><b>{f.name}</b><small>{cat} - {f.family || 'General'} - {f.size} - {f.when}</small><em>{(f.tags||[]).length ? (f.tags||[]).slice(0,5).join(' · ') : cat==='Matrices APU'?'Puede alimentar APUs':cat==='Mano de obra'?'Rendimientos y cuadrillas':cat==='Costos'?'Precios y catalogos':'Consulta tecnica'}</em></div><div className="lib-actions"><button className="soft" onClick={(e)=>{e.stopPropagation(); f.downloadURL ? window.open(f.downloadURL,'_blank') : setSelected(f)}}>{f.downloadURL?'Abrir':'Ver'}</button><button className="row-del" onClick={(e)=>{e.stopPropagation();del(i)}}>x</button></div></div>}) : (showDemoLibrary ? demoDocs.map((f,i)=><div className="lib-file demo-card" key={'demo-'+i}><span className="lib-ext">{f.ext||'DOC'}</span><div className="lib-meta"><b>{f.name}</b><small>{f.cat} - {f.family || 'General'} - {f.size} - {f.when}</small><em>{(f.tags||[]).slice(0,5).join(' · ')}</em></div></div>) : <div className="lib-empty">No hay documentos con ese filtro. Sube archivos o cambia la busqueda.</div>)}
           {visible.length > pageSize && <div className="lib-pager"><button className="soft" disabled={safePage<=1} onClick={()=>setPage(safePage-1)}>Anterior</button><span>{(safePage-1)*pageSize+1}-{Math.min(safePage*pageSize,visible.length)} de {visible.length}</span><button className="soft" disabled={safePage>=pages} onClick={()=>setPage(safePage+1)}>Siguiente</button></div>}
         </div>
         <aside className="lib-preview pro"><small>Ficha tecnica</small><h2>{active?.name || 'Sin archivo seleccionado'}</h2><p>{active ? (active.cat || classify(active.name))+' - '+(active.family || 'General')+' - '+(active.ext || 'DOC')+' - '+active.size : 'Sube documentos para crear una base consultable.'}</p>{active?.tags?.length ? <div className="lib-tags-mini">{active.tags.map(t=><span key={t}>{t}</span>)}</div> : null}<div className="lib-ai-card"><b>Acciones IA</b><button onClick={()=>alert('Usara este archivo como fuente para sugerir materiales, MO, equipo y rendimientos.')}>Usar para generar APU</button><button onClick={()=>alert('Comparara nombre, categoria y familia tecnica para sugerir matrices compatibles.')}>Buscar matrices similares</button><button onClick={()=>alert('Extraera descripciones, unidades, precios y rendimientos a una tabla auditable cuando el extractor de contenido este conectado.')}>Extraer insumos</button><button onClick={indexVisible}>Crear indice</button></div><div className="lib-trace"><span>Estado</span><b>{active?.status || 'Pendiente'}</b><span>Permiso</span><b>{user?.role==='admin'?'Administrador':'Plan Profesional'}</b><span>Confianza</span><b>{active ? `${active.confidence || 50}%` : 'Sin fuente'}</b></div></aside>
@@ -3020,7 +3118,7 @@ function VisualAI({user}){
       setResult(data.result || localBrief());
     }catch(err){
       setGeneratedImage('');
-      setResult(`${localBrief()}\n\nNo pude generar con IA en este momento:\n${err?.message || 'Revisa OPENAI_API_KEY y permisos del usuario en Vercel.'}`);
+      setResult(`${localBrief()}\n\nNo pude generar con IA en este momento:\n${friendlyServiceError(err,'Servicio temporalmente no disponible. Intenta de nuevo mas tarde.')}`);
     }finally{
       setLoading(false);
     }
@@ -3039,7 +3137,7 @@ function VisualAI({user}){
         <div className="visual-modes">{[['fachada','Fachada'],['plano','Plano a 3D'],['interior','Interior'],['obra','Revision de obra']].map(x=><button key={x[0]} className={mode===x[0]?'active':''} onClick={()=>setMode(x[0])}>{x[1]}</button>)}</div>
         <label>Instrucciones para la IA</label>
         <textarea value={prompt} onChange={e=>setPrompt(e.target.value)} placeholder="Ej. Quiero ver esta fachada mas moderna, con piedra, luz calida y porton negro..." />
-        <div className="visual-actions"><button onClick={generate} disabled={loading}>{loading?'Generando...':'Generar brief visual'}</button><button className="secondary" onClick={()=>alert('Configuracion IA: /api/visual-ai usa OPENAI_API_KEY en Vercel. Para guardar historial agrega FIREBASE_SERVICE_ACCOUNT_JSON.')}>Ver configuracion IA</button></div>
+        <div className="visual-actions"><button onClick={generate} disabled={loading}>{loading?'Generando...':'Generar brief visual'}</button><button className="secondary" onClick={()=>alert('La generacion con IA y el historial se procesan de forma segura en el servidor.')}>Ver configuracion IA</button></div>
       </div>
       <div className="panel visual-result">
         <h2>Salida tecnica</h2>
@@ -3077,7 +3175,7 @@ function PlansAccess({user}){
     ['Base de datos', 'Firestore para APUs, presupuestos, biblioteca, foro, planes y permisos.'],
     ['Archivos', 'Firebase Storage o Vercel Blob para Excel, PDF, cursos y documentos pesados.'],
     ['Cobro', 'Mercado Pago o Stripe con webhooks para activar plan automaticamente.'],
-    ['IA segura', 'Endpoint serverless en Vercel; la OPENAI_API_KEY nunca va en el navegador.'],
+    ['IA segura', 'Endpoint serverless; la llave de IA nunca viaja al navegador del usuario.'],
     ['Control de uso', 'Contadores mensuales por plan: APUs, tokens IA, descargas y usuarios.']
   ];
   const payPlan=async(plan, method='Mercado Pago')=>{
@@ -3099,7 +3197,7 @@ function PlansAccess({user}){
       if(data.url) window.location.href=data.url;
       else alert('El checkout respondio sin URL. Revisa el endpoint de Vercel.');
     }catch(err){
-      alert(`No pude crear el checkout: ${err?.message || 'configura Mercado Pago/Stripe en Vercel.'}`);
+      alert(`No pude crear el checkout: ${friendlyServiceError(err,'Este metodo de pago no esta disponible en este momento.')}`);
     }finally{
       setPaying('');
     }
@@ -3111,7 +3209,7 @@ function PlansAccess({user}){
       <button onClick={()=>payPlan(p.name)} disabled={Boolean(paying)}>{paying.endsWith(p.name)?'Conectando...':(p.featured?'Plan recomendado':'Configurar')}</button>
     </div>)}</div>
     <div className="payment-panel panel">
-      <div className="payment-head"><div><small>Cobro real</small><h2>Metodos de pago para publicar</h2><p>El pago debe hacerse con un endpoint seguro. Las llaves secretas de Mercado Pago o Stripe nunca van dentro del React.</p></div><button onClick={()=>alert('En Vercel se configuran variables como MP_ACCESS_TOKEN, STRIPE_SECRET_KEY y WEBHOOK_SECRET.')}>Ver variables</button></div>
+      <div className="payment-head"><div><small>Cobro real</small><h2>Metodos de pago para publicar</h2><p>El pago debe hacerse con un endpoint seguro. Las llaves secretas de Mercado Pago o Stripe nunca van dentro del React.</p></div><button onClick={()=>alert('Las credenciales de cobro se configuran de forma segura en el servidor, nunca en el navegador.')}>Ver configuracion</button></div>
       <div className="payment-grid">{payments.map(m=><div className="payment-card" key={m.name}>
         <span>{m.tag}</span><h3>{m.name}</h3><p>{m.desc}</p>
         <button onClick={()=>payPlan('Profesional',m.name)} disabled={Boolean(paying)}>{paying.startsWith(m.name)?'Conectando...':m.action}</button>
@@ -3122,13 +3220,13 @@ function PlansAccess({user}){
     <div className="prod-grid">{production.map(([t,d])=><div className="prod-step" key={t}><b>{t}</b><p>{d}</p><small>Configurado por variables seguras y reglas de Firebase</small></div>)}</div>
   </section>
 }
-function Reports({clients,apus,budgets}){
+function Reports({clients,apus,budgets,demo=false}){
   const total=budgets.reduce((a,b)=>a+(b.total||0),0);
   const hasData = Boolean(clients.length || apus.length || budgets.length);
   const segs=hasData ? [{label:'Presupuestos',value:budgets.length,color:'#9D6FD0'},{label:'APUs',value:apus.length,color:'#2A1740'},{label:'Clientes',value:clients.length,color:'#C7A35C'}].filter(s=>s.value>0) : [];
   const bars=[['Presupuestos enviados',Math.min(100,budgets.length*10),'#9D6FD0'],['APU creados',Math.min(100,apus.length*10),'#2A1740'],['Clientes nuevos',Math.min(100,clients.length*10),'#C7A35C']];
   const alerts=hasData ? [...apus.slice(0,2).map(a=>`APU ${a.clave || a.id} disponible para revisar`), ...budgets.slice(0,2).map(b=>`Presupuesto ${b.name} en cartera`)] : [];
-  return <section><PageHead kicker="Reportes" title="Tablero ejecutivo" desc="Ventas, presupuestos, clientes, APUs, avances, utilidad y rendimiento de la oficina." action={<button>Exportar reporte</button>} /><div className="report-hero"><div><small>Venta potencial</small><b>{money(total)}</b><span>acumulado</span></div><div><small>Pipeline</small><b>{budgets.length ? 'Activo' : '0%'}</b><span>tasa de cierre</span></div><div><small>Productividad</small><b>{apus.length}</b><span>APU generados</span></div><div><small>Clientes</small><b>{clients.length}</b><span>activos</span></div></div><div className="dash-charts report-grid"><div className="panel"><h2>Cotizacion mensual</h2><Spark points={budgets.length ? budgets.slice(-8).map(b=>Math.max(1,(Number(b.total)||0)/1000)) : [0,0,0,0,0,0,0,0]} h={110}/><div className="chart-foot"><span>{budgets.length ? 'Presupuestos reales' : 'Sin datos reales'}</span><b>{budgets.length ? 'Actualizado' : '0% acumulado'}</b></div></div><div className="panel chart-donut"><h2>Cartera por tipo de obra</h2><Donut segments={segs} center={hasData ? '100%' : '0%'} sub="cartera"/><div className="donut-legend">{segs.length ? segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>) : <EmptyState text="Sin datos para graficar."/>}</div></div></div><div className="report-bottom"><div className="panel"><h2>Resumen mensual</h2>{bars.map(([label,val,color])=><div className="bar-row" key={label}><span>{label}</span><i><b style={{width:val+'%',background:color}}></b></i><em className="bar-val">{val}%</em></div>)}</div><div className="panel"><h2>Alertas ejecutivas</h2>{alerts.length ? alerts.map(a=><div className="activity" key={a}><Icon name="bell" size={15}/> {a}</div>) : <EmptyState text="Sin alertas hasta que existan movimientos reales."/>}</div></div></section>
+  return <section><PageHead kicker="Reportes" title="Tablero ejecutivo" desc="Ventas, presupuestos, clientes, APUs, avances, utilidad y rendimiento de la oficina." action={<>{demo && <DemoBadge/>}<button>Exportar reporte</button></>} /><div className="report-hero"><div><small>Venta potencial</small><b>{money(total)}</b><span>acumulado</span></div><div><small>Pipeline</small><b>{budgets.length ? 'Activo' : '0%'}</b><span>tasa de cierre</span></div><div><small>Productividad</small><b>{apus.length}</b><span>APU generados</span></div><div><small>Clientes</small><b>{clients.length}</b><span>activos</span></div></div><div className="dash-charts report-grid"><div className="panel"><h2>Cotizacion mensual</h2><Spark points={budgets.length ? budgets.slice(-8).map(b=>Math.max(1,(Number(b.total)||0)/1000)) : [0,0,0,0,0,0,0,0]} h={110}/><div className="chart-foot"><span>{budgets.length ? 'Presupuestos reales' : 'Sin datos reales'}</span><b>{budgets.length ? 'Actualizado' : '0% acumulado'}</b></div></div><div className="panel chart-donut"><h2>Cartera por tipo de obra</h2><Donut segments={segs} center={hasData ? '100%' : '0%'} sub="cartera"/><div className="donut-legend">{segs.length ? segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>) : <EmptyState text="Sin datos para graficar."/>}</div></div></div><div className="report-bottom"><div className="panel"><h2>Resumen mensual</h2>{bars.map(([label,val,color])=><div className="bar-row" key={label}><span>{label}</span><i><b style={{width:val+'%',background:color}}></b></i><em className="bar-val">{val}%</em></div>)}</div><div className="panel"><h2>Alertas ejecutivas</h2>{alerts.length ? alerts.map(a=><div className="activity" key={a}><Icon name="bell" size={15}/> {a}</div>) : <EmptyState text="Sin alertas hasta que existan movimientos reales."/>}</div></div></section>
 }
 
 createRoot(document.getElementById('root')).render(<App />);

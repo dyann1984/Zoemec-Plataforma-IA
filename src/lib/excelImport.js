@@ -455,7 +455,9 @@ export function parseCSV(text){
 }
 export function parseConceptText(input){
   const text=(input||'').replace(/\s+/g,' ').trim();
-  const unitMatch=text.match(/\b(m2|m²|m3|m³|kg|pza|pieza|ml|lote|jgo|hr)\b/i);
+  // (?!\s*\/\s*cm) evita capturar el "kg" de una resistencia de material tipo
+  // f'c=250 kg/cm² o fy=4200 kg/cm², que no es la unidad de medida del concepto.
+  const unitMatch=text.match(/\b(m2|m²|m3|m³|kg|pza|pieza|ml|lote|jgo|hr)\b(?!\s*\/\s*cm)/i);
   const moneyMatches=[...text.matchAll(/\$?\s*([0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?)/g)]
     .map(m=>({raw:m[0], value:parseFloat(m[1].replace(/,/g,'')), index:m.index ?? 0}))
     .filter(x=>!Number.isNaN(x.value));

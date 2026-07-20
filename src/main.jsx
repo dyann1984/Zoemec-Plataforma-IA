@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import jsPDF from 'jspdf';
 import writeXlsxFile from 'write-excel-file/browser';
 import { createUserWithEmailAndPassword, GoogleAuthProvider, onAuthStateChanged, sendEmailVerification, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile } from 'firebase/auth';
-import { addDoc, collection, doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { addDoc, collection, doc, getDoc, getDocs, serverTimestamp, setDoc } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { auth, db, firebaseReady, storage } from './firebase.js';
 import { useCloudState } from './cloud.js';
@@ -58,7 +58,8 @@ const ICONS = {
   micStop:<><rect x="7" y="7" width="10" height="10" rx="2"/></>,
   speakerOn:<><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 8.5a4 4 0 010 7M19 6a7.5 7.5 0 010 12"/></>,
   speakerOff:<><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 9l5 6M21 9l-5 6"/></>,
-  history:<><path d="M3 12a9 9 0 109-9 9 9 0 00-8 5"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></>
+  history:<><path d="M3 12a9 9 0 109-9 9 9 0 00-8 5"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></>,
+  admin:<><path d="M12 2l8 3.5v6c0 5-3.4 8.7-8 10.5-4.6-1.8-8-5.5-8-10.5v-6z"/><path d="M9 12l2 2 4-4"/></>
 };
 function Icon({name,size=20}){return <svg className="ic" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{ICONS[name]||ICONS.doc}</svg>;}
 
@@ -256,6 +257,18 @@ function App(){
   }, [setBudgetItems]);
   const companyView = (!company?.logo || company.logo === '/logo.png' || company.logo === '/images/logo-web.png') ? {...company, logo:'/images/logo-web.png?v=zoemec-2026'} : company;
 
+  // Copia el nombre de la empresa en users/{uid} (denormalizado) para que el Panel
+  // Admin pueda listar organizaciones sin necesitar acceso al blob comprimido de
+  // estado por usuario (users/{uid}/state/*), que las reglas de Firestore no le
+  // otorgan al rol admin. Debounced para no escribir en cada tecleo.
+  useEffect(() => {
+    if(!firebaseReady || !user?.uid || !company?.name) return;
+    const t = window.setTimeout(() => {
+      setDoc(doc(db, 'users', user.uid), { companyName: company.name }, { merge:true }).catch(()=>{});
+    }, 1200);
+    return () => window.clearTimeout(t);
+  }, [user?.uid, company?.name]);
+
   useEffect(() => {
     localStorage.removeItem('zoemec-user');
     const legacyClients = new Set(legacySeedClientNames);
@@ -450,6 +463,7 @@ function App(){
     {module === 'comunidad' && <Community />}
     {module === 'planes' && <PlansAccess user={user} />}
     {module === 'reportes' && <Reports clients={clients} apus={apus} budgets={budgets} />}
+    {module === 'admin' && user.role==='admin' && <AdminPanel user={user} />}
   </Shell>;
   return <><NoticeHost />{content}</>;
 }
@@ -870,7 +884,8 @@ function Shell({children,user,logout,module,setModule,company}){
     ['cartera','clientes','Proyectos y clientes','Cartera de obra'],
     ['biblioteca','biblioteca','Biblioteca','Academia y documentos'],
     ['tecnico','tecnico','Oficina técnica','Cálculos y formatos'],
-    ['reportes','reportes','Reportes']
+    ['reportes','reportes','Reportes'],
+    ...(user.role==='admin' ? [['admin','admin','Panel Admin','Usuarios, planes y sistema']] : [])
   ];
   return <div className="app-layout">
     <aside className="sidebar">
@@ -1528,32 +1543,40 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     if(!requireApuAccess()) return;
     if(!concept.trim()){ alert('Pega o sube un concepto real para generar con IA.'); return; }
     if(aiBusy) return;
-    const parsed=parseConceptText(concept);
     setAiBusy(true);
-    setAiStatus('Generando APU con IA...');
+    setAiStatus('Analizando el concepto...');
+    const parsed=parseConceptText(concept);
+    const controller=new AbortController();
+    const timer=window.setTimeout(()=>controller.abort(), 30000);
     try{
+      setAiStatus('Consultando biblioteca y catálogo de precios...');
       const res=await fetch(aiServerUrl('/api/generate-apu'),{
         method:'POST',
         headers:await authHeaders(),
-        body:JSON.stringify({concept:parsed.concept,catalog})
+        body:JSON.stringify({concept:parsed.concept,catalog}),
+        signal:controller.signal
       });
       const data=await res.json().catch(()=>({}));
       if(!res.ok) throw new Error(data?.error || 'No se pudo generar con IA.');
+      setAiStatus('Generando matriz APU...');
       const aiDraft=normalizeAIAPU(data.apu, parsed.concept);
       const next=finalizeAIAPU(aiDraft, {concept:parsed.concept, unit:parsed.unit || aiDraft.unit, qty:parsed.qty, referencePU:parsed.referencePU}, 0, 'OpenAI API');
+      setAiStatus('Validando resultados y aplicando precios de catálogo...');
       setConcept(next.concept);
       setApu(next);
       setExcelInfo({fileName:'OpenAI API',concept:next.concept,unit:next.unit,qty:parsed.qty,referencePU:parsed.referencePU,catalog});
       setAiStatus(`IA lista: ${next.family} (${next.confidence}%)`);
       setAiOpen(false);
     }catch(err){
-      const next = templateFallbackAPU({concept:parsed.concept, unit:parsed.unit, qty:parsed.qty, referencePU:parsed.referencePU}, catalog, 0, 'Plantilla tecnica ZOEMEC', friendlyServiceError(err,'servidor no disponible'));
+      const reason = err?.name==='AbortError' ? 'la IA tardo demasiado en responder' : friendlyServiceError(err,'servidor no disponible');
+      const next = templateFallbackAPU({concept:parsed.concept, unit:parsed.unit, qty:parsed.qty, referencePU:parsed.referencePU}, catalog, 0, 'Plantilla tecnica ZOEMEC', reason);
       setConcept(next.concept);
       setApu(next);
       setExcelInfo({fileName:'Plantilla tecnica ZOEMEC',concept:next.concept,unit:next.unit,qty:parsed.qty,referencePU:parsed.referencePU,catalog});
       setAiStatus(`Plantilla tecnica aplicada (IA no disponible): ${next.family}`);
       setAiOpen(false);
     }finally{
+      window.clearTimeout(timer);
       setAiBusy(false);
     }
   };
@@ -1781,7 +1804,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatch} disabled={batchBusy}>{batchBusy?'Generando con IA...':`Descargar Excel: ${conceptBatch.concepts.length} hojas APU`}</button>}
         {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatchPDF}>Descargar PDF: {conceptBatch.concepts.length} APUs</button>}
       </div>
-      {aiStatus && <div className="ai-note"><b>{aiStatus}</b></div>}
+      {aiStatus && <div className={'ai-note'+(aiBusy?' ai-note-busy':'')}>{aiBusy && <span className="asst-dots"><i/><i/><i/></span>}<b>{aiStatus}</b></div>}
       {excelInfo && <div className="excel-preview">
         <div><small>Archivo</small><b>{excelInfo.fileName}</b></div>
         <div><small>Concepto detectado</small><b>{excelInfo.concept}</b></div>
@@ -3290,6 +3313,148 @@ function Reports({clients,apus,budgets}){
   const bars=[['Presupuestos enviados',Math.min(100,budgets.length*10),'#9D6FD0'],['APU creados',Math.min(100,apus.length*10),'#2A1740'],['Clientes nuevos',Math.min(100,clients.length*10),'#C7A35C']];
   const alerts=hasData ? [...apus.slice(0,2).map(a=>`APU ${a.clave || a.id} disponible para revisar`), ...budgets.slice(0,2).map(b=>`Presupuesto ${b.name} en cartera`)] : [];
   return <section><PageHead kicker="Reportes" title="Tablero ejecutivo" desc="Ventas, presupuestos, clientes, APUs, avances, utilidad y rendimiento de la oficina." action={<button>Exportar reporte</button>} /><div className="report-hero"><div><small>Venta potencial</small><b>{money(total)}</b><span>acumulado</span></div><div><small>Pipeline</small><b>{budgets.length ? 'Activo' : '0%'}</b><span>tasa de cierre</span></div><div><small>Productividad</small><b>{apus.length}</b><span>APU generados</span></div><div><small>Clientes</small><b>{clients.length}</b><span>activos</span></div></div><div className="dash-charts report-grid"><div className="panel"><h2>Cotizacion mensual</h2><Spark points={budgets.length ? budgets.slice(-8).map(b=>Math.max(1,(Number(b.total)||0)/1000)) : [0,0,0,0,0,0,0,0]} h={110}/><div className="chart-foot"><span>{budgets.length ? 'Presupuestos reales' : 'Sin datos reales'}</span><b>{budgets.length ? 'Actualizado' : '0% acumulado'}</b></div></div><div className="panel chart-donut"><h2>Cartera por tipo de obra</h2><Donut segments={segs} center={hasData ? '100%' : '0%'} sub="cartera"/><div className="donut-legend">{segs.length ? segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>) : <EmptyState text="Sin datos para graficar."/>}</div></div></div><div className="report-bottom"><div className="panel"><h2>Resumen mensual</h2>{bars.map(([label,val,color])=><div className="bar-row" key={label}><span>{label}</span><i><b style={{width:val+'%',background:color}}></b></i><em className="bar-val">{val}%</em></div>)}</div><div className="panel"><h2>Alertas ejecutivas</h2>{alerts.length ? alerts.map(a=><div className="activity" key={a}><Icon name="bell" size={15}/> {a}</div>) : <EmptyState text="Sin alertas hasta que existan movimientos reales."/>}</div></div></section>
+}
+
+function AdminPanel({user}){
+  const [tab,setTab]=useState('usuarios');
+  const [users,setUsers]=useState(null);
+  const [usersErr,setUsersErr]=useState('');
+  const [library,setLibrary]=useState(null);
+  const [config,setConfig]=useState(null);
+  const [health,setHealth]=useState(null);
+  const [savingUid,setSavingUid]=useState(null);
+  const [savingConfig,setSavingConfig]=useState(false);
+
+  const loadUsers=async()=>{
+    setUsers(null); setUsersErr('');
+    try{
+      const snap=await getDocs(collection(db,'users'));
+      setUsers(snap.docs.map(d=>({id:d.id,...d.data()})));
+    }catch(err){ setUsersErr(friendlyServiceError(err,'No se pudo leer la lista de usuarios.')); setUsers([]); }
+  };
+  const loadLibrary=async()=>{
+    setLibrary(null);
+    try{ const snap=await getDocs(collection(db,'library')); setLibrary(snap.docs.map(d=>({id:d.id,...d.data()}))); }
+    catch{ setLibrary([]); }
+  };
+  const loadConfig=async()=>{
+    setConfig(null);
+    try{ const snap=await getDoc(doc(db,'config','platform')); setConfig(snap.exists()?snap.data():{}); }
+    catch{ setConfig({}); }
+  };
+  const loadHealth=async()=>{
+    setHealth(null);
+    try{
+      const res=await fetch('/api/health', { headers: await authHeaders() });
+      const data=await res.json().catch(()=>null);
+      if(!data) throw new Error('El servicio de diagnostico no respondio con datos validos.');
+      if(!res.ok) throw new Error(data?.error || 'No se pudo consultar el estado del sistema.');
+      setHealth(data);
+    }catch(err){ setHealth({error:friendlyServiceError(err,'No se pudo consultar el estado del sistema.')}); }
+  };
+
+  useEffect(()=>{ loadUsers(); },[]);
+  useEffect(()=>{
+    if(tab==='biblioteca' && library===null) loadLibrary();
+    if(tab==='config' && config===null) loadConfig();
+    if(tab==='sistema' && health===null) loadHealth();
+  },[tab]);
+
+  const updateUser=async(uid,patch)=>{
+    setSavingUid(uid);
+    try{
+      await setDoc(doc(db,'users',uid), patch, {merge:true});
+      setUsers(list=>list.map(u=>u.id===uid?{...u,...patch}:u));
+    }catch(err){ alert(`No pude actualizar el usuario: ${friendlyServiceError(err)}`); }
+    finally{ setSavingUid(null); }
+  };
+  const saveConfig=async()=>{
+    setSavingConfig(true);
+    try{ await setDoc(doc(db,'config','platform'), config||{}, {merge:true}); alert('Configuración guardada.'); }
+    catch(err){ alert(`No pude guardar la configuración: ${friendlyServiceError(err)}`); }
+    finally{ setSavingConfig(false); }
+  };
+
+  const tabs=[['usuarios','Usuarios'],['empresas','Empresas'],['biblioteca','Biblioteca'],['planes','Planes y licencias'],['config','Configuración'],['sistema','Estado del sistema']];
+  const Busy=()=><div className="ai-note-busy"><span className="asst-dots"><i/><i/><i/></span><b>Cargando datos reales de Firestore...</b></div>;
+
+  return <section>
+    <PageHead kicker="Panel Admin" title="Administración de la plataforma" desc="Usuarios, roles, organizaciones, biblioteca, licencias, configuración y estado del sistema, con datos reales de Firestore." />
+    <div className="admin-tabs">{tabs.map(([id,label])=><button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}>{label}</button>)}</div>
+
+    {tab==='usuarios' && <div className="panel admin-panel-body">
+      <div className="admin-panel-head"><h2>Usuarios <small className="hint">({users?.length ?? '…'})</small></h2><button className="soft" onClick={loadUsers}>Actualizar</button></div>
+      {users===null ? <Busy/> :
+       usersErr ? <EmptyState icon="admin" title="No se pudo cargar" text={usersErr}/> :
+       !users.length ? <EmptyState icon="clientes" title="Sin usuarios registrados" text="Cuando alguien se registre en ZOEMEC aparecerá aquí."/> :
+       <div className="admin-table-wrap"><table className="data-table admin-table">
+         <thead><tr><th>Usuario</th><th>Correo</th><th>Empresa</th><th>Rol</th><th>Plan</th><th>Estado</th><th>APUs</th></tr></thead>
+         <tbody>{users.map(u=><tr key={u.id}>
+           <td>{u.name||'—'}</td>
+           <td>{u.email||'—'}</td>
+           <td>{u.companyName||'—'}</td>
+           <td><select value={u.role||'user'} disabled={savingUid===u.id} onChange={e=>updateUser(u.id,{role:e.target.value})}><option value="user">Usuario</option><option value="admin">Administrador</option></select></td>
+           <td><select value={u.plan||'Gratis'} disabled={savingUid===u.id} onChange={e=>updateUser(u.id,{plan:e.target.value})}><option>Gratis</option><option>Inicial</option><option>Profesional</option><option>Empresa</option></select></td>
+           <td><button className={'admin-status-toggle '+(u.active!==false?'ok':'off')} disabled={savingUid===u.id} onClick={()=>updateUser(u.id,{active:u.active===false})}>{u.active!==false?'Activo':'Inactivo'}</button></td>
+           <td>{u.apusCreated||0}</td>
+         </tr>)}</tbody>
+       </table></div>}
+    </div>}
+
+    {tab==='empresas' && (()=>{
+      const groups={};
+      (users||[]).forEach(u=>{ const k=u.companyName||'Sin nombre de empresa'; (groups[k]=groups[k]||[]).push(u); });
+      const rows=Object.entries(groups).sort((a,b)=>b[1].length-a[1].length);
+      return <div className="panel admin-panel-body">
+        <div className="admin-panel-head"><h2>Empresas <small className="hint">({rows.length})</small></h2></div>
+        {users===null ? <Busy/> : !rows.length ? <EmptyState icon="oficina" title="Sin organizaciones aún" text="El nombre de empresa se registra cuando un usuario lo captura en Oficina técnica."/> :
+        <div className="admin-table-wrap"><table className="data-table admin-table">
+          <thead><tr><th>Empresa</th><th>Usuarios</th><th>Planes</th></tr></thead>
+          <tbody>{rows.map(([name,us])=><tr key={name}><td>{name}</td><td>{us.length}</td><td>{[...new Set(us.map(u=>u.plan||'Gratis'))].join(', ')}</td></tr>)}</tbody>
+        </table></div>}
+      </div>;
+    })()}
+
+    {tab==='biblioteca' && <div className="panel admin-panel-body">
+      <div className="admin-panel-head"><h2>Biblioteca <small className="hint">({library?.length ?? '…'})</small></h2><button className="soft" onClick={loadLibrary}>Actualizar</button></div>
+      {library===null ? <Busy/> : !library.length ? <EmptyState icon="biblioteca" title="Sin documentos en Firestore" text="Los documentos que los usuarios suben a la Biblioteca aparecerán aquí."/> :
+      <div className="admin-table-wrap"><table className="data-table admin-table">
+        <thead><tr><th>Documento</th><th>Categoría</th><th>Visibilidad</th><th>Propietario</th><th>Tamaño</th></tr></thead>
+        <tbody>{library.map(f=><tr key={f.id}><td>{f.name||'—'}</td><td>{f.cat||'—'}</td><td>{f.visibility||'private'}</td><td className="admin-uid">{f.ownerUid?String(f.ownerUid).slice(0,8):'—'}</td><td>{f.size||'—'}</td></tr>)}</tbody>
+      </table></div>}
+    </div>}
+
+    {tab==='planes' && (()=>{
+      const plans=['Gratis','Inicial','Profesional','Empresa'];
+      const counts=plans.map(p=>({plan:p,count:(users||[]).filter(u=>(u.plan||'Gratis')===p).length,active:(users||[]).filter(u=>(u.plan||'Gratis')===p && u.active!==false).length}));
+      return <div className="panel admin-panel-body">
+        <div className="admin-panel-head"><h2>Planes y licencias</h2></div>
+        {users===null ? <Busy/> : <div className="admin-plan-grid">{counts.map(c=><div className="admin-plan-card" key={c.plan}><b>{c.plan}</b><span className="admin-plan-count">{c.count}</span><small>{c.active} activos</small></div>)}</div>}
+      </div>;
+    })()}
+
+    {tab==='config' && <div className="panel admin-panel-body">
+      <div className="admin-panel-head"><h2>Configuración de la plataforma</h2></div>
+      {config===null ? <Busy/> : <>
+        <div className="field-grid">
+          <div className="nf"><label>Correo de soporte</label><input value={config.supportEmail||''} onChange={e=>setConfig({...config,supportEmail:e.target.value})} placeholder="soporte@zoemec.mx"/></div>
+          <div className="nf wide"><label>Aviso para todos los usuarios</label><input value={config.announcement||''} onChange={e=>setConfig({...config,announcement:e.target.value})} placeholder="Ej. Mantenimiento programado el sábado"/></div>
+        </div>
+        <button onClick={saveConfig} disabled={savingConfig}>{savingConfig?'Guardando...':'Guardar configuración'}</button>
+      </>}
+    </div>}
+
+    {tab==='sistema' && <div className="panel admin-panel-body">
+      <div className="admin-panel-head"><h2>Estado del sistema</h2><button className="soft" onClick={loadHealth}>Actualizar</button></div>
+      {health===null ? <Busy/> :
+       health.error ? <EmptyState icon="admin" title="No se pudo consultar" text={health.error}/> :
+       <div className="admin-health-grid">{Object.entries(health.checks||{}).map(([key,c])=><div className={'admin-health-card '+c.status} key={key}>
+         <b>{c.label||key}</b>
+         <span className="admin-health-status">{c.status==='ok'?'Operativo':c.status==='error'?'Con errores':'No disponible'}</span>
+         <p>{c.detail}</p>
+       </div>)}</div>}
+    </div>}
+  </section>;
 }
 
 createRoot(document.getElementById('root')).render(<App />);

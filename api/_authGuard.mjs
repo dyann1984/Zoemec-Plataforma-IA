@@ -91,6 +91,29 @@ export async function requireFeature(req, feature){
   };
 }
 
+export async function requireAdmin(req){
+  if(!hasAdminCredentials()){
+    const error = new Error('Falta FIREBASE_SERVICE_ACCOUNT_JSON en Vercel para validar administradores.');
+    error.status = 500;
+    throw error;
+  }
+  const token = bearerToken(req);
+  if(!token){
+    const error = new Error('Inicia sesion como administrador.');
+    error.status = 401;
+    throw error;
+  }
+  const decoded = await getAdminAuth().verifyIdToken(token);
+  const snap = await getAdminDb().collection('users').doc(decoded.uid).get();
+  const profile = snap.exists ? snap.data() : {};
+  if(profile.role !== 'admin'){
+    const error = new Error('Esta seccion es solo para administradores.');
+    error.status = 403;
+    throw error;
+  }
+  return { uid: decoded.uid };
+}
+
 export async function markFeatureUsed(authz){
   if(!authz?.userRef || authz.role === 'admin') return;
   await authz.userRef.set({

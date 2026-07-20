@@ -80,6 +80,8 @@ export function useCloudState(user, key, fallback){
   });
   const uidRef = useRef(uid);
   uidRef.current = uid;
+  const valueRef = useRef(value);
+  valueRef.current = value;
 
   useEffect(() => {
     if(!uid) return;
@@ -105,16 +107,19 @@ export function useCloudState(user, key, fallback){
     return () => { alive = false; };
   }, [uid, key]);
 
+  // No hacer el guardado local/nube dentro del actualizador funcional de setValue:
+  // saveCloud -> emitCloud -> dispatchEvent dispara sincronicamente el setState de
+  // CloudBadge, y React no permite actualizar un componente mientras renderiza otro
+  // (warning "Cannot update a component while rendering a different component").
   const save = useCallback((next) => {
-    setValue(prev => {
-      const v = typeof next === 'function' ? next(prev) : next;
-      try {
-        localStorage.setItem(key, JSON.stringify(v));
-        localStorage.setItem(key + ':ts', String(Date.now()));
-      } catch {}
-      if(uidRef.current) saveCloud(uidRef.current, key, v);
-      return v;
-    });
+    const v = typeof next === 'function' ? next(valueRef.current) : next;
+    valueRef.current = v;
+    setValue(v);
+    try {
+      localStorage.setItem(key, JSON.stringify(v));
+      localStorage.setItem(key + ':ts', String(Date.now()));
+    } catch {}
+    if(uidRef.current) saveCloud(uidRef.current, key, v);
   }, [key]);
 
   return [value, save];

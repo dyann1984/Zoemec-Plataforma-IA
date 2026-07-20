@@ -12,3 +12,4 @@ pnpm-debug.log*
 .vercel
 .tmp/
 samples/library/
+design-assets/

@@ -1,7 +1,7 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
-import { getStorage } from 'firebase/storage';
+import { connectAuthEmulator, getAuth } from 'firebase/auth';
+import { connectFirestoreEmulator, getFirestore } from 'firebase/firestore';
+import { connectStorageEmulator, getStorage } from 'firebase/storage';
 
 export const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyDDsrzynvKAAZKtGDm3Q6pBHrhCiMGMTKI',
@@ -18,3 +18,13 @@ export const firebaseApp = initializeApp(firebaseConfig);
 export const auth = getAuth(firebaseApp);
 export const db = getFirestore(firebaseApp);
 export const storage = getStorage(firebaseApp);
+
+/* Solo para desarrollo/pruebas locales: conecta a los emuladores de Firebase en vez
+   del proyecto real cuando VITE_USE_FIREBASE_EMULATOR=true, para no escribir datos
+   de prueba en el Firestore/Auth de produccion. Nunca se activa en el build de Vercel. */
+if(import.meta.env.DEV && import.meta.env.VITE_USE_FIREBASE_EMULATOR === 'true' && !globalThis.__zoemecEmulatorConnected){
+  globalThis.__zoemecEmulatorConnected = true;
+  connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings:true });
+  connectFirestoreEmulator(db, '127.0.0.1', 8080);
+  connectStorageEmulator(storage, '127.0.0.1', 9199);
+}

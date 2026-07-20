@@ -3,6 +3,17 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
+  server: {
+    proxy: {
+      // El servidor local de IA (npm run ai) expone /api/generate-apu y /api/assistant
+      // en el puerto ZOEMEC_AI_PORT (8787 por defecto). En produccion estas mismas
+      // rutas las sirve Vercel como funciones serverless (carpeta api/).
+      '/api': {
+        target: `http://127.0.0.1:${process.env.ZOEMEC_AI_PORT || 8787}`,
+        changeOrigin: true
+      }
+    }
+  },
   build: {
     chunkSizeWarningLimit: 650,
     rollupOptions: {

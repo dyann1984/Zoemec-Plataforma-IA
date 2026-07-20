@@ -640,7 +640,28 @@ function Assistant(){
   </>;
 }
 
+const LANDING_PIPELINE = [
+  { tag:'Excel', flow:['Excel','Contexto BIM','APU'], head:'ZOE está leyendo', metric:'48 conceptos',
+    rows:[['01','Falso plafón de tablaroca','m²','94%'],['02','Estructura metálica ASTM A500','kg','91%'],['03','Pintura vinílica en muros','m²','88%']],
+    foot:['Extrayendo conceptos','Contexto BIM'] },
+  { tag:'Biblioteca', flow:['Catálogo','Coincidencias','Precios'], head:'ZOE consulta biblioteca', metric:'12 matrices base',
+    rows:[['01','Concreto premezclado f\'c=250','m³','96%'],['02','Bomba centrífuga 1 HP','pza','90%'],['03','Tubería PVC hidráulica 1/2"','m','93%']],
+    foot:['Cruzando evidencia técnica','Catálogo base ZOEMEC'] },
+  { tag:'APU', flow:['Materiales','Mano de obra','Equipo'], head:'ZOE genera la matriz', metric:'3 insumos por concepto',
+    rows:[['01','Cemento gris CPC 30R','bulto','$225.00'],['02','Oficial albañil','jor','1.85 FSR'],['03','Revolvedora 1 saco','hr','$95.00']],
+    foot:['Aplicando indirectos y utilidad', 'Metodología RLOPSRM'] },
+  { tag:'Validación', flow:['Indirectos','Financiamiento','Utilidad'], head:'ZOE valida resultados', metric:'Confianza 94%',
+    rows:[['01','Costo directo','—','$2,716.26'],['02','Indirectos + financiamiento','—','$469.91'],['03','Utilidad + cargos','—','$336.14']],
+    foot:['Precio unitario integrado', 'Listo para revisión'] },
+];
+
 function Landing({setScreen, login, company}){
+  const [step, setStep] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setStep(s => (s + 1) % LANDING_PIPELINE.length), 3200);
+    return () => clearInterval(t);
+  }, []);
+  const p = LANDING_PIPELINE[step];
   return <div className="landing">
     <header className="nav-public">
       <div className="brand-mini"><img src={company?.logo || '/images/logo-web.png'} onError={(e)=>e.currentTarget.style.display='none'} /><b>ZOEMEC</b></div>
@@ -657,26 +678,47 @@ function Landing({setScreen, login, company}){
       </div>
       <div className="future-stage" aria-label="Modelo digital de construcción">
         <img className="stage-photo" src="/images/hero/zoemec-hero-web.webp" alt="Obra de construccion con overlays de IA mostrando APU, presupuestos, licitaciones y costos en tiempo real" />
+        <div className="hero-scan" aria-hidden="true"></div>
         <div className="stage-status">
           <span>MODELO EN VIVO</span>
           <b>Panel de inteligencia de costos</b>
         </div>
-        <div className="ai-console">
-          <div className="command-strip"><span>ZOE está leyendo</span><b>48 conceptos</b></div>
-          <div className="command-flow"><span>Excel</span><i/><span>Contexto BIM</span><i/><span>APU</span></div>
+        <div className="ai-console" key={step}>
+          <div className="command-strip"><span>{p.head}</span><b>{p.metric}</b></div>
+          <div className="command-flow">{p.flow.map((f,i)=><React.Fragment key={f}>{i>0 && <i/>}<span>{f}</span></React.Fragment>)}</div>
           <div className="command-table">
-            <div><b>01</b><span>Falso plafón de tablaroca</span><em>m²</em><strong>94%</strong></div>
-            <div><b>02</b><span>Estructura metálica ASTM A500</span><em>kg</em><strong>91%</strong></div>
-            <div><b>03</b><span>Pintura vinílica en muros</span><em>m²</em><strong>88%</strong></div>
+            {p.rows.map(r=><div key={r[0]}><b>{r[0]}</b><span>{r[1]}</span><em>{r[2]}</em><strong>{r[3]}</strong></div>)}
           </div>
-          <div className="command-total"><span>Listo para revisión del ingeniero</span><b>Excel + PDF</b></div>
+          <div className="command-total"><span>{p.foot[0]}</span><b>{p.foot[1]}</b></div>
         </div>
+        <div className="stage-tag">Vista ilustrativa del flujo ZOE</div>
       </div>
       <div className="hero-benefits">
         <div><Icon name="apu" size={28}/><b>Motor de APU con IA</b><span>Matrices de costo con revisión</span></div>
         <div><Icon name="doc" size={28}/><b>Importación de Excel</b><span>Catálogos de construcción multi-hoja</span></div>
         <div><Icon name="biblioteca" size={28}/><b>Trazabilidad de evidencia</b><span>Rastreo de fuente, hoja y fila</span></div>
         <div><Icon name="reportes" size={28}/><b>Entregables</b><span>PDF y Excel profesionales</span></div>
+      </div>
+    </section>
+    <section className="landing-story">
+      <div className="landing-story-head">
+        <span className="eyebrow">Cómo funciona</span>
+        <h2>De un Excel disperso a un presupuesto auditable, en el mismo flujo.</h2>
+      </div>
+      <div className="story-steps">
+        <div className="story-step"><b>01</b><h3>Importa tu Excel o pega el concepto</h3><p>ZOEMEC lee catálogos completos o un solo concepto y detecta unidad, cantidad y precio de referencia automáticamente.</p></div>
+        <div className="story-step"><b>02</b><h3>ZOE genera la matriz APU</h3><p>Materiales, mano de obra y equipo con la metodología RLOPSRM: FSR, herramienta menor, indirectos, financiamiento y utilidad.</p></div>
+        <div className="story-step"><b>03</b><h3>Exporta entregables profesionales</h3><p>PDF y Excel auditables con membrete, listos para concurso, licitación u obra — con la fuente de cada insumo trazable.</p></div>
+      </div>
+    </section>
+    <section className="landing-preview">
+      <div className="landing-story-head">
+        <span className="eyebrow">La plataforma real</span>
+        <h2>Así se ve ZOEMEC por dentro.</h2>
+      </div>
+      <div className="preview-grid">
+        <figure><img src="/images/dashboard/zoemec-dashboard-web.webp" alt="Dashboard de ZOEMEC con proyectos, presupuesto y actividad reciente"/><figcaption>Centro de costos</figcaption></figure>
+        <figure><img src="/images/screenshots/apu-matrix.png" alt="Matriz APU real generada en ZOEMEC con materiales, mano de obra y equipo"/><figcaption>Matriz APU generada</figcaption></figure>
       </div>
     </section>
   </div>

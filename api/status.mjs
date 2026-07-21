@@ -26,11 +26,25 @@ async function checkOpenAI(){
   }
 }
 
+/* El aviso de plataforma (config/platform.announcement) ya lo edita un admin real
+   en el Panel Admin; se expone aqui de solo lectura para el login/landing (paginas
+   sin sesion) sin abrir esa coleccion a lectura publica en firestore.rules. */
+async function readAnnouncement(){
+  if(!hasAdminCredentials()) return '';
+  try{
+    const db = getAdminDb();
+    const snap = await db.collection('config').doc('platform').get();
+    return snap.exists ? String(snap.data()?.announcement || '') : '';
+  }catch{
+    return '';
+  }
+}
+
 export default async function handler(req, res){
   if(req.method !== 'GET'){
     res.status(405).json({ error:'Metodo no permitido.' });
     return;
   }
-  const [firebase, openai] = await Promise.all([checkFirebase(), checkOpenAI()]);
-  res.status(200).json({ firebase, openai });
+  const [firebase, openai, announcement] = await Promise.all([checkFirebase(), checkOpenAI(), readAnnouncement()]);
+  res.status(200).json({ firebase, openai, announcement });
 }

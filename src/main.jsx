@@ -613,6 +613,59 @@ function Donut({segments,size=150,thickness=22,center,sub}){
     {sub && <text x="50%" y="60%" textAnchor="middle" className="donut-s">{sub}</text>}
   </svg></div>;
 }
+/* Gemelo Digital: visualizacion SVG que reacciona solo a datos reales de un APU
+   guardado (estructura de costo real via calcAPU, familia/confianza real de la IA
+   o el catalogo base). Sin BIM 3D ni metricas inventadas: si no hay APU, EmptyState. */
+function twinFamilyIcon(apu){
+  const t = `${apu?.family||''} ${apu?.concept||''}`.toLowerCase();
+  if(/concreto|losa|zapata|firme|columna/.test(t)) return 'concreto';
+  if(/acero|varilla|fierro|estructura met/.test(t)) return 'acero';
+  if(/pintura|pintar|esmalte|vinil/.test(t)) return 'pintura';
+  if(/imperm/.test(t)) return 'impermeabilizante';
+  if(/excavaci|zanja/.test(t)) return 'excavacion';
+  if(/block|tabique|muro/.test(t)) return 'block';
+  return 'doc';
+}
+function twinOrigin(apu){
+  if(apu.aiGenerated) return 'Generado por IA';
+  if(apu.templateFallback) return 'Plantilla técnica (IA no disponible)';
+  if(apu.templateGenerated) return 'Catálogo base ZOEMEC';
+  return 'Editado manualmente';
+}
+function DigitalTwin({apu, compact=false, onOpen}){
+  if(!apu){
+    return <div className={'twin-card'+(compact?' compact':'')}>
+      <EmptyState icon="apu" title="Gemelo Digital en espera" text="Genera y guarda tu primer APU para encender el modelo de costos en vivo."/>
+    </div>;
+  }
+  const t = calcAPU(apu);
+  const direct = t.direct || 0;
+  const layers = [
+    { key:'mat', label:'Materiales', value:t.mat, color:'#4FB8A8' },
+    { key:'mo', label:'Mano de obra', value:t.mo, color:'#C9A24A' },
+    { key:'equipo', label:'Equipo', value:t.equipo, color:'#9D6FD0' },
+    { key:'herramienta', label:'Herramienta', value:t.herramienta, color:'#B54A62' }
+  ];
+  const confidence = Number(apu.confidence || 88);
+  const risky = confidence < 80;
+  let cursor = 0;
+  return <div className={'twin-card'+(compact?' compact':'')+(risky?' risky':'')} onClick={onOpen} role={onOpen?'button':undefined}>
+    <div className="twin-head">
+      <span className="twin-icon"><Icon name={twinFamilyIcon(apu)} size={compact?18:24}/></span>
+      <div><b>{apu.concept || apu.clave || 'Concepto sin nombre'}</b><small>{apu.family || 'Sin clasificar'}</small></div>
+      <span className={'twin-confidence'+(risky?' risky':'')}>{confidence}%</span>
+    </div>
+    <svg className="twin-stack" viewBox="0 0 300 22" preserveAspectRatio="none" width="100%" height="22" aria-label="Estructura de costo directo">
+      {direct>0 ? layers.map(l=>{ const w=(l.value/direct)*300; const el=<rect key={l.key} x={cursor} y="0" width={Math.max(0,w)} height="22" fill={l.color}/>; cursor+=w; return el; }) : <rect x="0" y="0" width="300" height="22" fill="var(--line)"/>}
+    </svg>
+    <div className="twin-legend">{layers.map(l=><span key={l.key}><i style={{background:l.color}}/>{l.label} <b>{direct?Math.round((l.value/direct)*100):0}%</b></span>)}</div>
+    <div className="twin-foot">
+      <div><small>P.U. total</small><b>{money(t.total)}</b></div>
+      <div><small>Origen</small><b>{twinOrigin(apu)}</b></div>
+    </div>
+    {risky && <div className="twin-alert"><Icon name="bell" size={13}/> Confianza baja ({confidence}%): revisar antes de aprobar</div>}
+  </div>;
+}
 function Spark({points,h=72,color='var(--teal)'}){
   const w=300, max=Math.max(...points), min=Math.min(...points), rng=(max-min)||1, step=w/(points.length-1);
   const pts=points.map((p,i)=>`${i*step},${h-((p-min)/rng)*(h-14)-7}`).join(' ');
@@ -927,6 +980,8 @@ function Auth({mode,setScreen,login,loginWithGoogle,company}){
   const [email,setEmail]=useState('');
   const [password,setPassword]=useState('');
   const [busy,setBusy]=useState(false);
+  const [status,setStatus]=useState(null);
+  useEffect(()=>{ apiGetSafe('/api/status').then(setStatus); },[]);
   const submit=async ()=>{
     if(!email.trim() || !password.trim()){
       alert('Captura correo y contraseña para continuar.');
@@ -948,6 +1003,11 @@ function Auth({mode,setScreen,login,loginWithGoogle,company}){
           <span><Icon name="tecnico" size={18}/> Modelo visual con evidencia, riesgos y costos</span>
           <span><Icon name="presupuestos" size={18}/> Exporta presupuesto profesional en PDF y Excel</span>
         </div>
+        {status && <div className="auth-status">
+          <span className={'auth-status-dot'+(status.firebase==='ok'&&status.openai==='ok'?' ok':'')}/>
+          <span>{status.firebase==='ok'&&status.openai==='ok' ? 'Plataforma operando con normalidad' : 'Algunos servicios de IA no responden en este momento'}</span>
+        </div>}
+        {status?.announcement && <div className="auth-announcement"><b>Novedades</b><p>{status.announcement}</p></div>}
       </div>
     </div>
     <div className="auth-form-side">
@@ -1052,8 +1112,7 @@ function Dashboard({setModule,apus,clients,budgets,projects}){
         <div className="os-pipeline">{pipeline.map((p,i)=><button key={p[0]} className={p[2]} onClick={()=>setModule(i<2?'biblioteca':i<5?'apu':'presupuestos')}><b>{p[0]}</b><span>{p[1]}</span></button>)}</div>
       </div>
       <div className="os-bim">
-        <div className="map-grid"><span>19.4326 N</span><span>99.1332 W</span><i/><i/><i/></div>
-        <div className="mini-bim"><div className="core"></div><div className="floor f1"></div><div className="floor f2"></div><div className="floor f3"></div><div className="cost-beam"></div></div>
+        <DigitalTwin apu={apus[0]} compact onOpen={()=>setModule('apu')}/>
       </div>
       <div className="os-side">
         <div><small>Conceptos</small><b>{apus.length || 'Listo'}</b><span>{apus.length ? 'matrices activas' : 'genera tu primer APU'}</span></div>

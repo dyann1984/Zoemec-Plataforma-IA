@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import jsPDF from 'jspdf';
 import writeXlsxFile from 'write-excel-file/browser';
 import { createUserWithEmailAndPassword, GoogleAuthProvider, onAuthStateChanged, sendEmailVerification, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile } from 'firebase/auth';
-import { addDoc, collection, doc, getDoc, getDocs, serverTimestamp, setDoc } from 'firebase/firestore';
+import { addDoc, collection, doc, getCountFromServer, getDoc, getDocs, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { auth, db, firebaseReady, storage } from './firebase.js';
 import { useCloudState } from './cloud.js';
@@ -27,6 +27,18 @@ async function apiPost(path, body){
   const data = await res.json().catch(()=>({}));
   if(!res.ok) throw new Error(data.error || 'No se pudo completar la solicitud.');
   return data;
+}
+/* No lanza: se usa para indicadores de estado donde un endpoint no disponible
+   (ej. servidor local de desarrollo, que no espeja /api/status) debe leerse
+   como "no disponible" en vez de romper la interfaz. */
+async function apiGetSafe(path){
+  try{
+    const res = await fetch(path, { headers:await authHeaders() });
+    if(!res.ok) return null;
+    return await res.json();
+  }catch{
+    return null;
+  }
 }
 
 /* Set de íconos de línea (engineering/drafting) — reemplaza emojis */
@@ -59,7 +71,9 @@ const ICONS = {
   speakerOn:<><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 8.5a4 4 0 010 7M19 6a7.5 7.5 0 010 12"/></>,
   speakerOff:<><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 9l5 6M21 9l-5 6"/></>,
   history:<><path d="M3 12a9 9 0 109-9 9 9 0 00-8 5"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></>,
-  admin:<><path d="M12 2l8 3.5v6c0 5-3.4 8.7-8 10.5-4.6-1.8-8-5.5-8-10.5v-6z"/><path d="M9 12l2 2 4-4"/></>
+  admin:<><path d="M12 2l8 3.5v6c0 5-3.4 8.7-8 10.5-4.6-1.8-8-5.5-8-10.5v-6z"/><path d="M9 12l2 2 4-4"/></>,
+  search:<><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></>,
+  link:<><path d="M9 15l6-6"/><path d="M11 6l1-1a4 4 0 015.7 5.7l-1 1"/><path d="M13 18l-1 1a4 4 0 01-5.7-5.7l1-1"/></>
 };
 function Icon({name,size=20}){return <svg className="ic" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{ICONS[name]||ICONS.doc}</svg>;}
 
@@ -189,9 +203,20 @@ function buildSession(profile, fbUser){
   };
 }
 
-function CloudBadge(){
+/* Placeholder honesto: la conexion real a OneDrive (Graph API/MSAL) se construye en
+   el Checkpoint G junto con src/lib/onedrive.js. Hasta que existan credenciales de
+   Azure AD configuradas, el boton debe decir la verdad en vez de simular exito. */
+function connectOneDrive(){
+  window.zoemecNotify?.('OneDrive: la conexion real esta en construccion. Falta registrar la app en Azure AD y configurar sus credenciales en este entorno.', 'info');
+}
+
+function CloudBadge({user}){
   const [st,setSt]=useState({status:'ok',message:''});
   const [online,setOnline]=useState(typeof navigator!=='undefined' ? navigator.onLine : true);
+  const [open,setOpen]=useState(false);
+  const [remote,setRemote]=useState(null);
+  const [libInfo,setLibInfo]=useState(null);
+  const boxRef=useRef(null);
   useEffect(()=>{
     const onCloud=e=>setSt(e.detail||{status:'ok'});
     const up=()=>setOnline(true), down=()=>setOnline(false);
@@ -199,12 +224,78 @@ function CloudBadge(){
     window.addEventListener('online',up); window.addEventListener('offline',down);
     return ()=>{window.removeEventListener('zoemec-cloud',onCloud);window.removeEventListener('online',up);window.removeEventListener('offline',down);};
   },[]);
+  useEffect(()=>{
+    if(!open) return;
+    let alive=true;
+    apiGetSafe('/api/status').then(data=>{ if(alive) setRemote(data); });
+    if(firebaseReady && user?.uid){
+      getCountFromServer(query(collection(db,'library'), where('ownerUid','==',user.uid)))
+        .then(snap=>{ if(alive) setLibInfo({count:snap.data().count, checkedAt:new Date().toLocaleTimeString('es-MX')}); })
+        .catch(()=>{ if(alive) setLibInfo(null); });
+    }
+    return ()=>{ alive=false; };
+  },[open, user?.uid]);
+  useEffect(()=>{
+    if(!open) return;
+    const onDown=(e)=>{ if(boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    return ()=>document.removeEventListener('mousedown', onDown);
+  },[open]);
   const mode = !online ? 'off' : st.status;
   const label = mode==='off' ? 'Sin conexión · guardado local'
     : mode==='saving' ? 'Guardando en la nube...'
-    : mode==='error' ? 'Nube con detalle · datos seguros en local'
+    : mode==='error' ? 'Nube con error · datos seguros en local'
     : 'Nube sincronizada';
-  return <span className={'cloud-badge '+mode} title={st.message||label}><i/><em>{label}</em></span>;
+  const rows = [
+    { key:'firebase', label:'Firebase / Firestore', ok: online && st.status!=='error',
+      detail: !online ? 'Sin conexión a internet.' : st.status==='error' ? (st.message || 'No se pudo sincronizar.') : 'Conectado y sincronizando.' },
+    { key:'library', label:'Biblioteca', ok: Boolean(libInfo),
+      detail: !user?.uid ? 'Inicia sesión para ver tu biblioteca.' : libInfo ? `${libInfo.count} documento(s) · verificado a las ${libInfo.checkedAt}` : 'Consultando Firestore...' },
+    { key:'openai', label:'OpenAI', ok: remote?.openai==='ok',
+      detail: remote ? (remote.openai==='ok' ? 'Configurada y responde.' : 'No disponible en este entorno.') : 'No disponible aquí (revisa conexión).' },
+    { key:'onedrive', label:'OneDrive', ok:false, detail:'No conectado.' }
+  ];
+  return <div className="cloud-panel" ref={boxRef}>
+    <button type="button" className={'cloud-badge '+mode} title={st.message||label} onClick={()=>setOpen(v=>!v)}><i/><em>{label}</em></button>
+    {open && <div className="cloud-drop">
+      <b>Estado de la plataforma</b>
+      {rows.map(r=><div className={'cloud-row'+(r.ok?' ok':' warn')} key={r.key}>
+        <i/>
+        <div><b>{r.label}</b><span>{r.detail}</span></div>
+        {r.key==='onedrive' && <button className="soft" onClick={connectOneDrive}>Conectar</button>}
+      </div>)}
+    </div>}
+  </div>;
+}
+
+function NotificationBell(){
+  const [items,setItems]=useLocalState('zoemec-notif-history', []);
+  const [open,setOpen]=useState(false);
+  const boxRef=useRef(null);
+  useEffect(()=>{
+    const onLog=(e)=>{
+      const text = String(e.detail?.message || '').trim();
+      if(!text) return;
+      setItems(list=>[{id:Date.now()+Math.random(), text, type:e.detail?.type||'info', at:new Date().toLocaleString('es-MX')}, ...list].slice(0,30));
+    };
+    window.addEventListener('zoemec-notify-log', onLog);
+    return ()=>window.removeEventListener('zoemec-notify-log', onLog);
+  },[setItems]);
+  useEffect(()=>{
+    if(!open) return;
+    const onDown=(e)=>{ if(boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    return ()=>document.removeEventListener('mousedown', onDown);
+  },[open]);
+  return <div className="notif-panel" ref={boxRef}>
+    <button type="button" className="bell" onClick={()=>setOpen(v=>!v)} aria-label="Notificaciones">
+      <Icon name="bell" size={19}/>{items.length>0 && <span className="notif-dot"/>}
+    </button>
+    {open && <div className="notif-drop">
+      <div className="notif-drop-head"><b>Notificaciones</b>{items.length>0 && <button className="soft" onClick={()=>setItems([])}>Limpiar</button>}</div>
+      {items.length ? items.slice(0,12).map(n=><div className="notif-item" key={n.id}><span className={'notif-mark '+n.type}/><div><p>{n.text}</p><small>{n.at}</small></div></div>) : <p className="notif-empty">Aún no hay notificaciones.</p>}
+    </div>}
+  </div>;
 }
 
 function NoticeHost(){
@@ -216,6 +307,9 @@ function NoticeHost(){
       const text = String(message || 'Accion completada.');
       setNotices(current => [{id,text,type}, ...current].slice(0,3));
       window.setTimeout(() => setNotices(current => current.filter(n => n.id !== id)), 5600);
+      // Registro para el panel de notificaciones de la topbar (NotificationBell):
+      // evento distinto de 'zoemec-notice' para no volver a disparar push() en bucle.
+      window.dispatchEvent(new CustomEvent('zoemec-notify-log', { detail:{ message:text, type } }));
     };
     const onNotice = (event) => push(event.detail?.message, event.detail?.type || 'info');
     window.addEventListener('zoemec-notice', onNotice);
@@ -452,7 +546,7 @@ function App(){
   else if(screen === 'login') content = <Auth mode="login" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} company={companyView} />;
   else if(screen === 'register') content = <Auth mode="register" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} company={companyView} />;
   else if(!hasValidSession(user)) content = <Landing setScreen={setScreen} login={login} company={companyView} />;
-  else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView}>
+  else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView} apus={apus} clients={clients} projects={projects}>
     {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} />}
     {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} />}
     {module === 'presupuestos' && <Budgets company={companyView} budgets={budgets} setBudgets={setBudgets} items={budgetItems} setItems={setBudgetItems} />}
@@ -876,7 +970,33 @@ function Auth({mode,setScreen,login,loginWithGoogle,company}){
   </div>
 }
 
-function Shell({children,user,logout,module,setModule,company}){
+function TopSearch({apus=[],clients=[],projects=[],setModule}){
+  const [q,setQ]=useState('');
+  const [open,setOpen]=useState(false);
+  const boxRef=useRef(null);
+  useEffect(()=>{
+    if(!open) return;
+    const onDown=(e)=>{ if(boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    return ()=>document.removeEventListener('mousedown', onDown);
+  },[open]);
+  const term = q.trim().toLowerCase();
+  const results = term ? [
+    ...apus.filter(a=>(a.concept||a.clave||'').toLowerCase().includes(term)).slice(0,4).map(a=>({type:'APU', label:a.concept||a.clave||'APU', module:'apu'})),
+    ...clients.filter(c=>(c.name||'').toLowerCase().includes(term)).slice(0,4).map(c=>({type:'Cliente', label:c.name, module:'cartera'})),
+    ...projects.filter(p=>(p.name||'').toLowerCase().includes(term)).slice(0,4).map(p=>({type:'Proyecto', label:p.name, module:'cartera'}))
+  ].slice(0,8) : [];
+  const go=(r)=>{ setModule(r.module); setOpen(false); setQ(''); };
+  return <div className="top-search" ref={boxRef}>
+    <Icon name="search" size={16}/>
+    <input value={q} placeholder="Buscar concepto, cliente o proyecto..." onChange={e=>{setQ(e.target.value); setOpen(true);}} onFocus={()=>term && setOpen(true)}/>
+    {open && term && <div className="top-search-drop">
+      {results.length ? results.map((r,i)=><button type="button" key={i} onClick={()=>go(r)}><b>{r.type}</b><span>{r.label}</span></button>) : <p>Sin resultados para "{q}".</p>}
+    </div>}
+  </div>;
+}
+
+function Shell({children,user,logout,module,setModule,company,apus,clients,projects}){
   // Comunidad, Planes y acceso y Visual IA se ocultan temporalmente del menu principal
   // (fase de concurso: se mantienen en el codigo, solo no se muestran en la navegacion).
   const menu = [
@@ -895,7 +1015,10 @@ function Shell({children,user,logout,module,setModule,company}){
       <button className="logout-side" onClick={logout}>Salir</button>
     </aside>
     <main className="main">
-      <header className="topbar"><div><b>Buscar concepto, cliente o proyecto...</b></div><div className="user"><CloudBadge/><span className="bell"><Icon name="bell" size={19}/></span><span className="avatar">{user.initials}</span><div><b>{user.name}</b><small>{user.role === 'admin' ? 'Administrador' : user.plan}</small></div><button onClick={logout}>Salir</button></div></header>
+      <header className="topbar">
+        <TopSearch apus={apus} clients={clients} projects={projects} setModule={setModule}/>
+        <div className="user"><CloudBadge user={user}/><NotificationBell/><span className="avatar">{user.initials}</span><div><b>{user.name}</b><small>{user.role === 'admin' ? 'Administrador' : user.plan}</small></div><button onClick={logout}>Salir</button></div>
+      </header>
       {children}
     </main>
     <Assistant/>

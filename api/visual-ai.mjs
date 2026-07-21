@@ -52,11 +52,19 @@ export default async function handler(req, res){
   try{
     const authz = await requireFeature(req, 'visual');
     if(!process.env.OPENAI_API_KEY) throw new Error('Falta OPENAI_API_KEY en Vercel.');
-    const { image, fileName, mode='fachada', prompt='' } = req.body || {};
+    const { image, fileName, mode='fachada', prompt='', libraryDocs } = req.body || {};
     if(!prompt.trim()) throw new Error('Escribe una instruccion para la IA.');
 
+    /* Evidencia real de la Biblioteca del usuario (solo nombre/categoria, nunca
+       el archivo completo) para que el analisis pueda referenciarla en vez de
+       trabajar a ciegas. Antes Visual IA no recibia ningun contexto documental. */
+    const docList = Array.isArray(libraryDocs) ? libraryDocs.slice(0, 20) : [];
+    const libraryContext = docList.length
+      ? `Documentos disponibles en la Biblioteca del usuario (usalos como referencia si aplica; no los inventes si no aparecen aqui):\n${docList.map(d=>`- ${d.name} (${d.cat}${d.family ? ' / ' + d.family : ''})`).join('\n')}`
+      : 'El usuario no tiene documentos en su Biblioteca todavia.';
+
     const content = [
-      { type:'input_text', text:`Modo: ${mode}\nArchivo: ${fileName || 'sin nombre'}\nSolicitud: ${prompt}` }
+      { type:'input_text', text:`Modo: ${mode}\nArchivo: ${fileName || 'sin nombre'}\nSolicitud: ${prompt}\n\n${libraryContext}` }
     ];
     if(image && String(image).startsWith('data:image/')){
       content.push({ type:'input_image', image_url:image });

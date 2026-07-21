@@ -4028,6 +4028,29 @@ function VisualAI({user}){
   const [result,setResult]=useState('');
   const [generatedImage,setGeneratedImage]=useState('');
   const [loading,setLoading]=useState(false);
+  /* Documentos reales de la Biblioteca (Firestore) para que la IA los use como
+     evidencia/contexto: antes Visual IA no leia nada de la biblioteca, asi que
+     su analisis nunca podia referenciar catalogos, normas o matrices ya
+     subidas por el usuario. Se manda solo nombre+categoria (nunca el archivo
+     completo) para no inflar el payload. */
+  const [libraryDocs,setLibraryDocs]=useState([]);
+  useEffect(()=>{
+    if(!firebaseReady || !user?.uid) return;
+    let alive=true;
+    Promise.all([
+      getDocs(query(collection(db,'library'), where('ownerUid','==',user.uid), limit(15))),
+      getDocs(query(collection(db,'library'), where('visibility','==','global'), limit(15)))
+    ]).then(([ownSnap, globalSnap])=>{
+      if(!alive) return;
+      const merged=new Map();
+      [...ownSnap.docs, ...globalSnap.docs].forEach(d=>{
+        const data=d.data();
+        merged.set(d.id, { name:data.name||'Documento', cat:data.cat||'Documentos', family:data.family||'' });
+      });
+      setLibraryDocs([...merged.values()].slice(0,20));
+    }).catch(()=>{ if(alive) setLibraryDocs([]); });
+    return ()=>{ alive=false; };
+  },[user?.uid]);
   const load=(file)=>{
     if(!file) return;
     const reader = new FileReader();
@@ -4046,7 +4069,7 @@ function VisualAI({user}){
   const generate=async()=>{
     setLoading(true);
     try{
-      const data=await apiPost('/api/visual-ai', { image, fileName, mode, prompt, uid:user?.uid, email:user?.email });
+      const data=await apiPost('/api/visual-ai', { image, fileName, mode, prompt, uid:user?.uid, email:user?.email, libraryDocs });
       const img = data.imageUrl || (data.imageB64 ? `data:image/png;base64,${data.imageB64}` : '');
       setGeneratedImage(img);
       setResult(data.result || localBrief());
@@ -4065,6 +4088,7 @@ function VisualAI({user}){
           <input type="file" accept="image/*" hidden onChange={e=>load(e.target.files[0])}/>
         </label>
         <div className="visual-meta"><b>{fileName || 'Sin archivo cargado'}</b><span>{image ? 'Vista previa lista para IA' : 'Sube una imagen para analizar fachada, plano u obra'}</span></div>
+        <p className="muted" style={{fontSize:'.78rem',marginTop:'8px'}}>{libraryDocs.length ? `${libraryDocs.length} documento(s) de tu Biblioteca disponibles como evidencia para la IA.` : 'Sin documentos de Biblioteca disponibles todavia como evidencia.'}</p>
       </div>
       <div className="panel visual-form">
         <h2>Que quieres generar</h2>

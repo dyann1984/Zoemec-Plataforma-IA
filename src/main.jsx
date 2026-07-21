@@ -8,6 +8,7 @@ import { deleteObject, getDownloadURL, ref, uploadBytes } from 'firebase/storage
 import { auth, db, firebaseReady, storage } from './firebase.js';
 import { useCloudState } from './cloud.js';
 import { consumeOneDriveRedirect, isOneDriveConfigured, startOneDriveConnect } from './lib/onedrive.js';
+import { buildZoeResponse, canExportApu, createDemoContext, processApuConcept, validateApu } from './lib/apuFlow.js';
 import './style.css';
 
 const money = (n) => Number(n || 0).toLocaleString('es-MX', { style:'currency', currency:'MXN' });
@@ -81,6 +82,13 @@ function Icon({name,size=20}){return <svg className="ic" width={size} height={si
 const defaultCompany = {
   name: 'ZOEMEC', rfc: 'RFC pendiente', phone: '55 0000 0000', email: 'contacto@zoemec.mx', address: 'México', logo: '/images/logo-web.png?v=zoemec-2026'
 };
+const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true';
+const demoCatalog = [
+  { desc: 'Muro de block 15 cm', unidad: 'm²', precio: 825 },
+  { desc: 'Pintura vinílica en muros', unidad: 'm²', precio: 95 },
+  { desc: 'Bomba sumergible 1 HP', unidad: 'pza', precio: 12500 },
+  { desc: 'Tubería PVC sanitaria 1/2"', unidad: 'm', precio: 85 }
+];
 // Nombres de registros sembrados en versiones anteriores del proyecto (antes de que
 // existiera cuenta real por usuario). Se usan solo para depurarlos de datos reales
 // preexistentes en el primer render; no se usan para mostrar contenido en la interfaz.
@@ -355,6 +363,7 @@ function NoticeHost(){
 function App(){
   const [screen, setScreen] = useState('landing');
   const [module, setModule] = useState('inicio');
+  const [zoeContext, setZoeContext] = useState({ user: null, route: 'inicio', activeApu: null, budget: null, project: null, importedFile: null, library: [], alerts: [], history: [] });
   const [user, setUser] = useState(null);
   const [accounts, setAccounts] = useLocalState('zoemec-accounts', []);
   const [usage, setUsage] = useLocalState('zoemec-usage', {});
@@ -370,6 +379,32 @@ function App(){
     window.addEventListener('zoemec-budget-add', onAdd);
     return () => window.removeEventListener('zoemec-budget-add', onAdd);
   }, [setBudgetItems]);
+  useEffect(() => {
+    const onContext = (e) => setZoeContext(prev => ({ ...prev, ...e.detail }));
+    window.addEventListener('zoemec-zoe-context', onContext);
+    return () => window.removeEventListener('zoemec-zoe-context', onContext);
+  }, []);
+  useEffect(() => {
+    if(!DEMO_MODE) return;
+    if(!projects.length){
+      setProjects([{ id:'PRO-DEMO', name:'Demo: Proyecto demostrativo', client:'Constructora Demo', progress:72, budget:1250000, status:'En ejecución' }]);
+    }
+    if(!budgets.length){
+      setBudgets([{ id:'PRE-DEMO', name:'Demo: Presupuesto demostrativo', client:'Constructora Demo', items:[{ concept:'Muro de block 15 cm', unit:'m²', qty:120, pu:825 }], total:99000, date:new Date().toLocaleDateString('es-MX') }]);
+    }
+    if(!catalog.length){
+      setCatalog(demoCatalog.map(item => ({ ...item, desc: item.desc, unidad: item.unidad, precio: item.precio })));
+    }
+    if(!apus.length){
+      setApus([{ id:'APU-DEMO', clave:'APU-DEMO', concept:'Muro de block 15 cm', unit:'m²', materials:[["Block hueco 15x20x40",12.5,'pza',16.5,3]], labor:[["Albañil oficial",0.35,'jor',380,1.85]], equipment:[["Andamio / equipo básico",0.05,'día',280]], herramienta:3, indCampo:8, indOficina:7, finance:2, utility:10, cargos:0.5, iva:16, family:'Albañileria', confidence:92, source:'exact_library', sourceFile:'Catálogo Demo', sourceSection:'Fila 1', rowNumber:1, traceability:[{file:'Catálogo Demo',sheet:'Hoja 1',row:1,source:'demo'}], assumptions:['Demo con trazabilidad técnica. Revisa precios, rendimiento y unidad.'], warnings:['Validación de trazabilidad pendiente'], aiNotes:['Demo con trazabilidad técnica. Revisa precios y rendimientos.'], date:new Date().toLocaleDateString('es-MX') }]);
+    }
+    if(!budgetItems.length){
+      setBudgetItems([{ concept:'Muro de block 15 cm', unit:'m²', qty:120, pu:825.39 }, { concept:'Pintura vinílica en muros', unit:'m²', qty:86, pu:95.5 }]);
+    }
+  }, [DEMO_MODE, projects.length, budgets.length, catalog.length, apus.length, budgetItems.length, setProjects, setBudgets, setCatalog, setApus, setBudgetItems]);
+  useEffect(() => {
+    setZoeContext(prev => ({ ...prev, user, route: module, activeApu: apus[0] || prev.activeApu, budget: budgets[0] || prev.budget, project: projects[0] || prev.project, library: catalog, alerts: prev.alerts || [] }));
+  }, [user, module, apus, budgets, projects, catalog]);
   const companyView = (!company?.logo || company.logo === '/logo.png' || company.logo === '/images/logo-web.png') ? {...company, logo:'/images/logo-web.png?v=zoemec-2026'} : company;
 
   // Microsoft redirige de vuelta a la app con ?code=...&state=... tras un login
@@ -591,8 +626,8 @@ function App(){
   else if(screen === 'register') content = <Auth mode="register" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} company={companyView} />;
   else if(!hasValidSession(user)) content = <Landing setScreen={setScreen} login={login} company={companyView} />;
   else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView} apus={apus} clients={clients} projects={projects}>
-    {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} />}
-    {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} />}
+    {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} user={user} demoMode={DEMO_MODE} demoContext={DEMO_MODE ? createDemoContext() : null} />}
+    {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} />}
     {module === 'presupuestos' && <Budgets company={companyView} budgets={budgets} setBudgets={setBudgets} items={budgetItems} setItems={setBudgetItems} />}
     {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} />}
     {module === 'biblioteca' && <Library user={user} />}
@@ -603,7 +638,7 @@ function App(){
     {module === 'reportes' && <Reports clients={clients} apus={apus} budgets={budgets} />}
     {module === 'admin' && user.role==='admin' && <AdminPanel user={user} />}
   </Shell>;
-  return <><NoticeHost />{content}</>;
+  return <><NoticeHost />{content}<Assistant context={zoeContext} setModule={setModule} /></>;
 }
 
 /* Fondo animado de construcción (line-art tipo plano) */
@@ -678,8 +713,15 @@ function twinOrigin(apu){
 }
 function DigitalTwin({apu, compact=false, onOpen}){
   if(!apu){
-    return <div className={'twin-card'+(compact?' compact':'')}>
-      <EmptyState icon="apu" title="Gemelo Digital en espera" text="Genera y guarda tu primer APU para encender el modelo de costos en vivo."/>
+    return <div className={'twin-card'+(compact?' compact':'')+' empty-illustration'}>
+      <div className="empty-illustration-media">
+        <img src="/images/dashboard/zoemec-dashboard-web.webp" alt="Gemelo Digital en espera"/>
+      </div>
+      <div className="empty-illustration-copy">
+        <h3>Gemelo Digital del Proyecto</h3>
+        <p>Activa el gemelo digital importando documentos o creando y guardando tu primer APU. ZOE extrae, clasifica y enlaza evidencia automáticamente.</p>
+        <div className="empty-actions"><button onClick={()=>onOpen?onOpen():null}>Crear APU</button></div>
+      </div>
     </div>;
   }
   const t = calcAPU(apu);
@@ -692,6 +734,7 @@ function DigitalTwin({apu, compact=false, onOpen}){
   ];
   const confidence = Number(apu.confidence || 88);
   const risky = confidence < 80;
+  const severeRisk = confidence < 65;
   let cursor = 0;
   return <div className={'twin-card'+(compact?' compact':'')+(risky?' risky':'')} onClick={onOpen} role={onOpen?'button':undefined}>
     <div className="twin-head">
@@ -707,7 +750,7 @@ function DigitalTwin({apu, compact=false, onOpen}){
       <div><small>P.U. total</small><b>{money(t.total)}</b></div>
       <div><small>Origen</small><b>{twinOrigin(apu)}</b></div>
     </div>
-    {risky && <div className="twin-alert"><Icon name="bell" size={13}/> Confianza baja ({confidence}%): revisar antes de aprobar</div>}
+    {confidence < 80 && <div className={`twin-warning${severeRisk ? ' critical' : ''}`}><Icon name="bell" size={13}/> {severeRisk ? `Riesgo alto: confianza ${confidence}%. Revisa antes de aprobar.` : `Confianza baja (${confidence}%). Revisa biblioteca y evidencias antes de entregar.`}</div>}
   </div>;
 }
 function Spark({points,h=72,color='var(--teal)'}){
@@ -811,38 +854,46 @@ function HardHat({size=46}){
     <rect x="30.5" y="14" width="3" height="14" rx="1.5" fill="#c08f2f"/>
   </svg>;
 }
-function assistantReply(q){
+function assistantReply(q, context={}){
   const t=q.toLowerCase();
-  const r=(...m)=>m.join(' ');
-  if(/hola|buenas|hey|saludos/.test(t)) return 'Hola. Soy ZOE, copiloto tecnico de costos y obra. Te ayudo con APU, FSR, rendimientos, catalogos, presupuestos, explosiones de insumos y programa de obra.';
-  if(/fsr|salario real|fasar/.test(t)) return r('El FSR (Factor de Salario Real, Art. 191 RLOPSRM) convierte el salario base en salario real: Salario real = base × FSR.','Calcúlalo en Centro Técnico con Tp (días pagados), Tl (días laborados) y Ps (cargas obrero-patronales). Suele andar entre 1.6 y 1.9.');
-  if(/apu|precio unitario/.test(t)) return r('Para un APU: ve a "APU Inteligente", pega tu concepto y pulsa "Generar desarrollo".','Edita insumos, ajusta indirectos de campo/oficina, utilidad y cargos, y exporta a PDF o Excel. La herramienta menor se calcula como % de la mano de obra.');
-  if(/excel|importar|catalogo|catálogo|precios/.test(t)) return r('Importa tu Excel de precios en Oficina Técnica o desde "Generar con IA".','Detecto las columnas de descripción, unidad y precio, y al generar un APU uso tus precios reales cuando coinciden con los insumos.');
-  if(/pdf|exportar|excel de salida|descargar/.test(t)) return 'Desde el APU o el Presupuesto usa "Descargar PDF" / "Descargar Excel": salen con el membrete y datos de tu empresa (configúralos en Oficina Técnica).';
-  if(/concreto|acero|block|pintura|excavaci|calculadora/.test(t)) return 'En Centro Técnico tienes calculadoras de concreto, acero, block, pintura, impermeabilizante, excavación y FSR. Te dan cantidades y costo al instante con precios editables.';
-  if(/indirecto/.test(t)) return 'Los indirectos van separados en campo y oficina; ambos % se suman y se aplican sobre el costo directo. Luego siguen financiamiento, utilidad y cargos adicionales hasta el P.U.';
-  if(/presupuesto/.test(t)) return 'En Presupuestos capturas conceptos con su P.U. (sin IVA); el sistema suma subtotal, IVA y total, y lo exportas a PDF/Excel con tu membrete.';
-  return r('Puedo orientarte sobre APU, FSR, indirectos, calculadoras, importar tu Excel o exportar formatos.','Cuando la IA este activa en Vercel, tambien puedo consultar tu biblioteca tecnica y responder con fuentes.');
+  const r=(...m)=>m.filter(Boolean).join(' ');
+  const activeApu = context.activeApu?.concept ? `${context.activeApu.concept} (${context.activeApu.family || 'familia no definida'})` : null;
+  const project = context.project?.name || null;
+  const libraryCount = Array.isArray(context.library) ? context.library.length : null;
+  const projectLine = project ? `Proyecto activo: ${project}.` : 'Sin proyecto activo.';
+  const apuLine = activeApu ? `APU activo: ${activeApu}.` : 'Genera tu primer APU para activar el gemelo digital.';
+  const libraryLine = libraryCount !== null ? `Biblioteca con ${libraryCount} insumos.` : 'No hay biblioteca técnica cargada.';
+  if(/hola|buenas|hey|saludos/.test(t)) return r('Hola. Soy ZOE, tu copiloto técnico senior en costos de construcción.', projectLine, apuLine, libraryLine, 'Te apoyo con APU, validación, presupuesto, biblioteca y entrega de documentos auditable.');
+  if(/fsr|salario real|fasar/.test(t)) return r('El FSR (Factor de Salario Real, Art. 191 RLOPSRM) convierte el salario base en salario real: Salario real = base × FSR.', 'Usa Centro Técnico para calcularlo con Tp (días pagados), Tl (días laborados) y Ps (cargas obrero-patronales).');
+  if(/apu|precio unitario/.test(t)) return r('Para generar un APU sólido, ve a "APU Inteligente", pega el concepto y ejecuta la generación.', 'Después revisa insumos, unidades, herramienta menor, indirectos de campo/oficina, financiamiento, utilidad y cargos.');
+  if(/excel|importar|catalogo|catálogo|precios/.test(t)) return r('Importa tu Excel de precios en Oficina Técnica o desde "Generar con IA".', 'Al generar el APU, uso tus precios reales cuando coinciden con insumos y te indico qué partidas requieren ajuste.');
+  if(/pdf|exportar|excel de salida|descargar/.test(t)) return 'Desde el APU o Presupuestos usa "Descargar PDF" / "Descargar Excel": el archivo sale con el membrete de tu empresa y trazabilidad técnica si la configuras en Oficina Técnica.';
+  if(/concreto|acero|block|pintura|excavaci|calculadora/.test(t)) return 'En Centro Técnico hay calculadoras para concreto, acero, block, pintura, impermeabilizante, excavación, FSR y más. Complementan los APUs con cantidades y costos editables.';
+  if(/indirecto/.test(t)) return 'Los indirectos de campo y oficina se suman sobre el costo directo. Luego se aplican financiamiento, utilidad y cargos adicionales para llegar al P.U. sin IVA.';
+  if(/presupuesto/.test(t)) return 'En Presupuestos capturas conceptos con P.U. sin IVA; el sistema calcula subtotal, IVA y total, y lo exportas a PDF/Excel con tu formato corporativo.';
+  if(/riesgo|alerta|revisar|validar/.test(t)) return r('Reviso el APU en busca de alertas, unidades incompatibles y ausencia de evidencias.', projectLine, apuLine, libraryLine, 'Puedo recomendar qué ajustar antes de exportar o entregar.');
+  if(/gemelo|centro de mando|dashboard|comando/.test(t)) return r('Este tablero es tu centro digital de costos.', projectLine, apuLine, libraryLine, 'Ahí ves estado de proyecto, IA, biblioteca, OneDrive, Firebase y entregables.');
+  return r('Puedo orientarte sobre APU, FSR, validación de costos, biblioteca técnica, importación de Excel y exportación a PDF/Excel.', projectLine, apuLine, libraryLine, 'Si la IA real no está disponible, respondo con metodología de revisión técnica.');
 }
-async function assistantReplyReal(q, history=[]){
+async function assistantReplyReal(q, history=[], context={}){
   try{
     const response = await fetch('/api/assistant', {
       method:'POST',
       headers:await authHeaders(),
-      body:JSON.stringify({question:q, history})
+      body:JSON.stringify({question:q, history, context})
     });
     const data = await response.json();
     if(!response.ok) throw new Error(data?.error || 'IA no disponible');
-    if(!data.answer) return {answer:assistantReply(q), source:'local'};
+    if(!data.answer) return {answer:assistantReply(q, context), source:'local'};
     return {answer:data.answer, source:'ai'};
   }catch{
-    return {answer:assistantReply(q), source:'local'};
+    return {answer:assistantReply(q, context), source:'local'};
   }
 }
 const ZOE_SEED_MSG = {me:false,t:'Soy ZOE. Leo conceptos, APUs, costos y evidencia para ayudarte a decidir como ingeniero, no como chatbot generico.'};
 const ZOE_VOICE_SUPPORTED = typeof window!=='undefined' && Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
 const ZOE_SPEECH_SUPPORTED = typeof window!=='undefined' && Boolean(window.speechSynthesis);
-function Assistant(){
+function Assistant({ context={}, setModule }){
   const [open,setOpen]=useState(false);
   const [msgs,setMsgs]=useLocalState('zoemec-zoe-thread', [ZOE_SEED_MSG]);
   const [threads,setThreads]=useLocalState('zoemec-zoe-history', []);
@@ -875,7 +926,7 @@ function Assistant(){
     const user=text.trim(); setQ(''); setBusy(true);
     setMsgs(m=>[...m,{me:true,t:user}]);
     const history = msgs.slice(-6).map(m=>({role:m.me?'user':'assistant', content:m.t}));
-    const {answer, source} = await assistantReplyReal(user, history);
+    const {answer, source} = await assistantReplyReal(user, history, context);
     setMsgs(m=>[...m,{me:false,t:answer,source}]);
     setBusy(false);
     speak(answer);
@@ -1131,37 +1182,125 @@ function Shell({children,user,logout,module,setModule,company,apus,clients,proje
 
 function PageHead({kicker,title,desc,action}){return <div className="page-head"><div><span>{kicker}</span><h1>{title}</h1><p>{desc}</p></div>{action}</div>}
 
-function Dashboard({setModule,apus,clients,budgets,projects}){
+function InfoCard({title,value,subtitle,actionLabel,onAction}){
+  return <div className="info-card">
+    <small>{title}</small>
+    <b>{value}</b>
+    <span>{subtitle}</span>
+    {actionLabel && <button className="soft" onClick={onAction}>{actionLabel}</button>}
+  </div>;
+}
+
+function ProjectsPlaceholder({onCreate, onImport}){
+  return <div className="placeholder-card">
+    <div className="ph-illustration"><img src="/images/dashboard/project-illustration.webp" alt="Proyectos"/></div>
+    <div className="ph-copy"><h3>Sin proyectos reales</h3><p>Importa un proyecto o crea el primero para activar el Gemelo Digital y el flujo de presupuestos.</p>
+      <div className="ph-actions"><button onClick={onCreate}>Crear proyecto</button><button className="soft" onClick={onImport}>Importar</button></div>
+    </div>
+  </div>;
+}
+
+function ActivityPlaceholder({onCreateApu,onOpenLibrary}){
+  return <div className="placeholder-activity">
+    <h3>Activa tu espacio de trabajo</h3>
+    <ol>
+      <li>Importa un documento o crea un APU</li>
+      <li>Valida y revisa con ZOE</li>
+      <li>Genera presupuesto y exporta entregables</li>
+    </ol>
+    <div className="ph-actions"><button onClick={onCreateApu}>Crear APU</button><button className="soft" onClick={onOpenLibrary}>Abrir Biblioteca</button></div>
+  </div>;
+}
+
+function Dashboard({setModule,apus,clients,budgets,projects,user}){
+  const [remoteStatus,setRemoteStatus] = useState(null);
+  const [oneDriveStatus,setOneDriveStatus] = useState(null);
+  const [libraryCount,setLibraryCount] = useState(null);
   const monto = budgets.reduce((a,b)=>a+(b.total||0),0);
   const pr = projects || [];
+  const activeProject = pr[0] || null;
+  const latestApu = apus[0] || null;
+  const activeBudget = budgets[0] || null;
+  const budgetCount = budgets.length;
+  const projectCount = pr.length;
+  const firebaseOk = remoteStatus?.firebase === 'ok';
+  const openaiOk = remoteStatus?.openai === 'ok';
+  const oneDriveOk = Boolean(oneDriveStatus?.connected);
+  const missingPieces = [];
+  if(!firebaseOk) missingPieces.push('Firebase');
+  if(!openaiOk) missingPieces.push('OpenAI');
+  if(libraryCount === 0) missingPieces.push('Biblioteca');
+  if(!latestApu) missingPieces.push('APU activo');
+  if(!budgetCount) missingPieces.push('Presupuesto');
+  const healthSummary = missingPieces.length ? `Faltan: ${missingPieces.join(', ')}` : 'Todos los servicios esenciales están operativos.';
+  const riskNotes = [];
+  if(!activeProject) riskNotes.push('Agrega un proyecto para alinear costos y entregables.');
+  if(!latestApu) riskNotes.push('Genera tu primer APU para activar el gemelo digital y la evaluación técnica.');
+  if(libraryCount === 0) riskNotes.push('Sube documentos a la biblioteca para mejorar evidencias y búsquedas IA.');
+  if(!openaiOk) riskNotes.push('La IA no responde: revisa la configuración de OpenAI.');
+  if(!firebaseOk) riskNotes.push('Firebase no disponible: sincronización y almacenamiento pueden fallar.');
   const estados = pr.reduce((m,p)=>{m[p.status]=(m[p.status]||0)+1;return m;},{});
   const palette = ['#9D6FD0','#2A1740','#C7A35C','#B8A4CC','#B54A62'];
   const segs = Object.keys(estados).map((k,i)=>({label:k,value:estados[k],color:palette[i%palette.length]}));
   const spark = budgets.length ? budgets.slice(-8).map((b,i)=>Math.max(1,(Number(b.total)||0)/1000+i)) : [0,0,0,0,0,0,0,0];
   const pipeline=[
-    ['Doc','Excel / PDF','ready'],
-    ['Extraer','Conceptos','active'],
-    ['Clasificar','Especialidad','ready'],
-    ['Evidencia','Fuente tecnica',apus.length?'ready':'watch'],
-    ['APU','Matriz editable',apus.length?'ready':'active'],
-    ['Entregar','PDF / XLSX',budgets.length?'ready':'watch']
+    ['Doc','Excel / PDF',firebaseOk ? 'ready' : 'watch'],
+    ['Extraer','Conceptos',libraryCount ? 'ready' : 'watch'],
+    ['Clasificar','Especialidad',libraryCount ? 'ready' : 'watch'],
+    ['Evidencia','Fuente técnica',libraryCount ? 'ready' : 'watch'],
+    ['APU','Matriz editable',apus.length ? 'ready' : 'active'],
+    ['Entregar','PDF / XLSX',budgetCount ? 'ready' : 'watch']
   ];
+  useEffect(()=>{
+    let alive=true;
+    apiGetSafe('/api/status').then(data=>{ if(alive) setRemoteStatus(data); });
+    if(!user?.uid){
+      return () => { alive=false; };
+    }
+    getCountFromServer(query(collection(db,'library'), where('ownerUid','==',user.uid)))
+      .then(snap=>{ if(alive) setLibraryCount(snap.data().count); })
+      .catch(()=>{ if(alive) setLibraryCount(null); });
+    apiPost('/api/onedrive', { action:'status' }).then(data=>{ if(alive) setOneDriveStatus(data); }).catch(()=>{ if(alive) setOneDriveStatus(null); });
+    return ()=>{ alive=false; };
+  }, [user]);
   return <section className="ai-os"><PageHead kicker="ZOEMEC AI OS" title="Copiloto de costos de construcción" desc="Un centro visual donde documentos, modelos, evidencia y APUs viven en el mismo flujo tecnico." action={<button onClick={()=>setModule('apu')}>Pedir a ZOE que cotice</button>} />
     <div className="os-grid">
       <div className="os-command">
         <div className="os-command-head"><span>Inteligencia del proyecto en vivo</span><b>{monto ? money(monto) : 'Sin presupuesto aun'}</b></div>
         <h2>{pr[0]?.name || 'Espacio de trabajo de construcción digital'}</h2>
         <p>{pr[0]?.client || 'Importa un concepto o crea un APU para encender el modelo de costos.'}</p>
+        <p className="os-summary">{projectCount ? `${projectCount} proyectos activos · ${budgetCount} presupuestos disponibles` : 'Activa tu flujo con el primer proyecto, APU y presupuesto.'}</p>
         <div className="os-prompt"><i>ZOE</i><span>Convierte el siguiente alcance en una matriz APU trazable...</span><button onClick={()=>setModule('apu')}>Iniciar</button></div>
         <div className="os-pipeline">{pipeline.map((p,i)=><button key={p[0]} className={p[2]} onClick={()=>setModule(i<2?'biblioteca':i<5?'apu':'presupuestos')}><b>{p[0]}</b><span>{p[1]}</span></button>)}</div>
       </div>
       <div className="os-bim">
-        <DigitalTwin apu={apus[0]} compact onOpen={()=>setModule('apu')}/>
+        <div className="twin-central">
+          <h2>GEMELO DIGITAL DEL PROYECTO</h2>
+          <div className="twin-flow" aria-hidden>
+            {['Documento','Extracción','Clasificación','Biblioteca','IA','Validación','Presupuesto','Entregables'].map((s,i)=>(
+              <div key={s} className={`twin-step ${i===0? 'start':''}`}><span>{s}</span>{i<7 && <i className="arrow">→</i>}</div>
+            ))}
+          </div>
+          <div className="twin-wrapper">
+            <DigitalTwin apu={apus[0]} compact onOpen={()=>setModule('apu')}/>
+          </div>
+          <div className="twin-insights">
+            <InfoCard title="Proyecto" value={pr[0]?.name || '—'} subtitle={pr[0] ? `${pr[0].progress || 0}% avance` : 'Sin proyecto activo'} actionLabel={pr[0] ? 'Ver proyecto' : 'Crear proyecto'} onAction={()=>setModule(pr[0]? 'cartera' : 'cartera')}/>
+            <InfoCard title="IA" value={apus.length? 'Activa': 'Inactiva'} subtitle={apus.length? `${apus.length} APUs disponibles` : 'Genera tu primer APU para activar ZOE'} actionLabel="Copiloto" onAction={()=>setModule('apu')}/>
+          </div>
+        </div>
       </div>
       <div className="os-side">
-        <div><small>Conceptos</small><b>{apus.length || 'Listo'}</b><span>{apus.length ? 'matrices activas' : 'genera tu primer APU'}</span></div>
-        <div><small>Presupuesto</small><b>{budgets.length || 'Borrador'}</b><span>{budgets.length ? 'entregables listos' : 'sin costo final'}</span></div>
-        <div><small>Clientes</small><b>{clients.length}</b><span>cartera conectada</span></div>
+        <div className="status-grid">
+          <div className="status-card"><small>Proyecto</small><b>{pr[0]?.name || '—'}</b><span>{pr[0] ? `${pr[0].client || ''}` : 'Crea o importa un proyecto'}</span></div>
+          <div className="status-card"><small>IA</small><b>{apus.length ? 'Activa' : 'Inactiva'}</b><span>{apus.length ? `Última confianza ${Math.round((apus[0]?.confidence||0)*100)/100}` : 'Genera un APU para activar'}</span></div>
+                  <div className="status-card"><small>Biblioteca</small><b>{libraryCount !== null ? `${libraryCount} insumos` : '—'}</b><span>{libraryCount !== null ? 'Biblioteca técnica detectada' : 'Sin datos de biblioteca'}</span></div>
+          <div className="status-card"><small>OneDrive</small><b>{oneDriveOk ? 'Conectado' : 'No conectado'}</b><span>{oneDriveOk ? 'Archivos de proyecto accesibles' : 'Sincroniza documentos y planos'}</span></div>
+          <div className="status-card"><small>Firebase</small><b>{firebaseOk ? 'Listo' : 'No disponible'}</b><span>{firebaseOk ? 'Datos y usuarios sincronizados' : 'Revisa la configuración de plataforma'}</span></div>
+          <div className="status-card"><small>OpenAI</small><b>{openaiOk ? 'Listo' : 'No disponible'}</b><span>{openaiOk ? 'IA preparada para generar APUs y respuestas' : 'La IA no responde en este entorno'}</span></div>
+          <div className="status-card"><small>Salud del tablero</small><b>{healthSummary}</b><span>{projectCount} proyectos · {budgetCount} presupuestos</span></div>
+        </div>
+        {riskNotes.length ? <div className="risk-notes"><small>Atención inmediata</small><ul>{riskNotes.map(note=><li key={note}>{note}</li>)}</ul></div> : null}
       </div>
     </div>
     <div className="quick os-actions"><button onClick={()=>setModule('apu')}><Icon name="apu"/> Generar APU</button><button onClick={()=>setModule('biblioteca')}><Icon name="biblioteca"/> Abrir evidencia</button><button onClick={()=>setModule('cartera')}><Icon name="clientes"/> Ver proyectos y clientes</button><button onClick={()=>setModule('presupuestos')}><Icon name="presupuestos"/> Exportar entregables</button></div>

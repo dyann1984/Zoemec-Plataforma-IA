@@ -1,6 +1,39 @@
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 
-export async function generateAPU({ concept='', catalog=[] }){
+export function extractJsonObject(text){
+  if(typeof text !== 'string') return null;
+  const trimmed = text.trim();
+  let candidate = trimmed;
+  const fence = trimmed.match(/```(?:json)?\s*([\s\S]*)\s*```/i);
+  if(fence && fence[1]) candidate = fence[1].trim();
+  try{
+    return JSON.parse(candidate);
+  }catch{}
+  const start = candidate.indexOf('{');
+  if(start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for(let i = start; i < candidate.length; i++){
+    const ch = candidate[i];
+    if(inString){
+      if(escape){ escape = false; }
+      else if(ch === '\\') escape = true;
+      else if(ch === '"') inString = false;
+      continue;
+    }
+    if(ch === '"') inString = true;
+    else if(ch === '{') depth++;
+    else if(ch === '}') depth--;
+    if(depth === 0 && i > start){
+      const slice = candidate.slice(start, i + 1);
+      try{ return JSON.parse(slice); }catch{}
+    }
+  }
+  return null;
+}
+
+export async function generateAPU({ concept='', catalog=[], preserveOriginal=false, mode='' }){
   if(!process.env.OPENAI_API_KEY) throw new Error('Falta OPENAI_API_KEY en Vercel.');
   const cleanConcept = String(concept || '').trim();
   if(!cleanConcept) throw new Error('Escribe un concepto para generar el APU.');
@@ -10,10 +43,15 @@ export async function generateAPU({ concept='', catalog=[] }){
     precio: Number(item.precio || 0)
   }));
 
+  const preserveText = preserveOriginal ? 'Preserva el concepto original exactamente y no lo cambies de tema.' : '';
+  const batchText = mode === 'batch-concept' ? 'Este APU forma parte de un lote de conceptos. Mantén el mismo enfoque tecnico para cada concepto y no homogenices respuestas entre ellos.' : '';
   const prompt = `Genera una cedula de analisis de precio unitario mexicano para este concepto EXACTO.
 
 CONCEPTO ORIGINAL, NO LO CAMBIES DE TEMA:
 ${cleanConcept}
+
+${preserveText}
+${batchText}
 
 CATALOGO DISPONIBLE. Usa estos precios cuando coincidan semanticamente:
 ${JSON.stringify(catalogSample)}
@@ -42,6 +80,7 @@ Reglas obligatorias:
 - No cambies el concepto. Si el usuario pide estructura metalica, no generes lavabo, block, concreto ni otro tema.
 - Si el concepto trae unidad entre parentesis como (KG), (M2), (PZA), esa unidad manda.
 - Si el concepto trae "Objetivo: $X" o "P.U. referencia", arma el APU para acercarse al precio objetivo sin meter ajustes absurdos.
+- Si el concepto es de supervision, admin, obra civil o instalaciones especiales, genera una matriz tecnica con insumos y mano de obra razonables.
 - Cada descripcion debe ser completa y profesional; evita textos cortados.
 - Materiales: 3 a 8 renglones. Mano de obra: 1 a 5 renglones. Equipo: 1 a 5 renglones.
 - Las cantidades deben representar consumo o rendimiento por UNA unidad del concepto analizado.
@@ -69,21 +108,25 @@ Reglas obligatorias:
 
   const data = await response.json();
   if(!response.ok) throw new Error(data?.error?.message || `OpenAI API error ${response.status}`);
-  const content = data?.choices?.[0]?.message?.content;
-  if(!content) throw new Error('La API no devolvio contenido.');
-  return sanitizeAPU(JSON.parse(content), cleanConcept);
+  const content = String(data?.choices?.[0]?.message?.content || '');
+  const json = extractJsonObject(content);
+  if(!json) throw new Error('La API no devolvio JSON valido.');
+  return sanitizeAPU(json, cleanConcept);
 }
 
-export async function answerAssistant({ question='', history=[] }){
+export async function answerAssistant({ question='', history=[], context={} }){
   if(!process.env.OPENAI_API_KEY) throw new Error('Falta OPENAI_API_KEY en Vercel.');
   const cleanQuestion = String(question || '').trim();
   if(!cleanQuestion) return 'Escribe una pregunta tecnica para poder ayudarte.';
-  // Ultimos turnos de la conversacion real, para que ZOE responda con contexto
-  // en vez de tratar cada pregunta como si fuera la primera (conversacion persistente).
+  const projectContext = context.project?.name ? `Proyecto activo: ${context.project.name}.` : '';
+  const apuContext = context.activeApu?.concept ? `APU activo: ${context.activeApu.concept} (${context.activeApu.family || 'sin familia definida'}) con confianza ${Number(context.activeApu.confidence || 0)}%.` : '';
+  const libraryContext = Array.isArray(context.library) ? `Biblioteca disponible: ${context.library.length} insumos.` : '';
+  const additionalContext = [projectContext, apuContext, libraryContext].filter(Boolean).join(' ');
   const priorTurns = (Array.isArray(history) ? history : [])
     .filter(m => m && typeof m.content === 'string' && m.content.trim() && (m.role === 'user' || m.role === 'assistant'))
     .slice(-6)
     .map(m => ({ role: m.role, content: String(m.content).trim().slice(0, 2000) }));
+  const contextPrompt = additionalContext ? [{ role:'user', content:`Contexto de plataforma: ${additionalContext}` }] : [];
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method:'POST',
     headers:{
@@ -92,10 +135,12 @@ export async function answerAssistant({ question='', history=[] }){
     },
     body:JSON.stringify({
       model:MODEL,
-      temperature:0.25,
+      temperature:0.18,
+      max_tokens:700,
       messages:[
-        { role:'system', content:'Eres ZOE, copiloto tecnico de ZOEMEC, una plataforma mexicana de costos de construccion. Responde en espanol claro, directo y util. Ayudas con APU, matrices de precios unitarios, FSR, rendimientos, catalogos de conceptos, presupuestos, explosion de insumos, programa de obra, planes de usuario y preparacion para produccion. Recuerda el contexto de los mensajes previos de esta conversacion.' },
+        { role:'system', content:'Eres ZOE, copiloto tecnico de ZOEMEC, una plataforma mexicana de costos de construccion. Responde en espanol claro, directo y util. Prioriza el analisis tecnico de APU, FSR, rendimientos, materiales, mano de obra, equipo, indirectos, utilidad y cargos. Si tienes contexto de proyecto o APU activo, úsalo para responder con mayor precision. No actues como un chatbot generico.' },
         ...priorTurns,
+        ...contextPrompt,
         { role:'user', content:cleanQuestion }
       ]
     })

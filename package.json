@@ -7,7 +7,8 @@
     "ai": "node server/openai-apu-server.mjs",
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test src/lib/apuFlow.test.js api/openaiApuCore.test.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^6.0.3",

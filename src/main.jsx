@@ -3345,7 +3345,7 @@ function GoogleDrivePanel({user, onImported}){
   const load=async(folderId)=>{
     setLoading(true); setItems(null); setLoadError('');
     try{
-      const data=await apiPost('/api/google-drive-list', folderId ? { folderId } : {});
+      const data=await apiPost('/api/google-drive', folderId ? { action:'list', folderId } : { action:'list' });
       setItems(data.items||[]);
       setNotConfigured(false);
     }catch(err){
@@ -3368,7 +3368,7 @@ function GoogleDrivePanel({user, onImported}){
   const importOne=async(item)=>{
     setFileStatus(s=>({...s,[item.id]:'importando'}));
     try{
-      await apiPost('/api/google-drive-import', { fileId:item.id });
+      await apiPost('/api/google-drive', { action:'import', fileId:item.id });
       setFileStatus(s=>({...s,[item.id]:'listo'}));
       onImported?.();
     }catch(err){
@@ -4237,7 +4237,7 @@ function AdminPanel({user}){
   const testGoogleDriveConnection=async()=>{
     setGdTesting(true); setGdTest(null);
     try{
-      const data=await apiPost('/api/google-drive-list',{});
+      const data=await apiPost('/api/google-drive',{action:'list'});
       setGdTest({ ok:true, count:(data.items||[]).length });
     }catch(err){ setGdTest({ ok:false, message:friendlyServiceError(err,'No se pudo probar la conexion.') }); }
     finally{ setGdTesting(false); }

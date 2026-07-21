@@ -54,4 +54,14 @@ export function getAdminAuth(){
   return admin.auth();
 }
 
+export function getAdminStorage(){
+  initAdminApp();
+  if(!hasAdminCredentials()){
+    throw new Error('Falta FIREBASE_SERVICE_ACCOUNT_JSON en Vercel para usar Firebase Storage.');
+  }
+  const serviceAccount = parseServiceAccount();
+  const bucketName = process.env.FIREBASE_STORAGE_BUCKET || `${serviceAccount?.project_id || DEFAULT_PROJECT_ID}.appspot.com`;
+  return admin.storage().bucket(bucketName);
+}
+
 export const FieldValue = admin.firestore.FieldValue;

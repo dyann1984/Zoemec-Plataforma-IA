@@ -1,4 +1,4 @@
-import { FieldValue, getAdminDb } from './_firebaseAdmin.mjs';
+import { FieldValue, getAdminDb, getAdminStorage } from './_firebaseAdmin.mjs';
 import { requireFeature } from './_authGuard.mjs';
 
 /* Backend real de la conexion con OneDrive (Microsoft Graph). El client secret
@@ -119,6 +119,59 @@ export default async function handler(req, res){
       const listData = await listRes.json();
       if(!listRes.ok) throw new Error(listData.error?.message || 'No se pudo listar OneDrive.');
       res.status(200).json({ items: (listData.value || []).map(it => ({ id:it.id, name:it.name, folder:Boolean(it.folder), size:it.size || 0 })) });
+      return;
+    }
+
+    if(action === 'importFile'){
+      if(!hasOneDriveCredentials()){
+        const error = new Error('OneDrive no esta configurado en este servidor.');
+        error.status = 501;
+        throw error;
+      }
+      const { id, name } = req.body || {};
+      if(!id) throw new Error('Falta el id del archivo de OneDrive a importar.');
+      const snap = await userRef.get();
+      const refreshToken = snap.data()?.oneDrive?.refreshToken;
+      if(!refreshToken){
+        const error = new Error('Esta cuenta todavia no conecto OneDrive.');
+        error.status = 409;
+        throw error;
+      }
+      const tokens = await refreshTokens(refreshToken);
+      if(tokens.refresh_token && tokens.refresh_token !== refreshToken){
+        await userRef.set({ oneDrive:{ refreshToken: tokens.refresh_token } }, { merge:true });
+      }
+      const fileRes = await fetch(`${GRAPH_BASE}/me/drive/items/${encodeURIComponent(id)}/content`, {
+        headers:{ Authorization:`Bearer ${tokens.access_token}` }
+      });
+      if(!fileRes.ok) throw new Error('No se pudo descargar el archivo desde OneDrive.');
+      const buffer = Buffer.from(await fileRes.arrayBuffer());
+      const safeName = (name || `onedrive-${id}`).toString();
+      const storagePath = `library/${authz.uid}/onedrive-${id}/${safeName}`;
+      const bucket = getAdminStorage();
+      const file = bucket.file(storagePath);
+      await file.save(buffer, { metadata:{ contentType: fileRes.headers.get('content-type') || 'application/octet-stream' } });
+      const [downloadURL] = await file.getSignedUrl({ action:'read', expires:'01-01-2500' });
+      const ext = (safeName.split('.').pop() || 'DOC').toUpperCase();
+      const docRef = await db.collection('library').add({
+        name: safeName,
+        size: `${(buffer.length / 1048576).toFixed(2)} MB`,
+        ext,
+        when: new Date().toLocaleDateString('es-MX'),
+        cat: 'Documentos',
+        family: 'OneDrive',
+        tags: ['onedrive'],
+        status: 'Subido e indexado',
+        uses: 0,
+        ownerUid: authz.uid,
+        visibility: authz.role === 'admin' ? 'global' : 'private',
+        storagePath,
+        downloadURL,
+        indexed: false,
+        source: 'onedrive',
+        createdAt: FieldValue.serverTimestamp()
+      });
+      res.status(200).json({ ok:true, docId: docRef.id, downloadURL, name: safeName });
       return;
     }
 

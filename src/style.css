@@ -1278,7 +1278,7 @@ svg.ic{display:block;flex:none}
   .landing .nav-actions{width:100%}
   .landing .nav-actions button{flex:1;min-width:0}
   .hero-build{min-height:auto;padding:44px 22px 26px}
-  .hero-build .hero-copy h1{font-size:2.25rem}
+  .hero-build .hero-copy h1{font-size:1.7rem;max-width:none}
   .hero-build .hero-actions button{min-width:100%}
   .command-table div{grid-template-columns:28px 1fr;gap:8px}
   .command-table em,.command-table strong{text-align:left}
@@ -1320,27 +1320,31 @@ svg.ic{display:block;flex:none}
 .landing .nav-actions button{border-radius:999px;min-width:136px}
 .landing .nav-actions .ghost{background:rgba(255,255,255,.06);color:#fff;border-color:rgba(255,255,255,.22)}
 .hero-build{
+  position:relative;
   min-height:calc(100vh - 82px);
   grid-template-columns:minmax(340px,.72fr) minmax(520px,1.28fr);
-  gap:42px;
-  padding:58px 5vw 34px;
+  gap:64px;
+  padding:84px 5vw 56px;
   background:transparent;
   perspective:1200px;
 }
 .hero-build::after{display:none}
+.hero-build .hero-copy{padding-right:8px}
 .hero-build .hero-copy h1{
-  max-width:640px;
-  font-size:clamp(2.5rem,4.6vw,4.9rem);
-  line-height:.96;
-  letter-spacing:-.055em;
+  max-width:15ch;
+  font-size:clamp(1.9rem,3.45vw,3.7rem);
+  line-height:1.08;
+  letter-spacing:-.04em;
+  margin:22px 0 22px;
   background:linear-gradient(120deg,#fff 10%,#EEE6FF 38%,#C9A24A 72%,#fff 100%);
   -webkit-background-clip:text;
   background-clip:text;
   color:transparent;
   text-shadow:none;
 }
-.hero-build .hero-copy p{color:#d8d1df;text-shadow:none;font-size:1.07rem}
+.hero-build .hero-copy p{color:#d8d1df;text-shadow:none;font-size:1.07rem;margin:0 0 34px;line-height:1.65}
 .eyebrow{color:#c9a24a}
+.hero-build .hero-actions{margin-bottom:8px}
 .hero-build .hero-actions button{
   min-width:210px;
   border-radius:999px;
@@ -1352,9 +1356,54 @@ svg.ic{display:block;flex:none}
   align-items:center;
   gap:9px;
   flex-wrap:wrap;
-  margin-top:22px;
+  margin-top:36px;
   max-width:720px;
 }
+
+/* ---- Atmosfera del hero: grid tecnico animado + particulas + brillo suave ---- */
+.hero-atmosphere{position:absolute;inset:0;z-index:0;overflow:hidden;pointer-events:none;border-radius:inherit}
+.hero-atmosphere .hero-glow{position:absolute;inset:-20%;
+  background:radial-gradient(circle at 22% 18%,rgba(157,111,208,.30),transparent 34%),
+    radial-gradient(circle at 78% 68%,rgba(201,162,74,.16),transparent 30%);
+  filter:blur(2px);animation:heroGlowDrift 16s ease-in-out infinite alternate}
+.hero-atmosphere .hero-techlines{position:absolute;inset:0;opacity:.55}
+.hero-atmosphere .hero-techlines path{stroke:rgba(216,194,242,.5);stroke-width:1;fill:none;
+  stroke-dasharray:6 10;animation:heroLineFlow 14s linear infinite}
+.hero-atmosphere .hero-techlines path:nth-child(2n){animation-duration:19s;stroke:rgba(201,162,74,.4)}
+.hero-atmosphere .hero-techlines path:nth-child(3n){animation-duration:23s;animation-direction:reverse}
+.hero-particles{position:absolute;inset:0}
+.hero-particles span{position:absolute;left:calc(var(--i) * 4.6% + 1%);top:calc(96% - (var(--i) * 6.1%));
+  width:3px;height:3px;border-radius:50%;background:#D8C2F2;opacity:.55;
+  box-shadow:0 0 6px 1px rgba(216,194,242,.6);
+  animation:heroParticleFloat calc(9s + (var(--i) * 1.1s)) ease-in-out infinite;
+  animation-delay:calc(var(--i) * -0.9s)}
+.hero-particles span:nth-child(3n){background:#C9A24A;box-shadow:0 0 6px 1px rgba(201,162,74,.55)}
+@keyframes heroGlowDrift{0%{transform:translate3d(0,0,0) scale(1)}100%{transform:translate3d(2%,-3%,0) scale(1.05)}}
+@keyframes heroLineFlow{to{stroke-dashoffset:-320}}
+@keyframes heroParticleFloat{0%,100%{transform:translateY(0) translateX(0);opacity:.15}50%{transform:translateY(-46px) translateX(10px);opacity:.75}}
+@media (prefers-reduced-motion:reduce){
+  .hero-atmosphere .hero-glow,.hero-atmosphere .hero-techlines path,.hero-particles span{animation:none}
+}
+
+/* ---- Franja de referentes visuales flotando sobre el hero (BIM, planos, drones...) ---- */
+.hero-visual-orbit{position:absolute;inset:0;z-index:1;pointer-events:none}
+.orbit-chip{position:absolute;display:flex;align-items:center;gap:8px;padding:9px 14px;
+  border-radius:999px;background:rgba(15,9,24,.55);border:1px solid rgba(255,255,255,.16);
+  backdrop-filter:blur(10px);color:#EFE7FA;font-size:.72rem;font-weight:600;letter-spacing:.02em;
+  white-space:nowrap;box-shadow:0 12px 30px rgba(0,0,0,.28);
+  animation:orbitFloat 7s ease-in-out infinite;animation-delay:calc(var(--i) * -1.1s)}
+.orbit-chip svg{color:#C9A24A;flex:none}
+/* Posiciones confinadas al padding superior/inferior y al gutter entre columnas
+   del grid del hero, para no encimarse nunca con el titulo ni el parrafo. */
+.orbit-chip:nth-child(1){top:2.4%;left:6%}
+.orbit-chip:nth-child(2){top:2.4%;left:58%}
+.orbit-chip:nth-child(3){top:26%;left:44%}
+.orbit-chip:nth-child(4){top:50%;left:44%}
+.orbit-chip:nth-child(5){top:74%;left:44%}
+.orbit-chip:nth-child(6){bottom:3%;left:5%}
+.orbit-chip:nth-child(7){bottom:3%;left:58%}
+@keyframes orbitFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+@media (max-width:1250px){.hero-visual-orbit{display:none}}
 .future-proof span{
   font-family:var(--mono);
   font-size:.68rem;
@@ -1760,6 +1809,56 @@ svg.ic{display:block;flex:none}
 .calc-actions button.ghost{box-shadow:none}
 .budget-table .row-del{color:var(--danger);font-weight:700;padding:4px 8px;border-radius:8px}
 .budget-table .row-del:hover{background:#F7E4E9}
+
+/* ==================================================================
+   Visual IA · reporte estructurado en tarjetas
+   ================================================================== */
+.visual-report{grid-column:1/3;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-top:2px}
+.visual-report .vr-card{background:#120C1C;border:1px solid rgba(255,255,255,.09);border-radius:14px;padding:16px}
+.visual-report .vr-card b{display:flex;align-items:center;gap:8px;color:#EFE7FA;font-family:var(--display);font-size:.92rem;margin-bottom:8px}
+.visual-report .vr-card b i{display:inline-flex;width:22px;height:22px;border-radius:7px;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--teal),var(--petrol));color:#fff;font-style:normal;font-size:.7rem}
+.visual-report .vr-card p{margin:0;color:#C9BFDB;font-size:.84rem;line-height:1.55;white-space:pre-wrap}
+@media (max-width:1100px){.visual-report{grid-column:auto}}
+
+/* ==================================================================
+   Dashboard · fila de KPIs y widgets de actividad reciente
+   ================================================================== */
+.kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+.kpi-tile{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;box-shadow:var(--shadow-sm)}
+.kpi-tile small{display:block;font-family:var(--mono);text-transform:uppercase;letter-spacing:.1em;font-size:.66rem;color:var(--muted);font-weight:700}
+.kpi-tile b{display:block;font-family:var(--display);font-size:1.7rem;color:var(--ink);margin:6px 0 4px}
+.kpi-tile span{color:var(--muted);font-size:.8rem}
+.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.mini-list-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);font-size:.86rem}
+.mini-list-row:last-child{border-bottom:0}
+.mini-list-row b{color:var(--ink);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mini-list-row span{font-family:var(--mono);color:var(--teal);font-size:.78rem;flex:none}
+@media (max-width:1100px){.kpi-row{grid-template-columns:repeat(2,1fr)}.grid-3{grid-template-columns:1fr}}
+@media (max-width:600px){.kpi-row{grid-template-columns:1fr}}
+
+/* ==================================================================
+   Biblioteca · panel de sincronizacion con OneDrive
+   ================================================================== */
+.lib-onedrive{background:#fff;border-top:3px solid var(--teal)}
+.lib-onedrive .admin-panel-head{margin-bottom:10px}
+.od-config-warning{display:flex;gap:10px;align-items:flex-start;background:var(--gold-soft);border:1px solid var(--gold);border-radius:12px;padding:12px 14px;color:var(--gold-ink);font-size:.86rem;line-height:1.5}
+.od-file-list{display:grid;gap:8px;margin-top:10px}
+.od-file-row{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px}
+.od-file-row b{color:var(--ink);font-size:.88rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.od-file-row small{color:var(--muted);font-size:.74rem}
+
+/* ==================================================================
+   Panel Admin · tabs nuevos (Uso IA, Logs, Costos IA, OneDrive, Metricas)
+   ================================================================== */
+.admin-cost-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}
+.admin-cost-card{background:linear-gradient(135deg,#fff,#F5EFFB);border:1px solid var(--line);border-radius:14px;padding:16px}
+.admin-cost-card small{display:block;color:var(--muted);font-family:var(--mono);text-transform:uppercase;font-size:.64rem;letter-spacing:.08em}
+.admin-cost-card b{display:block;font-family:var(--display);font-size:1.4rem;color:var(--ink);margin:6px 0 2px}
+.admin-metric-note{margin-top:14px;padding:12px 14px;border-radius:12px;background:var(--mint);color:var(--petrol);font-size:.84rem;line-height:1.5}
+.admin-log-row{display:grid;grid-template-columns:110px 1fr 90px 140px;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);font-size:.84rem}
+.admin-log-row:last-child{border-bottom:0}
+.admin-log-row span{color:var(--muted)}
+@media (max-width:900px){.admin-log-row{grid-template-columns:1fr;gap:2px}}
 @media (max-width:640px){.calc-row:has(.nf:nth-child(4)){grid-template-columns:1fr 1fr}}
 
 /* ---------- Insignia de sincronización en la nube ---------- */

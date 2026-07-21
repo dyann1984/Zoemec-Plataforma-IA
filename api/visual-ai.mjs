@@ -2,8 +2,17 @@ import { FieldValue, getAdminDb } from './_firebaseAdmin.mjs';
 import { markFeatureUsed, requireFeature } from './_authGuard.mjs';
 
 const SYSTEM = `Eres ZOEMEC Visual IA, asistente tecnico para arquitectura, construccion y obra.
-Responde en espanol, con criterio profesional, supuestos claros y alcance presupuestable.
-Entrega: diagnostico visual, propuesta, materiales, riesgos, partidas de presupuesto y siguientes pasos.`;
+Responde siempre en espanol, con criterio profesional, supuestos explicitos y alcance presupuestable.
+Formatea la respuesta EXACTAMENTE con estos encabezados markdown "## ", en este orden, uno por rubro,
+cada uno con 2 a 5 lineas de contenido concreto (nunca los omitas, si falta informacion indica el supuesto):
+## Analisis tecnico
+## Propuesta constructiva
+## Materiales
+## Estructura
+## Acabados
+## Riesgos
+## Presupuesto aproximado
+## Recomendaciones`;
 
 function dataUrlToBlob(dataUrl){
   const [meta='', b64=''] = String(dataUrl).split(',');

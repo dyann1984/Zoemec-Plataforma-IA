@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import jsPDF from 'jspdf';
 import writeXlsxFile from 'write-excel-file/browser';
 import { createUserWithEmailAndPassword, GoogleAuthProvider, onAuthStateChanged, sendEmailVerification, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile } from 'firebase/auth';
-import { addDoc, collection, deleteDoc, doc, getCountFromServer, getDoc, getDocs, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
+import { addDoc, collection, deleteDoc, doc, getCountFromServer, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import { deleteObject, getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { auth, db, firebaseReady, storage } from './firebase.js';
 import { useCloudState } from './cloud.js';
@@ -75,7 +75,14 @@ const ICONS = {
   history:<><path d="M3 12a9 9 0 109-9 9 9 0 00-8 5"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></>,
   admin:<><path d="M12 2l8 3.5v6c0 5-3.4 8.7-8 10.5-4.6-1.8-8-5.5-8-10.5v-6z"/><path d="M9 12l2 2 4-4"/></>,
   search:<><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></>,
-  link:<><path d="M9 15l6-6"/><path d="M11 6l1-1a4 4 0 015.7 5.7l-1 1"/><path d="M13 18l-1 1a4 4 0 01-5.7-5.7l1-1"/></>
+  link:<><path d="M9 15l6-6"/><path d="M11 6l1-1a4 4 0 015.7 5.7l-1 1"/><path d="M13 18l-1 1a4 4 0 01-5.7-5.7l1-1"/></>,
+  plano:<><rect x="3" y="3" width="18" height="18" rx="1"/><path d="M3 9h18M9 21V9"/><path d="M13 13h4v4h-4z"/></>,
+  render:<><rect x="3" y="4" width="18" height="14" rx="1.5"/><path d="M3 15l4.5-4.5a1.5 1.5 0 012.1 0L14 15"/><circle cx="16" cy="9" r="1.6"/></>,
+  bim:<><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5L12 12l8-4.5M12 12v9"/></>,
+  puntos:<><circle cx="5" cy="6" r="1.4"/><circle cx="12" cy="4" r="1.4"/><circle cx="19" cy="7" r="1.4"/><circle cx="6" cy="13" r="1.4"/><circle cx="13" cy="11" r="1.4"/><circle cx="18" cy="14" r="1.4"/><circle cx="4" cy="20" r="1.4"/><circle cx="11" cy="19" r="1.4"/><circle cx="18" cy="20" r="1.4"/></>,
+  dron:<><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9.5 9.5L4 4M14.5 9.5L20 4M9.5 14.5L4 20M14.5 14.5L20 20"/><circle cx="4" cy="4" r="1.6"/><circle cx="20" cy="4" r="1.6"/><circle cx="4" cy="20" r="1.6"/><circle cx="20" cy="20" r="1.6"/></>,
+  edificio:<><path d="M6 21V6a1 1 0 011-1h4a1 1 0 011 1v15"/><path d="M14 21V10a1 1 0 011-1h3a1 1 0 011 1v11"/><path d="M9 8h.01M9 11h.01M9 14h.01M9 17h.01"/></>,
+  alerta:<><path d="M10.3 3.6L1.8 18a1.8 1.8 0 001.5 2.7h17.4a1.8 1.8 0 001.5-2.7L13.7 3.6a1.8 1.8 0 00-3.4 0z"/><path d="M12 9v4M12 17h.01"/></>
 };
 function Icon({name,size=20}){return <svg className="ic" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{ICONS[name]||ICONS.doc}</svg>;}
 
@@ -719,7 +726,8 @@ function DigitalTwin({apu, compact=false, onOpen}){
       </div>
       <div className="empty-illustration-copy">
         <h3>Gemelo Digital del Proyecto</h3>
-        <p>Activa el gemelo digital importando documentos o creando y guardando tu primer APU. ZOE extrae, clasifica y enlaza evidencia automáticamente.</p>
+        <p>Una representación digital del proyecto que concentra planos, APU, documentos, presupuestos, evidencias, avances y conocimiento técnico para que ZOE pueda analizar toda la obra.</p>
+        <p>Actívalo importando documentos o creando y guardando tu primer APU: ZOE extrae, clasifica y enlaza evidencia automáticamente.</p>
         <div className="empty-actions"><button onClick={()=>onOpen?onOpen():null}>Crear APU</button></div>
       </div>
     </div>;
@@ -1001,6 +1009,12 @@ const LANDING_PIPELINE = [
     foot:['Precio unitario integrado', 'Listo para revisión'] },
 ];
 
+const HERO_PARTICLES = Array.from({length:16}, (_,i)=>i);
+const HERO_VISUALS = [
+  ['plano','Planos'],['bim','Modelos BIM'],['render','Renders'],['puntos','Nube de puntos'],
+  ['edificio','Edificios'],['dron','Drones'],['tecnico','Estructuras']
+];
+
 function Landing({setScreen, login, company}){
   const [step, setStep] = useState(0);
   useEffect(() => {
@@ -1015,6 +1029,18 @@ function Landing({setScreen, login, company}){
       <div className="nav-actions"><button className="ghost" onClick={()=>setScreen('login')}>Iniciar sesión</button><button onClick={()=>setScreen('register')}>Comenzar gratis</button></div>
     </header>
     <section className="hero-build">
+      <div className="hero-atmosphere" aria-hidden="true">
+        <div className="hero-glow"/>
+        <svg className="hero-techlines" viewBox="0 0 1000 600" preserveAspectRatio="none">
+          <path d="M0 80 L340 80 L400 140 L1000 140"/>
+          <path d="M0 260 L220 260 L280 320 L1000 320"/>
+          <path d="M0 440 L460 440 L520 500 L1000 500"/>
+        </svg>
+        <div className="hero-particles">{HERO_PARTICLES.map(i=><span key={i} style={{'--i':i}}/>)}</div>
+      </div>
+      <div className="hero-visual-orbit" aria-hidden="true">
+        {HERO_VISUALS.map(([icon,label],i)=><div className="orbit-chip" key={icon} style={{'--i':i}}><Icon name={icon} size={14}/><span>{label}</span></div>)}
+      </div>
       <div className="hero-copy">
         <span className="eyebrow">Copiloto de IA para ingeniería de costos en construcción</span>
         <h1>Construye el modelo de costos antes de verter el concreto.</h1>
@@ -1152,12 +1178,13 @@ function TopSearch({apus=[],clients=[],projects=[],setModule}){
 }
 
 function Shell({children,user,logout,module,setModule,company,apus,clients,projects}){
-  // Comunidad, Planes y acceso y Visual IA se ocultan temporalmente del menu principal
+  // Comunidad y Planes y acceso se ocultan temporalmente del menu principal
   // (fase de concurso: se mantienen en el codigo, solo no se muestran en la navegacion).
   const menu = [
     ['inicio','inicio','Inicio'], ['apu','apu','APU Inteligente'], ['presupuestos','presupuestos','Presupuestos'],
     ['cartera','clientes','Proyectos y clientes','Cartera de obra'],
     ['biblioteca','biblioteca','Biblioteca','Academia y documentos'],
+    ['visual','render','Visual IA','Foto, plano o render a propuesta'],
     ['tecnico','tecnico','Oficina técnica','Cálculos y formatos'],
     ['reportes','reportes','Reportes'],
     ...(user.role==='admin' ? [['admin','admin','Panel Admin','Usuarios, planes y sistema']] : [])
@@ -1216,6 +1243,7 @@ function Dashboard({setModule,apus,clients,budgets,projects,user}){
   const [remoteStatus,setRemoteStatus] = useState(null);
   const [oneDriveStatus,setOneDriveStatus] = useState(null);
   const [libraryCount,setLibraryCount] = useState(null);
+  const [libraryRecent,setLibraryRecent] = useState(null);
   const monto = budgets.reduce((a,b)=>a+(b.total||0),0);
   const pr = projects || [];
   const activeProject = pr[0] || null;
@@ -1260,10 +1288,24 @@ function Dashboard({setModule,apus,clients,budgets,projects,user}){
     getCountFromServer(query(collection(db,'library'), where('ownerUid','==',user.uid)))
       .then(snap=>{ if(alive) setLibraryCount(snap.data().count); })
       .catch(()=>{ if(alive) setLibraryCount(null); });
+    getDocs(query(collection(db,'library'), where('ownerUid','==',user.uid), limit(20)))
+      .then(snap=>{
+        if(!alive) return;
+        const docs=snap.docs.map(d=>({id:d.id,...d.data()}));
+        docs.sort((a,b)=>(b.createdAt?.toMillis?.()||0)-(a.createdAt?.toMillis?.()||0));
+        setLibraryRecent(docs.slice(0,4));
+      })
+      .catch(()=>{ if(alive) setLibraryRecent(null); });
     apiPost('/api/onedrive', { action:'status' }).then(data=>{ if(alive) setOneDriveStatus(data); }).catch(()=>{ if(alive) setOneDriveStatus(null); });
     return ()=>{ alive=false; };
   }, [user]);
   return <section className="ai-os"><PageHead kicker="ZOEMEC AI OS" title="Copiloto de costos de construcción" desc="Un centro visual donde documentos, modelos, evidencia y APUs viven en el mismo flujo tecnico." action={<button onClick={()=>setModule('apu')}>Pedir a ZOE que cotice</button>} />
+    <div className="kpi-row">
+      <div className="kpi-tile"><small>Proyectos</small><b>{projectCount}</b><span>{projectCount ? `${projectCount} en cartera` : 'Crea el primero'}</span></div>
+      <div className="kpi-tile"><small>APUs generados</small><b>{apus.length}</b><span>{apus.length ? 'Matrices con IA' : 'Sin APUs aún'}</span></div>
+      <div className="kpi-tile"><small>Presupuestos</small><b>{budgetCount}</b><span>{monto ? money(monto) : 'Sin monto acumulado'}</span></div>
+      <div className="kpi-tile"><small>Documentos</small><b>{libraryCount ?? '—'}</b><span>Biblioteca técnica</span></div>
+    </div>
     <div className="os-grid">
       <div className="os-command">
         <div className="os-command-head"><span>Inteligencia del proyecto en vivo</span><b>{monto ? money(monto) : 'Sin presupuesto aun'}</b></div>
@@ -1308,7 +1350,15 @@ function Dashboard({setModule,apus,clients,budgets,projects,user}){
       <div className="panel future-panel"><h2>Tendencia de costo</h2><Spark points={spark}/><div className="chart-foot"><span>{budgets.length ? 'Datos de presupuesto' : 'Esperando primer presupuesto real'}</span><b>{budgets.length ? 'Sincronizado' : 'Standby'}</b></div></div>
       <div className="panel chart-donut future-panel"><h2>Mapa de proyecto</h2><Donut segments={segs} center={pr.length || 'IA'} sub="nodos"/><div className="donut-legend">{segs.length ? segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>) : <span><i style={{background:'#C7A35C'}}/>Sin proyectos: crea uno o genera APU</span>}</div></div>
     </div>
-    <div className="grid-2"><div className="panel"><h2>Proyectos recientes</h2>{pr.length ? pr.slice(0,4).map(p=><div className="project-row" key={p.name}><div><b>{p.name}</b><small>{p.client}</small></div><span>{p.progress}%</span><progress value={p.progress} max="100" /></div>) : <EmptyState text="Aún no hay proyectos reales. Crea el primero para alimentar este tablero."/>}</div><div className="panel"><h2>Actividad reciente</h2>{apus.length || budgets.length ? [...apus.slice(0,2).map(a=>`APU ${a.clave || a.id} creado`), ...budgets.slice(0,2).map(b=>`Presupuesto ${b.name} guardado`)].map(x=><div className="activity" key={x}><Icon name="doc" size={15}/> {x}</div>) : <EmptyState text="La actividad aparecerá cuando guardes APUs, presupuestos, clientes o documentos."/>}</div></div>
+    <div className="grid-3">
+      <div className="panel"><h2>Proyectos recientes</h2>{pr.length ? pr.slice(0,4).map(p=><div className="project-row" key={p.name}><div><b>{p.name}</b><small>{p.client}</small></div><span>{p.progress}%</span><progress value={p.progress} max="100" /></div>) : <EmptyState text="Aún no hay proyectos reales. Crea el primero para alimentar este tablero."/>}</div>
+      <div className="panel"><h2>Últimos APUs</h2>{apus.length ? apus.slice(0,4).map((a,i)=><div className="mini-list-row" key={a.id||i}><Icon name="apu" size={15}/><b>{a.concept || a.clave || `APU ${i+1}`}</b><span>{a.confidence ? `${Math.round(a.confidence)}%` : '—'}</span></div>) : <EmptyState text="Genera tu primer APU para verlo aquí." actionLabel="Crear APU" onAction={()=>setModule('apu')}/>}</div>
+      <div className="panel"><h2>Últimos presupuestos</h2>{budgets.length ? budgets.slice(0,4).map((b,i)=><div className="mini-list-row" key={b.id||i}><Icon name="presupuestos" size={15}/><b>{b.name || `Presupuesto ${i+1}`}</b><span>{b.total ? money(b.total) : '—'}</span></div>) : <EmptyState text="Guarda un presupuesto para verlo aquí." actionLabel="Ir a presupuestos" onAction={()=>setModule('presupuestos')}/>}</div>
+    </div>
+    <div className="grid-2">
+      <div className="panel"><h2>Últimos documentos</h2>{libraryRecent === null ? <EmptyState text="Sin datos de biblioteca en este momento."/> : libraryRecent.length ? libraryRecent.map(f=><div className="mini-list-row" key={f.id}><Icon name="doc" size={15}/><b>{f.name || 'Documento'}</b><span>{f.cat || f.ext || '—'}</span></div>) : <EmptyState text="Sube tu primer documento a la Biblioteca para verlo aquí." actionLabel="Abrir Biblioteca" onAction={()=>setModule('biblioteca')}/>}</div>
+      <div className="panel"><h2>Actividad reciente</h2>{apus.length || budgets.length || (libraryRecent||[]).length ? [...(libraryRecent||[]).slice(0,2).map(f=>`Documento "${f.name}" sincronizado`), ...apus.slice(0,2).map(a=>`APU ${a.clave || a.id || ''} creado`), ...budgets.slice(0,2).map(b=>`Presupuesto ${b.name} guardado`)].map((x,i)=><div className="activity" key={i}><Icon name="doc" size={15}/> {x}</div>) : <EmptyState text="La actividad aparecerá cuando guardes APUs, presupuestos, clientes o documentos."/>}</div>
+    </div>
   </section>
 }
 function EmptyState({icon,title,text,actionLabel,onAction}){
@@ -3136,6 +3186,53 @@ function scoreLibraryFile(file,q=''){
   return terms.reduce((n,t)=>n+(hay.includes(t)?2:0), hay.includes(query)?8:0);
 }
 
+function OneDrivePanel({onImported}){
+  const [status,setStatus]=useState(null);
+  const [items,setItems]=useState(null);
+  const [loadingList,setLoadingList]=useState(false);
+  const [importingId,setImportingId]=useState(null);
+  const refreshStatus=async()=>{
+    try{ const data=await apiPost('/api/onedrive',{action:'status'}); setStatus(data); }
+    catch(err){ setStatus({error:friendlyServiceError(err,'No se pudo consultar OneDrive.')}); }
+  };
+  useEffect(()=>{ refreshStatus(); },[]);
+  const listFiles=async()=>{
+    setLoadingList(true); setItems(null);
+    try{ const data=await apiPost('/api/onedrive',{action:'listRoot'}); setItems((data.items||[]).filter(it=>!it.folder)); }
+    catch(err){ window.zoemecNotify?.(err.message || 'No se pudo listar OneDrive.', 'error'); setItems([]); }
+    finally{ setLoadingList(false); }
+  };
+  const importFile=async(item)=>{
+    setImportingId(item.id);
+    try{
+      await apiPost('/api/onedrive',{action:'importFile', id:item.id, name:item.name});
+      window.zoemecNotify?.(`"${item.name}" importado a la Biblioteca.`,'info');
+      onImported?.();
+    }catch(err){ window.zoemecNotify?.(err.message || 'No se pudo importar el archivo.', 'error'); }
+    finally{ setImportingId(null); }
+  };
+  const connected = Boolean(status?.connected);
+  const configured = isOneDriveConfigured();
+  return <div className="panel lib-onedrive">
+    <div className="admin-panel-head"><h2>OneDrive</h2><button className="soft" onClick={refreshStatus}>Actualizar estado</button></div>
+    {!configured && <div className="od-config-warning"><Icon name="alerta" size={18}/><div>Falta la variable <b>VITE_ONEDRIVE_CLIENT_ID</b> en este entorno: sin ella no se puede iniciar sesión con Microsoft. Pide al administrador que registre la app en Azure AD y configure esa variable en el cliente, además de <b>ONEDRIVE_CLIENT_ID</b>/<b>ONEDRIVE_CLIENT_SECRET</b> en el servidor (Vercel).</div></div>}
+    {status?.error && <EmptyState icon="admin" title="No se pudo consultar OneDrive" text={status.error}/>}
+    {status && !status.error && <>
+      <p className="muted">{connected ? `Conectado como ${status.account || 'tu cuenta de Microsoft'}.` : 'Conecta tu cuenta de OneDrive para listar e importar documentos reales a la Biblioteca.'}</p>
+      <div className="visual-actions">
+        {!connected
+          ? <button disabled={!configured} onClick={()=>connectOneDrive()}>Conectar OneDrive</button>
+          : <button className="soft" onClick={listFiles} disabled={loadingList}>{loadingList?'Listando...':'Listar archivos de OneDrive'}</button>}
+      </div>
+    </>}
+    {items && (items.length ? <div className="od-file-list">{items.map(it=><div className="od-file-row" key={it.id}>
+        <div><b>{it.name}</b><small>{((it.size||0)/1048576).toFixed(2)} MB</small></div>
+        <small>OneDrive</small>
+        <button className="soft" disabled={importingId===it.id} onClick={()=>importFile(it)}>{importingId===it.id?'Importando...':'Importar a Biblioteca'}</button>
+      </div>)}</div> : <p className="muted">No se encontraron archivos en la raíz de tu OneDrive.</p>)}
+  </div>;
+}
+
 function Library({user}){
   const fileInputRef=useRef(null);
   const [files,setFiles]=useLocalState('zoemec-biblioteca',[]);
@@ -3147,12 +3244,14 @@ function Library({user}){
   const [page,setPage]=useState(1);
   const [syncing,setSyncing]=useState(false);
   const [lastSync,setLastSync]=useState(null);
+  const [syncKey,setSyncKey]=useState(0);
   /* Antes esta lista solo salia de localStorage: cada subida escribia en Firestore
      pero nunca se volvia a leer de ahi, asi que el Panel Admin (que si lee Firestore)
      y esta pantalla mostraban datos distintos para el mismo usuario. Ahora Firestore
      es la fuente real; localStorage sigue siendo el cache de arranque instantaneo, y
      se conservan solo los archivos que de verdad nunca se sincronizaron (sin docId,
-     ej. subidos sin sesion o sin Storage disponible). */
+     ej. subidos sin sesion o sin Storage disponible). syncKey permite forzar un
+     refresco manual (por ejemplo, tras importar un archivo desde OneDrive). */
   useEffect(()=>{
     if(!firebaseReady || !user?.uid) return;
     let alive=true;
@@ -3185,7 +3284,7 @@ function Library({user}){
       finally{ if(alive) setSyncing(false); }
     })();
     return ()=>{ alive=false; };
-  },[user?.uid]);
+  },[user?.uid, syncKey]);
   const classify=(name='')=>{
     const n=libKey(name);
     if(/matriz|matrices|precio unitario|analisis|apu/.test(n)) return 'Matrices APU';
@@ -3288,6 +3387,7 @@ function Library({user}){
     <div className="lib-cloud panel">
       {[['1. Subida masiva','Puedes cargar lotes completos desde la plataforma. Para carpetas grandes conviene subir ZIP o seleccionar multiples archivos.'],['2. Nube privada','Los archivos reales deben vivir en Firebase Storage o Vercel Blob. Firestore guarda nombre, categoria, permiso, usuario y fuente.'],['3. Busqueda IA','Despues se indexa el contenido para buscar por insumo, concepto, unidad, precio, rendimiento o norma.']].map(x=><div key={x[0]}><b>{x[0]}</b><p>{x[1]}</p></div>)}
     </div>
+    <OneDrivePanel onImported={()=>setSyncKey(k=>k+1)}/>
     <div className="library-dashboard"><div className="lib-stat"><small>Documentos</small><b>{files.length}</b><span>{totalMb.toFixed(2)} MB cargados</span></div><div className="lib-stat"><small>Categorias activas</small><b>{counts.filter(x=>x[1]>0).length}</b><span>{type === 'Todos' ? 'Vista global' : type}</span></div><div className="lib-stat"><small>Seleccionados</small><b>{batch.length}</b><span>Lote visible para acciones IA</span></div></div>
     <div className="lib-console panel">
       <div className="lib-searchbar"><input className="search" placeholder="Buscar por concepto, insumo, familia, archivo o fuente..." value={q} onChange={e=>{setQ(e.target.value);setPage(1)}}/><button onClick={()=>alert('Busqueda IA: usa el indice documental para encontrar matrices, insumos y referencias compatibles con tu concepto.')}>Buscar con IA</button></div>
@@ -3609,6 +3709,38 @@ function Community(){
 }
 
 
+const VISUAL_REPORT_SECTIONS = [
+  { keys:['analisis tecnico','analisis técnico','diagnostico'], label:'Análisis técnico', icon:'search' },
+  { keys:['propuesta constructiva','propuesta'], label:'Propuesta constructiva', icon:'apu' },
+  { keys:['mejoras'], label:'Mejoras', icon:'reportes' },
+  { keys:['materiales'], label:'Materiales', icon:'block' },
+  { keys:['estructura'], label:'Estructura', icon:'concreto' },
+  { keys:['acabados'], label:'Acabados', icon:'pintura' },
+  { keys:['riesgos'], label:'Riesgos', icon:'alerta' },
+  { keys:['presupuesto aproximado','presupuesto'], label:'Presupuesto aproximado', icon:'presupuestos' },
+  { keys:['recomendaciones','siguientes pasos'], label:'Recomendaciones', icon:'link' }
+];
+/* El backend (api/visual-ai.mjs) pide a OpenAI Responses que devuelva encabezados
+   "## Seccion" por cada rubro. Esto separa la salida en tarjetas legibles y deja
+   la puerta abierta a otros modelos de vision futuros que respeten el mismo
+   contrato de texto, sin acoplar el frontend a un proveedor especifico. */
+function parseVisualReport(text){
+  if(!text) return null;
+  const blocks = String(text).split(/\n(?=#{1,3}\s*[^\n]+)/g).map(b=>b.trim()).filter(Boolean);
+  const sections = [];
+  blocks.forEach(block=>{
+    const headMatch = block.match(/^#{1,3}\s*(.+)$/);
+    if(!headMatch) return;
+    const heading = headMatch[1].replace(/[:*]/g,'').trim();
+    const headingKey = libKey(heading);
+    const body = block.slice(headMatch[0].length).trim();
+    if(!body) return;
+    const known = VISUAL_REPORT_SECTIONS.find(s=>s.keys.some(k=>headingKey.includes(libKey(k))));
+    sections.push({ label: known?.label || heading, icon: known?.icon || 'doc', text: body });
+  });
+  return sections.length ? sections : null;
+}
+
 function VisualAI({user}){
   const [image,setImage]=useState('');
   const [fileName,setFileName]=useState('');
@@ -3625,12 +3757,12 @@ function VisualAI({user}){
   };
   const localBrief=()=>{
     const modes = {
-      fachada:'Analisis de fachada: conservar estructura principal, proponer paleta de materiales, iluminacion, herreria, canceleria, textura, jardineria y mejoras de acceso.',
-      plano:'Plano a 3D: interpretar areas, volumenes, alturas aproximadas, circulaciones, estilo arquitectonico, materialidad y sugerir una volumetria inicial.',
-      interior:'Interiorismo: proponer distribucion, mobiliario, acabados, iluminacion, plafones, colores y puntos criticos de ejecucion.',
-      obra:'Revision de obra: detectar riesgos visuales, pendientes, seguridad, limpieza, avance y recomendaciones para reporte fotografico.'
+      fachada:'Conservar estructura principal, proponer paleta de materiales, iluminacion, herreria, canceleria, textura, jardineria y mejoras de acceso.',
+      plano:'Interpretar areas, volumenes, alturas aproximadas, circulaciones, estilo arquitectonico, materialidad y sugerir una volumetria inicial.',
+      interior:'Proponer distribucion, mobiliario, acabados, iluminacion, plafones, colores y puntos criticos de ejecucion.',
+      obra:'Detectar riesgos visuales, pendientes, seguridad, limpieza, avance y recomendaciones para reporte fotografico.'
     };
-    return `${modes[mode]}\n\nInstruccion del usuario:\n${prompt}\n\nSalida esperada:\n1. Imagen o render propuesto.\n2. Lista de cambios visibles.\n3. Materiales sugeridos.\n4. Alcance preliminar para presupuesto.\n5. Observaciones tecnicas y supuestos.`;
+    return `## Analisis tecnico\n${modes[mode]}\n\n## Propuesta constructiva\nInstruccion capturada: ${prompt}\n\n## Materiales\nPendiente de definir con IA conectada.\n\n## Estructura\nPendiente de definir con IA conectada.\n\n## Acabados\nPendiente de definir con IA conectada.\n\n## Riesgos\nEsta es una vista previa local, sin IA. Conecta OPENAI_API_KEY para un analisis real de riesgos.\n\n## Presupuesto aproximado\nSin datos: genera con IA para obtener un rango estimado.\n\n## Recomendaciones\nSube una imagen y genera con IA para recomendaciones concretas.`;
   };
   const generate=async()=>{
     setLoading(true);
@@ -3665,8 +3797,11 @@ function VisualAI({user}){
       <div className="panel visual-result">
         <h2>Salida tecnica</h2>
         {generatedImage && <img className="visual-generated" src={generatedImage} alt="Propuesta visual generada por ZOEMEC IA"/>}
-        {result ? <pre>{result}</pre> : <p className="muted">Sube una imagen y genera el brief. ZOEMEC puede devolver propuesta visual, descripcion tecnica, materiales y alcance para presupuesto.</p>}
+        {!result && <p className="muted">Sube una imagen y genera el brief. ZOEMEC devuelve analisis tecnico, propuesta constructiva, materiales, estructura, acabados, riesgos, presupuesto aproximado y recomendaciones.</p>}
       </div>
+      {result && (()=>{ const sections=parseVisualReport(result); return sections
+        ? <div className="visual-report">{sections.map((s,i)=><div className="vr-card" key={i}><b><i><Icon name={s.icon} size={13}/></i>{s.label}</b><p>{s.text}</p></div>)}</div>
+        : <div className="panel visual-result" style={{gridColumn:'1/3'}}><pre>{result}</pre></div>; })()}
     </div>
     <div className="visual-flow">{['Subir imagen a Storage','Guardar solicitud en Firestore','IA analiza referencia','Genera render o brief','Usuario aprueba y manda a presupuesto'].map((x,i)=><div key={x}><b>{i+1}</b><span>{x}</span></div>)}</div>
   </section>
@@ -3752,6 +3887,8 @@ function Reports({clients,apus,budgets}){
   return <section><PageHead kicker="Reportes" title="Tablero ejecutivo" desc="Ventas, presupuestos, clientes, APUs, avances, utilidad y rendimiento de la oficina." action={<button>Exportar reporte</button>} /><div className="report-hero"><div><small>Venta potencial</small><b>{money(total)}</b><span>acumulado</span></div><div><small>Pipeline</small><b>{budgets.length ? 'Activo' : '0%'}</b><span>tasa de cierre</span></div><div><small>Productividad</small><b>{apus.length}</b><span>APU generados</span></div><div><small>Clientes</small><b>{clients.length}</b><span>activos</span></div></div><div className="dash-charts report-grid"><div className="panel"><h2>Cotizacion mensual</h2><Spark points={budgets.length ? budgets.slice(-8).map(b=>Math.max(1,(Number(b.total)||0)/1000)) : [0,0,0,0,0,0,0,0]} h={110}/><div className="chart-foot"><span>{budgets.length ? 'Presupuestos reales' : 'Sin datos reales'}</span><b>{budgets.length ? 'Actualizado' : '0% acumulado'}</b></div></div><div className="panel chart-donut"><h2>Cartera por tipo de obra</h2><Donut segments={segs} center={hasData ? '100%' : '0%'} sub="cartera"/><div className="donut-legend">{segs.length ? segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>) : <EmptyState text="Sin datos para graficar."/>}</div></div></div><div className="report-bottom"><div className="panel"><h2>Resumen mensual</h2>{bars.map(([label,val,color])=><div className="bar-row" key={label}><span>{label}</span><i><b style={{width:val+'%',background:color}}></b></i><em className="bar-val">{val}%</em></div>)}</div><div className="panel"><h2>Alertas ejecutivas</h2>{alerts.length ? alerts.map(a=><div className="activity" key={a}><Icon name="bell" size={15}/> {a}</div>) : <EmptyState text="Sin alertas hasta que existan movimientos reales."/>}</div></div></section>
 }
 
+const AI_COST_ESTIMATE = { apu:0.02, visual:0.09, assistant:0.006 };
+
 function AdminPanel({user}){
   const [tab,setTab]=useState('usuarios');
   const [users,setUsers]=useState(null);
@@ -3759,6 +3896,9 @@ function AdminPanel({user}){
   const [library,setLibrary]=useState(null);
   const [config,setConfig]=useState(null);
   const [health,setHealth]=useState(null);
+  const [logs,setLogs]=useState(null);
+  const [logsErr,setLogsErr]=useState('');
+  const [oneDriveAdmin,setOneDriveAdmin]=useState(null);
   const [savingUid,setSavingUid]=useState(null);
   const [savingConfig,setSavingConfig]=useState(false);
 
@@ -3789,12 +3929,30 @@ function AdminPanel({user}){
       setHealth(data);
     }catch(err){ setHealth({error:friendlyServiceError(err,'No se pudo consultar el estado del sistema.')}); }
   };
+  const loadLogs=async()=>{
+    setLogs(null); setLogsErr('');
+    try{
+      const snap=await getDocs(query(collection(db,'visual_requests'), orderBy('createdAt','desc'), limit(50)));
+      setLogs(snap.docs.map(d=>({id:d.id,...d.data()})));
+    }catch(err){ setLogsErr(friendlyServiceError(err,'No se pudieron leer los registros de Visual IA.')); setLogs([]); }
+  };
+  const loadOneDriveAdmin=async()=>{
+    setOneDriveAdmin(null);
+    try{ const data=await apiPost('/api/onedrive',{action:'status'}); setOneDriveAdmin(data); }
+    catch(err){ setOneDriveAdmin({error:friendlyServiceError(err,'No se pudo consultar OneDrive.')}); }
+  };
 
   useEffect(()=>{ loadUsers(); },[]);
   useEffect(()=>{
     if(tab==='biblioteca' && library===null) loadLibrary();
     if(tab==='config' && config===null) loadConfig();
     if(tab==='sistema' && health===null) loadHealth();
+    if(tab==='logs' && logs===null) loadLogs();
+    if(tab==='onedrive' && oneDriveAdmin===null) loadOneDriveAdmin();
+    if(tab==='metricas'){
+      if(library===null) loadLibrary();
+      if(logs===null) loadLogs();
+    }
   },[tab]);
 
   const updateUser=async(uid,patch)=>{
@@ -3812,11 +3970,17 @@ function AdminPanel({user}){
     finally{ setSavingConfig(false); }
   };
 
-  const tabs=[['usuarios','Usuarios'],['empresas','Empresas'],['biblioteca','Biblioteca'],['planes','Planes y licencias'],['config','Configuración'],['sistema','Estado del sistema']];
+  const tabs=[['usuarios','Usuarios'],['uso_ia','Uso IA'],['empresas','Empresas'],['biblioteca','Biblioteca'],['logs','Logs'],['planes','Planes y licencias'],['costos_ia','Costos IA'],['onedrive','OneDrive'],['config','Configuración'],['sistema','Estado del sistema'],['metricas','Métricas']];
   const Busy=()=><div className="ai-note-busy"><span className="asst-dots"><i/><i/><i/></span><b>Cargando datos reales de Firestore...</b></div>;
+  const usageTotals=(users||[]).reduce((acc,u)=>{
+    Object.values(u.usage||{}).forEach(monthUsage=>{
+      Object.entries(monthUsage||{}).forEach(([feature,count])=>{ acc[feature]=(acc[feature]||0)+Number(count||0); });
+    });
+    return acc;
+  },{});
 
   return <section>
-    <PageHead kicker="Panel Admin" title="Administración de la plataforma" desc="Usuarios, roles, organizaciones, biblioteca, licencias, configuración y estado del sistema, con datos reales de Firestore." />
+    <PageHead kicker="Panel Admin" title="Administración de la plataforma" desc="Usuarios, uso de IA, biblioteca, logs, costos, OneDrive, Firebase, OpenAI, estado del sistema y métricas ejecutivas, con datos reales de Firestore." />
     <div className="admin-tabs">{tabs.map(([id,label])=><button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}>{label}</button>)}</div>
 
     {tab==='usuarios' && <div className="panel admin-panel-body">
@@ -3837,6 +4001,24 @@ function AdminPanel({user}){
          </tr>)}</tbody>
        </table></div>}
     </div>}
+
+    {tab==='uso_ia' && (()=>{
+      const month=(()=>{ const n=new Date(); return `${n.getUTCFullYear()}-${String(n.getUTCMonth()+1).padStart(2,'0')}`; })();
+      const rows=(users||[]).map(u=>{
+        const cur=u.usage?.[month]||{};
+        return { id:u.id, name:u.name||u.email||'—', plan:u.role==='admin'?'Empresa':(u.plan||'Gratis'),
+          apu:Number(cur.apu||0), visual:Number(cur.visual||0), assistant:Number(cur.assistant||0),
+          last:u.lastAiUseAt?.toDate ? u.lastAiUseAt.toDate().toLocaleString('es-MX') : '—' };
+      }).filter(r=>r.apu||r.visual||r.assistant).sort((a,b)=>(b.apu+b.visual+b.assistant)-(a.apu+a.visual+a.assistant));
+      return <div className="panel admin-panel-body">
+        <div className="admin-panel-head"><h2>Uso de IA <small className="hint">mes {month}</small></h2><button className="soft" onClick={loadUsers}>Actualizar</button></div>
+        {users===null ? <Busy/> : !rows.length ? <EmptyState icon="apu" title="Sin uso de IA este mes" text="Cuando los usuarios generen APUs, usen Visual IA o al asistente, el consumo aparecerá aquí (contador real por usuario en Firestore)."/> :
+        <div className="admin-table-wrap"><table className="data-table admin-table">
+          <thead><tr><th>Usuario</th><th>Plan</th><th>APU</th><th>Visual IA</th><th>Asistente</th><th>Último uso</th></tr></thead>
+          <tbody>{rows.map(r=><tr key={r.id}><td>{r.name}</td><td>{r.plan}</td><td>{r.apu}</td><td>{r.visual}</td><td>{r.assistant}</td><td>{r.last}</td></tr>)}</tbody>
+        </table></div>}
+      </div>;
+    })()}
 
     {tab==='empresas' && (()=>{
       const groups={};
@@ -3861,12 +4043,58 @@ function AdminPanel({user}){
       </table></div>}
     </div>}
 
+    {tab==='logs' && <div className="panel admin-panel-body">
+      <div className="admin-panel-head"><h2>Logs <small className="hint">Visual IA · últimos {logs?.length ?? '…'}</small></h2><button className="soft" onClick={loadLogs}>Actualizar</button></div>
+      {logs===null ? <Busy/> :
+       logsErr ? <EmptyState icon="admin" title="No se pudo cargar" text={logsErr}/> :
+       !logs.length ? <EmptyState icon="tecnico" title="Sin registros todavía" text="Cada solicitud de Visual IA queda registrada en Firestore (colección visual_requests) con usuario, modo y resultado."/> :
+       <div className="admin-log-list">{logs.map(l=><div className="admin-log-row" key={l.id}>
+         <span>{l.createdAt?.toDate ? l.createdAt.toDate().toLocaleString('es-MX') : '—'}</span>
+         <b>{l.email || l.uid || 'Usuario'} · {l.fileName || 'sin archivo'}</b>
+         <span>{l.mode || '—'}</span>
+         <span>{l.imageGenerated ? 'Render generado' : (l.imageError ? `Error imagen: ${l.imageError}` : 'Solo texto')}</span>
+       </div>)}</div>}
+    </div>}
+
     {tab==='planes' && (()=>{
       const plans=['Gratis','Inicial','Profesional','Empresa'];
       const counts=plans.map(p=>({plan:p,count:(users||[]).filter(u=>(u.plan||'Gratis')===p).length,active:(users||[]).filter(u=>(u.plan||'Gratis')===p && u.active!==false).length}));
       return <div className="panel admin-panel-body">
         <div className="admin-panel-head"><h2>Planes y licencias</h2></div>
         {users===null ? <Busy/> : <div className="admin-plan-grid">{counts.map(c=><div className="admin-plan-card" key={c.plan}><b>{c.plan}</b><span className="admin-plan-count">{c.count}</span><small>{c.active} activos</small></div>)}</div>}
+      </div>;
+    })()}
+
+    {tab==='costos_ia' && (()=>{
+      const estimated=(usageTotals.apu||0)*AI_COST_ESTIMATE.apu + (usageTotals.visual||0)*AI_COST_ESTIMATE.visual + (usageTotals.assistant||0)*AI_COST_ESTIMATE.assistant;
+      return <div className="panel admin-panel-body">
+        <div className="admin-panel-head"><h2>Costos IA</h2><button className="soft" onClick={loadUsers}>Actualizar</button></div>
+        {users===null ? <Busy/> : <>
+          <div className="admin-cost-grid">
+            <div className="admin-cost-card"><small>Llamadas APU</small><b>{usageTotals.apu||0}</b></div>
+            <div className="admin-cost-card"><small>Llamadas Visual IA</small><b>{usageTotals.visual||0}</b></div>
+            <div className="admin-cost-card"><small>Llamadas asistente</small><b>{usageTotals.assistant||0}</b></div>
+            <div className="admin-cost-card"><small>Costo estimado (USD)</small><b>${estimated.toFixed(2)}</b></div>
+          </div>
+          <div className="admin-metric-note">Este costo es una <b>estimación orientativa</b> calculada con precios de referencia por llamada (APU ${AI_COST_ESTIMATE.apu}, Visual IA ${AI_COST_ESTIMATE.visual}, asistente ${AI_COST_ESTIMATE.assistant}), no es la facturación real de OpenAI. Para el gasto exacto se requiere conectar la API de facturación de OpenAI (hoy no disponible; ver pestaña "Estado del sistema" → Consumo de OpenAI).</div>
+        </>}
+      </div>;
+    })()}
+
+    {tab==='onedrive' && (()=>{
+      const connectedUsers=(users||[]).filter(u=>u.oneDrive?.refreshToken).length;
+      return <div className="panel admin-panel-body">
+        <div className="admin-panel-head"><h2>OneDrive</h2><button className="soft" onClick={loadOneDriveAdmin}>Actualizar</button></div>
+        {oneDriveAdmin===null ? <Busy/> :
+         oneDriveAdmin.error ? <EmptyState icon="admin" title="No se pudo consultar" text={oneDriveAdmin.error}/> : <>
+          <div className="admin-cost-grid">
+            <div className="admin-cost-card"><small>Configurado en el servidor</small><b>{oneDriveAdmin.configured ? 'Sí' : 'No'}</b></div>
+            <div className="admin-cost-card"><small>Tu cuenta admin</small><b>{oneDriveAdmin.connected ? 'Conectada' : 'No conectada'}</b></div>
+            <div className="admin-cost-card"><small>Usuarios con OneDrive conectado</small><b>{connectedUsers}</b></div>
+          </div>
+          {!oneDriveAdmin.configured && <div className="od-config-warning"><Icon name="alerta" size={18}/><div>Faltan variables de servidor: <b>ONEDRIVE_CLIENT_ID</b> y <b>ONEDRIVE_CLIENT_SECRET</b> en Vercel (Microsoft Graph). En el navegador además se requiere <b>VITE_ONEDRIVE_CLIENT_ID</b> para iniciar el login. Sin esto, la sincronización de OneDrive no puede activarse — este mensaje se muestra en vez de simular una conexión.</div></div>}
+          <div className="admin-metric-note">Los usuarios conectan su cuenta desde el indicador de nube (arriba a la derecha) o desde Biblioteca → OneDrive. Ahí también pueden listar e importar archivos hacia la Biblioteca.</div>
+        </>}
       </div>;
     })()}
 
@@ -3891,6 +4119,34 @@ function AdminPanel({user}){
          <p>{c.detail}</p>
        </div>)}</div>}
     </div>}
+
+    {tab==='metricas' && (()=>{
+      const totalUsers=users?.length||0;
+      const activeUsers=(users||[]).filter(u=>u.active!==false).length;
+      const plans=['Gratis','Inicial','Profesional','Empresa'];
+      const palette=['#B8A4CC','#9D6FD0','#6F3FA7','#2A1740'];
+      const segs=plans.map((p,i)=>({label:p,value:(users||[]).filter(u=>(u.role==='admin'?'Empresa':(u.plan||'Gratis'))===p).length,color:palette[i]})).filter(s=>s.value>0);
+      const totalCalls=(usageTotals.apu||0)+(usageTotals.visual||0)+(usageTotals.assistant||0);
+      return <div className="panel admin-panel-body">
+        <div className="admin-panel-head"><h2>Métricas · Dashboard ejecutivo</h2></div>
+        {users===null ? <Busy/> : <>
+          <div className="kpi-row">
+            <div className="kpi-tile"><small>Usuarios</small><b>{totalUsers}</b><span>{activeUsers} activos</span></div>
+            <div className="kpi-tile"><small>Documentos en Biblioteca</small><b>{library!==null ? library.length : '…'}</b><span>Firestore · colección library</span></div>
+            <div className="kpi-tile"><small>Peticiones Visual IA</small><b>{logs!==null ? logs.length : '…'}</b><span>últimas registradas</span></div>
+            <div className="kpi-tile"><small>Llamadas IA totales (mes)</small><b>{totalCalls}</b><span>APU + Visual IA + asistente</span></div>
+          </div>
+          <div className="dash-charts">
+            <div className="panel"><h2>Distribución de planes</h2>{segs.length ? <Donut segments={segs} center={totalUsers} sub="usuarios"/> : <EmptyState text="Sin usuarios con plan asignado."/>}
+              <div className="donut-legend">{segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>)}</div>
+            </div>
+            <div className="panel"><h2>Uso de IA por función</h2><Spark points={[usageTotals.apu||0,usageTotals.visual||0,usageTotals.assistant||0,totalCalls]}/>
+              <div className="chart-foot"><span>APU {usageTotals.apu||0} · Visual {usageTotals.visual||0} · Asistente {usageTotals.assistant||0}</span><b>Mes en curso</b></div>
+            </div>
+          </div>
+        </>}
+      </div>;
+    })()}
   </section>;
 }
 

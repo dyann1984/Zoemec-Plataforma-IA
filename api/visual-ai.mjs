@@ -14,6 +14,16 @@ cada uno con 2 a 5 lineas de contenido concreto (nunca los omitas, si falta info
 ## Presupuesto aproximado
 ## Recomendaciones`;
 
+/* Evita que un cuerpo vacio o truncado de OpenAI se muestre como
+   "Unexpected end of JSON input" tal cual al usuario. */
+async function readOpenAIJsonSafe(res){
+  let text = '';
+  try{ text = await res.text(); }catch{ text = ''; }
+  if(!text || !text.trim()) return { error:{ message:`OpenAI no devolvio contenido (HTTP ${res.status}).` } };
+  try{ return JSON.parse(text); }
+  catch{ return { error:{ message:`OpenAI devolvio una respuesta con formato invalido (HTTP ${res.status}).` } }; }
+}
+
 function dataUrlToBlob(dataUrl){
   const [meta='', b64=''] = String(dataUrl).split(',');
   const mime = meta.match(/data:(.*?);base64/)?.[1] || 'image/png';
@@ -64,7 +74,7 @@ export default async function handler(req, res){
         max_output_tokens:1200
       })
     });
-    const data = await aiRes.json();
+    const data = await readOpenAIJsonSafe(aiRes);
     if(!aiRes.ok) throw new Error(data.error?.message || 'OpenAI no pudo generar la respuesta.');
     const result = data.output_text || data.output?.flatMap(o=>o.content||[]).map(c=>c.text).filter(Boolean).join('\n') || 'Sin texto generado.';
     let imageUrl = '';
@@ -99,13 +109,18 @@ export default async function handler(req, res){
           })
         });
       }
-      const imgData = await imgRes.json();
+      const imgData = await readOpenAIJsonSafe(imgRes);
       if(!imgRes.ok) throw new Error(imgData.error?.message || 'OpenAI no pudo generar la imagen.');
       imageUrl = imgData.data?.[0]?.url || '';
       imageB64 = imgData.data?.[0]?.b64_json || '';
       if(!imageUrl && !imageB64) throw new Error('La respuesta de imagen no trajo archivo generado.');
     }catch(err){
-      imageError = err.message || 'No se pudo generar la imagen.';
+      /* Nunca se finge un render: si la generacion de imagen falla o no esta
+         disponible para esta cuenta/proveedor, se dice explicitamente. */
+      imageError = 'Análisis técnico disponible; generación visual pendiente de proveedor configurado.';
+      if(process.env.NODE_ENV !== 'production'){
+        imageError += ` (detalle interno: ${err.message || 'sin detalle'})`;
+      }
     }
 
     if(authz.uid){
@@ -126,7 +141,7 @@ export default async function handler(req, res){
     }
     await markFeatureUsed(authz);
 
-    res.status(200).json({ result: imageError ? `${result}\n\nImagen IA: ${imageError}` : result, imageUrl, imageB64, imageError });
+    res.status(200).json({ result: imageError ? `${result}\n\n${imageError}` : result, imageUrl, imageB64, imageError });
   }catch(err){
     res.status(err.status || 400).json({ error:err.message || 'No se pudo usar Visual IA.' });
   }

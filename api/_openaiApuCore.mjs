@@ -1,5 +1,34 @@
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 
+/* OpenAI casi siempre responde JSON, pero ante timeouts, cortes de red o errores
+   de infraestructura puede llegar un cuerpo vacio o truncado. response.json()
+   en ese caso lanza "Unexpected end of JSON input" tal cual, y ese texto tecnico
+   terminaba visible para el usuario final. Aqui se lee el texto primero y se
+   deja un mensaje claro, con codigo de estado, si no se puede interpretar. */
+async function readOpenAIJson(response){
+  let text = '';
+  try{ text = await response.text(); }catch{ text = ''; }
+  if(!text || !text.trim()){
+    const error = new Error(`OpenAI no devolvio contenido (HTTP ${response.status}).`);
+    error.status = response.status === 200 ? 502 : response.status;
+    throw error;
+  }
+  try{ return JSON.parse(text); }
+  catch{
+    const error = new Error(`OpenAI devolvio una respuesta con formato invalido (HTTP ${response.status}).`);
+    error.status = 502;
+    throw error;
+  }
+}
+
+function openaiStatusMessage(status, fallback){
+  if(status === 401) return 'La API key de OpenAI fue rechazada (401). Revisa OPENAI_API_KEY en Vercel.';
+  if(status === 403) return 'OpenAI rechazo la solicitud por permisos (403).';
+  if(status === 429) return 'OpenAI esta limitando las solicitudes por volumen (429). Intenta de nuevo en unos segundos.';
+  if(status >= 500) return 'OpenAI no esta disponible en este momento (error de servidor).';
+  return fallback;
+}
+
 export function extractJsonObject(text){
   if(typeof text !== 'string') return null;
   const trimmed = text.trim();
@@ -106,8 +135,13 @@ Reglas obligatorias:
     })
   });
 
-  const data = await response.json();
-  if(!response.ok) throw new Error(data?.error?.message || `OpenAI API error ${response.status}`);
+  if(!response.ok){
+    const errBody = await readOpenAIJson(response).catch(()=>null);
+    const error = new Error(errBody?.error?.message || openaiStatusMessage(response.status, `OpenAI API error ${response.status}`));
+    error.status = response.status >= 400 && response.status < 500 ? response.status : 502;
+    throw error;
+  }
+  const data = await readOpenAIJson(response);
   const content = String(data?.choices?.[0]?.message?.content || '');
   const json = extractJsonObject(content);
   if(!json) throw new Error('La API no devolvio JSON valido.');
@@ -145,8 +179,13 @@ export async function answerAssistant({ question='', history=[], context={} }){
       ]
     })
   });
-  const data = await response.json();
-  if(!response.ok) throw new Error(data?.error?.message || `OpenAI API error ${response.status}`);
+  if(!response.ok){
+    const errBody = await readOpenAIJson(response).catch(()=>null);
+    const error = new Error(errBody?.error?.message || openaiStatusMessage(response.status, `OpenAI API error ${response.status}`));
+    error.status = response.status >= 400 && response.status < 500 ? response.status : 502;
+    throw error;
+  }
+  const data = await readOpenAIJson(response);
   return data?.choices?.[0]?.message?.content || 'No pude generar respuesta.';
 }
 

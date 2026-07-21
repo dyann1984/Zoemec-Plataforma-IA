@@ -66,7 +66,14 @@ export default async function handler(req, res){
         configured: hasOneDriveCredentials(),
         connected: Boolean(oneDrive?.refreshToken),
         account: oneDrive?.account || '',
-        connectedAt: oneDrive?.connectedAt || null
+        connectedAt: oneDrive?.connectedAt || null,
+        /* Solo booleanos de presencia (nunca el valor real): sirven para el
+           diagnostico del Panel Admin sin exponer secretos. */
+        env: {
+          ONEDRIVE_CLIENT_ID: Boolean(process.env.ONEDRIVE_CLIENT_ID),
+          ONEDRIVE_CLIENT_SECRET: Boolean(process.env.ONEDRIVE_CLIENT_SECRET),
+          ONEDRIVE_TENANT_ID: Boolean(process.env.ONEDRIVE_TENANT_ID)
+        }
       });
       return;
     }

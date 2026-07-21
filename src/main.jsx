@@ -2,7 +2,7 @@
 import { createRoot } from 'react-dom/client';
 import jsPDF from 'jspdf';
 import writeXlsxFile from 'write-excel-file/browser';
-import { createUserWithEmailAndPassword, GoogleAuthProvider, onAuthStateChanged, sendEmailVerification, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile } from 'firebase/auth';
+import { createUserWithEmailAndPassword, getIdTokenResult, GoogleAuthProvider, onAuthStateChanged, sendEmailVerification, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile } from 'firebase/auth';
 import { addDoc, collection, deleteDoc, doc, getCountFromServer, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import { deleteObject, getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { auth, db, firebaseReady, storage } from './firebase.js';
@@ -26,9 +26,28 @@ async function apiPost(path, body){
     headers:await authHeaders(),
     body:JSON.stringify(body || {})
   });
-  const data = await res.json().catch(()=>({}));
+  const data = await readJsonSafe(res);
   if(!res.ok) throw new Error(data.error || 'No se pudo completar la solicitud.');
   return data;
+}
+/* Lee una respuesta fetch como JSON sin arriesgar "Unexpected end of JSON input":
+   primero lee el texto crudo, valida que no este vacio y solo entonces intenta
+   JSON.parse. Un cuerpo vacio o mal formado (504/502 de la plataforma, corte de
+   red a media respuesta, etc.) regresa un error saneado en vez de una excepcion
+   de parseo cruda visible para el usuario. */
+async function readJsonSafe(res){
+  let text = '';
+  try{ text = await res.text(); }catch{ text = ''; }
+  if(!text || !text.trim()) return { error: httpErrorMessage(res.status, `El servidor no respondio contenido (HTTP ${res.status}).`) };
+  try{ return JSON.parse(text); }
+  catch{ return { error: httpErrorMessage(res.status, `El servidor respondio un formato invalido (HTTP ${res.status}).`) }; }
+}
+function httpErrorMessage(status, fallback){
+  if(status === 401) return 'Sesion expirada o no autenticada. Vuelve a iniciar sesion.';
+  if(status === 403) return 'No tienes permiso para completar esta accion.';
+  if(status === 429) return 'Demasiadas solicitudes en poco tiempo. Espera unos segundos y vuelve a intentar.';
+  if(status >= 500) return 'El servicio no esta disponible en este momento. Intenta de nuevo en unos minutos.';
+  return fallback;
 }
 /* No lanza: se usa para indicadores de estado donde un endpoint no disponible
    (ej. servidor local de desarrollo, que no espeja /api/status) debe leerse
@@ -154,8 +173,26 @@ const PLAN_LIMITS = {
   Profesional:{ apus:999, library:true, ai:true, exports:true, label:'Profesional' },
   Empresa:{ apus:9999, library:true, ai:true, exports:true, label:'Empresa' }
 };
+/* Fuente unica de verdad para saber si alguien es administrador. Antes cada
+   pantalla comparaba user.role==='admin' de forma literal: si el rol venia
+   guardado en Firestore como "Administrador", "ADMIN" o con espacios, el Panel
+   Admin simplemente no aparecia (sin ningun error visible). Ahora se normaliza
+   el texto y ademas se acepta custom claim de Firebase o correo en
+   VITE_ADMIN_EMAILS, para no depender de un solo campo fragil. */
+const ADMIN_ROLE_VALUES = new Set(['admin', 'administrator', 'administrador', 'superadmin']);
+const ADMIN_EMAILS = String(import.meta.env.VITE_ADMIN_EMAILS || '')
+  .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+function normalizeRoleValue(v){ return String(v ?? '').trim().toLowerCase(); }
+function isAdminUser(user, profile){
+  const role = normalizeRoleValue(profile?.role ?? user?.role);
+  if(ADMIN_ROLE_VALUES.has(role)) return true;
+  if(user?.claims?.admin === true) return true;
+  const email = normalizeRoleValue(profile?.email ?? user?.email);
+  if(email && ADMIN_EMAILS.includes(email)) return true;
+  return false;
+}
 function canUse(user, feature, used=0){
-  if(user?.role === 'admin') return true;
+  if(user?.isAdmin) return true;
   const plan = PLAN_LIMITS[user?.plan || 'Gratis'] || PLAN_LIMITS.Gratis;
   if(feature === 'apu') return used < plan.apus;
   return Boolean(plan[feature]);
@@ -182,6 +219,11 @@ function friendlyServiceError(err, fallback='Servicio temporalmente no disponibl
   if(/API_KEY|ACCESS_TOKEN|SERVICE_ACCOUNT|PRIVATE_KEY|CLIENT_EMAIL|process\.env|\bVercel\b|\.env\b/i.test(msg)){
     return 'Servicio temporalmente no configurado. Intenta mas tarde o contacta a soporte.';
   }
+  /* Red de seguridad: si por alguna otra ruta llega un error crudo de parseo
+     (JSON.parse/SyntaxError/fetch), nunca se muestra tal cual al usuario. */
+  if(/unexpected (end of|token)|json\.parse|syntaxerror|failed to fetch|networkerror/i.test(msg)){
+    return 'El servicio no respondio correctamente. Intenta de nuevo en unos minutos.';
+  }
   return msg;
 }
 async function loadOrCreateProfile(fbUser, fallbackName='Usuario ZOEMEC'){
@@ -203,17 +245,23 @@ async function loadOrCreateProfile(fbUser, fallbackName='Usuario ZOEMEC'){
   await setDoc(userRef, profile, { merge:true });
   return profile;
 }
-function buildSession(profile, fbUser){
+function buildSession(profile, fbUser, claims=null){
   const name = profile?.name || fbUser?.displayName || fbUser?.email?.split('@')?.[0] || 'Usuario ZOEMEC';
   const role = profile?.role || 'user';
+  const email = profile?.email || fbUser?.email;
+  const isAdmin = isAdminUser({ email, claims }, profile);
+  if(import.meta.env.DEV){
+    console.log('[ZOEMEC][admin-check]', { email, roleDetectado: role, isAdmin });
+  }
   return {
     uid: profile?.uid || fbUser?.uid,
     name,
-    email: profile?.email || fbUser?.email,
-    role,
-    plan: role === 'admin' ? (profile?.plan || 'Empresa') : (profile?.plan || 'Gratis'),
+    email,
+    role: isAdmin ? 'admin' : role,
+    isAdmin,
+    plan: isAdmin ? (profile?.plan || 'Empresa') : (profile?.plan || 'Gratis'),
     active: profile?.active !== false,
-    initials: userInitials(name, profile?.email || fbUser?.email),
+    initials: userInitials(name, email),
     deviceId: profile?.deviceId || getDeviceId(),
     apusCreated: Number(profile?.apusCreated || 0)
   };
@@ -245,8 +293,11 @@ function CloudBadge({user}){
     window.addEventListener('online',up); window.addEventListener('offline',down);
     return ()=>{window.removeEventListener('zoemec-cloud',onCloud);window.removeEventListener('online',up);window.removeEventListener('offline',down);};
   },[]);
+  /* Antes esto solo se consultaba al abrir el desplegable, asi que la insignia
+     (siempre visible) no podia reflejar el estado real de Firebase/OpenAI/
+     OneDrive: siempre mostraba el mismo texto generico. Ahora se consulta al
+     montar, para que la etiqueta ya sea honesta desde el primer render. */
   useEffect(()=>{
-    if(!open) return;
     let alive=true;
     apiGetSafe('/api/status').then(data=>{ if(alive) setRemote(data); });
     if(firebaseReady && user?.uid){
@@ -256,7 +307,7 @@ function CloudBadge({user}){
     }
     apiPost('/api/onedrive', { action:'status' }).then(data=>{ if(alive) setOneDrive(data); }).catch(()=>{ if(alive) setOneDrive(null); });
     return ()=>{ alive=false; };
-  },[open, user?.uid]);
+  },[user?.uid]);
   const disconnectOneDrive=async()=>{
     try{
       await apiPost('/api/onedrive', { action:'disconnect' });
@@ -272,11 +323,25 @@ function CloudBadge({user}){
     document.addEventListener('mousedown', onDown);
     return ()=>document.removeEventListener('mousedown', onDown);
   },[open]);
-  const mode = !online ? 'off' : st.status;
-  const label = mode==='off' ? 'Sin conexión · guardado local'
-    : mode==='saving' ? 'Guardando en la nube...'
-    : mode==='error' ? 'Nube con error · datos seguros en local'
-    : 'Nube sincronizada';
+  /* Estado global real, no solo el de escritura de Firestore: considera
+     Firebase, OpenAI y OneDrive juntos, con reglas explicitas:
+     - sin internet -> "Sin conexión" (gris)
+     - Firestore realmente fallando (escritura con error) -> "Trabajo local
+       protegido" (los datos siguen a salvo en localStorage, rojo solo si la
+       falla es critica de verdad)
+     - Firebase/OpenAI bien pero OneDrive no conectado/configurado (o OpenAI no
+       disponible) -> "Sincronización parcial" (ambar, nunca rojo por esto)
+     - todo activo -> "Servicios conectados" (verde) */
+  const firebaseCriticalError = st.status==='error';
+  const openaiOk = remote?.openai==='ok';
+  const oneDriveOk = Boolean(oneDrive?.connected);
+  let mode, label;
+  if(!online){ mode='off'; label='Sin conexión'; }
+  else if(firebaseCriticalError){ mode='error'; label='Trabajo local protegido'; }
+  else if(st.status==='saving'){ mode='saving'; label='Guardando en la nube...'; }
+  else if(remote && !openaiOk){ mode='partial'; label='Sincronización parcial'; }
+  else if(oneDrive && !oneDriveOk){ mode='partial'; label='Sincronización parcial'; }
+  else { mode='ok'; label='Servicios conectados'; }
   const rows = [
     { key:'firebase', label:'Firebase / Firestore', ok: online && st.status!=='error',
       detail: !online ? 'Sin conexión a internet.' : st.status==='error' ? (st.message || 'No se pudo sincronizar.') : 'Conectado y sincronizando.' },
@@ -473,7 +538,9 @@ function App(){
       }
       try{
         const profile = await loadOrCreateProfile(fbUser);
-        if(!fbUser.emailVerified && profile.role !== 'admin'){
+        const tokenResult = await fbUser.getIdTokenResult().catch(()=>null);
+        const claims = tokenResult?.claims || null;
+        if(!fbUser.emailVerified && !isAdminUser({ email:profile?.email, claims }, profile)){
           setUser(null);
           return;
         }
@@ -484,7 +551,7 @@ function App(){
           alert('Tu cuenta esta desactivada. Contacta al administrador de ZOEMEC.');
           return;
         }
-        const session = buildSession(profile, fbUser);
+        const session = buildSession(profile, fbUser, claims);
         setUser(session);
         setUsage(prev => ({...prev, [session.email]:{apusCreated:session.apusCreated || 0, deviceId:session.deviceId}}));
       }catch(error){
@@ -544,7 +611,9 @@ function App(){
       }
       const credential = await signInWithEmailAndPassword(auth, cleanEmail, password);
       const profile = await loadOrCreateProfile(credential.user);
-      if(!credential.user.emailVerified && profile.role !== 'admin'){
+      const tokenResult = await credential.user.getIdTokenResult().catch(()=>null);
+      const claims = tokenResult?.claims || null;
+      if(!credential.user.emailVerified && !isAdminUser({ email:profile?.email, claims }, profile)){
         await sendEmailVerification(credential.user).catch(()=>{});
         await signOut(auth);
         alert('Tu correo aun no esta verificado. Te enviamos otro correo de verificacion.');
@@ -555,7 +624,7 @@ function App(){
         alert('Tu cuenta esta desactivada. Contacta al administrador de ZOEMEC.');
         return false;
       }
-      const session = buildSession(profile, credential.user);
+      const session = buildSession(profile, credential.user, claims);
       setUsage({...usage, [cleanEmail]:{apusCreated:session.apusCreated || 0, deviceId:session.deviceId}});
       setUser(session);
       setScreen('app');
@@ -609,7 +678,8 @@ function App(){
         alert('Tu cuenta esta desactivada. Contacta al administrador de ZOEMEC.');
         return false;
       }
-      const session = buildSession(profile, fbUser);
+      const tokenResult = await fbUser.getIdTokenResult().catch(()=>null);
+      const session = buildSession(profile, fbUser, tokenResult?.claims || null);
       setUsage(prev => ({...prev, [session.email]:{apusCreated:session.apusCreated || 0, deviceId:session.deviceId}}));
       setUser(session);
       setScreen('app');
@@ -643,7 +713,7 @@ function App(){
     {module === 'comunidad' && <Community />}
     {module === 'planes' && <PlansAccess user={user} />}
     {module === 'reportes' && <Reports clients={clients} apus={apus} budgets={budgets} />}
-    {module === 'admin' && user.role==='admin' && <AdminPanel user={user} />}
+    {module === 'admin' && user.isAdmin && <AdminPanel user={user} />}
   </Shell>;
   return <><NoticeHost />{content}<Assistant context={zoeContext} setModule={setModule} /></>;
 }
@@ -890,7 +960,7 @@ async function assistantReplyReal(q, history=[], context={}){
       headers:await authHeaders(),
       body:JSON.stringify({question:q, history, context})
     });
-    const data = await response.json();
+    const data = await readJsonSafe(response);
     if(!response.ok) throw new Error(data?.error || 'IA no disponible');
     if(!data.answer) return {answer:assistantReply(q, context), source:'local'};
     return {answer:data.answer, source:'ai'};
@@ -1010,9 +1080,12 @@ const LANDING_PIPELINE = [
 ];
 
 const HERO_PARTICLES = Array.from({length:16}, (_,i)=>i);
+/* Solo 4 posiciones: son las unicas zonas del hero (franja superior antes del
+   panel, y el hueco entre el pipeline y la barra de beneficios) donde un chip
+   cabe completo sin recortarse contra el panel o la barra inferior. Verificado
+   visualmente en el preview local; no agregar mas sin volver a verificar. */
 const HERO_VISUALS = [
-  ['plano','Planos'],['bim','Modelos BIM'],['render','Renders'],['puntos','Nube de puntos'],
-  ['edificio','Edificios'],['dron','Drones'],['tecnico','Estructuras']
+  ['plano','Planos'],['bim','Modelos BIM'],['puntos','Nube de puntos'],['dron','Drones']
 ];
 
 function Landing({setScreen, login, company}){
@@ -1133,13 +1206,13 @@ function Auth({mode,setScreen,login,loginWithGoogle,company}){
     </div>
     <div className="auth-form-side">
       <div className="auth-card">
-        <h1>{mode==='login'?'Iniciar sesion':'Crear cuenta'}</h1>
+        <h1>{mode==='login'?'Iniciar sesión':'Crear cuenta'}</h1>
         <p>{mode==='login'?'Accede con tu cuenta registrada.':'Empieza con 1 APU gratis por dispositivo.'}</p>
         {mode==='register' && <><label>Nombre completo</label><input value={name} onChange={e=>setName(e.target.value)} placeholder="Tu nombre" /></>}
-        <label>Correo electronico</label>
+        <label>Correo electrónico</label>
         <input placeholder="correo@empresa.com" type="email" value={email} onChange={e=>setEmail(e.target.value)} />
-        <label>Contrasena</label>
-        <input placeholder="minimo 6 caracteres" type="password" value={password} onChange={e=>setPassword(e.target.value)} />
+        <label>Contraseña</label>
+        <input placeholder="mínimo 6 caracteres" type="password" value={password} onChange={e=>setPassword(e.target.value)} />
         <button onClick={submit} disabled={busy}>{busy?'Conectando...':(mode==='login'?'Entrar':'Crear cuenta')}</button>
         <div className="auth-or"><span>o</span></div>
         <button className="google" disabled={busy} onClick={async()=>{ setBusy(true); try{ await loginWithGoogle?.(); } finally{ setBusy(false); } }}><Icon name="clientes" size={18}/> Continuar con Google</button>
@@ -1187,7 +1260,7 @@ function Shell({children,user,logout,module,setModule,company,apus,clients,proje
     ['visual','render','Visual IA','Foto, plano o render a propuesta'],
     ['tecnico','tecnico','Oficina técnica','Cálculos y formatos'],
     ['reportes','reportes','Reportes'],
-    ...(user.role==='admin' ? [['admin','admin','Panel Admin','Usuarios, planes y sistema']] : [])
+    ...(user.isAdmin ? [['admin','admin','Panel Admin','Usuarios, planes y sistema']] : [])
   ];
   return <div className="app-layout">
     <aside className="sidebar">
@@ -1199,7 +1272,7 @@ function Shell({children,user,logout,module,setModule,company,apus,clients,proje
     <main className="main">
       <header className="topbar">
         <TopSearch apus={apus} clients={clients} projects={projects} setModule={setModule}/>
-        <div className="user"><CloudBadge user={user}/><NotificationBell/><span className="avatar">{user.initials}</span><div><b>{user.name}</b><small>{user.role === 'admin' ? 'Administrador' : user.plan}</small></div><button onClick={logout}>Salir</button></div>
+        <div className="user"><CloudBadge user={user}/><NotificationBell/><span className="avatar">{user.initials}</span><div><b>{user.name}</b><small>{user.isAdmin ? 'Administrador' : user.plan}</small></div><button onClick={logout}>Salir</button></div>
       </header>
       {children}
     </main>
@@ -1566,6 +1639,10 @@ function makeAPUFromConcept(concept, catalog){
   else if(/impermeabiliz/.test(t)) tipo='imper';
   else if(/aplanado|repellado|enjarre|yeso|resane/.test(t)) tipo='aplanado';
   else if(/piso|cer[aá]mic|loseta|porcelanato|azulejo/.test(t)) tipo='piso';
+  else if(/limpieza\s*(y|,)?\s*trazo|trazo\s*y\s*nivelaci[oó]n|trazo\s+topogr[aá]fico|desyerbe|chapeo|limpieza\s+(inicial|del\s+terreno|del\s+predio|del\s+solar)/.test(t)) tipo='limpieza_trazo';
+  else if(/desmonte|desenra[ií]ce|destronque/.test(t)) tipo='desmonte_mecanico';
+  else if(/acarreo/.test(t) && /cami[oó]n|volteo|for[aá]neo/.test(t)) tipo='acarreo_camion';
+  else if(/excavaci[oó]n?.*(m[aá]quina|mec[aá]nica|retroexcavadora|excavadora)|retroexcavadora|excavadora/.test(t)) tipo='excavacion_mecanica';
   else if(/excavaci|zanja|despalme/.test(t)) tipo='excavacion';
   else tipo='generico';
 
@@ -1646,8 +1723,24 @@ function makeAPUFromConcept(concept, catalog){
       equipment:[['Cortadora de loseta',0.03,'día',150]] },
     excavacion:{ unit:'m³',
       materials:[],
-      labor:[['Peón',0.6,'jor',258,1.82]],
-      equipment:[['Herramienta de excavación',0.05,'día',60]] },
+      labor:[['Peón (excavación manual)',0.6,'jor',258,1.82],['Cabo de obra',0.03,'jor',380,1.85]],
+      equipment:[['Herramienta de excavación (pala, pico, barreta)',0.05,'día',60]] },
+    limpieza_trazo:{ unit:'m²',
+      materials:[['Cal para trazo',0.05,'kg',12,0],['Estacas de madera',0.08,'pza',8,5],['Hilo nylon para trazo',0.02,'rollo',35,0],['Pintura en aerosol para referencias',0.01,'pza',55,0]],
+      labor:[['Cuadrilla de trazo y nivelación (topógrafo/albañil oficial)',0.02,'jor',480,1.85],['Ayudante de trazo',0.02,'jor',258,1.82]],
+      equipment:[['Equipo topográfico básico (nivel, estadal, cinta)',0.015,'día',180],['Herramienta menor',0.02,'día',60]] },
+    desmonte_mecanico:{ unit:'m²',
+      materials:[],
+      labor:[['Operador de maquinaria pesada',0.015,'jor',650,1.85],['Peón de apoyo',0.02,'jor',258,1.82]],
+      equipment:[['Tractor / retroexcavadora para desmonte',0.04,'hr',850],['Combustible y consumibles de equipo (costo horario)',0.04,'hr',180]] },
+    excavacion_mecanica:{ unit:'m³',
+      materials:[],
+      labor:[['Operador de excavadora / retroexcavadora',0.025,'jor',650,1.85],['Peón de apoyo',0.03,'jor',258,1.82]],
+      equipment:[['Excavadora / retroexcavadora',0.06,'hr',950],['Combustible y consumibles de equipo (costo horario)',0.06,'hr',150]] },
+    acarreo_camion:{ unit:'m³',
+      materials:[],
+      labor:[['Operador de camión de volteo',0.02,'jor',480,1.85],['Ayudante de maniobras',0.01,'jor',258,1.82]],
+      equipment:[['Camión de volteo 7 m³ (costo por hora/ciclo, editable segun distancia)',0.08,'hr',680],['Cargador frontal (carga de material, si aplica)',0.015,'hr',780]] },
     block:{ unit:'m²',
       materials:[['Block hueco 15x20x40',12.5,'pza',16.5,3],['Cemento gris CPC 30R',0.16,'bulto',225,3],['Arena cernida',0.035,'m³',480,5],['Agua',0.012,'m³',65,0],['Alambre / plomeo / nivelación',0.015,'jgo',90,0],['Materiales misceláneos',0.02,'jgo',120,0]],
       labor:[['Albañil (oficial)',0.35,'jor',380,1.85],['Peón',0.35,'jor',258,1.82],['Trazo, plomeo y nivelación',0.04,'jor',380,1.85],['Acarreos internos y limpieza',0.05,'jor',258,1.82]],
@@ -1661,7 +1754,7 @@ function makeAPUFromConcept(concept, catalog){
       labor:[['Tubero / plomero (oficial)',0.09,'jor',400,1.85],['Ayudante',0.09,'jor',258,1.82],['Pruebas hidrostaticas y ajuste de juntas',0.02,'jor',400,1.85]],
       equipment:[['Herramienta de corte y union de tuberia',0.03,'día',110],['Equipo de prueba de presion',0.02,'día',150]] },
     generico:{ unit:'pza',
-      materials:[['Insumo principal segun especificacion del concepto (revisar y ajustar)',1,'pza',0,0],['Materiales complementarios y de fijacion (revisar y ajustar)',1,'lote',0,0]],
+      materials:[['Pendiente de cotización: insumo principal no identificado automáticamente',1,'pza',0,0],['Pendiente de cotización: materiales complementarios y de fijación',1,'lote',0,0]],
       labor:[['Oficial (revisar cuadrilla segun concepto)',0.1,'jor',380,1.85],['Ayudante',0.1,'jor',258,1.82]],
       equipment:[['Herramienta menor y equipo de apoyo (revisar segun concepto)',0.05,'día',100]] }
   };
@@ -1696,6 +1789,10 @@ function makeAPUFromConcept(concept, catalog){
     estructura_metalica:{ confidence:97, sat:'72101700' },
     bomba:{ confidence:90, sat:'40101700' },
     tuberia:{ confidence:88, sat:'72101507' },
+    limpieza_trazo:{ confidence:85, sat:'72101505' },
+    desmonte_mecanico:{ confidence:83, sat:'72101503' },
+    excavacion_mecanica:{ confidence:85, sat:'72101503' },
+    acarreo_camion:{ confidence:82, sat:'78101800' },
     generico:{ confidence:45, sat:'72100000' }
   };
   const meta = { family: APU_FAMILY_LABELS[tipo] || tipo, confidence: TPL_META[tipo]?.confidence ?? 88, sat: TPL_META[tipo]?.sat ?? '72100000' };
@@ -1706,7 +1803,8 @@ function makeAPUFromConcept(concept, catalog){
     family: meta.family,
     confidence: meta.confidence,
     sat: meta.sat,
-    aiNotes: unmatched ? ['No se identifico con precision el tipo de concepto: revisa y ajusta materiales, mano de obra y unidad antes de usar este APU.'] : [],
+    incomplete: unmatched,
+    aiNotes: unmatched ? ['APU INCOMPLETO: no se identifico con precision la familia tecnica del concepto. Los materiales marcados "Pendiente de cotización" tienen precio $0.00 y no deben tomarse como precio final; captura precios reales antes de exportar.'] : [],
     date:new Date().toLocaleDateString('es-MX')
   };
 }
@@ -1914,7 +2012,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         headers:await authHeaders(),
         body:JSON.stringify({description:desc,unit:r[2]||'',kind})
       });
-      const data = await res.json();
+      const data = await readJsonSafe(res);
       if(!res.ok) throw new Error(data?.error||'No se pudo consultar el precio.');
       const q = data.quote||{};
       const nuevoPrecio = Number(q.price)||0;
@@ -2069,7 +2167,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       const timer = window.setTimeout(() => controller.abort(), 45000);
       try{
         const res=await fetch(aiServerUrl('/api/generate-apu'),{method:'POST',headers:await authHeaders(),body:JSON.stringify({concept:conceptForAI,catalog,company,mode:'batch-concept',preserveOriginal:true}),signal:controller.signal});
-        const data=await res.json();
+        const data=await readJsonSafe(res);
         if(!res.ok){ const err=new Error(data?.error || 'No fue posible generar con IA'); err.status=res.status; throw err; }
         return data;
       }finally{
@@ -2179,7 +2277,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     }
   };
   const markApuUsed=()=>{
-    if(user?.role === 'admin') return;
+    if(user?.isAdmin) return;
     const nextCount = (userUsage.apusCreated||0)+1;
     setUsage({...usage,[user.email]:{...userUsage,apusCreated:nextCount,deviceId:user.deviceId}});
     if(firebaseReady && user?.uid){
@@ -3150,7 +3248,8 @@ const APU_FAMILY_LABELS = {
   concreto:'Cimentacion', acero:'Estructura metalica', estructura_metalica:'Estructura metalica',
   block:'Albanileria', tablaroca:'Tablaroca y Durock', lavabo_ptr:'Tablaroca y Durock', plafon_suspendido:'Tablaroca y Durock',
   pintura:'Acabados', aplanado:'Acabados', piso:'Acabados', marmol_granito:'Acabados', sello:'Acabados', registro:'Acabados', imper:'Acabados',
-  excavacion:'Terracerias', tuberia:'Hidrosanitaria', bomba:'Hidrosanitaria', generico:'General'
+  excavacion:'Terracerias', excavacion_mecanica:'Terracerias', desmonte_mecanico:'Terracerias', acarreo_camion:'Terracerias',
+  limpieza_trazo:'Limpieza y preliminares', tuberia:'Hidrosanitaria', bomba:'Hidrosanitaria', generico:'General'
 };
 function libKey(v=''){
   return cleanText(v).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9.%/ -]/g,' ').replace(/\s+/g,' ').trim();
@@ -3186,7 +3285,7 @@ function scoreLibraryFile(file,q=''){
   return terms.reduce((n,t)=>n+(hay.includes(t)?2:0), hay.includes(query)?8:0);
 }
 
-function OneDrivePanel({onImported}){
+function OneDrivePanel({user, onImported}){
   const [status,setStatus]=useState(null);
   const [items,setItems]=useState(null);
   const [loadingList,setLoadingList]=useState(false);
@@ -3213,19 +3312,27 @@ function OneDrivePanel({onImported}){
   };
   const connected = Boolean(status?.connected);
   const configured = isOneDriveConfigured();
+  /* El detalle tecnico (que variable exacta falta) vive solo en Panel Admin ->
+     OneDrive. Aqui, para cualquier usuario, el mensaje es honesto pero nunca
+     alarmista: la biblioteca local sigue funcionando aunque OneDrive no este
+     activado en este entorno. */
   return <div className="panel lib-onedrive">
     <div className="admin-panel-head"><h2>OneDrive</h2><button className="soft" onClick={refreshStatus}>Actualizar estado</button></div>
-    {!configured && <div className="od-config-warning"><Icon name="alerta" size={18}/><div>Falta la variable <b>VITE_ONEDRIVE_CLIENT_ID</b> en este entorno: sin ella no se puede iniciar sesión con Microsoft. Pide al administrador que registre la app en Azure AD y configure esa variable en el cliente, además de <b>ONEDRIVE_CLIENT_ID</b>/<b>ONEDRIVE_CLIENT_SECRET</b> en el servidor (Vercel).</div></div>}
-    {status?.error && <EmptyState icon="admin" title="No se pudo consultar OneDrive" text={status.error}/>}
-    {status && !status.error && <>
+    {!configured && <div className="od-local-ok">
+      <Icon name="biblioteca" size={18}/>
+      <div><b>Biblioteca local disponible</b><p>Tus documentos se guardan y consultan sin problema. La sincronización con OneDrive todavía no está activada en este entorno.</p></div>
+      <button className="soft" onClick={()=>window.zoemecNotify?.(user?.isAdmin ? 'Configura OneDrive desde Panel Admin → OneDrive.' : 'Pide a un administrador que active la sincronización con OneDrive.', 'info')}>Configurar OneDrive</button>
+    </div>}
+    {configured && status?.error && <EmptyState icon="admin" title="No se pudo consultar OneDrive" text={status.error}/>}
+    {configured && status && !status.error && <>
       <p className="muted">{connected ? `Conectado como ${status.account || 'tu cuenta de Microsoft'}.` : 'Conecta tu cuenta de OneDrive para listar e importar documentos reales a la Biblioteca.'}</p>
       <div className="visual-actions">
         {!connected
-          ? <button disabled={!configured} onClick={()=>connectOneDrive()}>Conectar OneDrive</button>
+          ? <button onClick={()=>connectOneDrive()}>Conectar OneDrive</button>
           : <button className="soft" onClick={listFiles} disabled={loadingList}>{loadingList?'Listando...':'Listar archivos de OneDrive'}</button>}
       </div>
     </>}
-    {items && (items.length ? <div className="od-file-list">{items.map(it=><div className="od-file-row" key={it.id}>
+    {configured && items && (items.length ? <div className="od-file-list">{items.map(it=><div className="od-file-row" key={it.id}>
         <div><b>{it.name}</b><small>{((it.size||0)/1048576).toFixed(2)} MB</small></div>
         <small>OneDrive</small>
         <button className="soft" disabled={importingId===it.id} onClick={()=>importFile(it)}>{importingId===it.id?'Importando...':'Importar a Biblioteca'}</button>
@@ -3308,7 +3415,7 @@ function Library({user}){
           const fileRef=ref(storage, `library/${user.uid}/${fileId}/${f.name}`);
           await uploadBytes(fileRef, f, { customMetadata:{ ownerUid:user.uid, category:meta.cat, family:meta.family, tags:(meta.tags||[]).join(',') } });
           const downloadURL=await getDownloadURL(fileRef);
-          const visibility=user.role === 'admin' ? 'global' : 'private';
+          const visibility=user.isAdmin ? 'global' : 'private';
           const docRef=await addDoc(collection(db,'library'), {
             ...meta,
             ownerUid:user.uid,
@@ -3387,7 +3494,7 @@ function Library({user}){
     <div className="lib-cloud panel">
       {[['1. Subida masiva','Puedes cargar lotes completos desde la plataforma. Para carpetas grandes conviene subir ZIP o seleccionar multiples archivos.'],['2. Nube privada','Los archivos reales deben vivir en Firebase Storage o Vercel Blob. Firestore guarda nombre, categoria, permiso, usuario y fuente.'],['3. Busqueda IA','Despues se indexa el contenido para buscar por insumo, concepto, unidad, precio, rendimiento o norma.']].map(x=><div key={x[0]}><b>{x[0]}</b><p>{x[1]}</p></div>)}
     </div>
-    <OneDrivePanel onImported={()=>setSyncKey(k=>k+1)}/>
+    <OneDrivePanel user={user} onImported={()=>setSyncKey(k=>k+1)}/>
     <div className="library-dashboard"><div className="lib-stat"><small>Documentos</small><b>{files.length}</b><span>{totalMb.toFixed(2)} MB cargados</span></div><div className="lib-stat"><small>Categorias activas</small><b>{counts.filter(x=>x[1]>0).length}</b><span>{type === 'Todos' ? 'Vista global' : type}</span></div><div className="lib-stat"><small>Seleccionados</small><b>{batch.length}</b><span>Lote visible para acciones IA</span></div></div>
     <div className="lib-console panel">
       <div className="lib-searchbar"><input className="search" placeholder="Buscar por concepto, insumo, familia, archivo o fuente..." value={q} onChange={e=>{setQ(e.target.value);setPage(1)}}/><button onClick={()=>alert('Busqueda IA: usa el indice documental para encontrar matrices, insumos y referencias compatibles con tu concepto.')}>Buscar con IA</button></div>
@@ -3400,7 +3507,7 @@ function Library({user}){
           {pageItems.length ? pageItems.map((f)=>{ const i=f.__idx ?? files.indexOf(f); const cat=f.cat||classify(f.name); const isActive=active?.name===f.name && active?.when===f.when; return <div className={'lib-file '+(isActive?'active':'')} key={i} onClick={()=>setSelected(f)}><span className="lib-ext">{f.ext||'DOC'}</span><div className="lib-meta"><b>{f.name}</b><small>{cat} - {f.family || 'General'} - {f.size} - {f.when}</small><em>{(f.tags||[]).length ? (f.tags||[]).slice(0,5).join(' · ') : cat==='Matrices APU'?'Puede alimentar APUs':cat==='Mano de obra'?'Rendimientos y cuadrillas':cat==='Costos'?'Precios y catalogos':'Consulta tecnica'}</em></div><div className="lib-actions"><button className="soft" onClick={(e)=>{e.stopPropagation(); f.downloadURL ? window.open(f.downloadURL,'_blank') : setSelected(f)}}>{f.downloadURL?'Abrir':'Ver'}</button><button className="row-del" onClick={(e)=>{e.stopPropagation();del(i)}}>x</button></div></div>}) : (files.length===0 ? <EmptyState icon="biblioteca" title="Tu Workspace documental está vacío" text="Sube tu primera base técnica para que ZOE pueda consultarla al generar APUs." actionLabel="Subir lote" onAction={()=>fileInputRef.current?.click()}/> : <div className="lib-empty">No hay documentos con ese filtro. Sube archivos o cambia la busqueda.</div>)}
           {visible.length > pageSize && <div className="lib-pager"><button className="soft" disabled={safePage<=1} onClick={()=>setPage(safePage-1)}>Anterior</button><span>{(safePage-1)*pageSize+1}-{Math.min(safePage*pageSize,visible.length)} de {visible.length}</span><button className="soft" disabled={safePage>=pages} onClick={()=>setPage(safePage+1)}>Siguiente</button></div>}
         </div>
-        <aside className="lib-preview pro"><small>Ficha tecnica</small><h2>{active?.name || 'Sin archivo seleccionado'}</h2><p>{active ? (active.cat || classify(active.name))+' - '+(active.family || 'General')+' - '+(active.ext || 'DOC')+' - '+active.size : 'Sube documentos para crear una base consultable.'}</p>{active?.tags?.length ? <div className="lib-tags-mini">{active.tags.map(t=><span key={t}>{t}</span>)}</div> : null}<div className="lib-ai-card"><b>Acciones IA</b><button onClick={()=>alert('Usara este archivo como fuente para sugerir materiales, MO, equipo y rendimientos.')}>Usar para generar APU</button><button onClick={()=>alert('Comparara nombre, categoria y familia tecnica para sugerir matrices compatibles.')}>Buscar matrices similares</button><button onClick={()=>alert('Extraera descripciones, unidades, precios y rendimientos a una tabla auditable cuando el extractor de contenido este conectado.')}>Extraer insumos</button><button onClick={indexVisible}>Crear indice</button></div><div className="lib-trace"><span>Estado</span><b>{active?.status || 'Pendiente'}</b><span>Permiso</span><b>{user?.role==='admin'?'Administrador':'Plan Profesional'}</b><span>Confianza</span><b>{active ? `${active.confidence || 50}%` : 'Sin fuente'}</b></div></aside>
+        <aside className="lib-preview pro"><small>Ficha tecnica</small><h2>{active?.name || 'Sin archivo seleccionado'}</h2><p>{active ? (active.cat || classify(active.name))+' - '+(active.family || 'General')+' - '+(active.ext || 'DOC')+' - '+active.size : 'Sube documentos para crear una base consultable.'}</p>{active?.tags?.length ? <div className="lib-tags-mini">{active.tags.map(t=><span key={t}>{t}</span>)}</div> : null}<div className="lib-ai-card"><b>Acciones IA</b><button onClick={()=>alert('Usara este archivo como fuente para sugerir materiales, MO, equipo y rendimientos.')}>Usar para generar APU</button><button onClick={()=>alert('Comparara nombre, categoria y familia tecnica para sugerir matrices compatibles.')}>Buscar matrices similares</button><button onClick={()=>alert('Extraera descripciones, unidades, precios y rendimientos a una tabla auditable cuando el extractor de contenido este conectado.')}>Extraer insumos</button><button onClick={indexVisible}>Crear indice</button></div><div className="lib-trace"><span>Estado</span><b>{active?.status || 'Pendiente'}</b><span>Permiso</span><b>{user?.isAdmin?'Administrador':'Plan Profesional'}</b><span>Confianza</span><b>{active ? `${active.confidence || 50}%` : 'Sin fuente'}</b></div></aside>
       </div>
     </div>
     <AcademyPanel />
@@ -3890,7 +3997,7 @@ function Reports({clients,apus,budgets}){
 const AI_COST_ESTIMATE = { apu:0.02, visual:0.09, assistant:0.006 };
 
 function AdminPanel({user}){
-  const [tab,setTab]=useState('usuarios');
+  const [tab,setTab]=useState('resumen');
   const [users,setUsers]=useState(null);
   const [usersErr,setUsersErr]=useState('');
   const [library,setLibrary]=useState(null);
@@ -3941,17 +4048,34 @@ function AdminPanel({user}){
     try{ const data=await apiPost('/api/onedrive',{action:'status'}); setOneDriveAdmin(data); }
     catch(err){ setOneDriveAdmin({error:friendlyServiceError(err,'No se pudo consultar OneDrive.')}); }
   };
+  const [odTest,setOdTest]=useState(null);
+  const [odTesting,setOdTesting]=useState(false);
+  const testOneDriveConnection=async()=>{
+    setOdTesting(true); setOdTest(null);
+    try{
+      const data=await apiPost('/api/onedrive',{action:'listRoot'});
+      setOdTest({ ok:true, count:(data.items||[]).length });
+    }catch(err){ setOdTest({ ok:false, message:friendlyServiceError(err,'No se pudo probar la conexion.') }); }
+    finally{ setOdTesting(false); }
+  };
 
   useEffect(()=>{ loadUsers(); },[]);
   useEffect(()=>{
     if(tab==='biblioteca' && library===null) loadLibrary();
     if(tab==='config' && config===null) loadConfig();
-    if(tab==='sistema' && health===null) loadHealth();
-    if(tab==='logs' && logs===null) loadLogs();
-    if(tab==='onedrive' && oneDriveAdmin===null) loadOneDriveAdmin();
-    if(tab==='metricas'){
+    if(tab==='servicios'){
+      if(health===null) loadHealth();
+      if(oneDriveAdmin===null) loadOneDriveAdmin();
+      if(library===null) loadLibrary();
+    }
+    if(tab==='ia' && logs===null) loadLogs();
+    if(tab==='resumen'){
       if(library===null) loadLibrary();
       if(logs===null) loadLogs();
+    }
+    if(tab==='diagnostico'){
+      if(health===null) loadHealth();
+      if(oneDriveAdmin===null) loadOneDriveAdmin();
     }
   },[tab]);
 
@@ -3970,7 +4094,7 @@ function AdminPanel({user}){
     finally{ setSavingConfig(false); }
   };
 
-  const tabs=[['usuarios','Usuarios'],['uso_ia','Uso IA'],['empresas','Empresas'],['biblioteca','Biblioteca'],['logs','Logs'],['planes','Planes y licencias'],['costos_ia','Costos IA'],['onedrive','OneDrive'],['config','Configuración'],['sistema','Estado del sistema'],['metricas','Métricas']];
+  const tabs=[['resumen','Resumen'],['usuarios','Usuarios'],['servicios','Servicios'],['biblioteca','Biblioteca'],['ia','IA y consumo'],['config','Configuración'],['diagnostico','Diagnóstico']];
   const Busy=()=><div className="ai-note-busy"><span className="asst-dots"><i/><i/><i/></span><b>Cargando datos reales de Firestore...</b></div>;
   const usageTotals=(users||[]).reduce((acc,u)=>{
     Object.values(u.usage||{}).forEach(monthUsage=>{
@@ -3980,8 +4104,48 @@ function AdminPanel({user}){
   },{});
 
   return <section>
-    <PageHead kicker="Panel Admin" title="Administración de la plataforma" desc="Usuarios, uso de IA, biblioteca, logs, costos, OneDrive, Firebase, OpenAI, estado del sistema y métricas ejecutivas, con datos reales de Firestore." />
+    <PageHead kicker="Panel Admin" title="Administración de la plataforma" desc="Resumen ejecutivo, usuarios, servicios (Firebase, OpenAI, OneDrive), biblioteca, IA y consumo, configuración y diagnóstico, con datos reales de Firestore." />
     <div className="admin-tabs">{tabs.map(([id,label])=><button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}>{label}</button>)}</div>
+
+    {tab==='resumen' && (()=>{
+      const totalUsers=users?.length||0;
+      const activeUsers=(users||[]).filter(u=>u.active!==false).length;
+      const plans=['Gratis','Inicial','Profesional','Empresa'];
+      const palette=['#B8A4CC','#9D6FD0','#6F3FA7','#2A1740'];
+      const segs=plans.map((p,i)=>({label:p,value:(users||[]).filter(u=>(u.role==='admin'?'Empresa':(u.plan||'Gratis'))===p).length,color:palette[i]})).filter(s=>s.value>0);
+      const totalCalls=(usageTotals.apu||0)+(usageTotals.visual||0)+(usageTotals.assistant||0);
+      const planCounts=plans.map(p=>({plan:p,count:(users||[]).filter(u=>(u.plan||'Gratis')===p).length,active:(users||[]).filter(u=>(u.plan||'Gratis')===p && u.active!==false).length}));
+      const groups={};
+      (users||[]).forEach(u=>{ const k=u.companyName||'Sin nombre de empresa'; (groups[k]=groups[k]||[]).push(u); });
+      const companyRows=Object.entries(groups).sort((a,b)=>b[1].length-a[1].length);
+      return <div className="panel admin-panel-body">
+        <div className="admin-panel-head"><h2>Resumen ejecutivo</h2><button className="soft" onClick={loadUsers}>Actualizar</button></div>
+        {users===null ? <Busy/> : <>
+          <div className="kpi-row">
+            <div className="kpi-tile"><small>Usuarios</small><b>{totalUsers}</b><span>{activeUsers} activos</span></div>
+            <div className="kpi-tile"><small>Documentos en Biblioteca</small><b>{library!==null ? library.length : '…'}</b><span>Firestore · colección library</span></div>
+            <div className="kpi-tile"><small>Peticiones Visual IA</small><b>{logs!==null ? logs.length : '…'}</b><span>últimas registradas</span></div>
+            <div className="kpi-tile"><small>Llamadas IA totales (mes)</small><b>{totalCalls}</b><span>APU + Visual IA + asistente</span></div>
+          </div>
+          <div className="dash-charts">
+            <div className="panel"><h2>Distribución de planes</h2>{segs.length ? <Donut segments={segs} center={totalUsers} sub="usuarios"/> : <EmptyState text="Sin usuarios con plan asignado."/>}
+              <div className="donut-legend">{segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>)}</div>
+            </div>
+            <div className="panel"><h2>Uso de IA por función</h2><Spark points={[usageTotals.apu||0,usageTotals.visual||0,usageTotals.assistant||0,totalCalls]}/>
+              <div className="chart-foot"><span>APU {usageTotals.apu||0} · Visual {usageTotals.visual||0} · Asistente {usageTotals.assistant||0}</span><b>Mes en curso</b></div>
+            </div>
+          </div>
+          <div className="admin-panel-head" style={{marginTop:'6px'}}><h2 style={{fontSize:'.95rem'}}>Planes y licencias</h2></div>
+          <div className="admin-plan-grid">{planCounts.map(c=><div className="admin-plan-card" key={c.plan}><b>{c.plan}</b><span className="admin-plan-count">{c.count}</span><small>{c.active} activos</small></div>)}</div>
+          <div className="admin-panel-head" style={{marginTop:'14px'}}><h2 style={{fontSize:'.95rem'}}>Empresas <small className="hint">({companyRows.length})</small></h2></div>
+          {!companyRows.length ? <EmptyState icon="oficina" title="Sin organizaciones aún" text="El nombre de empresa se registra cuando un usuario lo captura en Oficina técnica."/> :
+          <div className="admin-table-wrap"><table className="data-table admin-table">
+            <thead><tr><th>Empresa</th><th>Usuarios</th><th>Planes</th></tr></thead>
+            <tbody>{companyRows.map(([name,us])=><tr key={name}><td>{name}</td><td>{us.length}</td><td>{[...new Set(us.map(u=>u.plan||'Gratis'))].join(', ')}</td></tr>)}</tbody>
+          </table></div>}
+        </>}
+      </div>;
+    })()}
 
     {tab==='usuarios' && <div className="panel admin-panel-body">
       <div className="admin-panel-head"><h2>Usuarios <small className="hint">({users?.length ?? '…'})</small></h2><button className="soft" onClick={loadUsers}>Actualizar</button></div>
@@ -4002,38 +4166,6 @@ function AdminPanel({user}){
        </table></div>}
     </div>}
 
-    {tab==='uso_ia' && (()=>{
-      const month=(()=>{ const n=new Date(); return `${n.getUTCFullYear()}-${String(n.getUTCMonth()+1).padStart(2,'0')}`; })();
-      const rows=(users||[]).map(u=>{
-        const cur=u.usage?.[month]||{};
-        return { id:u.id, name:u.name||u.email||'—', plan:u.role==='admin'?'Empresa':(u.plan||'Gratis'),
-          apu:Number(cur.apu||0), visual:Number(cur.visual||0), assistant:Number(cur.assistant||0),
-          last:u.lastAiUseAt?.toDate ? u.lastAiUseAt.toDate().toLocaleString('es-MX') : '—' };
-      }).filter(r=>r.apu||r.visual||r.assistant).sort((a,b)=>(b.apu+b.visual+b.assistant)-(a.apu+a.visual+a.assistant));
-      return <div className="panel admin-panel-body">
-        <div className="admin-panel-head"><h2>Uso de IA <small className="hint">mes {month}</small></h2><button className="soft" onClick={loadUsers}>Actualizar</button></div>
-        {users===null ? <Busy/> : !rows.length ? <EmptyState icon="apu" title="Sin uso de IA este mes" text="Cuando los usuarios generen APUs, usen Visual IA o al asistente, el consumo aparecerá aquí (contador real por usuario en Firestore)."/> :
-        <div className="admin-table-wrap"><table className="data-table admin-table">
-          <thead><tr><th>Usuario</th><th>Plan</th><th>APU</th><th>Visual IA</th><th>Asistente</th><th>Último uso</th></tr></thead>
-          <tbody>{rows.map(r=><tr key={r.id}><td>{r.name}</td><td>{r.plan}</td><td>{r.apu}</td><td>{r.visual}</td><td>{r.assistant}</td><td>{r.last}</td></tr>)}</tbody>
-        </table></div>}
-      </div>;
-    })()}
-
-    {tab==='empresas' && (()=>{
-      const groups={};
-      (users||[]).forEach(u=>{ const k=u.companyName||'Sin nombre de empresa'; (groups[k]=groups[k]||[]).push(u); });
-      const rows=Object.entries(groups).sort((a,b)=>b[1].length-a[1].length);
-      return <div className="panel admin-panel-body">
-        <div className="admin-panel-head"><h2>Empresas <small className="hint">({rows.length})</small></h2></div>
-        {users===null ? <Busy/> : !rows.length ? <EmptyState icon="oficina" title="Sin organizaciones aún" text="El nombre de empresa se registra cuando un usuario lo captura en Oficina técnica."/> :
-        <div className="admin-table-wrap"><table className="data-table admin-table">
-          <thead><tr><th>Empresa</th><th>Usuarios</th><th>Planes</th></tr></thead>
-          <tbody>{rows.map(([name,us])=><tr key={name}><td>{name}</td><td>{us.length}</td><td>{[...new Set(us.map(u=>u.plan||'Gratis'))].join(', ')}</td></tr>)}</tbody>
-        </table></div>}
-      </div>;
-    })()}
-
     {tab==='biblioteca' && <div className="panel admin-panel-body">
       <div className="admin-panel-head"><h2>Biblioteca <small className="hint">({library?.length ?? '…'})</small></h2><button className="soft" onClick={loadLibrary}>Actualizar</button></div>
       {library===null ? <Busy/> : !library.length ? <EmptyState icon="biblioteca" title="Sin documentos en Firestore" text="Los documentos que los usuarios suben a la Biblioteca aparecerán aquí."/> :
@@ -4043,57 +4175,43 @@ function AdminPanel({user}){
       </table></div>}
     </div>}
 
-    {tab==='logs' && <div className="panel admin-panel-body">
-      <div className="admin-panel-head"><h2>Logs <small className="hint">Visual IA · últimos {logs?.length ?? '…'}</small></h2><button className="soft" onClick={loadLogs}>Actualizar</button></div>
-      {logs===null ? <Busy/> :
-       logsErr ? <EmptyState icon="admin" title="No se pudo cargar" text={logsErr}/> :
-       !logs.length ? <EmptyState icon="tecnico" title="Sin registros todavía" text="Cada solicitud de Visual IA queda registrada en Firestore (colección visual_requests) con usuario, modo y resultado."/> :
-       <div className="admin-log-list">{logs.map(l=><div className="admin-log-row" key={l.id}>
-         <span>{l.createdAt?.toDate ? l.createdAt.toDate().toLocaleString('es-MX') : '—'}</span>
-         <b>{l.email || l.uid || 'Usuario'} · {l.fileName || 'sin archivo'}</b>
-         <span>{l.mode || '—'}</span>
-         <span>{l.imageGenerated ? 'Render generado' : (l.imageError ? `Error imagen: ${l.imageError}` : 'Solo texto')}</span>
-       </div>)}</div>}
-    </div>}
-
-    {tab==='planes' && (()=>{
-      const plans=['Gratis','Inicial','Profesional','Empresa'];
-      const counts=plans.map(p=>({plan:p,count:(users||[]).filter(u=>(u.plan||'Gratis')===p).length,active:(users||[]).filter(u=>(u.plan||'Gratis')===p && u.active!==false).length}));
-      return <div className="panel admin-panel-body">
-        <div className="admin-panel-head"><h2>Planes y licencias</h2></div>
-        {users===null ? <Busy/> : <div className="admin-plan-grid">{counts.map(c=><div className="admin-plan-card" key={c.plan}><b>{c.plan}</b><span className="admin-plan-count">{c.count}</span><small>{c.active} activos</small></div>)}</div>}
-      </div>;
-    })()}
-
-    {tab==='costos_ia' && (()=>{
+    {tab==='ia' && (()=>{
+      const month=(()=>{ const n=new Date(); return `${n.getUTCFullYear()}-${String(n.getUTCMonth()+1).padStart(2,'0')}`; })();
+      const rows=(users||[]).map(u=>{
+        const cur=u.usage?.[month]||{};
+        return { id:u.id, name:u.name||u.email||'—', plan:u.role==='admin'?'Empresa':(u.plan||'Gratis'),
+          apu:Number(cur.apu||0), visual:Number(cur.visual||0), assistant:Number(cur.assistant||0),
+          last:u.lastAiUseAt?.toDate ? u.lastAiUseAt.toDate().toLocaleString('es-MX') : '—' };
+      }).filter(r=>r.apu||r.visual||r.assistant).sort((a,b)=>(b.apu+b.visual+b.assistant)-(a.apu+a.visual+a.assistant));
       const estimated=(usageTotals.apu||0)*AI_COST_ESTIMATE.apu + (usageTotals.visual||0)*AI_COST_ESTIMATE.visual + (usageTotals.assistant||0)*AI_COST_ESTIMATE.assistant;
       return <div className="panel admin-panel-body">
-        <div className="admin-panel-head"><h2>Costos IA</h2><button className="soft" onClick={loadUsers}>Actualizar</button></div>
+        <div className="admin-panel-head"><h2>IA y consumo</h2><button className="soft" onClick={()=>{loadUsers();loadLogs();}}>Actualizar</button></div>
         {users===null ? <Busy/> : <>
           <div className="admin-cost-grid">
-            <div className="admin-cost-card"><small>Llamadas APU</small><b>{usageTotals.apu||0}</b></div>
-            <div className="admin-cost-card"><small>Llamadas Visual IA</small><b>{usageTotals.visual||0}</b></div>
-            <div className="admin-cost-card"><small>Llamadas asistente</small><b>{usageTotals.assistant||0}</b></div>
+            <div className="admin-cost-card"><small>Llamadas APU (mes)</small><b>{usageTotals.apu||0}</b></div>
+            <div className="admin-cost-card"><small>Llamadas Visual IA (mes)</small><b>{usageTotals.visual||0}</b></div>
+            <div className="admin-cost-card"><small>Llamadas asistente (mes)</small><b>{usageTotals.assistant||0}</b></div>
             <div className="admin-cost-card"><small>Costo estimado (USD)</small><b>${estimated.toFixed(2)}</b></div>
           </div>
-          <div className="admin-metric-note">Este costo es una <b>estimación orientativa</b> calculada con precios de referencia por llamada (APU ${AI_COST_ESTIMATE.apu}, Visual IA ${AI_COST_ESTIMATE.visual}, asistente ${AI_COST_ESTIMATE.assistant}), no es la facturación real de OpenAI. Para el gasto exacto se requiere conectar la API de facturación de OpenAI (hoy no disponible; ver pestaña "Estado del sistema" → Consumo de OpenAI).</div>
-        </>}
-      </div>;
-    })()}
+          <div className="admin-metric-note">Este costo es una <b>estimación orientativa</b> calculada con precios de referencia por llamada (APU ${AI_COST_ESTIMATE.apu}, Visual IA ${AI_COST_ESTIMATE.visual}, asistente ${AI_COST_ESTIMATE.assistant}), no es la facturación real de OpenAI. Para el gasto exacto se requiere conectar la API de facturación de OpenAI (ver pestaña Diagnóstico).</div>
 
-    {tab==='onedrive' && (()=>{
-      const connectedUsers=(users||[]).filter(u=>u.oneDrive?.refreshToken).length;
-      return <div className="panel admin-panel-body">
-        <div className="admin-panel-head"><h2>OneDrive</h2><button className="soft" onClick={loadOneDriveAdmin}>Actualizar</button></div>
-        {oneDriveAdmin===null ? <Busy/> :
-         oneDriveAdmin.error ? <EmptyState icon="admin" title="No se pudo consultar" text={oneDriveAdmin.error}/> : <>
-          <div className="admin-cost-grid">
-            <div className="admin-cost-card"><small>Configurado en el servidor</small><b>{oneDriveAdmin.configured ? 'Sí' : 'No'}</b></div>
-            <div className="admin-cost-card"><small>Tu cuenta admin</small><b>{oneDriveAdmin.connected ? 'Conectada' : 'No conectada'}</b></div>
-            <div className="admin-cost-card"><small>Usuarios con OneDrive conectado</small><b>{connectedUsers}</b></div>
-          </div>
-          {!oneDriveAdmin.configured && <div className="od-config-warning"><Icon name="alerta" size={18}/><div>Faltan variables de servidor: <b>ONEDRIVE_CLIENT_ID</b> y <b>ONEDRIVE_CLIENT_SECRET</b> en Vercel (Microsoft Graph). En el navegador además se requiere <b>VITE_ONEDRIVE_CLIENT_ID</b> para iniciar el login. Sin esto, la sincronización de OneDrive no puede activarse — este mensaje se muestra en vez de simular una conexión.</div></div>}
-          <div className="admin-metric-note">Los usuarios conectan su cuenta desde el indicador de nube (arriba a la derecha) o desde Biblioteca → OneDrive. Ahí también pueden listar e importar archivos hacia la Biblioteca.</div>
+          <div className="admin-panel-head" style={{marginTop:'16px'}}><h2 style={{fontSize:'.95rem'}}>Uso por usuario <small className="hint">mes {month}</small></h2></div>
+          {!rows.length ? <EmptyState icon="apu" title="Sin uso de IA este mes" text="Cuando los usuarios generen APUs, usen Visual IA o al asistente, el consumo aparecerá aquí (contador real por usuario en Firestore)."/> :
+          <div className="admin-table-wrap"><table className="data-table admin-table">
+            <thead><tr><th>Usuario</th><th>Plan</th><th>APU</th><th>Visual IA</th><th>Asistente</th><th>Último uso</th></tr></thead>
+            <tbody>{rows.map(r=><tr key={r.id}><td>{r.name}</td><td>{r.plan}</td><td>{r.apu}</td><td>{r.visual}</td><td>{r.assistant}</td><td>{r.last}</td></tr>)}</tbody>
+          </table></div>}
+
+          <div className="admin-panel-head" style={{marginTop:'16px'}}><h2 style={{fontSize:'.95rem'}}>Logs de Visual IA <small className="hint">últimos {logs?.length ?? '…'}</small></h2></div>
+          {logs===null ? <Busy/> :
+           logsErr ? <EmptyState icon="admin" title="No se pudo cargar" text={logsErr}/> :
+           !logs.length ? <EmptyState icon="tecnico" title="Sin registros todavía" text="Cada solicitud de Visual IA queda registrada en Firestore (colección visual_requests) con usuario, modo y resultado."/> :
+           <div className="admin-log-list">{logs.map(l=><div className="admin-log-row" key={l.id}>
+             <span>{l.createdAt?.toDate ? l.createdAt.toDate().toLocaleString('es-MX') : '—'}</span>
+             <b>{l.email || l.uid || 'Usuario'} · {l.fileName || 'sin archivo'}</b>
+             <span>{l.mode || '—'}</span>
+             <span>{l.imageGenerated ? 'Render generado' : (l.imageError ? 'Solo análisis (sin render)' : 'Solo texto')}</span>
+           </div>)}</div>}
         </>}
       </div>;
     })()}
@@ -4109,42 +4227,76 @@ function AdminPanel({user}){
       </>}
     </div>}
 
-    {tab==='sistema' && <div className="panel admin-panel-body">
-      <div className="admin-panel-head"><h2>Estado del sistema</h2><button className="soft" onClick={loadHealth}>Actualizar</button></div>
-      {health===null ? <Busy/> :
-       health.error ? <EmptyState icon="admin" title="No se pudo consultar" text={health.error}/> :
-       <div className="admin-health-grid">{Object.entries(health.checks||{}).map(([key,c])=><div className={'admin-health-card '+c.status} key={key}>
-         <b>{c.label||key}</b>
-         <span className="admin-health-status">{c.status==='ok'?'Operativo':c.status==='error'?'Con errores':'No disponible'}</span>
-         <p>{c.detail}</p>
-       </div>)}</div>}
-    </div>}
-
-    {tab==='metricas' && (()=>{
-      const totalUsers=users?.length||0;
-      const activeUsers=(users||[]).filter(u=>u.active!==false).length;
-      const plans=['Gratis','Inicial','Profesional','Empresa'];
-      const palette=['#B8A4CC','#9D6FD0','#6F3FA7','#2A1740'];
-      const segs=plans.map((p,i)=>({label:p,value:(users||[]).filter(u=>(u.role==='admin'?'Empresa':(u.plan||'Gratis'))===p).length,color:palette[i]})).filter(s=>s.value>0);
-      const totalCalls=(usageTotals.apu||0)+(usageTotals.visual||0)+(usageTotals.assistant||0);
+    {tab==='servicios' && (()=>{
+      const connectedUsers=(users||[]).filter(u=>u.oneDrive?.refreshToken).length;
+      const onedriveDocs=(library||[]).filter(f=>f.source==='onedrive').length;
+      const envVars=[
+        ['VITE_ONEDRIVE_CLIENT_ID (cliente)', isOneDriveConfigured()],
+        ['ONEDRIVE_CLIENT_ID (servidor)', Boolean(oneDriveAdmin?.env?.ONEDRIVE_CLIENT_ID)],
+        ['ONEDRIVE_CLIENT_SECRET (servidor)', Boolean(oneDriveAdmin?.env?.ONEDRIVE_CLIENT_SECRET)],
+        ['ONEDRIVE_TENANT_ID (servidor, opcional)', Boolean(oneDriveAdmin?.env?.ONEDRIVE_TENANT_ID)]
+      ];
+      const missingVars=envVars.filter(([,present])=>!present);
       return <div className="panel admin-panel-body">
-        <div className="admin-panel-head"><h2>Métricas · Dashboard ejecutivo</h2></div>
-        {users===null ? <Busy/> : <>
-          <div className="kpi-row">
-            <div className="kpi-tile"><small>Usuarios</small><b>{totalUsers}</b><span>{activeUsers} activos</span></div>
-            <div className="kpi-tile"><small>Documentos en Biblioteca</small><b>{library!==null ? library.length : '…'}</b><span>Firestore · colección library</span></div>
-            <div className="kpi-tile"><small>Peticiones Visual IA</small><b>{logs!==null ? logs.length : '…'}</b><span>últimas registradas</span></div>
-            <div className="kpi-tile"><small>Llamadas IA totales (mes)</small><b>{totalCalls}</b><span>APU + Visual IA + asistente</span></div>
+        <div className="admin-panel-head"><h2>Servicios</h2><button className="soft" onClick={()=>{loadHealth();loadOneDriveAdmin();}}>Actualizar</button></div>
+        <div className="admin-panel-head" style={{marginTop:0}}><h2 style={{fontSize:'.95rem'}}>Firebase y OpenAI</h2></div>
+        {health===null ? <Busy/> :
+         health.error ? <EmptyState icon="admin" title="No se pudo consultar" text={health.error}/> :
+         <div className="admin-health-grid">{Object.entries(health.checks||{}).map(([key,c])=><div className={'admin-health-card '+c.status} key={key}>
+           <b>{c.label||key}</b>
+           <span className="admin-health-status">{c.status==='ok'?'Operativo':c.status==='error'?'Con errores':'No disponible'}</span>
+           <p>{c.detail}</p>
+         </div>)}</div>}
+
+        <div className="admin-panel-head" style={{marginTop:'16px'}}><h2 style={{fontSize:'.95rem'}}>OneDrive</h2></div>
+        {oneDriveAdmin===null ? <Busy/> :
+         oneDriveAdmin.error ? <EmptyState icon="admin" title="No se pudo consultar" text={oneDriveAdmin.error}/> : <>
+          <div className="admin-cost-grid">
+            <div className="admin-cost-card"><small>Configurado en el servidor</small><b>{oneDriveAdmin.configured ? 'Sí' : 'No'}</b></div>
+            <div className="admin-cost-card"><small>Tu cuenta admin</small><b>{oneDriveAdmin.connected ? 'Conectada' : 'No conectada'}</b></div>
+            <div className="admin-cost-card"><small>Usuarios con OneDrive conectado</small><b>{connectedUsers}</b></div>
+            <div className="admin-cost-card"><small>Documentos importados de OneDrive</small><b>{library===null ? '…' : onedriveDocs}</b></div>
+            <div className="admin-cost-card"><small>Última sincronización (tu cuenta)</small><b>{oneDriveAdmin.connectedAt?.toDate ? oneDriveAdmin.connectedAt.toDate().toLocaleString('es-MX') : (oneDriveAdmin.connectedAt || '—')}</b></div>
           </div>
-          <div className="dash-charts">
-            <div className="panel"><h2>Distribución de planes</h2>{segs.length ? <Donut segments={segs} center={totalUsers} sub="usuarios"/> : <EmptyState text="Sin usuarios con plan asignado."/>}
-              <div className="donut-legend">{segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>)}</div>
-            </div>
-            <div className="panel"><h2>Uso de IA por función</h2><Spark points={[usageTotals.apu||0,usageTotals.visual||0,usageTotals.assistant||0,totalCalls]}/>
-              <div className="chart-foot"><span>APU {usageTotals.apu||0} · Visual {usageTotals.visual||0} · Asistente {usageTotals.assistant||0}</span><b>Mes en curso</b></div>
-            </div>
-          </div>
+          <div className="admin-table-wrap"><table className="data-table admin-table">
+            <thead><tr><th>Variable</th><th>Estado</th></tr></thead>
+            <tbody>{envVars.map(([name,present])=><tr key={name}><td>{name}</td><td>{present ? 'Detectada' : 'Faltante'}</td></tr>)}</tbody>
+          </table></div>
+          {missingVars.length > 0 && <div className="od-config-warning"><Icon name="alerta" size={18}/><div>Faltan {missingVars.length} variable(s) para activar OneDrive por completo: {missingVars.map(([name])=>name).join(', ')}. Este detalle solo es visible aquí; los usuarios ven "Biblioteca local disponible".</div></div>}
+          <div className="visual-actions"><button className="soft" onClick={testOneDriveConnection} disabled={odTesting || !oneDriveAdmin.connected}>{odTesting?'Probando...':'Probar conexión'}</button></div>
+          {!oneDriveAdmin.connected && <p className="muted">Conecta tu cuenta de OneDrive (desde Biblioteca o el indicador de nube) para poder probar la conexión real con Microsoft Graph.</p>}
+          {odTest && (odTest.ok
+            ? <div className="admin-metric-note">Conexión correcta: se encontraron {odTest.count} archivo(s)/carpeta(s) en la raíz de OneDrive (respuesta sanitizada, sin nombres de archivo).</div>
+            : <EmptyState icon="admin" title="La prueba de conexión falló" text={odTest.message}/>)}
         </>}
+      </div>;
+    })()}
+
+    {tab==='diagnostico' && (()=>{
+      const envRows=[
+        ['Firebase Storage/Firestore', health?.checks?.firebase?.status==='ok'],
+        ['OpenAI (OPENAI_API_KEY)', health?.checks?.openai?.status==='ok'],
+        ['OneDrive cliente (VITE_ONEDRIVE_CLIENT_ID)', isOneDriveConfigured()],
+        ['OneDrive servidor (ONEDRIVE_CLIENT_ID/SECRET)', Boolean(oneDriveAdmin?.env?.ONEDRIVE_CLIENT_ID && oneDriveAdmin?.env?.ONEDRIVE_CLIENT_SECRET)],
+        ['Lista de administradores (VITE_ADMIN_EMAILS)', ADMIN_EMAILS.length > 0]
+      ];
+      return <div className="panel admin-panel-body">
+        <div className="admin-panel-head"><h2>Diagnóstico</h2><button className="soft" onClick={()=>{loadHealth();loadOneDriveAdmin();}}>Actualizar</button></div>
+        <div className="admin-panel-head" style={{marginTop:0}}><h2 style={{fontSize:'.95rem'}}>Tu sesión</h2></div>
+        <div className="admin-cost-grid">
+          <div className="admin-cost-card"><small>Correo detectado</small><b>{user?.email || '—'}</b></div>
+          <div className="admin-cost-card"><small>Rol detectado</small><b>{user?.role || 'user'}</b></div>
+          <div className="admin-cost-card"><small>isAdmin</small><b>{user?.isAdmin ? 'true' : 'false'}</b></div>
+          <div className="admin-cost-card"><small>Plan</small><b>{user?.plan || '—'}</b></div>
+        </div>
+        <div className="admin-metric-note">isAdmin se calcula con isAdminUser(): rol normalizado (admin/administrator/administrador/superadmin), custom claim de Firebase (admin===true) o correo en VITE_ADMIN_EMAILS. En desarrollo, este mismo detalle se imprime en la consola del navegador al iniciar sesión.</div>
+
+        <div className="admin-panel-head" style={{marginTop:'16px'}}><h2 style={{fontSize:'.95rem'}}>Variables y servicios detectados</h2></div>
+        <div className="admin-table-wrap"><table className="data-table admin-table">
+          <thead><tr><th>Servicio / variable</th><th>Estado</th></tr></thead>
+          <tbody>{envRows.map(([name,ok])=><tr key={name}><td>{name}</td><td>{ok ? 'Detectado' : 'Faltante o sin confirmar'}</td></tr>)}</tbody>
+        </table></div>
+        <div className="admin-metric-note">Ninguna fila muestra el valor real de una variable, solo si esta presente. Para el detalle de cada servicio revisa la pestaña Servicios.</div>
       </div>;
     })()}
   </section>;

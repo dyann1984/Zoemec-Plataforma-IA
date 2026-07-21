@@ -17,6 +17,23 @@ function normalizePlan(plan){
   return PLAN_RULES[plan] ? plan : 'Gratis';
 }
 
+/* Misma logica que isAdminUser en el frontend (src/main.jsx): no confiar en un
+   solo valor exacto de "role". Acepta variantes normalizadas, custom claim de
+   Firebase (decoded.admin === true) o correo en VITE_ADMIN_EMAILS (la misma
+   variable que usa el cliente; Vercel la expone igual en runtime de funciones). */
+const ADMIN_ROLE_VALUES = new Set(['admin', 'administrator', 'administrador', 'superadmin']);
+const ADMIN_EMAILS = String(process.env.VITE_ADMIN_EMAILS || process.env.ADMIN_EMAILS || '')
+  .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+function normalizeRoleValue(v){ return String(v ?? '').trim().toLowerCase(); }
+function isAdminProfile(decoded, profile){
+  const role = normalizeRoleValue(profile?.role);
+  if(ADMIN_ROLE_VALUES.has(role)) return true;
+  if(decoded?.admin === true) return true;
+  const email = normalizeRoleValue(profile?.email ?? decoded?.email);
+  if(email && ADMIN_EMAILS.includes(email)) return true;
+  return false;
+}
+
 function usageMonth(){
   const now = new Date();
   return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
@@ -48,13 +65,14 @@ export async function requireFeature(req, feature){
     throw error;
   }
 
-  const role = profile.role || 'user';
-  const plan = role === 'admin' ? 'Empresa' : normalizePlan(profile.plan || 'Gratis');
+  const isAdmin = isAdminProfile(decoded, profile);
+  const role = isAdmin ? 'admin' : (profile.role || 'user');
+  const plan = isAdmin ? 'Empresa' : normalizePlan(profile.plan || 'Gratis');
   const rules = PLAN_RULES[plan] || PLAN_RULES.Gratis;
   const month = usageMonth();
   const currentUsage = Number(profile.usage?.[month]?.[feature] || 0);
 
-  if(role !== 'admin'){
+  if(!isAdmin){
     if(feature === 'apu' && currentUsage >= rules.apuLimit){
       const error = new Error('Tu limite de APUs de este plan ya fue usado. Activa o mejora tu plan para continuar.');
       error.status = 402;
@@ -106,7 +124,7 @@ export async function requireAdmin(req){
   const decoded = await getAdminAuth().verifyIdToken(token);
   const snap = await getAdminDb().collection('users').doc(decoded.uid).get();
   const profile = snap.exists ? snap.data() : {};
-  if(profile.role !== 'admin'){
+  if(!isAdminProfile(decoded, profile)){
     const error = new Error('Esta seccion es solo para administradores.');
     error.status = 403;
     throw error;

@@ -13,3 +13,4 @@ pnpm-debug.log*
 .tmp/
 samples/library/
 design-assets/
+.env*

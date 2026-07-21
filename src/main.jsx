@@ -3,10 +3,11 @@ import { createRoot } from 'react-dom/client';
 import jsPDF from 'jspdf';
 import writeXlsxFile from 'write-excel-file/browser';
 import { createUserWithEmailAndPassword, GoogleAuthProvider, onAuthStateChanged, sendEmailVerification, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile } from 'firebase/auth';
-import { addDoc, collection, doc, getCountFromServer, getDoc, getDocs, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
-import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
+import { addDoc, collection, deleteDoc, doc, getCountFromServer, getDoc, getDocs, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
+import { deleteObject, getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { auth, db, firebaseReady, storage } from './firebase.js';
 import { useCloudState } from './cloud.js';
+import { consumeOneDriveRedirect, isOneDriveConfigured, startOneDriveConnect } from './lib/onedrive.js';
 import './style.css';
 
 const money = (n) => Number(n || 0).toLocaleString('es-MX', { style:'currency', currency:'MXN' });
@@ -203,11 +204,15 @@ function buildSession(profile, fbUser){
   };
 }
 
-/* Placeholder honesto: la conexion real a OneDrive (Graph API/MSAL) se construye en
-   el Checkpoint G junto con src/lib/onedrive.js. Hasta que existan credenciales de
-   Azure AD configuradas, el boton debe decir la verdad en vez de simular exito. */
-function connectOneDrive(){
-  window.zoemecNotify?.('OneDrive: la conexion real esta en construccion. Falta registrar la app en Azure AD y configurar sus credenciales en este entorno.', 'info');
+/* Conexion real con OneDrive (OAuth2 + PKCE contra Microsoft Identity Platform,
+   ver src/lib/onedrive.js). Sin VITE_ONEDRIVE_CLIENT_ID configurado, el intento
+   falla con un mensaje honesto en vez de simular una conexion exitosa. */
+async function connectOneDrive(){
+  try{
+    await startOneDriveConnect();
+  }catch(err){
+    window.zoemecNotify?.(err.message || 'No se pudo iniciar la conexion con OneDrive.', 'error');
+  }
 }
 
 function CloudBadge({user}){
@@ -216,6 +221,7 @@ function CloudBadge({user}){
   const [open,setOpen]=useState(false);
   const [remote,setRemote]=useState(null);
   const [libInfo,setLibInfo]=useState(null);
+  const [oneDrive,setOneDrive]=useState(null);
   const boxRef=useRef(null);
   useEffect(()=>{
     const onCloud=e=>setSt(e.detail||{status:'ok'});
@@ -233,8 +239,18 @@ function CloudBadge({user}){
         .then(snap=>{ if(alive) setLibInfo({count:snap.data().count, checkedAt:new Date().toLocaleTimeString('es-MX')}); })
         .catch(()=>{ if(alive) setLibInfo(null); });
     }
+    apiPost('/api/onedrive', { action:'status' }).then(data=>{ if(alive) setOneDrive(data); }).catch(()=>{ if(alive) setOneDrive(null); });
     return ()=>{ alive=false; };
   },[open, user?.uid]);
+  const disconnectOneDrive=async()=>{
+    try{
+      await apiPost('/api/onedrive', { action:'disconnect' });
+      setOneDrive(d=>({...d, connected:false, account:''}));
+      window.zoemecNotify?.('OneDrive desconectado.', 'info');
+    }catch(err){
+      window.zoemecNotify?.(err.message || 'No se pudo desconectar OneDrive.', 'error');
+    }
+  };
   useEffect(()=>{
     if(!open) return;
     const onDown=(e)=>{ if(boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
@@ -253,7 +269,10 @@ function CloudBadge({user}){
       detail: !user?.uid ? 'Inicia sesión para ver tu biblioteca.' : libInfo ? `${libInfo.count} documento(s) · verificado a las ${libInfo.checkedAt}` : 'Consultando Firestore...' },
     { key:'openai', label:'OpenAI', ok: remote?.openai==='ok',
       detail: remote ? (remote.openai==='ok' ? 'Configurada y responde.' : 'No disponible en este entorno.') : 'No disponible aquí (revisa conexión).' },
-    { key:'onedrive', label:'OneDrive', ok:false, detail:'No conectado.' }
+    { key:'onedrive', label:'OneDrive', ok: Boolean(oneDrive?.connected),
+      detail: oneDrive?.connected ? `Conectado${oneDrive.account ? ' · ' + oneDrive.account : ''}.`
+        : oneDrive && !oneDrive.configured ? 'No conectado (requiere configurar la app de Azure AD).'
+        : 'No conectado.' }
   ];
   return <div className="cloud-panel" ref={boxRef}>
     <button type="button" className={'cloud-badge '+mode} title={st.message||label} onClick={()=>setOpen(v=>!v)}><i/><em>{label}</em></button>
@@ -262,7 +281,9 @@ function CloudBadge({user}){
       {rows.map(r=><div className={'cloud-row'+(r.ok?' ok':' warn')} key={r.key}>
         <i/>
         <div><b>{r.label}</b><span>{r.detail}</span></div>
-        {r.key==='onedrive' && <button className="soft" onClick={connectOneDrive}>Conectar</button>}
+        {r.key==='onedrive' && (oneDrive?.connected
+          ? <button className="soft" onClick={disconnectOneDrive}>Desconectar</button>
+          : <button className="soft" onClick={connectOneDrive}>Conectar</button>)}
       </div>)}
     </div>}
   </div>;
@@ -350,6 +371,29 @@ function App(){
     return () => window.removeEventListener('zoemec-budget-add', onAdd);
   }, [setBudgetItems]);
   const companyView = (!company?.logo || company.logo === '/logo.png' || company.logo === '/images/logo-web.png') ? {...company, logo:'/images/logo-web.png?v=zoemec-2026'} : company;
+
+  // Microsoft redirige de vuelta a la app con ?code=...&state=... tras un login
+  // real (ver src/lib/onedrive.js). Se captura una sola vez al montar (antes de
+  // que otra pantalla borre esos parametros de la URL) y se procesa en cuanto
+  // haya sesion, ya que intercambiar el code por tokens requiere el ID token
+  // del usuario autenticado.
+  const [pendingOneDrive] = useState(() => consumeOneDriveRedirect());
+  useEffect(() => {
+    if(!pendingOneDrive) return;
+    if(pendingOneDrive.error){
+      alert(`No se pudo conectar OneDrive: ${pendingOneDrive.error}`);
+      return;
+    }
+    if(!user?.uid) return;
+    (async () => {
+      try{
+        const data = await apiPost('/api/onedrive', { action:'token', ...pendingOneDrive });
+        alert(`OneDrive conectado${data.account ? ' (' + data.account + ')' : ''}.`);
+      }catch(err){
+        alert(`No se pudo completar la conexion con OneDrive: ${friendlyServiceError(err)}`);
+      }
+    })();
+  }, [user?.uid, pendingOneDrive]);
 
   // Copia el nombre de la empresa en users/{uid} (denormalizado) para que el Panel
   // Admin pueda listar organizaciones sin necesitar acceso al blob comprimido de
@@ -1457,15 +1501,15 @@ function makeAPUFromConcept(concept, catalog){
   if(/acarreo|acarreos/.test(t)) equipment.push(['Equipo menor para acarreos internos',0.04,'día',110]);
   const standardClave = 'APU-' + stableHash(c);
   const TPL_META = {
-    plafon_suspendido:{ family:'Acabados - Falso plafon de tablaroca con suspension oculta', confidence:88, sat:'72152400' },
-    pintura:{ family:'Acabados - Pintura en muros y plafones', confidence:88, sat:'72151300' },
-    lavabo_ptr:{ family:'Mobiliario metálico ligero / base PTR con Durock', confidence:98, sat:'72101500' },
-    estructura_metalica:{ family:'Estructura metálica / fabricación y montaje', confidence:97, sat:'72101700' },
-    bomba:{ family:'Instalaciones hidraulicas / equipo de bombeo', confidence:90, sat:'40101700' },
-    tuberia:{ family:'Instalaciones hidraulicas / tuberia y conexiones', confidence:88, sat:'72101507' },
-    generico:{ family:'Concepto sin clasificar - revisar manualmente', confidence:45, sat:'72100000' }
+    plafon_suspendido:{ confidence:88, sat:'72152400' },
+    pintura:{ confidence:88, sat:'72151300' },
+    lavabo_ptr:{ confidence:98, sat:'72101500' },
+    estructura_metalica:{ confidence:97, sat:'72101700' },
+    bomba:{ confidence:90, sat:'40101700' },
+    tuberia:{ confidence:88, sat:'72101507' },
+    generico:{ confidence:45, sat:'72100000' }
   };
-  const meta = TPL_META[tipo] || { family:tipo, confidence:88, sat:'72100000' };
+  const meta = { family: APU_FAMILY_LABELS[tipo] || tipo, confidence: TPL_META[tipo]?.confidence ?? 88, sat: TPL_META[tipo]?.sat ?? '72100000' };
   return {
     id:standardClave, clave:standardClave, concept:cleanText(c), unit:normalizeUnitLabel(tpl.unit), templateGenerated:true,
     materials, labor, equipment,
@@ -2892,21 +2936,33 @@ function Clients({clients,setClients,embedded=false}){
   </section>
 }
 
+/* Taxonomia unica de disciplinas: la usan tanto la Biblioteca (para clasificar
+   documentos) como el motor de APU (para etiquetar la familia de un concepto,
+   via APU_FAMILY_LABELS mas abajo). Un documento y un APU con la misma familia
+   usan literalmente el mismo texto, para que "usar como fuente" tenga sentido. */
 const LIBRARY_DISCIPLINES=[
-  ['Acabados',['acabado','piso','azulejo','loseta','porcelanato','ceramico','pintura','aplanado','recubrimiento','boquilla']],
+  ['Acabados',['acabado','piso','azulejo','loseta','porcelanato','ceramico','pintura','aplanado','recubrimiento','boquilla','marmol','granito','sellador','registro','impermeabiliz']],
   ['Albanileria',['albanileria','muro','block','tabique','castillo','cadena','mortero','aplanado']],
-  ['Tablaroca y Durock',['tablaroca','durock','yeso','plafon','bastidor','panel']],
+  ['Tablaroca y Durock',['tablaroca','durock','yeso','plafon','bastidor','panel','lavabo']],
   ['Electricidad',['electricidad','electrico','electrica','cfe','luminaria','cable','contacto','canalizacion','conduit']],
-  ['Hidrosanitaria',['hidrosanitario','hidraulica','sanitario','agua potable','drenaje','alcantarillado','tuberia','valvula']],
+  ['Hidrosanitaria',['hidrosanitario','hidraulica','sanitario','agua potable','drenaje','alcantarillado','tuberia','valvula','bomba','bombeo']],
   ['Aire acondicionado',['aire acondicionado','hvac','ducto','difusor','chiller','minisplit']],
   ['Estructura metalica',['estructura','metalica','acero','ptr','perfil','soldadura','herrerias','herreria']],
-  ['Cimentacion',['cimentacion','zapata','losa','contratrabe','pilote','plantilla']],
+  ['Cimentacion',['cimentacion','zapata','losa','contratrabe','pilote','plantilla','concreto']],
   ['Terracerias',['terraceria','excavacion','relleno','compactacion','acarreo','base hidraulica']],
   ['Urbanizacion',['urbanizacion','pavimento','banqueta','guarnicion','asfalto','adoquin']],
   ['Equipamiento',['equipamiento','mobiliario','senaletica','senalizacion','juego','equipo']],
   ['Limpieza y preliminares',['limpieza','preliminar','trazo','nivelacion','demolicion','retiro']],
   ['Gas e incendio',['gas','incendio','sprinkler','hidrante','extintor']]
 ];
+/* Mapa tipo interno del motor APU -> familia compartida con la Biblioteca.
+   No cambia la clasificacion tecnica (tipo), solo la etiqueta que se muestra. */
+const APU_FAMILY_LABELS = {
+  concreto:'Cimentacion', acero:'Estructura metalica', estructura_metalica:'Estructura metalica',
+  block:'Albanileria', tablaroca:'Tablaroca y Durock', lavabo_ptr:'Tablaroca y Durock', plafon_suspendido:'Tablaroca y Durock',
+  pintura:'Acabados', aplanado:'Acabados', piso:'Acabados', marmol_granito:'Acabados', sello:'Acabados', registro:'Acabados', imper:'Acabados',
+  excavacion:'Terracerias', tuberia:'Hidrosanitaria', bomba:'Hidrosanitaria', generico:'General'
+};
 function libKey(v=''){
   return cleanText(v).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9.%/ -]/g,' ').replace(/\s+/g,' ').trim();
 }
@@ -2950,6 +3006,47 @@ function Library({user}){
   const [selected,setSelected]=useState(null);
   const [view,setView]=useState('tabla');
   const [page,setPage]=useState(1);
+  const [syncing,setSyncing]=useState(false);
+  const [lastSync,setLastSync]=useState(null);
+  /* Antes esta lista solo salia de localStorage: cada subida escribia en Firestore
+     pero nunca se volvia a leer de ahi, asi que el Panel Admin (que si lee Firestore)
+     y esta pantalla mostraban datos distintos para el mismo usuario. Ahora Firestore
+     es la fuente real; localStorage sigue siendo el cache de arranque instantaneo, y
+     se conservan solo los archivos que de verdad nunca se sincronizaron (sin docId,
+     ej. subidos sin sesion o sin Storage disponible). */
+  useEffect(()=>{
+    if(!firebaseReady || !user?.uid) return;
+    let alive=true;
+    setSyncing(true);
+    (async()=>{
+      try{
+        const [ownSnap, globalSnap] = await Promise.all([
+          getDocs(query(collection(db,'library'), where('ownerUid','==',user.uid))),
+          getDocs(query(collection(db,'library'), where('visibility','==','global')))
+        ]);
+        const remote=new Map();
+        [...ownSnap.docs, ...globalSnap.docs].forEach(d=>{
+          const data=d.data();
+          remote.set(d.id, {
+            name:data.name || 'Documento', size:data.size || '0.00 MB', ext:data.ext || 'DOC',
+            when:data.when || 'Sin fecha', cat:data.cat, family:data.family, tags:data.tags || [],
+            status:data.status || 'Subido e indexado', uses:Number(data.uses || 0),
+            downloadURL:data.downloadURL || '', storagePath:data.storagePath || '',
+            ownerUid:data.ownerUid, visibility:data.visibility, indexed:Boolean(data.indexed),
+            docId:d.id
+          });
+        });
+        if(!alive) return;
+        setFiles(current=>{
+          const localOnly=current.filter(f=>!f.docId);
+          return [...remote.values(), ...localOnly];
+        });
+        setLastSync(new Date().toLocaleTimeString('es-MX'));
+      }catch{ /* sin conexion o sin permisos: se conserva el cache local */ }
+      finally{ if(alive) setSyncing(false); }
+    })();
+    return ()=>{ alive=false; };
+  },[user?.uid]);
   const classify=(name='')=>{
     const n=libKey(name);
     if(/matriz|matrices|precio unitario|analisis|apu/.test(n)) return 'Matrices APU';
@@ -2973,15 +3070,19 @@ function Library({user}){
           const fileRef=ref(storage, `library/${user.uid}/${fileId}/${f.name}`);
           await uploadBytes(fileRef, f, { customMetadata:{ ownerUid:user.uid, category:meta.cat, family:meta.family, tags:(meta.tags||[]).join(',') } });
           const downloadURL=await getDownloadURL(fileRef);
-          await addDoc(collection(db,'library'), {
+          const visibility=user.role === 'admin' ? 'global' : 'private';
+          const docRef=await addDoc(collection(db,'library'), {
             ...meta,
             ownerUid:user.uid,
-            visibility:user.role === 'admin' ? 'global' : 'private',
+            visibility,
             storagePath:fileRef.fullPath,
             downloadURL,
             indexed:meta.indexed,
             createdAt:serverTimestamp()
           });
+          meta.docId=docRef.id;
+          meta.ownerUid=user.uid;
+          meta.visibility=visibility;
           meta.downloadURL=downloadURL;
           meta.storagePath=fileRef.fullPath;
           meta.status='Subido e indexado';
@@ -2997,7 +3098,22 @@ function Library({user}){
       setUploading(false);
     }
   };
-  const del=(i)=>setFiles(files.filter((_,idx)=>idx!==i));
+  /* Antes solo se quitaba del arreglo local: el archivo real seguia vivo en
+     Firestore/Storage y volvia a aparecer en la proxima sincronizacion. Ahora
+     se borra de verdad cuando el usuario tiene permiso para hacerlo. */
+  const del=async(i)=>{
+    const target=files[i];
+    setFiles(files.filter((_,idx)=>idx!==i));
+    if(!target?.docId || !firebaseReady) return;
+    try{
+      await deleteDoc(doc(db,'library',target.docId));
+      if(target.storagePath){
+        await deleteObject(ref(storage, target.storagePath)).catch(()=>{});
+      }
+    }catch(err){
+      alert(`Se quito de tu lista, pero no se pudo borrar de la nube: ${err?.message || 'revisa permisos.'}`);
+    }
+  };
   const types=['Todos','Costos','Matrices APU','Mano de obra','Normas','Formatos','Academia','Documentos'];
   const normalizedFiles=files.map((f,idx)=>({...enrichLibraryMeta(f, classify),__idx:idx}));
   const visible=normalizedFiles

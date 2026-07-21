@@ -1552,13 +1552,16 @@ svg.ic{display:block;flex:none}
 .os-grid{
   display:grid;
   grid-template-columns:1.1fr 1fr 280px;
+  grid-auto-rows:auto;
   gap:16px;
   margin-bottom:16px;
   /* antes las 3 columnas se estiraban (stretch por defecto) a la altura de la
      mas alta, dejando huecos enormes en las columnas con menos contenido.
      align-items:start deja que cada columna crezca solo lo que su contenido
-     necesita. */
+     necesita; height/min-height:0 en cada columna evita que un valor fijo
+     reintroduzca el mismo hueco. */
   align-items:start;
+  height:auto;
 }
 .os-command,.os-bim,.os-side>div,.future-panel{
   border:1px solid rgba(27,16,42,.12);
@@ -1566,8 +1569,10 @@ svg.ic{display:block;flex:none}
   background:rgba(255,255,255,.72);
   box-shadow:0 24px 70px rgba(27,16,42,.12);
   backdrop-filter:blur(18px);
+  height:auto;
+  min-height:0;
 }
-.os-command{padding:24px;min-height:0;background:linear-gradient(135deg,rgba(27,16,42,.96),rgba(52,28,78,.9));color:#fff}
+.os-command{padding:24px;height:auto;min-height:0;background:linear-gradient(135deg,rgba(27,16,42,.96),rgba(52,28,78,.9));color:#fff}
 .os-command-head{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:20px}
 .os-command-head span,.os-side small{font-family:var(--mono);font-size:.66rem;letter-spacing:.12em;text-transform:uppercase;color:#C9A24A}
 .os-command-head b{font-family:var(--mono);color:#fff}
@@ -1579,9 +1584,12 @@ svg.ic{display:block;flex:none}
 .os-pipeline button{text-align:left;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);box-shadow:none;border-radius:14px;padding:12px;color:#fff}
 .os-pipeline button.ready{border-color:rgba(201,162,74,.45)}.os-pipeline button.active{background:rgba(123,66,188,.38)}.os-pipeline button.watch{border-style:dashed}
 .os-pipeline b{display:block}.os-pipeline span{font-size:.72rem;color:#d9cde9}
-.os-bim{position:relative;min-height:320px;overflow:hidden;background:linear-gradient(150deg,#120B1D,#2A1740);color:#fff;display:flex}
+.os-bim{position:relative;height:auto;min-height:0;overflow:hidden;background:linear-gradient(150deg,#120B1D,#2A1740);color:#fff;display:flex}
 
-/* Gemelo Digital: tarjeta SVG que reacciona al APU real mas reciente */
+/* Gemelo Digital: tarjeta SVG que reacciona al APU real mas reciente.
+   flex:1 aqui ya no fuerza altura extra porque .os-bim dejo de tener un
+   min-height fijo: ahora ambos crecen solo lo que el contenido (la imagen
+   grande + el flujo + las tarjetas Proyecto/IA) realmente necesita. */
 .twin-card{flex:1;display:flex;flex-direction:column;gap:14px;padding:22px;min-width:0}
 .twin-card.compact{padding:20px;gap:12px}
 .twin-card .empty-state{color:#e7dbf4;margin:auto}
@@ -1609,7 +1617,7 @@ svg.ic{display:block;flex:none}
 .twin-insights{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:4px}
 .twin-insights .info-card{min-height:0;padding:14px}
 @media (max-width:640px){.twin-insights{grid-template-columns:1fr}}
-.os-side{display:grid;gap:12px}.os-side>div{padding:18px}.os-side b{display:block;font-size:1.45rem;color:#1B102A;margin:6px 0}.os-side span{color:var(--muted);font-size:.8rem}
+.os-side{display:grid;gap:12px;height:auto;min-height:0;align-content:start}.os-side>div{padding:18px}.os-side b{display:block;font-size:1.45rem;color:#1B102A;margin:6px 0}.os-side span{color:var(--muted);font-size:.8rem}
 .os-actions button{border-radius:16px}
 .asst-fab{border-radius:18px;background:#12091d;border-color:rgba(201,162,74,.55)}
 .asst-panel{border-radius:24px;border-color:rgba(201,162,74,.35);box-shadow:0 36px 100px rgba(14,7,24,.34)}
@@ -1901,6 +1909,25 @@ svg.ic{display:block;flex:none}
 .od-file-row{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px}
 .od-file-row b{color:var(--ink);font-size:.88rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .od-file-row small{color:var(--muted);font-size:.74rem}
+
+/* ==================================================================
+   Biblioteca · explorador de Google Drive (repositorio tecnico real)
+   ================================================================== */
+.lib-gdrive{background:#fff;border-top:3px solid var(--gold)}
+.lib-gdrive .admin-panel-head{margin-bottom:10px}
+.gdrive-breadcrumb{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:10px}
+.gdrive-breadcrumb button{padding:6px 10px;font-size:.8rem}
+.gdrive-breadcrumb span{color:var(--muted)}
+.gdrive-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;flex-wrap:wrap}
+.gdrive-folder{cursor:pointer}
+.gdrive-folder:hover{border-color:var(--teal);background:var(--mint)}
+.gdrive-check{display:flex;align-items:center;gap:8px;min-width:0;cursor:pointer}
+.gdrive-check input{flex:none}
+.gdrive-check b{color:var(--ink);font-size:.88rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gdrive-status{font-family:var(--mono);font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;padding:3px 8px;border-radius:999px;background:var(--mint);color:var(--petrol);justify-self:start}
+.gdrive-status.importando{background:var(--gold-soft);color:var(--gold-ink)}
+.gdrive-status.listo{background:rgba(89,179,122,.15);color:#2E7D4F}
+.gdrive-status.error{background:rgba(181,74,98,.14);color:var(--danger)}
 
 /* ==================================================================
    Panel Admin · tabs nuevos (Uso IA, Logs, Costos IA, OneDrive, Metricas)

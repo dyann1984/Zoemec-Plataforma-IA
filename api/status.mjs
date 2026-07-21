@@ -1,4 +1,5 @@
 import { getAdminDb, hasAdminCredentials } from './_firebaseAdmin.mjs';
+import { hasGoogleDriveCredentials } from './_googleDrive.mjs';
 
 /* Estado publico y minimo (sin datos sensibles) para que cualquier usuario logueado
    -no solo un admin- pueda ver en la topbar si Firebase y OpenAI responden de verdad.
@@ -46,5 +47,5 @@ export default async function handler(req, res){
     return;
   }
   const [firebase, openai, announcement] = await Promise.all([checkFirebase(), checkOpenAI(), readAnnouncement()]);
-  res.status(200).json({ firebase, openai, announcement });
+  res.status(200).json({ firebase, openai, announcement, googleDriveConfigured: hasGoogleDriveCredentials() });
 }

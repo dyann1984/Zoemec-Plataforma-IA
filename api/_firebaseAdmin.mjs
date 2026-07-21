@@ -60,7 +60,13 @@ export function getAdminStorage(){
     throw new Error('Falta FIREBASE_SERVICE_ACCOUNT_JSON en Vercel para usar Firebase Storage.');
   }
   const serviceAccount = parseServiceAccount();
-  const bucketName = process.env.FIREBASE_STORAGE_BUCKET || `${serviceAccount?.project_id || DEFAULT_PROJECT_ID}.appspot.com`;
+  /* El bucket real de este proyecto es "<project>.firebasestorage.app" (dominio
+     nuevo de Firebase Storage), no el "<project>.appspot.com" clasico — asi lo
+     usa el cliente en src/firebase.js. Si el admin SDK usara appspot.com por
+     default, subiria a un bucket distinto al que lee el cliente: el archivo
+     "subiria bien" pero nunca aparecería. FIREBASE_STORAGE_BUCKET sigue
+     pudiendo forzar otro valor si el bucket real fuera distinto. */
+  const bucketName = process.env.FIREBASE_STORAGE_BUCKET || `${serviceAccount?.project_id || DEFAULT_PROJECT_ID}.firebasestorage.app`;
   return admin.storage().bucket(bucketName);
 }
 

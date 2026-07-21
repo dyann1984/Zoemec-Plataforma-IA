@@ -224,6 +224,11 @@ function friendlyServiceError(err, fallback='Servicio temporalmente no disponibl
   if(/unexpected (end of|token)|json\.parse|syntaxerror|failed to fetch|networkerror/i.test(msg)){
     return 'El servicio no respondio correctamente. Intenta de nuevo en unos minutos.';
   }
+  /* Un error de CORS (subida directa del navegador bloqueada) nunca debe
+     mostrarse tal cual: es ruido tecnico para el usuario final. */
+  if(/cors|cross-origin|preflight|access-control-allow-origin|err_failed/i.test(msg)){
+    return 'No se pudo completar la operación en este entorno. Intenta de nuevo o contacta a soporte.';
+  }
   return msg;
 }
 async function loadOrCreateProfile(fbUser, fallbackName='Usuario ZOEMEC'){
@@ -335,11 +340,13 @@ function CloudBadge({user}){
   const firebaseCriticalError = st.status==='error';
   const openaiOk = remote?.openai==='ok';
   const oneDriveOk = Boolean(oneDrive?.connected);
+  const googleDriveConfigured = Boolean(remote?.googleDriveConfigured);
   let mode, label;
   if(!online){ mode='off'; label='Sin conexión'; }
   else if(firebaseCriticalError){ mode='error'; label='Trabajo local protegido'; }
   else if(st.status==='saving'){ mode='saving'; label='Guardando en la nube...'; }
   else if(remote && !openaiOk){ mode='partial'; label='Sincronización parcial'; }
+  else if(remote && !googleDriveConfigured){ mode='partial'; label='Sincronización parcial'; }
   else if(oneDrive && !oneDriveOk){ mode='partial'; label='Sincronización parcial'; }
   else { mode='ok'; label='Servicios conectados'; }
   const rows = [
@@ -349,6 +356,8 @@ function CloudBadge({user}){
       detail: !user?.uid ? 'Inicia sesión para ver tu biblioteca.' : libInfo ? `${libInfo.count} documento(s) · verificado a las ${libInfo.checkedAt}` : 'Consultando Firestore...' },
     { key:'openai', label:'OpenAI', ok: remote?.openai==='ok',
       detail: remote ? (remote.openai==='ok' ? 'Configurada y responde.' : 'No disponible en este entorno.') : 'No disponible aquí (revisa conexión).' },
+    { key:'googledrive', label:'Google Drive', ok: googleDriveConfigured,
+      detail: remote ? (googleDriveConfigured ? 'Configurado en el servidor.' : 'No configurado (repositorio técnico no disponible).') : 'No disponible aquí (revisa conexión).' },
     { key:'onedrive', label:'OneDrive', ok: Boolean(oneDrive?.connected),
       detail: oneDrive?.connected ? `Conectado${oneDrive.account ? ' · ' + oneDrive.account : ''}.`
         : oneDrive && !oneDrive.configured ? 'No conectado (requiere configurar la app de Azure AD).'
@@ -435,6 +444,19 @@ function NoticeHost(){
 function App(){
   const [screen, setScreen] = useState('landing');
   const [module, setModule] = useState('inicio');
+  /* Modo Build Week / Demo: Panel Admin ya no aparece en el menu lateral, pero
+     sigue existiendo intacto. Un administrador puede llegar directo agregando
+     #admin a la URL (ej. localhost:5173/#admin); si el usuario no es admin,
+     el "module==='admin' && user.isAdmin" de mas abajo simplemente no renderiza
+     nada, sin exponer la ruta a usuarios normales. */
+  useEffect(() => {
+    const checkAdminHash = () => {
+      if(window.location.hash === '#admin') setModule('admin');
+    };
+    checkAdminHash();
+    window.addEventListener('hashchange', checkAdminHash);
+    return () => window.removeEventListener('hashchange', checkAdminHash);
+  }, []);
   const [zoeContext, setZoeContext] = useState({ user: null, route: 'inicio', activeApu: null, budget: null, project: null, importedFile: null, library: [], alerts: [], history: [] });
   const [user, setUser] = useState(null);
   const [accounts, setAccounts] = useLocalState('zoemec-accounts', []);
@@ -554,6 +576,14 @@ function App(){
         const session = buildSession(profile, fbUser, claims);
         setUser(session);
         setUsage(prev => ({...prev, [session.email]:{apusCreated:session.apusCreated || 0, deviceId:session.deviceId}}));
+        /* Antes, si ya existia una sesion valida de Firebase (ej. al recargar
+           la pagina), "screen" se quedaba en su valor por defecto ('landing')
+           porque solo login()/loginWithGoogle() avanzaban a 'app'. Con eso, un
+           usuario ya autenticado veia la landing publica en vez del Dashboard
+           hasta volver a escribir su correo/contrasena. Ahora, si detectamos
+           sesion valida y la pantalla sigue en landing/login/register, se
+           avanza sola. */
+        setScreen(current => (current === 'landing' || current === 'login' || current === 'register') ? 'app' : current);
       }catch(error){
         console.error(error);
       }
@@ -1317,6 +1347,7 @@ function Dashboard({setModule,apus,clients,budgets,projects,user}){
   const [oneDriveStatus,setOneDriveStatus] = useState(null);
   const [libraryCount,setLibraryCount] = useState(null);
   const [libraryRecent,setLibraryRecent] = useState(null);
+  const [libraryError,setLibraryError] = useState('');
   const monto = budgets.reduce((a,b)=>a+(b.total||0),0);
   const pr = projects || [];
   const activeProject = pr[0] || null;
@@ -1358,17 +1389,28 @@ function Dashboard({setModule,apus,clients,budgets,projects,user}){
     if(!user?.uid){
       return () => { alive=false; };
     }
-    getCountFromServer(query(collection(db,'library'), where('ownerUid','==',user.uid)))
-      .then(snap=>{ if(alive) setLibraryCount(snap.data().count); })
-      .catch(()=>{ if(alive) setLibraryCount(null); });
-    getDocs(query(collection(db,'library'), where('ownerUid','==',user.uid), limit(20)))
-      .then(snap=>{
-        if(!alive) return;
-        const docs=snap.docs.map(d=>({id:d.id,...d.data()}));
-        docs.sort((a,b)=>(b.createdAt?.toMillis?.()||0)-(a.createdAt?.toMillis?.()||0));
-        setLibraryRecent(docs.slice(0,4));
-      })
-      .catch(()=>{ if(alive) setLibraryRecent(null); });
+    /* Misma fuente que la pantalla Biblioteca: propios + globales, deduplicados
+       por id de documento (antes el Dashboard solo contaba "ownerUid==uid" y
+       Biblioteca ademas sumaba los documentos 'global', asi que el mismo usuario
+       podia ver dos numeros distintos para "sus" documentos). */
+    Promise.all([
+      getDocs(query(collection(db,'library'), where('ownerUid','==',user.uid), limit(200))),
+      getDocs(query(collection(db,'library'), where('visibility','==','global'), limit(200)))
+    ]).then(([ownSnap, globalSnap])=>{
+      if(!alive) return;
+      const merged=new Map();
+      [...ownSnap.docs, ...globalSnap.docs].forEach(d=>merged.set(d.id, {id:d.id, ...d.data()}));
+      const docs=[...merged.values()];
+      setLibraryCount(docs.length);
+      setLibraryError('');
+      docs.sort((a,b)=>(b.createdAt?.toMillis?.()||0)-(a.createdAt?.toMillis?.()||0));
+      setLibraryRecent(docs.slice(0,4));
+    }).catch(err=>{
+      if(!alive) return;
+      setLibraryCount(null);
+      setLibraryRecent(null);
+      setLibraryError(friendlyServiceError(err,'No se pudo consultar la biblioteca (permisos, indice o red).'));
+    });
     apiPost('/api/onedrive', { action:'status' }).then(data=>{ if(alive) setOneDriveStatus(data); }).catch(()=>{ if(alive) setOneDriveStatus(null); });
     return ()=>{ alive=false; };
   }, [user]);
@@ -1409,7 +1451,7 @@ function Dashboard({setModule,apus,clients,budgets,projects,user}){
         <div className="status-grid">
           <div className="status-card"><small>Proyecto</small><b>{pr[0]?.name || '—'}</b><span>{pr[0] ? `${pr[0].client || ''}` : 'Crea o importa un proyecto'}</span></div>
           <div className="status-card"><small>IA</small><b>{apus.length ? 'Activa' : 'Inactiva'}</b><span>{apus.length ? `Última confianza ${Math.round((apus[0]?.confidence||0)*100)/100}` : 'Genera un APU para activar'}</span></div>
-                  <div className="status-card"><small>Biblioteca</small><b>{libraryCount !== null ? `${libraryCount} insumos` : '—'}</b><span>{libraryCount !== null ? 'Biblioteca técnica detectada' : 'Sin datos de biblioteca'}</span></div>
+                  <div className="status-card"><small>Biblioteca</small><b>{libraryCount !== null ? `${libraryCount} documentos` : '—'}</b><span>{libraryCount !== null ? (libraryCount > 0 ? 'Biblioteca técnica detectada' : 'Sin documentos aún: sube tu primera base') : (libraryError || 'Sin datos de biblioteca')}</span></div>
           <div className="status-card"><small>OneDrive</small><b>{oneDriveOk ? 'Conectado' : 'No conectado'}</b><span>{oneDriveOk ? 'Archivos de proyecto accesibles' : 'Sincroniza documentos y planos'}</span></div>
           <div className="status-card"><small>Firebase</small><b>{firebaseOk ? 'Listo' : 'No disponible'}</b><span>{firebaseOk ? 'Datos y usuarios sincronizados' : 'Revisa la configuración de plataforma'}</span></div>
           <div className="status-card"><small>OpenAI</small><b>{openaiOk ? 'Listo' : 'No disponible'}</b><span>{openaiOk ? 'IA preparada para generar APUs y respuestas' : 'La IA no responde en este entorno'}</span></div>
@@ -1429,7 +1471,7 @@ function Dashboard({setModule,apus,clients,budgets,projects,user}){
       <div className="panel"><h2>Últimos presupuestos</h2>{budgets.length ? budgets.slice(0,4).map((b,i)=><div className="mini-list-row" key={b.id||i}><Icon name="presupuestos" size={15}/><b>{b.name || `Presupuesto ${i+1}`}</b><span>{b.total ? money(b.total) : '—'}</span></div>) : <EmptyState text="Guarda un presupuesto para verlo aquí." actionLabel="Ir a presupuestos" onAction={()=>setModule('presupuestos')}/>}</div>
     </div>
     <div className="grid-2">
-      <div className="panel"><h2>Últimos documentos</h2>{libraryRecent === null ? <EmptyState text="Sin datos de biblioteca en este momento."/> : libraryRecent.length ? libraryRecent.map(f=><div className="mini-list-row" key={f.id}><Icon name="doc" size={15}/><b>{f.name || 'Documento'}</b><span>{f.cat || f.ext || '—'}</span></div>) : <EmptyState text="Sube tu primer documento a la Biblioteca para verlo aquí." actionLabel="Abrir Biblioteca" onAction={()=>setModule('biblioteca')}/>}</div>
+      <div className="panel"><h2>Últimos documentos</h2>{libraryRecent === null ? <EmptyState text={libraryError || 'Sin datos de biblioteca en este momento.'}/> : libraryRecent.length ? libraryRecent.map(f=><div className="mini-list-row" key={f.id}><Icon name="doc" size={15}/><b>{f.name || 'Documento'}</b><span>{f.cat || f.ext || '—'}</span></div>) : <EmptyState text="Sube tu primer documento a la Biblioteca para verlo aquí." actionLabel="Abrir Biblioteca" onAction={()=>setModule('biblioteca')}/>}</div>
       <div className="panel"><h2>Actividad reciente</h2>{apus.length || budgets.length || (libraryRecent||[]).length ? [...(libraryRecent||[]).slice(0,2).map(f=>`Documento "${f.name}" sincronizado`), ...apus.slice(0,2).map(a=>`APU ${a.clave || a.id || ''} creado`), ...budgets.slice(0,2).map(b=>`Presupuesto ${b.name} guardado`)].map((x,i)=><div className="activity" key={i}><Icon name="doc" size={15}/> {x}</div>) : <EmptyState text="La actividad aparecerá cuando guardes APUs, presupuestos, clientes o documentos."/>}</div>
     </div>
   </section>
@@ -3285,6 +3327,109 @@ function scoreLibraryFile(file,q=''){
   return terms.reduce((n,t)=>n+(hay.includes(t)?2:0), hay.includes(query)?8:0);
 }
 
+function GoogleDrivePanel({user, onImported}){
+  const [path,setPath]=useState([]); // breadcrumb: [{id,name}]
+  const [items,setItems]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [selected,setSelected]=useState(()=>new Set());
+  const [fileStatus,setFileStatus]=useState({});
+  const [importingAll,setImportingAll]=useState(false);
+  const [notConfigured,setNotConfigured]=useState(false);
+  const [loadError,setLoadError]=useState('');
+
+  /* Antes, cualquier falla (backend no alcanzable, error de red, etc.) caia en
+     el mismo catch que "no configurado" y terminaba mostrando "esta carpeta
+     esta vacia" — indistinguible de una carpeta real sin archivos. Ahora se
+     distinguen los 3 casos: no configurado, error real (se muestra tal cual,
+     sin fingir una carpeta vacia) y exito con 0 elementos. */
+  const load=async(folderId)=>{
+    setLoading(true); setItems(null); setLoadError('');
+    try{
+      const data=await apiPost('/api/google-drive-list', folderId ? { folderId } : {});
+      setItems(data.items||[]);
+      setNotConfigured(false);
+    }catch(err){
+      if(/no est[aá] configurado/i.test(err.message||'')){
+        setNotConfigured(true);
+      }else{
+        setNotConfigured(false);
+        setLoadError(friendlyServiceError(err,'No se pudo conectar con Google Drive en este entorno.'));
+        window.zoemecNotify?.(err.message || 'No se pudo listar Google Drive.', 'error');
+      }
+    }finally{ setLoading(false); }
+  };
+  useEffect(()=>{ load(null); },[]);
+
+  const openFolder=(folder)=>{ setPath(p=>[...p,{id:folder.id,name:folder.name}]); setSelected(new Set()); load(folder.id); };
+  const goToCrumb=(index)=>{ const next=path.slice(0,index+1); setPath(next); setSelected(new Set()); load(next.length?next[next.length-1].id:null); };
+  const goRoot=()=>{ setPath([]); setSelected(new Set()); load(null); };
+  const toggleSelect=(id)=>setSelected(s=>{ const next=new Set(s); if(next.has(id)) next.delete(id); else next.add(id); return next; });
+
+  const importOne=async(item)=>{
+    setFileStatus(s=>({...s,[item.id]:'importando'}));
+    try{
+      await apiPost('/api/google-drive-import', { fileId:item.id });
+      setFileStatus(s=>({...s,[item.id]:'listo'}));
+      onImported?.();
+    }catch(err){
+      setFileStatus(s=>({...s,[item.id]:'error'}));
+      window.zoemecNotify?.(`${item.name}: ${err.message || 'no se pudo importar'}`, 'error');
+    }
+  };
+  const importSelected=async()=>{
+    setImportingAll(true);
+    for(const id of [...selected]){
+      const item=(items||[]).find(it=>it.id===id);
+      if(item && !item.isFolder) await importOne(item);
+    }
+    setImportingAll(false);
+    setSelected(new Set());
+  };
+
+  const folders=(items||[]).filter(it=>it.isFolder);
+  const files=(items||[]).filter(it=>!it.isFolder);
+  const doneCount=Object.values(fileStatus).filter(s=>s==='listo').length;
+  const statusLabel={ importando:'Importando', listo:'Listo', error:'Error' };
+
+  return <div className="panel lib-gdrive">
+    <div className="admin-panel-head"><h2>Google Drive</h2><button className="soft" onClick={()=>load(path.length?path[path.length-1].id:null)}>Actualizar</button></div>
+    {notConfigured && <div className="od-local-ok">
+      <Icon name="biblioteca" size={18}/>
+      <div><b>Google Drive no configurado</b><p>Biblioteca local disponible. Pide a un administrador que configure GOOGLE_DRIVE_CLIENT_ID/CLIENT_SECRET/REFRESH_TOKEN y GOOGLE_DRIVE_FOLDER_ID.</p></div>
+      <button className="soft" onClick={()=>window.zoemecNotify?.(user?.isAdmin ? 'Configura Google Drive en las variables de entorno del servidor (Vercel).' : 'Pide a un administrador que active Google Drive.', 'info')}>Configurar Google Drive</button>
+    </div>}
+    {!notConfigured && loadError && !loading && <EmptyState icon="admin" title="No se pudo conectar con Google Drive" text={loadError}/>}
+    {!notConfigured && !loadError && <>
+      <div className="gdrive-breadcrumb">
+        <button className="soft" onClick={goRoot}>Repositorio técnico</button>
+        {path.map((p,i)=><React.Fragment key={p.id}><span>/</span><button className="soft" onClick={()=>goToCrumb(i)}>{p.name}</button></React.Fragment>)}
+      </div>
+      {loading ? <div className="ai-note-busy"><span className="asst-dots"><i/><i/><i/></span><b>Cargando Google Drive...</b></div> : <>
+        <div className="gdrive-toolbar">
+          <span className="muted">{folders.length} carpeta(s) · {files.length} archivo(s){doneCount ? ` · ${doneCount} importado(s)` : ''}</span>
+          <button onClick={importSelected} disabled={!selected.size || importingAll}>{importingAll ? 'Importando...' : `Importar seleccionados (${selected.size})`}</button>
+        </div>
+        <div className="od-file-list">
+          {folders.map(f=><div className="od-file-row gdrive-folder" key={f.id} onClick={()=>openFolder(f)}>
+            <div><b><Icon name="folder" size={15}/> {f.name}</b><small>Carpeta</small></div>
+            <small>Explorar</small>
+            <button className="soft" onClick={(e)=>{e.stopPropagation(); openFolder(f);}}>Abrir</button>
+          </div>)}
+          {files.map(f=>{
+            const st=fileStatus[f.id];
+            return <div className="od-file-row" key={f.id}>
+              <label className="gdrive-check" onClick={e=>e.stopPropagation()}><input type="checkbox" checked={selected.has(f.id)} onChange={()=>toggleSelect(f.id)}/><b>{f.name}</b></label>
+              <small className={'gdrive-status '+(st||'pendiente')}>{statusLabel[st] || 'Pendiente'}</small>
+              <button className="soft" disabled={st==='importando'} onClick={()=>importOne(f)}>{st==='listo' ? 'Reimportar' : 'Importar'}</button>
+            </div>;
+          })}
+          {!folders.length && !files.length && <p className="muted">Esta carpeta está vacía.</p>}
+        </div>
+      </>}
+    </>}
+  </div>;
+}
+
 function OneDrivePanel({user, onImported}){
   const [status,setStatus]=useState(null);
   const [items,setItems]=useState(null);
@@ -3340,6 +3485,15 @@ function OneDrivePanel({user, onImported}){
   </div>;
 }
 
+/* Datos de ejemplo, SEPARADOS de la biblioteca real: solo se muestran cuando
+   Firebase no esta configurado en este entorno, nunca se mezclan con "files"
+   ni se cuentan en ningun contador real. */
+const LIBRARY_DEMO_SEED = [
+  { name:'Catálogo demo CMIC 2024.xlsx', cat:'Costos', family:'Catálogo', size:'1.20 MB' },
+  { name:'Matriz APU demo — Muro de block.pdf', cat:'Matrices APU', family:'Albañilería', size:'0.35 MB' },
+  { name:'Rendimientos de mano de obra (demo).xlsx', cat:'Mano de obra', family:'Referencia', size:'0.80 MB' }
+];
+
 function Library({user}){
   const fileInputRef=useRef(null);
   const [files,setFiles]=useLocalState('zoemec-biblioteca',[]);
@@ -3352,17 +3506,22 @@ function Library({user}){
   const [syncing,setSyncing]=useState(false);
   const [lastSync,setLastSync]=useState(null);
   const [syncKey,setSyncKey]=useState(0);
+  const [syncError,setSyncError]=useState('');
   /* Antes esta lista solo salia de localStorage: cada subida escribia en Firestore
      pero nunca se volvia a leer de ahi, asi que el Panel Admin (que si lee Firestore)
      y esta pantalla mostraban datos distintos para el mismo usuario. Ahora Firestore
      es la fuente real; localStorage sigue siendo el cache de arranque instantaneo, y
      se conservan solo los archivos que de verdad nunca se sincronizaron (sin docId,
      ej. subidos sin sesion o sin Storage disponible). syncKey permite forzar un
-     refresco manual (por ejemplo, tras importar un archivo desde OneDrive). */
+     refresco manual (por ejemplo, tras importar un archivo desde OneDrive).
+     El catch antes era silencioso: un permiso o indice fallido en Firestore se
+     veia identico a "no hay documentos" (0 sin explicacion). Ahora el error real
+     queda en syncError y se muestra, en vez de esconderse detras de un contador
+     en cero. */
   useEffect(()=>{
     if(!firebaseReady || !user?.uid) return;
     let alive=true;
-    setSyncing(true);
+    setSyncing(true); setSyncError('');
     (async()=>{
       try{
         const [ownSnap, globalSnap] = await Promise.all([
@@ -3387,7 +3546,7 @@ function Library({user}){
           return [...remote.values(), ...localOnly];
         });
         setLastSync(new Date().toLocaleTimeString('es-MX'));
-      }catch{ /* sin conexion o sin permisos: se conserva el cache local */ }
+      }catch(err){ if(alive) setSyncError(friendlyServiceError(err,'No se pudo sincronizar con Firestore (permisos, indice o red).')); }
       finally{ if(alive) setSyncing(false); }
     })();
     return ()=>{ alive=false; };
@@ -3402,43 +3561,49 @@ function Library({user}){
     if(/curso|video|capacitacion/.test(n)) return 'Academia';
     return 'Documentos';
   };
+  /* La subida ya no va directo del navegador a Firebase Storage (eso es lo que
+     disparaba el bloqueo de CORS en consola: preflight/cross-origin rechazado
+     por el bucket). Ahora el archivo viaja como base64 dentro de un POST JSON
+     a /api/upload-library, y el servidor (Firebase Admin SDK, sin navegador de
+     por medio) hace la subida real. Ver api/upload-library.mjs. */
+  const readFileAsBase64=(file)=>new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onload=()=>resolve(reader.result);
+    reader.onerror=()=>reject(reader.error);
+    reader.readAsDataURL(file);
+  });
   const add=async(fl)=>{
     if(!fl||!fl.length) return;
     const picked=[...fl];
     setUploading(true);
     try{
       const arr=[];
+      const errors=[];
       for(const f of picked){
-        const fileId='LIB-'+uid()+'-'+Date.now().toString(36);
-        const meta=enrichLibraryMeta({name:cleanText(f.name),size:(f.size/1048576).toFixed(2)+' MB',ext:(f.name.split('.').pop()||'').toUpperCase(),when:new Date().toLocaleDateString('es-MX'),cat:classify(f.name),status:'Pendiente de indice',uses:0}, classify);
         if(firebaseReady && user?.uid){
-          const fileRef=ref(storage, `library/${user.uid}/${fileId}/${f.name}`);
-          await uploadBytes(fileRef, f, { customMetadata:{ ownerUid:user.uid, category:meta.cat, family:meta.family, tags:(meta.tags||[]).join(',') } });
-          const downloadURL=await getDownloadURL(fileRef);
-          const visibility=user.isAdmin ? 'global' : 'private';
-          const docRef=await addDoc(collection(db,'library'), {
-            ...meta,
-            ownerUid:user.uid,
-            visibility,
-            storagePath:fileRef.fullPath,
-            downloadURL,
-            indexed:meta.indexed,
-            createdAt:serverTimestamp()
-          });
-          meta.docId=docRef.id;
-          meta.ownerUid=user.uid;
-          meta.visibility=visibility;
-          meta.downloadURL=downloadURL;
-          meta.storagePath=fileRef.fullPath;
-          meta.status='Subido e indexado';
+          try{
+            const dataBase64=await readFileAsBase64(f);
+            const visibility=user.isAdmin ? 'global' : 'private';
+            const data=await apiPost('/api/upload-library', { fileName:f.name, mimeType:f.type, dataBase64, visibility });
+            arr.push({
+              name:data.name, size:data.size, ext:data.type, when:data.date,
+              cat:data.cat, family:data.family, tags:[], status:'Subido e indexado', uses:0,
+              docId:data.id, ownerUid:user.uid, visibility, downloadURL:data.url, indexed:false
+            });
+          }catch(err){
+            errors.push(`${f.name}: ${friendlyServiceError(err,'no se pudo subir')}`);
+          }
+        }else{
+          const meta=enrichLibraryMeta({name:cleanText(f.name),size:(f.size/1048576).toFixed(2)+' MB',ext:(f.name.split('.').pop()||'').toUpperCase(),when:new Date().toLocaleDateString('es-MX'),cat:classify(f.name),status:'Pendiente de indice',uses:0}, classify);
+          arr.push(meta);
         }
-        arr.push(meta);
       }
-      setFiles([...arr,...files]);
-      setSelected(arr[0]);
-      alert(firebaseReady && user?.uid ? `Subi ${arr.length} archivo(s) a Firebase Storage.` : `Agregue ${arr.length} archivo(s). Para compartirlos con otros usuarios inicia sesion y activa Storage.`);
-    }catch(err){
-      alert(`No pude subir el lote: ${err?.message || 'revisa reglas de Storage/Firestore'}`);
+      if(arr.length){ setFiles([...arr,...files]); setSelected(arr[0]); }
+      if(errors.length){
+        alert(`Subi ${arr.length} de ${picked.length} archivo(s). No se pudieron subir:\n${errors.join('\n')}`);
+      }else{
+        alert(firebaseReady && user?.uid ? `Subi ${arr.length} archivo(s) a la Biblioteca.` : `Agregue ${arr.length} archivo(s) localmente. Inicia sesion para sincronizarlos en la nube.`);
+      }
     }finally{
       setUploading(false);
     }
@@ -3491,9 +3656,16 @@ function Library({user}){
       <div><small>Base tecnica</small><h2>{files.length ? `${files.length} documentos listos` : 'Tu Workspace documental está vacío'}</h2><p>La biblioteca debe funcionar como buscador tecnico, no como bodega de archivos. Cada documento queda clasificado por uso y listo para IA.</p></div>
       <div className="lib-hero-actions"><button className="secondary" onClick={()=>alert('Estado de nube: Firebase Storage guarda archivos y Firestore guarda metadata. Revisa reglas de Storage/Firestore y planes de usuario para produccion.')}>Estado de nube</button><label className="up-btn">{uploading?'Subiendo...':'Subir lote'}<input ref={fileInputRef} type="file" multiple onChange={e=>add(e.target.files)} hidden disabled={uploading}/></label></div>
     </div>
+    {syncError && <div className="od-config-warning"><Icon name="alerta" size={18}/><div><b>No se pudo sincronizar con la nube:</b> {syncError} Mientras tanto se muestran los documentos que ya tienes en este dispositivo.</div></div>}
+    {!firebaseReady && <div className="panel lib-demo-mode">
+      <div className="admin-panel-head"><h2>Modo demo</h2><small className="hint">Firebase no configurado en este entorno</small></div>
+      <p className="muted">Estos son documentos de ejemplo para mostrar cómo luce la Biblioteca. No son archivos reales: no se cuentan en tus estadísticas ni se mezclan con tu biblioteca real.</p>
+      <div className="od-file-list">{LIBRARY_DEMO_SEED.map(f=><div className="od-file-row" key={f.name}><div><b>{f.name}</b><small>{f.cat} · {f.family} · {f.size}</small></div><small>Demo</small><button className="soft" disabled>Ejemplo</button></div>)}</div>
+    </div>}
     <div className="lib-cloud panel">
       {[['1. Subida masiva','Puedes cargar lotes completos desde la plataforma. Para carpetas grandes conviene subir ZIP o seleccionar multiples archivos.'],['2. Nube privada','Los archivos reales deben vivir en Firebase Storage o Vercel Blob. Firestore guarda nombre, categoria, permiso, usuario y fuente.'],['3. Busqueda IA','Despues se indexa el contenido para buscar por insumo, concepto, unidad, precio, rendimiento o norma.']].map(x=><div key={x[0]}><b>{x[0]}</b><p>{x[1]}</p></div>)}
     </div>
+    <GoogleDrivePanel user={user} onImported={()=>setSyncKey(k=>k+1)}/>
     <OneDrivePanel user={user} onImported={()=>setSyncKey(k=>k+1)}/>
     <div className="library-dashboard"><div className="lib-stat"><small>Documentos</small><b>{files.length}</b><span>{totalMb.toFixed(2)} MB cargados</span></div><div className="lib-stat"><small>Categorias activas</small><b>{counts.filter(x=>x[1]>0).length}</b><span>{type === 'Todos' ? 'Vista global' : type}</span></div><div className="lib-stat"><small>Seleccionados</small><b>{batch.length}</b><span>Lote visible para acciones IA</span></div></div>
     <div className="lib-console panel">
@@ -4001,11 +4173,13 @@ function AdminPanel({user}){
   const [users,setUsers]=useState(null);
   const [usersErr,setUsersErr]=useState('');
   const [library,setLibrary]=useState(null);
+  const [libraryErr,setLibraryErr]=useState('');
   const [config,setConfig]=useState(null);
   const [health,setHealth]=useState(null);
   const [logs,setLogs]=useState(null);
   const [logsErr,setLogsErr]=useState('');
   const [oneDriveAdmin,setOneDriveAdmin]=useState(null);
+  const [platformStatus,setPlatformStatus]=useState(null);
   const [savingUid,setSavingUid]=useState(null);
   const [savingConfig,setSavingConfig]=useState(false);
 
@@ -4017,9 +4191,9 @@ function AdminPanel({user}){
     }catch(err){ setUsersErr(friendlyServiceError(err,'No se pudo leer la lista de usuarios.')); setUsers([]); }
   };
   const loadLibrary=async()=>{
-    setLibrary(null);
+    setLibrary(null); setLibraryErr('');
     try{ const snap=await getDocs(collection(db,'library')); setLibrary(snap.docs.map(d=>({id:d.id,...d.data()}))); }
-    catch{ setLibrary([]); }
+    catch(err){ setLibraryErr(friendlyServiceError(err,'No se pudo leer la biblioteca (permisos, indice o red).')); setLibrary([]); }
   };
   const loadConfig=async()=>{
     setConfig(null);
@@ -4058,6 +4232,16 @@ function AdminPanel({user}){
     }catch(err){ setOdTest({ ok:false, message:friendlyServiceError(err,'No se pudo probar la conexion.') }); }
     finally{ setOdTesting(false); }
   };
+  const [gdTest,setGdTest]=useState(null);
+  const [gdTesting,setGdTesting]=useState(false);
+  const testGoogleDriveConnection=async()=>{
+    setGdTesting(true); setGdTest(null);
+    try{
+      const data=await apiPost('/api/google-drive-list',{});
+      setGdTest({ ok:true, count:(data.items||[]).length });
+    }catch(err){ setGdTest({ ok:false, message:friendlyServiceError(err,'No se pudo probar la conexion.') }); }
+    finally{ setGdTesting(false); }
+  };
 
   useEffect(()=>{ loadUsers(); },[]);
   useEffect(()=>{
@@ -4067,6 +4251,7 @@ function AdminPanel({user}){
       if(health===null) loadHealth();
       if(oneDriveAdmin===null) loadOneDriveAdmin();
       if(library===null) loadLibrary();
+      if(platformStatus===null) apiGetSafe('/api/status').then(setPlatformStatus);
     }
     if(tab==='ia' && logs===null) loadLogs();
     if(tab==='resumen'){
@@ -4076,6 +4261,7 @@ function AdminPanel({user}){
     if(tab==='diagnostico'){
       if(health===null) loadHealth();
       if(oneDriveAdmin===null) loadOneDriveAdmin();
+      if(platformStatus===null) apiGetSafe('/api/status').then(setPlatformStatus);
     }
   },[tab]);
 
@@ -4168,7 +4354,9 @@ function AdminPanel({user}){
 
     {tab==='biblioteca' && <div className="panel admin-panel-body">
       <div className="admin-panel-head"><h2>Biblioteca <small className="hint">({library?.length ?? '…'})</small></h2><button className="soft" onClick={loadLibrary}>Actualizar</button></div>
-      {library===null ? <Busy/> : !library.length ? <EmptyState icon="biblioteca" title="Sin documentos en Firestore" text="Los documentos que los usuarios suben a la Biblioteca aparecerán aquí."/> :
+      {library===null ? <Busy/> :
+       libraryErr ? <EmptyState icon="admin" title="No se pudo cargar" text={libraryErr}/> :
+       !library.length ? <EmptyState icon="biblioteca" title="Sin documentos en Firestore" text="Los documentos que los usuarios suben a la Biblioteca aparecerán aquí."/> :
       <div className="admin-table-wrap"><table className="data-table admin-table">
         <thead><tr><th>Documento</th><th>Categoría</th><th>Visibilidad</th><th>Propietario</th><th>Tamaño</th></tr></thead>
         <tbody>{library.map(f=><tr key={f.id}><td>{f.name||'—'}</td><td>{f.cat||'—'}</td><td>{f.visibility||'private'}</td><td className="admin-uid">{f.ownerUid?String(f.ownerUid).slice(0,8):'—'}</td><td>{f.size||'—'}</td></tr>)}</tbody>
@@ -4230,6 +4418,7 @@ function AdminPanel({user}){
     {tab==='servicios' && (()=>{
       const connectedUsers=(users||[]).filter(u=>u.oneDrive?.refreshToken).length;
       const onedriveDocs=(library||[]).filter(f=>f.source==='onedrive').length;
+      const gdriveDocs=(library||[]).filter(f=>f.source==='google-drive').length;
       const envVars=[
         ['VITE_ONEDRIVE_CLIENT_ID (cliente)', isOneDriveConfigured()],
         ['ONEDRIVE_CLIENT_ID (servidor)', Boolean(oneDriveAdmin?.env?.ONEDRIVE_CLIENT_ID)],
@@ -4237,6 +4426,7 @@ function AdminPanel({user}){
         ['ONEDRIVE_TENANT_ID (servidor, opcional)', Boolean(oneDriveAdmin?.env?.ONEDRIVE_TENANT_ID)]
       ];
       const missingVars=envVars.filter(([,present])=>!present);
+      const gdriveConfigured=Boolean(platformStatus?.googleDriveConfigured);
       return <div className="panel admin-panel-body">
         <div className="admin-panel-head"><h2>Servicios</h2><button className="soft" onClick={()=>{loadHealth();loadOneDriveAdmin();}}>Actualizar</button></div>
         <div className="admin-panel-head" style={{marginTop:0}}><h2 style={{fontSize:'.95rem'}}>Firebase y OpenAI</h2></div>
@@ -4247,6 +4437,17 @@ function AdminPanel({user}){
            <span className="admin-health-status">{c.status==='ok'?'Operativo':c.status==='error'?'Con errores':'No disponible'}</span>
            <p>{c.detail}</p>
          </div>)}</div>}
+
+        <div className="admin-panel-head" style={{marginTop:'16px'}}><h2 style={{fontSize:'.95rem'}}>Google Drive</h2></div>
+        <div className="admin-cost-grid">
+          <div className="admin-cost-card"><small>Configurado en el servidor</small><b>{gdriveConfigured ? 'Sí' : 'No'}</b></div>
+          <div className="admin-cost-card"><small>Documentos importados de Drive</small><b>{library===null ? '…' : gdriveDocs}</b></div>
+        </div>
+        {!gdriveConfigured && <div className="od-config-warning"><Icon name="alerta" size={18}/><div>Faltan variables de servidor: <b>GOOGLE_DRIVE_CLIENT_ID</b>, <b>GOOGLE_DRIVE_CLIENT_SECRET</b>, <b>GOOGLE_DRIVE_REFRESH_TOKEN</b> y <b>GOOGLE_DRIVE_FOLDER_ID</b> en Vercel. Este detalle solo es visible aquí; los usuarios ven "Google Drive no configurado" sin más detalle técnico.</div></div>}
+        <div className="visual-actions"><button className="soft" onClick={testGoogleDriveConnection} disabled={gdTesting}>{gdTesting?'Probando...':'Probar conexión'}</button></div>
+        {gdTest && (gdTest.ok
+          ? <div className="admin-metric-note">Conexión correcta: se encontraron {gdTest.count} elemento(s) en la carpeta raíz de Google Drive (respuesta sanitizada, sin nombres de archivo).</div>
+          : <EmptyState icon="admin" title="La prueba de conexión falló" text={gdTest.message}/>)}
 
         <div className="admin-panel-head" style={{marginTop:'16px'}}><h2 style={{fontSize:'.95rem'}}>OneDrive</h2></div>
         {oneDriveAdmin===null ? <Busy/> :
@@ -4276,6 +4477,7 @@ function AdminPanel({user}){
       const envRows=[
         ['Firebase Storage/Firestore', health?.checks?.firebase?.status==='ok'],
         ['OpenAI (OPENAI_API_KEY)', health?.checks?.openai?.status==='ok'],
+        ['Google Drive (CLIENT_ID/SECRET/REFRESH_TOKEN)', Boolean(platformStatus?.googleDriveConfigured)],
         ['OneDrive cliente (VITE_ONEDRIVE_CLIENT_ID)', isOneDriveConfigured()],
         ['OneDrive servidor (ONEDRIVE_CLIENT_ID/SECRET)', Boolean(oneDriveAdmin?.env?.ONEDRIVE_CLIENT_ID && oneDriveAdmin?.env?.ONEDRIVE_CLIENT_SECRET)],
         ['Lista de administradores (VITE_ADMIN_EMAILS)', ADMIN_EMAILS.length > 0]

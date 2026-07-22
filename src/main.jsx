@@ -178,9 +178,15 @@ const PLAN_LIMITS = {
    guardado en Firestore como "Administrador", "ADMIN" o con espacios, el Panel
    Admin simplemente no aparecia (sin ningun error visible). Ahora se normaliza
    el texto y ademas se acepta custom claim de Firebase o correo en
-   VITE_ADMIN_EMAILS, para no depender de un solo campo fragil. */
+   VITE_ADMIN_EMAILS, para no depender de un solo campo fragil.
+   VITE_ADMIN_EMAILS nunca se configuro en Vercel/local (confirmado: no aparece
+   en ninguno de los dos entornos), asi que la lista quedaba vacia y el unico
+   admin real de la plataforma dependia 100% de que Firestore tuviera guardado
+   role:"admin" exacto. Se agrega un correo de respaldo fijo (el mismo patron
+   que ya usa src/firebase.js con sus valores por defecto) para que el acceso
+   de administrador nunca dependa de una variable de entorno olvidada. */
 const ADMIN_ROLE_VALUES = new Set(['admin', 'administrator', 'administrador', 'superadmin']);
-const ADMIN_EMAILS = String(import.meta.env.VITE_ADMIN_EMAILS || '')
+const ADMIN_EMAILS = String(import.meta.env.VITE_ADMIN_EMAILS || 'dianalopez161184@gmail.com')
   .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
 function normalizeRoleValue(v){ return String(v ?? '').trim().toLowerCase(); }
 function isAdminUser(user, profile){
@@ -256,6 +262,22 @@ async function loadOrCreateProfile(fbUser, fallbackName='Usuario ZOEMEC'){
   };
   await setDoc(userRef, profile, { merge:true });
   return profile;
+}
+/* Si Firestore no responde (red, permisos, indice) la sesion de Firebase Auth
+   ya es valida y no debe perderse: se arma un perfil minimo desde el propio
+   fbUser para que isAdminUser() todavia pueda reconocer admin por correo/claims
+   sin depender de que el documento de Firestore se haya podido leer. */
+function fallbackProfile(fbUser, deviceId){
+  return {
+    uid: fbUser.uid,
+    name: fbUser.displayName || fbUser.email?.split('@')[0] || 'Usuario ZOEMEC',
+    email: fbUser.email,
+    role: 'user',
+    plan: 'Gratis',
+    active: true,
+    apusCreated: 0,
+    deviceId: deviceId || getDeviceId()
+  };
 }
 function buildSession(profile, fbUser, claims=null){
   const name = profile?.name || fbUser?.displayName || fbUser?.email?.split('@')?.[0] || 'Usuario ZOEMEC';
@@ -566,7 +588,13 @@ function App(){
         return;
       }
       try{
-        const profile = await loadOrCreateProfile(fbUser);
+        let profile;
+        try{
+          profile = await loadOrCreateProfile(fbUser);
+        }catch(profileError){
+          console.error(profileError);
+          profile = fallbackProfile(fbUser);
+        }
         const tokenResult = await fbUser.getIdTokenResult().catch(()=>null);
         const claims = tokenResult?.claims || null;
         if(!fbUser.emailVerified && !isAdminUser({ email:profile?.email, claims }, profile)){
@@ -647,7 +675,13 @@ function App(){
         return true;
       }
       const credential = await signInWithEmailAndPassword(auth, cleanEmail, password);
-      const profile = await loadOrCreateProfile(credential.user);
+      let profile;
+      try{
+        profile = await loadOrCreateProfile(credential.user);
+      }catch(profileError){
+        console.error(profileError);
+        profile = fallbackProfile(credential.user, deviceId);
+      }
       const tokenResult = await credential.user.getIdTokenResult().catch(()=>null);
       const claims = tokenResult?.claims || null;
       if(!credential.user.emailVerified && !isAdminUser({ email:profile?.email, claims }, profile)){
@@ -683,32 +717,37 @@ function App(){
       const credential = await signInWithPopup(auth, provider);
       const fbUser = credential.user;
       const userRef = doc(db, 'users', fbUser.uid);
-      const snap = await getDoc(userRef);
       let profile;
-      if(snap.exists()){
-        profile = { uid: fbUser.uid, ...snap.data() };
-      }else{
-        const deviceRef = doc(db, 'devices', deviceId);
-        const deviceSnap = await getDoc(deviceRef);
-        if(deviceSnap.exists()){
-          await signOut(auth);
-          alert('Este dispositivo ya uso la prueba gratis. Inicia sesion con tu cuenta original o solicita un plan ZOEMEC.');
-          return false;
+      try{
+        const snap = await getDoc(userRef);
+        if(snap.exists()){
+          profile = { uid: fbUser.uid, ...snap.data() };
+        }else{
+          const deviceRef = doc(db, 'devices', deviceId);
+          const deviceSnap = await getDoc(deviceRef);
+          if(deviceSnap.exists()){
+            await signOut(auth);
+            alert('Este dispositivo ya uso la prueba gratis. Inicia sesion con tu cuenta original o solicita un plan ZOEMEC.');
+            return false;
+          }
+          profile = {
+            uid: fbUser.uid,
+            name: fbUser.displayName || fbUser.email?.split('@')[0] || 'Usuario ZOEMEC',
+            email: fbUser.email,
+            role: 'user',
+            plan: 'Gratis',
+            active: true,
+            apusCreated: 0,
+            deviceId,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+          };
+          await setDoc(userRef, profile, { merge:true });
+          await setDoc(deviceRef, { uid: fbUser.uid, email: fbUser.email, createdAt: serverTimestamp() }, { merge:true });
         }
-        profile = {
-          uid: fbUser.uid,
-          name: fbUser.displayName || fbUser.email?.split('@')[0] || 'Usuario ZOEMEC',
-          email: fbUser.email,
-          role: 'user',
-          plan: 'Gratis',
-          active: true,
-          apusCreated: 0,
-          deviceId,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        };
-        await setDoc(userRef, profile, { merge:true });
-        await setDoc(deviceRef, { uid: fbUser.uid, email: fbUser.email, createdAt: serverTimestamp() }, { merge:true });
+      }catch(profileError){
+        console.error(profileError);
+        profile = fallbackProfile(fbUser, deviceId);
       }
       if(profile.active === false){
         await signOut(auth);

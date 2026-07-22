@@ -1655,7 +1655,12 @@ svg.ic{display:block;flex:none}
 .auth-form-side .auth-card .back{color:#c9c0d4}
 .auth-form-side .auth-card .auth-or{color:#c9c0d4}
 .auth-form-side .auth-card .auth-or::before,.auth-form-side .auth-card .auth-or::after{background:rgba(255,255,255,.18)}
-.auth-card input{background:rgba(255,255,255,.92)}
+.auth-card input{
+  background:#FFFFFF;
+  color:#1B102A;
+  caret-color:#1B102A;
+  -webkit-text-fill-color:#1B102A;
+}
 .page-head{position:relative}
 .page-head::after{
   content:"AI";

@@ -203,8 +203,15 @@ function userInitials(name='', email=''){
 }
 function firebaseMessage(error){
   const code = error?.code || '';
+  /* Un dominio no autorizado es un problema de configuracion (Firebase Auth >
+     Authorized domains), no una credencial invalida: mostrar "correo o
+     contrasena incorrectos" aqui confundiria al usuario para intentar de nuevo
+     con otra contrasena cuando el problema es del dominio, no de la cuenta. */
+  if(code.includes('unauthorized-domain')) return 'Este dominio no esta autorizado en Firebase Authentication. Pide al administrador que lo agregue en Authentication > Settings > Authorized domains.';
   if(code.includes('email-already-in-use')) return 'Ese correo ya esta registrado. Inicia sesion.';
-  if(code.includes('invalid-credential') || code.includes('wrong-password') || code.includes('user-not-found')) return 'Correo o contrasena incorrectos.';
+  if(code.includes('invalid-credential')) return 'Los datos de acceso no son validos. Verifica tu correo y tu contrasena.';
+  if(code.includes('user-not-found')) return 'No encontramos una cuenta registrada con ese correo.';
+  if(code.includes('wrong-password')) return 'La contrasena es incorrecta.';
   if(code.includes('weak-password')) return 'La contrasena debe tener minimo 6 caracteres.';
   if(code.includes('network')) return 'No hay conexion con Firebase. Revisa internet y vuelve a intentar.';
   if(code.includes('permission-denied')) return 'No se pudo completar la operacion por permisos de Firestore. Intenta de nuevo o contacta al administrador.';
@@ -4095,7 +4102,7 @@ function VisualAI({user}){
         <div className="visual-modes">{[['fachada','Fachada'],['plano','Plano a 3D'],['interior','Interior'],['obra','Revision de obra']].map(x=><button key={x[0]} className={mode===x[0]?'active':''} onClick={()=>setMode(x[0])}>{x[1]}</button>)}</div>
         <label>Instrucciones para la IA</label>
         <textarea value={prompt} onChange={e=>setPrompt(e.target.value)} placeholder="Ej. Quiero ver esta fachada mas moderna, con piedra, luz calida y porton negro..." />
-        <div className="visual-actions"><button onClick={generate} disabled={loading}>{loading?'Generando...':'Generar brief visual'}</button><button className="secondary" onClick={()=>alert('La generacion con IA y el historial se procesan de forma segura en el servidor.')}>Ver configuracion IA</button></div>
+        <div className="visual-actions"><button onClick={generate} disabled={loading}>{loading?'Generando...':'Generar brief visual'}</button></div>
       </div>
       <div className="panel visual-result">
         <h2>Salida tecnica</h2>

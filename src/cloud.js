@@ -6,10 +6,11 @@
      o no hay internet, todo funciona igual que antes.
    - Regla de conflicto: gana el más reciente (updatedAt).
    ==================================================================== */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { gzipSync, gunzipSync, strToU8, strFromU8 } from 'fflate';
 import { db, firebaseReady } from './firebase.js';
+import { scopedKey } from './utils/scopedStorage.js';
 
 /* --- utilidades base64 <-> bytes --- */
 function toB64(u8){
@@ -73,13 +74,32 @@ export async function loadCloud(uid, key){
    - Al detectar sesión: baja la versión de la nube; adopta la más reciente
      y sube la local si la nube está vacía o vieja.
    - Cada setX: guarda local al instante y en la nube con debounce.       */
+function readLocalScoped(storageKey, fallback){
+  try { const raw = localStorage.getItem(storageKey); return raw != null ? JSON.parse(raw) : fallback; } catch { return fallback; }
+}
+
 export function useCloudState(user, key, fallback){
   const uid = user?.uid || null;
-  const [value, setValue] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
-  });
+  // storageKey namespacea la CACHE local por uid (zoemec:{uid}:{key}); la clave
+  // en Firestore (users/{uid}/state/{key}) ya estaba aislada por el propio path,
+  // asi que loadCloud/saveCloud siguen recibiendo "key" sin cambios. Sin este
+  // namespace, en un navegador compartido el Usuario B leia (y podia terminar
+  // subiendo a su propia cuenta) los datos locales que dejo el Usuario A.
+  const storageKey = scopedKey(key, uid);
+
+  // Patron de "ajustar estado durante el render" (documentado por React): si
+  // storageKey cambia (cambio de sesion), se resetea el valor ANTES de pintar,
+  // sin el parpadeo de un frame mostrando datos del usuario anterior.
+  const [state, setState] = useState(() => ({ storageKey, value: readLocalScoped(storageKey, fallback) }));
+  if(state.storageKey !== storageKey){
+    setState({ storageKey, value: readLocalScoped(storageKey, fallback) });
+  }
+  const value = state.value;
+
   const uidRef = useRef(uid);
   uidRef.current = uid;
+  const storageKeyRef = useRef(storageKey);
+  storageKeyRef.current = storageKey;
   const valueRef = useRef(value);
   valueRef.current = value;
 
@@ -89,38 +109,38 @@ export function useCloudState(user, key, fallback){
     (async () => {
       const cloud = await loadCloud(uid, key);
       if(!alive) return;
-      const localTs = Number(localStorage.getItem(key + ':ts')) || 0;
+      const localTs = Number(localStorage.getItem(storageKey + ':ts')) || 0;
       if(cloud && cloud.updatedAt >= localTs){
         try {
-          localStorage.setItem(key, JSON.stringify(cloud.value));
-          localStorage.setItem(key + ':ts', String(cloud.updatedAt));
+          localStorage.setItem(storageKey, JSON.stringify(cloud.value));
+          localStorage.setItem(storageKey + ':ts', String(cloud.updatedAt));
         } catch {}
-        setValue(cloud.value ?? fallback);
+        setState({ storageKey, value: cloud.value ?? fallback });
         emitCloud('ok');
       } else {
-        const raw = localStorage.getItem(key);
+        const raw = localStorage.getItem(storageKey);
         if(raw != null){
           try { saveCloud(uid, key, JSON.parse(raw)); } catch {}
         }
       }
     })();
     return () => { alive = false; };
-  }, [uid, key]);
+  }, [uid, key, storageKey]);
 
   // No hacer el guardado local/nube dentro del actualizador funcional de setValue:
   // saveCloud -> emitCloud -> dispatchEvent dispara sincronicamente el setState de
   // CloudBadge, y React no permite actualizar un componente mientras renderiza otro
   // (warning "Cannot update a component while rendering a different component").
-  const save = useCallback((next) => {
+  const save = (next) => {
     const v = typeof next === 'function' ? next(valueRef.current) : next;
     valueRef.current = v;
-    setValue(v);
+    setState({ storageKey: storageKeyRef.current, value: v });
     try {
-      localStorage.setItem(key, JSON.stringify(v));
-      localStorage.setItem(key + ':ts', String(Date.now()));
+      localStorage.setItem(storageKeyRef.current, JSON.stringify(v));
+      localStorage.setItem(storageKeyRef.current + ':ts', String(Date.now()));
     } catch {}
     if(uidRef.current) saveCloud(uidRef.current, key, v);
-  }, [key]);
+  };
 
   return [value, save];
 }

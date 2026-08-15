@@ -9,6 +9,12 @@ yarn-error.log*
 pnpm-debug.log*
 .DS_Store
 
+# Emulador de Firebase (npm run test:rules / test:authguard / test:security)
+firestore-debug.log
+firebase-debug.log
+ui-debug.log
+.firebase/
+
 .vercel
 .tmp/
 samples/library/

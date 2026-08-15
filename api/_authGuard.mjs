@@ -1,11 +1,52 @@
 import { FieldValue, getAdminAuth, getAdminDb, hasAdminCredentials } from './_firebaseAdmin.mjs';
 
+/* "library" faltaba aqui (bug real, no de seguridad): rules['library'] daba
+   undefined para CUALQUIER plan, asi que requireFeature(req,'library') le
+   negaba el acceso a Biblioteca a todo usuario no-admin sin importar cuanto
+   hubiera pagado. Los valores boolean reflejan la misma intencion que
+   PLAN_LIMITS.library en src/main.jsx (Gratis:false, resto:true). */
 const PLAN_RULES = {
-  Gratis: { apuLimit: 1, ai: false, visual: false, assistant: true },
-  Inicial: { apuLimit: 10, ai: false, visual: false, assistant: true },
-  Profesional: { apuLimit: 999, ai: true, visual: true, assistant: true },
-  Empresa: { apuLimit: 9999, ai: true, visual: true, assistant: true }
+  Gratis: { apuLimit: 1, ai: false, visual: false, assistant: true, library: false },
+  Inicial: { apuLimit: 10, ai: false, visual: false, assistant: true, library: true },
+  Profesional: { apuLimit: 999, ai: true, visual: true, assistant: true, library: true },
+  Empresa: { apuLimit: 9999, ai: true, visual: true, assistant: true, library: true }
 };
+
+/* Tope de ráfaga por usuario y funcion, independiente del limite mensual de
+   plan (apuLimit). Antes assistant/visual/ai/library solo verificaban un
+   booleano de plan, sin ningun freno de frecuencia: una cuenta de pago (o
+   admin) podia hacer scripting de llamadas ilimitadas contra OpenAI/Drive sin
+   ningun control de costo. Los administradores quedan exentos, igual que ya
+   pasa con el limite mensual. */
+const RATE_LIMITS = {
+  apu: { max: 30, windowMs: 60 * 60 * 1000 },
+  assistant: { max: 40, windowMs: 60 * 60 * 1000 },
+  visual: { max: 15, windowMs: 60 * 60 * 1000 },
+  ai: { max: 40, windowMs: 60 * 60 * 1000 },
+  library: { max: 60, windowMs: 60 * 60 * 1000 }
+};
+
+async function enforceRateLimit(db, uid, feature){
+  const limit = RATE_LIMITS[feature];
+  if(!limit) return;
+  const ref = db.collection('rateLimits').doc(`${uid}_${feature}`);
+  const now = Date.now();
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const data = snap.exists ? snap.data() : null;
+    const expired = !data || (now - Number(data.windowStart || 0)) > limit.windowMs;
+    if(expired){
+      tx.set(ref, { windowStart: now, count: 1 });
+      return;
+    }
+    if(Number(data.count || 0) >= limit.max){
+      const error = new Error('Demasiadas solicitudes en poco tiempo para esta funcion. Espera unos minutos e intenta de nuevo.');
+      error.status = 429;
+      throw error;
+    }
+    tx.update(ref, { count: FieldValue.increment(1) });
+  });
+}
 
 function bearerToken(req){
   const header = req.headers?.authorization || req.headers?.Authorization || '';
@@ -58,6 +99,18 @@ export async function requireFeature(req, feature){
   const userRef = db.collection('users').doc(decoded.uid);
   const snap = await userRef.get();
   const profile = snap.exists ? snap.data() : {};
+  const isAdmin = isAdminProfile(decoded, profile);
+
+  /* Misma regla que el cliente (src/main.jsx: cierra la sesion si
+     !fbUser.emailVerified y no es admin) pero aplicada server-side. Sin esto,
+     un ID token real de una cuenta que nunca confirmo su correo podia llamar
+     cualquier endpoint protegido directo (sin pasar por el login del
+     frontend, que es el unico lugar donde antes se exigia). */
+  if(!decoded.email_verified && !isAdmin){
+    const error = new Error('Verifica tu correo antes de usar esta funcion. Revisa tu bandeja de entrada.');
+    error.status = 403;
+    throw error;
+  }
 
   if(profile.active === false){
     const error = new Error('Tu cuenta esta desactivada. Contacta al administrador.');
@@ -65,7 +118,6 @@ export async function requireFeature(req, feature){
     throw error;
   }
 
-  const isAdmin = isAdminProfile(decoded, profile);
   const role = isAdmin ? 'admin' : (profile.role || 'user');
   const plan = isAdmin ? 'Empresa' : normalizePlan(profile.plan || 'Gratis');
   const rules = PLAN_RULES[plan] || PLAN_RULES.Gratis;
@@ -83,6 +135,7 @@ export async function requireFeature(req, feature){
       error.status = 402;
       throw error;
     }
+    await enforceRateLimit(db, decoded.uid, feature);
   }
 
   if(!snap.exists){
@@ -130,6 +183,50 @@ export async function requireAdmin(req){
     throw error;
   }
   return { uid: decoded.uid };
+}
+
+/* Verificacion de identidad sin gating de plan/feature: para endpoints como
+   create-checkout donde cualquier usuario con sesion valida (de cualquier
+   plan, porque esta comprando/mejorando uno) debe poder operar, pero SIEMPRE
+   sobre su propia identidad real verificada por Firebase Admin, nunca sobre
+   un uid/email/name que el cliente mande en el body. */
+export async function requireAuth(req){
+  if(!hasAdminCredentials()){
+    const error = new Error('Falta FIREBASE_SERVICE_ACCOUNT_JSON en Vercel para validar la sesion.');
+    error.status = 500;
+    throw error;
+  }
+  const token = bearerToken(req);
+  if(!token){
+    const error = new Error('Inicia sesion para continuar.');
+    error.status = 401;
+    throw error;
+  }
+  const decoded = await getAdminAuth().verifyIdToken(token);
+  const db = getAdminDb();
+  const userRef = db.collection('users').doc(decoded.uid);
+  const snap = await userRef.get();
+  const profile = snap.exists ? snap.data() : {};
+  const isAdmin = isAdminProfile(decoded, profile);
+
+  if(!decoded.email_verified && !isAdmin){
+    const error = new Error('Verifica tu correo antes de continuar. Revisa tu bandeja de entrada.');
+    error.status = 403;
+    throw error;
+  }
+  if(profile.active === false){
+    const error = new Error('Tu cuenta esta desactivada. Contacta al administrador.');
+    error.status = 403;
+    throw error;
+  }
+
+  return {
+    uid: decoded.uid,
+    email: decoded.email || profile.email || '',
+    name: profile.name || decoded.name || decoded.email || 'Usuario ZOEMEC',
+    role: isAdmin ? 'admin' : (profile.role || 'user'),
+    userRef
+  };
 }
 
 export async function markFeatureUsed(authz){

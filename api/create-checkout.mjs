@@ -1,3 +1,5 @@
+import { requireAuth } from './_authGuard.mjs';
+
 const PLAN_PRICES = {
   Inicial: 399,
   Profesional: 899,
@@ -12,8 +14,17 @@ export default async function handler(req, res){
     return;
   }
   try{
-    const { plan='Profesional', method='Mercado Pago', uid, email, name } = req.body || {};
-    if(!uid || !email) throw new Error('Falta usuario autenticado.');
+    /* La identidad SIEMPRE viene del ID token verificado, nunca del body: antes
+       este endpoint confiaba en el uid/email/name que mandaba el cliente, asi
+       que cualquiera podia generar un link de pago que activara el plan sobre
+       la cuenta de OTRA persona (el uid del body llegaba intacto hasta
+       payment-webhook.mjs y terminaba en db.collection('users').doc(uid)). */
+    const authz = await requireAuth(req);
+    const { plan='Profesional', method='Mercado Pago' } = req.body || {};
+    const uid = authz.uid;
+    const email = authz.email;
+    const name = authz.name;
+    if(!email) throw new Error('Tu cuenta no tiene un correo asociado.');
     if(!PLAN_PRICES[plan]) throw new Error('Plan no valido.');
 
     if(method !== 'Mercado Pago'){
@@ -56,6 +67,6 @@ export default async function handler(req, res){
 
     res.status(200).json({ id:data.id, url:data.init_point || data.sandbox_init_point });
   }catch(err){
-    res.status(400).json({ error:err.message || 'No se pudo crear checkout.' });
+    res.status(err.status || 400).json({ error:err.message || 'No se pudo crear checkout.' });
   }
 }

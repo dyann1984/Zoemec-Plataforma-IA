@@ -1,5 +1,6 @@
 import { FieldValue, getAdminDb, getAdminStorage } from './_firebaseAdmin.mjs';
 import { requireFeature } from './_authGuard.mjs';
+import { assertAllowedFile, sanitizeFileName } from './_libraryClassify.mjs';
 
 /* Backend real de la conexion con OneDrive (Microsoft Graph). El client secret
    de la app registrada en Azure AD solo puede vivir aqui, nunca en el navegador.
@@ -148,12 +149,28 @@ export default async function handler(req, res){
       if(tokens.refresh_token && tokens.refresh_token !== refreshToken){
         await userRef.set({ oneDrive:{ refreshToken: tokens.refresh_token } }, { merge:true });
       }
+
+      /* Mismo control que ya aplican upload-library.mjs y google-drive.mjs
+         (assertAllowedFile + sanitizeFileName): antes importFile de OneDrive
+         era el unico de los 3 caminos de la Biblioteca sin allowlist de
+         extension ni tope de tamano, y el nombre de archivo llegaba tal cual
+         del cliente hasta formar parte literal de la ruta de Storage. Primero
+         se valida con la metadata (rapido, sin bajar el archivo completo si
+         va a rechazarse) y luego otra vez con el tamano real descargado. */
+      const metaRes = await fetch(`${GRAPH_BASE}/me/drive/items/${encodeURIComponent(id)}?select=id,name,size,file`, {
+        headers:{ Authorization:`Bearer ${tokens.access_token}` }
+      });
+      const meta = await metaRes.json().catch(() => null);
+      if(!metaRes.ok || !meta) throw new Error('No se pudo leer la metadata del archivo en OneDrive.');
+      const safeName = sanitizeFileName(name || meta.name || `onedrive-${id}`);
+      assertAllowedFile({ name: safeName, mimeType: meta.file?.mimeType, size: meta.size });
+
       const fileRes = await fetch(`${GRAPH_BASE}/me/drive/items/${encodeURIComponent(id)}/content`, {
         headers:{ Authorization:`Bearer ${tokens.access_token}` }
       });
       if(!fileRes.ok) throw new Error('No se pudo descargar el archivo desde OneDrive.');
       const buffer = Buffer.from(await fileRes.arrayBuffer());
-      const safeName = (name || `onedrive-${id}`).toString();
+      assertAllowedFile({ name: safeName, mimeType: fileRes.headers.get('content-type'), size: buffer.length });
       const storagePath = `library/${authz.uid}/onedrive-${id}/${safeName}`;
       const bucket = getAdminStorage();
       const file = bucket.file(storagePath);

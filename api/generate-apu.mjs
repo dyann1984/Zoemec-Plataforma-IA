@@ -1,4 +1,4 @@
-import { generateAPU } from './_openaiApuCore.mjs';
+import { generateAPU, generateAPUv2 } from './_openaiApuCore.mjs';
 import { markFeatureUsed, requireFeature } from './_authGuard.mjs';
 
 export default async function handler(req, res){
@@ -8,9 +8,13 @@ export default async function handler(req, res){
   }
   try{
     const authz = await requireFeature(req, 'apu');
-    const apu = await generateAPU(req.body || {});
+    // schema:'v2' es aditivo y opcional: nadie en la UI actual lo manda, asi
+    // que el flujo por defecto (sin ese campo) sigue devolviendo exactamente
+    // el mismo shape { ok, apu } de siempre.
+    const wantsV2 = req.body?.schema === 'v2';
+    const apu = wantsV2 ? await generateAPUv2(req.body || {}) : await generateAPU(req.body || {});
     await markFeatureUsed(authz);
-    res.status(200).json({ ok:true, apu });
+    res.status(200).json(wantsV2 ? { ok:true, apu, schemaVersion:2 } : { ok:true, apu });
   }catch(err){
     /* "error" se mantiene como string (compatibilidad con el frontend actual,
        que hace data?.error || fallback). ok/errorCode se agregan de forma

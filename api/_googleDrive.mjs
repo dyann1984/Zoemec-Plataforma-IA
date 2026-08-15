@@ -77,6 +77,42 @@ export async function driveFetch(path, { accessToken, ...init } = {}){
   return res;
 }
 
+/* Los IDs reales de Drive solo usan letras, digitos, "-" y "_" (asi los emite
+   la API). Cualquier otro caracter (comillas, espacios) en un folderId que
+   venga del cliente es, por definicion, invalido — y antes se interpolaba
+   sin validar dentro de una query de Drive ("'${targetFolder}' in parents"),
+   lo que permitia romper la sintaxis de esa query con un folderId como
+   "x' or trashed=false or '". */
+const DRIVE_ID_RE = /^[A-Za-z0-9_-]{10,120}$/;
+
+export function isValidDriveId(id){
+  return typeof id === 'string' && DRIVE_ID_RE.test(id);
+}
+
+/* Antes cualquier usuario con acceso a Biblioteca podia pedir listar
+   CUALQUIER carpeta visible para la cuenta de Google compartida cambiando
+   folderId, no solo el repositorio tecnico previsto en
+   GOOGLE_DRIVE_FOLDER_ID. Esto confirma que la carpeta pedida es la raiz
+   autorizada o un descendiente de ella, recorriendo "parents" hacia arriba
+   con un limite de saltos para no encadenar llamadas indefinidamente. Si no
+   hay carpeta raiz configurada, no hay arbol que restringir (mismo
+   comportamiento que antes en ese caso). */
+export async function isWithinAuthorizedTree(folderId, rootId, { maxHops = 12 } = {}){
+  if(!rootId) return true;
+  if(folderId === rootId) return true;
+  let current = folderId;
+  for(let hop = 0; hop < maxHops; hop++){
+    const res = await driveFetch(`/${current}?fields=id,parents`);
+    const data = await res.json().catch(() => null);
+    if(!res.ok || !data) return false;
+    const parents = Array.isArray(data.parents) ? data.parents : [];
+    if(!parents.length) return false;
+    if(parents.includes(rootId)) return true;
+    current = parents[0];
+  }
+  return false;
+}
+
 export function isGoogleNativeDoc(mimeType = ''){
   return String(mimeType).startsWith('application/vnd.google-apps.');
 }

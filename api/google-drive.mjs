@@ -1,6 +1,6 @@
 import { FieldValue, getAdminDb, getAdminStorage } from './_firebaseAdmin.mjs';
 import { requireFeature } from './_authGuard.mjs';
-import { driveFetch, defaultFolderId, getGoogleDriveAccessToken, hasGoogleDriveCredentials, isGoogleNativeDoc, GOOGLE_EXPORT_MIME } from './_googleDrive.mjs';
+import { driveFetch, defaultFolderId, getGoogleDriveAccessToken, hasGoogleDriveCredentials, isGoogleNativeDoc, isValidDriveId, isWithinAuthorizedTree, GOOGLE_EXPORT_MIME } from './_googleDrive.mjs';
 import { assertAllowedFile, classifyLibraryFile, sanitizeFileName, extOf, MAX_UPLOAD_BYTES } from './_libraryClassify.mjs';
 
 /* list + import en un solo archivo (accion en el body, mismo patron que
@@ -22,6 +22,17 @@ async function listFolder(req, res){
   if(!targetFolder){
     const error = new Error('Falta el folderId y no hay GOOGLE_DRIVE_FOLDER_ID configurado.');
     error.status = 400;
+    throw error;
+  }
+  if(!isValidDriveId(targetFolder)){
+    const error = new Error('folderId invalido.');
+    error.status = 400;
+    throw error;
+  }
+  const rootFolder = defaultFolderId();
+  if(!(await isWithinAuthorizedTree(targetFolder, rootFolder))){
+    const error = new Error('Esa carpeta no pertenece al repositorio tecnico autorizado.');
+    error.status = 403;
     throw error;
   }
   const size = Math.min(Number(pageSize) || 100, 200);
@@ -66,6 +77,11 @@ async function importFile(req, res){
   const { fileId } = req.body || {};
   if(!fileId){
     const error = new Error('Falta el fileId de Google Drive a importar.');
+    error.status = 400;
+    throw error;
+  }
+  if(!isValidDriveId(fileId)){
+    const error = new Error('fileId invalido.');
     error.status = 400;
     throw error;
   }

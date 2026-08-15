@@ -1,316 +1,54 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import jsPDF from 'jspdf';
-import writeXlsxFile from 'write-excel-file/browser';
+import { jsPDF } from 'jspdf';
 import { createUserWithEmailAndPassword, getIdTokenResult, GoogleAuthProvider, onAuthStateChanged, sendEmailVerification, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile } from 'firebase/auth';
 import { addDoc, collection, deleteDoc, doc, getCountFromServer, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import { deleteObject, getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { auth, db, firebaseReady, storage } from './firebase.js';
 import { useCloudState } from './cloud.js';
-import { consumeOneDriveRedirect, isOneDriveConfigured, startOneDriveConnect } from './lib/onedrive.js';
-import { buildZoeResponse, canExportApu, createDemoContext, processApuConcept, validateApu } from './lib/apuFlow.js';
+import { consumeOneDriveRedirect, isOneDriveConfigured } from './lib/onedrive.js';
+import { createDemoContext } from './lib/apuFlow.js';
+import { APU_DEFAULT_FACTORS, DEFAULT_IVA_RATE, calcAPU, rowImporte, toSafeNonNegativeNumber } from './lib/apuCalc.js';
+import { migrateLegacyApuToV2 } from './domain/apuSchema.js';
+import { finalizeProfessionalAPU, makePriceRecord } from './domain/apuProfessional.js';
+import { exportAPUExcelV2, exportAPUPdfV2 } from './lib/apuExportV2.js';
+import {
+  money, num, excelCell, XLS, xcell, fcell, styleHeader, styleSection,
+  exportRowsCSV, exportRowsExcel, exportWorkbookExcel,
+  buildAuditModel, exportAPUPDFPro, buildCompleteAPUSheet, exportAPUExcel,
+  exportBudgetExcel, exportBudgetPDF
+} from './lib/apuExport.js';
+import { uid } from './utils/id.js';
+import { getDeviceId, readLocal, writeLocal } from './utils/localStorage.js';
+import { setActiveUid } from './utils/scopedStorage.js';
+import { useLocalState } from './hooks/useLocalState.js';
+import { authHeaders, apiPost, readJsonSafe, httpErrorMessage, apiGetSafe, aiServerUrl } from './services/apiClient.js';
+import { firebaseMessage, friendlyServiceError } from './services/errorMessages.js';
+import { loadOrCreateProfile, fallbackProfile, buildSession, connectOneDrive } from './services/userSession.js';
+import {
+  hasValidSession, PLAN_LIMITS, ADMIN_EMAILS,
+  isAdminUser, canUse, userInitials
+} from './domain/permissions.js';
+import { Icon } from './components/ui/Icon.jsx';
+import { Backdrop } from './components/ui/Backdrop.jsx';
+import { Donut, Spark } from './components/ui/charts.jsx';
+import { PageHead, InfoCard, EmptyState } from './components/ui/PageElements.jsx';
+import { Param, Cost, NField, ORow } from './components/ui/FormFields.jsx';
+import { HardHat } from './components/ui/HardHat.jsx';
+import {
+  conceptApuKey, applyConceptMetadata, finalizeAIAPU, templateFallbackAPU,
+  saveMarketPrice, standardAPUForConcept, makeAPUFromConcept, normalizeAIAPU, makeEmptyAPU
+} from './domain/apuGeneration.js';
+import { libKey, enrichLibraryMeta, scoreLibraryFile } from './domain/library.js';
+import { TechnicalCenter } from './features/technical-center/TechnicalCenter.jsx';
+import { AdminPanel } from './features/admin/AdminPanel.jsx';
+import { ProfessionalApuEditor } from './features/apu/ProfessionalApuEditor.jsx';
+import { parseExcelToCatalog, cleanText, normalizeUnitLabel, parseExcelToAPU, parseRobustConceptCatalog, parseConceptText } from './lib/excelImport.js';
+import {
+  defaultCompany, DEMO_MODE, demoCatalog,
+  legacySeedClientNames, legacySeedProjectNames, libraryFolders, courses
+} from './config/appConfig.js';
 import './style.css';
-
-const money = (n) => Number(n || 0).toLocaleString('es-MX', { style:'currency', currency:'MXN' });
-const num = (n) => Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits:2, maximumFractionDigits:2 });
-const uid = () => Math.random().toString(36).slice(2, 8).toUpperCase();
-async function authHeaders(){
-  const headers = {'Content-Type':'application/json'};
-  const token = await auth?.currentUser?.getIdToken?.();
-  if(token) headers.Authorization = `Bearer ${token}`;
-  return headers;
-}
-async function apiPost(path, body){
-  const res = await fetch(path, {
-    method:'POST',
-    headers:await authHeaders(),
-    body:JSON.stringify(body || {})
-  });
-  const data = await readJsonSafe(res);
-  if(!res.ok) throw new Error(data.error || 'No se pudo completar la solicitud.');
-  return data;
-}
-/* Lee una respuesta fetch como JSON sin arriesgar "Unexpected end of JSON input":
-   primero lee el texto crudo, valida que no este vacio y solo entonces intenta
-   JSON.parse. Un cuerpo vacio o mal formado (504/502 de la plataforma, corte de
-   red a media respuesta, etc.) regresa un error saneado en vez de una excepcion
-   de parseo cruda visible para el usuario. */
-async function readJsonSafe(res){
-  let text = '';
-  try{ text = await res.text(); }catch{ text = ''; }
-  if(!text || !text.trim()) return { error: httpErrorMessage(res.status, `El servidor no respondio contenido (HTTP ${res.status}).`) };
-  try{ return JSON.parse(text); }
-  catch{ return { error: httpErrorMessage(res.status, `El servidor respondio un formato invalido (HTTP ${res.status}).`) }; }
-}
-function httpErrorMessage(status, fallback){
-  if(status === 401) return 'Sesion expirada o no autenticada. Vuelve a iniciar sesion.';
-  if(status === 403) return 'No tienes permiso para completar esta accion.';
-  if(status === 429) return 'Demasiadas solicitudes en poco tiempo. Espera unos segundos y vuelve a intentar.';
-  if(status >= 500) return 'El servicio no esta disponible en este momento. Intenta de nuevo en unos minutos.';
-  return fallback;
-}
-/* No lanza: se usa para indicadores de estado donde un endpoint no disponible
-   (ej. servidor local de desarrollo, que no espeja /api/status) debe leerse
-   como "no disponible" en vez de romper la interfaz. */
-async function apiGetSafe(path){
-  try{
-    const res = await fetch(path, { headers:await authHeaders() });
-    if(!res.ok) return null;
-    return await res.json();
-  }catch{
-    return null;
-  }
-}
-
-/* Set de íconos de línea (engineering/drafting) — reemplaza emojis */
-const ICONS = {
-  inicio:<><path d="M3 11l9-7 9 7"/><path d="M5 10v10a1 1 0 001 1h3v-6h4v6h3a1 1 0 001-1V10"/></>,
-  apu:<><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1.5v2.5M15 1.5v2.5M9 20v2.5M15 20v2.5M1.5 9H4M1.5 15H4M20 9h2.5M20 15h2.5"/></>,
-  presupuestos:<><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h8M8 9h2"/></>,
-  proyectos:<><path d="M3 21h18"/><path d="M5 21V5a1 1 0 011-1h6a1 1 0 011 1v16"/><path d="M13 21V9h5a1 1 0 011 1v11"/><path d="M8 7h2M8 11h2M8 15h2"/></>,
-  clientes:<><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></>,
-  biblioteca:<><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></>,
-  tecnico:<><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8"/><path d="M8 10h.01M12 10h.01M16 10h.01M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01M16 18h.01"/></>,
-  oficina:<><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/></>,
-  comunidad:<><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/><path d="M8 9h8M8 13h5"/></>,
-  academia:<><path d="M22 10L12 5 2 10l10 5 10-5z"/><path d="M6 12v5c0 1.3 2.7 3 6 3s6-1.7 6-3v-5"/></>,
-  reportes:<><path d="M3 3v18h18"/><path d="M7 16v-5M12 16V8M17 16v-9"/></>,
-  cuantificaciones:<><path d="M16 3l5 5L8 21l-5-5z"/><path d="M14 5l2 2M11 8l2 2M8 11l2 2"/></>,
-  concreto:<><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><path d="M3.3 7L12 12l8.7-5M12 22V12"/></>,
-  acero:<><path d="M5 4v16M12 4v16M19 4v16"/><path d="M3 8h18M3 16h18"/></>,
-  pintura:<><path d="M9 11.9l8.1-8.1a2.85 2.85 0 114 4l-8.1 8.1z"/><path d="M7 14.9c-1.7 0-3 1.4-3 3 0 1.3-2.5 1.5-2 2 1.1 1.1 2.5 2 4 2 2.2 0 4-1.8 4-4a3 3 0 00-3-3z"/></>,
-  impermeabilizante:<><path d="M12 2.7l5.7 5.7a8 8 0 11-11.3 0z"/></>,
-  excavacion:<><path d="M12 2L2 7l10 5 10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></>,
-  block:<><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 9.3h18M3 14.6h18M9 4v5.3M15 9.3v5.3M11 14.6V20"/></>,
-  fsr:<><path d="M19 5L5 19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/></>,
-  folder:<><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></>,
-  doc:<><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></>,
-  bell:<><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></>,
-  play:<><path d="M6 4l14 8-14 8z"/></>,
-  mic:<><path d="M12 2a3 3 0 00-3 3v6a3 3 0 006 0V5a3 3 0 00-3-3z"/><path d="M5 10v1a7 7 0 0014 0v-1M12 18v3M9 21h6"/></>,
-  micStop:<><rect x="7" y="7" width="10" height="10" rx="2"/></>,
-  speakerOn:<><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 8.5a4 4 0 010 7M19 6a7.5 7.5 0 010 12"/></>,
-  speakerOff:<><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 9l5 6M21 9l-5 6"/></>,
-  history:<><path d="M3 12a9 9 0 109-9 9 9 0 00-8 5"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></>,
-  admin:<><path d="M12 2l8 3.5v6c0 5-3.4 8.7-8 10.5-4.6-1.8-8-5.5-8-10.5v-6z"/><path d="M9 12l2 2 4-4"/></>,
-  search:<><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></>,
-  link:<><path d="M9 15l6-6"/><path d="M11 6l1-1a4 4 0 015.7 5.7l-1 1"/><path d="M13 18l-1 1a4 4 0 01-5.7-5.7l1-1"/></>,
-  plano:<><rect x="3" y="3" width="18" height="18" rx="1"/><path d="M3 9h18M9 21V9"/><path d="M13 13h4v4h-4z"/></>,
-  render:<><rect x="3" y="4" width="18" height="14" rx="1.5"/><path d="M3 15l4.5-4.5a1.5 1.5 0 012.1 0L14 15"/><circle cx="16" cy="9" r="1.6"/></>,
-  bim:<><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5L12 12l8-4.5M12 12v9"/></>,
-  puntos:<><circle cx="5" cy="6" r="1.4"/><circle cx="12" cy="4" r="1.4"/><circle cx="19" cy="7" r="1.4"/><circle cx="6" cy="13" r="1.4"/><circle cx="13" cy="11" r="1.4"/><circle cx="18" cy="14" r="1.4"/><circle cx="4" cy="20" r="1.4"/><circle cx="11" cy="19" r="1.4"/><circle cx="18" cy="20" r="1.4"/></>,
-  dron:<><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9.5 9.5L4 4M14.5 9.5L20 4M9.5 14.5L4 20M14.5 14.5L20 20"/><circle cx="4" cy="4" r="1.6"/><circle cx="20" cy="4" r="1.6"/><circle cx="4" cy="20" r="1.6"/><circle cx="20" cy="20" r="1.6"/></>,
-  edificio:<><path d="M6 21V6a1 1 0 011-1h4a1 1 0 011 1v15"/><path d="M14 21V10a1 1 0 011-1h3a1 1 0 011 1v11"/><path d="M9 8h.01M9 11h.01M9 14h.01M9 17h.01"/></>,
-  alerta:<><path d="M10.3 3.6L1.8 18a1.8 1.8 0 001.5 2.7h17.4a1.8 1.8 0 001.5-2.7L13.7 3.6a1.8 1.8 0 00-3.4 0z"/><path d="M12 9v4M12 17h.01"/></>
-};
-function Icon({name,size=20}){return <svg className="ic" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{ICONS[name]||ICONS.doc}</svg>;}
-
-const defaultCompany = {
-  name: 'ZOEMEC', rfc: 'RFC pendiente', phone: '55 0000 0000', email: 'contacto@zoemec.mx', address: 'México', logo: '/images/logo-web.png?v=zoemec-2026'
-};
-const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true';
-const demoCatalog = [
-  { desc: 'Muro de block 15 cm', unidad: 'm²', precio: 825 },
-  { desc: 'Pintura vinílica en muros', unidad: 'm²', precio: 95 },
-  { desc: 'Bomba sumergible 1 HP', unidad: 'pza', precio: 12500 },
-  { desc: 'Tubería PVC sanitaria 1/2"', unidad: 'm', precio: 85 }
-];
-// Nombres de registros sembrados en versiones anteriores del proyecto (antes de que
-// existiera cuenta real por usuario). Se usan solo para depurarlos de datos reales
-// preexistentes en el primer render; no se usan para mostrar contenido en la interfaz.
-const legacySeedClientNames = ['Municipio de Tlalmanalco','Grupo Residencial Volcanes','Cliente particular','Constructora del Centro','Desarrollos Industriales del Valle'];
-const legacySeedProjectNames = ['Local comercial','Rehabilitación de plaza','Casa habitación 180 m²'];
-const libraryFolders = [
-  ['Bases OPUS', 'Importación y catálogos de precios unitarios', '124 archivos'],
-  ['Bases NEODATA', 'Catálogos, presupuestos y formatos compatibles', '86 archivos'],
-  ['Excel de precios', 'CMIC, BIMSA, ECOSTOS y bases propias', '300+ archivos'],
-  ['Formatos Word / Excel', 'APU, generadores, estimaciones y bitácoras', '78 plantillas'],
-  ['Normas y manuales', 'NTC, SCT, CFE, CONAGUA y reglamentos', '42 documentos'],
-  ['Cursos y videos', 'Capacitación para costos, obra e ingeniería', '24 cursos']
-];
-const courses = [
-  ['Precios Unitarios desde cero', 'APU, indirectos, utilidad, FSR y formatos', 68],
-  ['Presupuestos profesionales', 'Catálogo, partidas, explosión de insumos y reportes', 42],
-  ['OPUS / NEODATA para obra', 'Importación, revisión y exportación de catálogos', 25],
-  ['IA aplicada a construcción', 'Cómo generar APUs, memorias y reportes con IA', 10]
-];
-
-function useLocalState(key, fallback){
-  const [value, setValue] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
-  });
-  // setValue(prev=>...) en vez de cerrar sobre `value`: dos llamadas funcionales
-  // seguidas dentro del mismo handler (ej. agregar el turno del usuario y luego
-  // el de la respuesta) deben encadenarse sobre el estado mas reciente, no sobre
-  // el que existia cuando este closure se creo.
-  const save = (next) => setValue(prev => {
-    const v = typeof next === 'function' ? next(prev) : next;
-    localStorage.setItem(key, JSON.stringify(v));
-    return v;
-  });
-  return [value, save];
-}
-function getDeviceId(){
-  let id = localStorage.getItem('zoemec-device-id');
-  if(!id){
-    id = 'DEV-' + uid() + '-' + Date.now().toString(36).toUpperCase();
-    localStorage.setItem('zoemec-device-id', id);
-  }
-  return id;
-}
-function readLocal(key, fallback){
-  try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
-}
-function writeLocal(key, value){
-  localStorage.setItem(key, JSON.stringify(value));
-}
-function hasValidSession(user){
-  return Boolean(user?.email && user?.plan && (user?.deviceId || user?.uid));
-}
-const PLAN_LIMITS = {
-  Gratis:{ apus:1, library:false, ai:false, exports:false, label:'Gratis - 1 APU' },
-  Inicial:{ apus:10, library:'limitada', ai:false, exports:true, label:'Inicial' },
-  Profesional:{ apus:999, library:true, ai:true, exports:true, label:'Profesional' },
-  Empresa:{ apus:9999, library:true, ai:true, exports:true, label:'Empresa' }
-};
-/* Fuente unica de verdad para saber si alguien es administrador. Antes cada
-   pantalla comparaba user.role==='admin' de forma literal: si el rol venia
-   guardado en Firestore como "Administrador", "ADMIN" o con espacios, el Panel
-   Admin simplemente no aparecia (sin ningun error visible). Ahora se normaliza
-   el texto y ademas se acepta custom claim de Firebase o correo en
-   VITE_ADMIN_EMAILS, para no depender de un solo campo fragil.
-   VITE_ADMIN_EMAILS nunca se configuro en Vercel/local (confirmado: no aparece
-   en ninguno de los dos entornos), asi que la lista quedaba vacia y el unico
-   admin real de la plataforma dependia 100% de que Firestore tuviera guardado
-   role:"admin" exacto. Se agrega un correo de respaldo fijo (el mismo patron
-   que ya usa src/firebase.js con sus valores por defecto) para que el acceso
-   de administrador nunca dependa de una variable de entorno olvidada. */
-const ADMIN_ROLE_VALUES = new Set(['admin', 'administrator', 'administrador', 'superadmin']);
-const ADMIN_EMAILS = String(import.meta.env.VITE_ADMIN_EMAILS || 'dianalopez161184@gmail.com')
-  .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
-function normalizeRoleValue(v){ return String(v ?? '').trim().toLowerCase(); }
-function isAdminUser(user, profile){
-  const role = normalizeRoleValue(profile?.role ?? user?.role);
-  if(ADMIN_ROLE_VALUES.has(role)) return true;
-  if(user?.claims?.admin === true) return true;
-  const email = normalizeRoleValue(profile?.email ?? user?.email);
-  if(email && ADMIN_EMAILS.includes(email)) return true;
-  return false;
-}
-function canUse(user, feature, used=0){
-  if(user?.isAdmin) return true;
-  const plan = PLAN_LIMITS[user?.plan || 'Gratis'] || PLAN_LIMITS.Gratis;
-  if(feature === 'apu') return used < plan.apus;
-  return Boolean(plan[feature]);
-}
-function userInitials(name='', email=''){
-  const base = (name || email?.split('@')?.[0] || 'Usuario ZOEMEC').trim();
-  return base.split(' ').map(x=>x[0]).filter(Boolean).slice(0,2).join('').toUpperCase() || 'UZ';
-}
-function firebaseMessage(error){
-  const code = error?.code || '';
-  /* Un dominio no autorizado es un problema de configuracion (Firebase Auth >
-     Authorized domains), no una credencial invalida: mostrar "correo o
-     contrasena incorrectos" aqui confundiria al usuario para intentar de nuevo
-     con otra contrasena cuando el problema es del dominio, no de la cuenta. */
-  if(code.includes('unauthorized-domain')) return 'Este dominio no esta autorizado en Firebase Authentication. Pide al administrador que lo agregue en Authentication > Settings > Authorized domains.';
-  if(code.includes('email-already-in-use')) return 'Ese correo ya esta registrado. Inicia sesion.';
-  if(code.includes('invalid-credential')) return 'Los datos de acceso no son validos. Verifica tu correo y tu contrasena.';
-  if(code.includes('user-not-found')) return 'No encontramos una cuenta registrada con ese correo.';
-  if(code.includes('wrong-password')) return 'La contrasena es incorrecta.';
-  if(code.includes('weak-password')) return 'La contrasena debe tener minimo 6 caracteres.';
-  if(code.includes('network')) return 'No hay conexion con Firebase. Revisa internet y vuelve a intentar.';
-  if(code.includes('permission-denied')) return 'No se pudo completar la operacion por permisos de Firestore. Intenta de nuevo o contacta al administrador.';
-  return error?.message || 'No se pudo conectar con Firebase.';
-}
-/* Los endpoints /api/* devuelven a veces el detalle tecnico exacto (nombre de la
-   variable de entorno faltante) para facilitar el diagnostico en Vercel. Esa cadena
-   nunca debe llegar al usuario final: se sustituye por un mensaje comercial. */
-function friendlyServiceError(err, fallback='Servicio temporalmente no disponible. Intenta de nuevo en unos minutos.'){
-  const msg = String(err?.message || '').trim();
-  if(!msg) return fallback;
-  if(/API_KEY|ACCESS_TOKEN|SERVICE_ACCOUNT|PRIVATE_KEY|CLIENT_EMAIL|process\.env|\bVercel\b|\.env\b/i.test(msg)){
-    return 'Servicio temporalmente no configurado. Intenta mas tarde o contacta a soporte.';
-  }
-  /* Red de seguridad: si por alguna otra ruta llega un error crudo de parseo
-     (JSON.parse/SyntaxError/fetch), nunca se muestra tal cual al usuario. */
-  if(/unexpected (end of|token)|json\.parse|syntaxerror|failed to fetch|networkerror/i.test(msg)){
-    return 'El servicio no respondio correctamente. Intenta de nuevo en unos minutos.';
-  }
-  /* Un error de CORS (subida directa del navegador bloqueada) nunca debe
-     mostrarse tal cual: es ruido tecnico para el usuario final. */
-  if(/cors|cross-origin|preflight|access-control-allow-origin|err_failed/i.test(msg)){
-    return 'No se pudo completar la operación en este entorno. Intenta de nuevo o contacta a soporte.';
-  }
-  return msg;
-}
-async function loadOrCreateProfile(fbUser, fallbackName='Usuario ZOEMEC'){
-  const userRef = doc(db, 'users', fbUser.uid);
-  const snap = await getDoc(userRef);
-  if(snap.exists()) return { uid: fbUser.uid, ...snap.data() };
-  const profile = {
-    uid: fbUser.uid,
-    name: fbUser.displayName || fallbackName || fbUser.email?.split('@')[0] || 'Usuario ZOEMEC',
-    email: fbUser.email,
-    role: 'user',
-    plan: 'Gratis',
-    active: true,
-    apusCreated: 0,
-    deviceId: getDeviceId(),
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp()
-  };
-  await setDoc(userRef, profile, { merge:true });
-  return profile;
-}
-/* Si Firestore no responde (red, permisos, indice) la sesion de Firebase Auth
-   ya es valida y no debe perderse: se arma un perfil minimo desde el propio
-   fbUser para que isAdminUser() todavia pueda reconocer admin por correo/claims
-   sin depender de que el documento de Firestore se haya podido leer. */
-function fallbackProfile(fbUser, deviceId){
-  return {
-    uid: fbUser.uid,
-    name: fbUser.displayName || fbUser.email?.split('@')[0] || 'Usuario ZOEMEC',
-    email: fbUser.email,
-    role: 'user',
-    plan: 'Gratis',
-    active: true,
-    apusCreated: 0,
-    deviceId: deviceId || getDeviceId()
-  };
-}
-function buildSession(profile, fbUser, claims=null){
-  const name = profile?.name || fbUser?.displayName || fbUser?.email?.split('@')?.[0] || 'Usuario ZOEMEC';
-  const role = profile?.role || 'user';
-  const email = profile?.email || fbUser?.email;
-  const isAdmin = isAdminUser({ email, claims }, profile);
-  if(import.meta.env.DEV){
-    console.log('[ZOEMEC][admin-check]', { email, roleDetectado: role, isAdmin });
-  }
-  return {
-    uid: profile?.uid || fbUser?.uid,
-    name,
-    email,
-    role: isAdmin ? 'admin' : role,
-    isAdmin,
-    plan: isAdmin ? (profile?.plan || 'Empresa') : (profile?.plan || 'Gratis'),
-    active: profile?.active !== false,
-    initials: userInitials(name, email),
-    deviceId: profile?.deviceId || getDeviceId(),
-    apusCreated: Number(profile?.apusCreated || 0)
-  };
-}
-
-/* Conexion real con OneDrive (OAuth2 + PKCE contra Microsoft Identity Platform,
-   ver src/lib/onedrive.js). Sin VITE_ONEDRIVE_CLIENT_ID configurado, el intento
-   falla con un mensaje honesto en vez de simular una conexion exitosa. */
-async function connectOneDrive(){
-  try{
-    await startOneDriveConnect();
-  }catch(err){
-    window.zoemecNotify?.(err.message || 'No se pudo iniciar la conexion con OneDrive.', 'error');
-  }
-}
 
 function CloudBadge({user}){
   const [st,setSt]=useState({status:'ok',message:''});
@@ -407,8 +145,8 @@ function CloudBadge({user}){
   </div>;
 }
 
-function NotificationBell(){
-  const [items,setItems]=useLocalState('zoemec-notif-history', []);
+function NotificationBell({user}){
+  const [items,setItems]=useLocalState('zoemec-notif-history', [], user?.uid);
   const [open,setOpen]=useState(false);
   const boxRef=useRef(null);
   useEffect(()=>{
@@ -488,8 +226,8 @@ function App(){
   }, []);
   const [zoeContext, setZoeContext] = useState({ user: null, route: 'inicio', activeApu: null, budget: null, project: null, importedFile: null, library: [], alerts: [], history: [] });
   const [user, setUser] = useState(null);
-  const [accounts, setAccounts] = useLocalState('zoemec-accounts', []);
-  const [usage, setUsage] = useLocalState('zoemec-usage', {});
+  const [accounts, setAccounts] = useLocalState('zoemec-accounts', [], user?.uid);
+  const [usage, setUsage] = useLocalState('zoemec-usage', {}, user?.uid);
   const [company, setCompany] = useCloudState(user, 'zoemec-company', defaultCompany);
   const [apus, setApus] = useCloudState(user, 'zoemec-apus', []);
   const [clients, setClients] = useCloudState(user, 'zoemec-clients', []);
@@ -519,7 +257,7 @@ function App(){
       setCatalog(demoCatalog.map(item => ({ ...item, desc: item.desc, unidad: item.unidad, precio: item.precio })));
     }
     if(!apus.length){
-      setApus([{ id:'APU-DEMO', clave:'APU-DEMO', concept:'Muro de block 15 cm', unit:'m²', materials:[["Block hueco 15x20x40",12.5,'pza',16.5,3]], labor:[["Albañil oficial",0.35,'jor',380,1.85]], equipment:[["Andamio / equipo básico",0.05,'día',280]], herramienta:3, indCampo:8, indOficina:7, finance:2, utility:10, cargos:0.5, iva:16, family:'Albañileria', confidence:92, source:'exact_library', sourceFile:'Catálogo Demo', sourceSection:'Fila 1', rowNumber:1, traceability:[{file:'Catálogo Demo',sheet:'Hoja 1',row:1,source:'demo'}], assumptions:['Demo con trazabilidad técnica. Revisa precios, rendimiento y unidad.'], warnings:['Validación de trazabilidad pendiente'], aiNotes:['Demo con trazabilidad técnica. Revisa precios y rendimientos.'], date:new Date().toLocaleDateString('es-MX') }]);
+      setApus([{ id:'APU-DEMO', clave:'APU-DEMO', concept:'Muro de block 15 cm', unit:'m²', materials:[["Block hueco 15x20x40",12.5,'pza',16.5,3]], labor:[["Albañil oficial",0.35,'jor',380,1.85]], equipment:[["Andamio / equipo básico",0.05,'día',280]], ...APU_DEFAULT_FACTORS, family:'Albañileria', confidence:92, source:'exact_library', sourceFile:'Catálogo Demo', sourceSection:'Fila 1', rowNumber:1, traceability:[{file:'Catálogo Demo',sheet:'Hoja 1',row:1,source:'demo'}], assumptions:['Demo con trazabilidad técnica. Revisa precios, rendimiento y unidad.'], warnings:['Validación de trazabilidad pendiente'], aiNotes:['Demo con trazabilidad técnica. Revisa precios y rendimientos.'], date:new Date().toLocaleDateString('es-MX') }]);
     }
     if(!budgetItems.length){
       setBudgetItems([{ concept:'Muro de block 15 cm', unit:'m²', qty:120, pu:825.39 }, { concept:'Pintura vinílica en muros', unit:'m²', qty:86, pu:95.5 }]);
@@ -583,6 +321,7 @@ function App(){
     if(!firebaseReady) return undefined;
     return onAuthStateChanged(auth, async (fbUser) => {
       if(!fbUser){
+        setActiveUid(null);
         setUser(null);
         setScreen(current => current === 'app' ? 'landing' : current);
         return;
@@ -598,17 +337,20 @@ function App(){
         const tokenResult = await fbUser.getIdTokenResult().catch(()=>null);
         const claims = tokenResult?.claims || null;
         if(!fbUser.emailVerified && !isAdminUser({ email:profile?.email, claims }, profile)){
+          setActiveUid(null);
           setUser(null);
           return;
         }
         if(profile.active === false){
           await signOut(auth);
+          setActiveUid(null);
           setUser(null);
           setScreen('landing');
           alert('Tu cuenta esta desactivada. Contacta al administrador de ZOEMEC.');
           return;
         }
         const session = buildSession(profile, fbUser, claims);
+        setActiveUid(session.uid);
         setUser(session);
         setUsage(prev => ({...prev, [session.email]:{apusCreated:session.apusCreated || 0, deviceId:session.deviceId}}));
         /* Antes, si ya existia una sesion valida de Firebase (ej. al recargar
@@ -669,6 +411,7 @@ function App(){
         setUsage({...usage, [cleanEmail]:{apusCreated:0, deviceId}});
         await sendEmailVerification(credential.user);
         await signOut(auth);
+        setActiveUid(null);
         setUser(null);
         setScreen('login');
         alert('Cuenta creada. Te enviamos un correo de verificacion. Confirma tu email y luego inicia sesion.');
@@ -697,6 +440,7 @@ function App(){
       }
       const session = buildSession(profile, credential.user, claims);
       setUsage({...usage, [cleanEmail]:{apusCreated:session.apusCreated || 0, deviceId:session.deviceId}});
+      setActiveUid(session.uid);
       setUser(session);
       setScreen('app');
       setModule('inicio');
@@ -757,6 +501,7 @@ function App(){
       const tokenResult = await fbUser.getIdTokenResult().catch(()=>null);
       const session = buildSession(profile, fbUser, tokenResult?.claims || null);
       setUsage(prev => ({...prev, [session.email]:{apusCreated:session.apusCreated || 0, deviceId:session.deviceId}}));
+      setActiveUid(session.uid);
       setUser(session);
       setScreen('app');
       setModule('inicio');
@@ -769,6 +514,7 @@ function App(){
   const logout = async () => {
     try { if(firebaseReady) await signOut(auth); } catch {}
     localStorage.removeItem('zoemec-user');
+    setActiveUid(null);
     setUser(null);
     setScreen('landing');
   };
@@ -794,220 +540,7 @@ function App(){
   return <><NoticeHost />{content}<Assistant context={zoeContext} setModule={setModule} /></>;
 }
 
-/* Fondo animado de construcción (line-art tipo plano) */
-function Backdrop(){
-  return <svg className="backdrop" viewBox="0 0 1440 760" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
-    <g className="bd-sky" stroke="currentColor" fill="none" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-      {/* edificio alto */}
-      <rect x="120" y="300" width="150" height="380"/>
-      {[330,370,410,450,490,530,570,610].map(y=><g key={y}><line x1="140" y1={y} x2="250" y2={y}/></g>)}
-      {[160,195,230].map(x=><line key={x} x1={x} y1="300" x2={x} y2="680"/>)}
-      {/* edificio medio */}
-      <rect x="300" y="420" width="120" height="260"/>
-      {[450,490,530,570,610,650].map(y=><line key={y} x1="316" y1={y} x2="404" y2={y}/>)}
-      <line x1="360" y1="420" x2="360" y2="680"/>
-      {/* torre derecha */}
-      <rect x="1140" y="250" width="170" height="430"/>
-      {[290,335,380,425,470,515,560,605,650].map(y=><line key={y} x1="1158" y1={y} x2="1292" y2={y}/>)}
-      {[1180,1225,1270].map(x=><line key={x} x1={x} y1="250" x2={x} y2="680"/>)}
-      {/* casa baja */}
-      <path d="M470 680V560h140v120M460 560l80-50 80 50"/>
-    </g>
-    {/* grúa torre */}
-    <g className="bd-crane" stroke="currentColor" fill="none" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="820" y1="680" x2="820" y2="180"/>
-      <line x1="806" y1="680" x2="834" y2="680"/>
-      <path d="M820 200l-26 26M820 240l-26 26M820 280l-26 26M820 320l-26 26M820 360l-26 26M820 200l26 26M820 240l26 26M820 280l26 26M820 320l26 26M820 360l26 26" strokeWidth="1"/>
-      {/* pluma + contrapluma */}
-      <line x1="600" y1="170" x2="1060" y2="170"/>
-      <line x1="820" y1="150" x2="650" y2="170"/>
-      <line x1="820" y1="150" x2="1000" y2="170"/>
-      <path d="M600 170l40-0M680 170v0" strokeWidth="1"/>
-      <line x1="620" y1="170" x2="640" y2="185"/>
-      {/* cable + gancho (se mueve) */}
-      <g className="bd-hook"><line x1="980" y1="170" x2="980" y2="300"/><path d="M974 300a6 6 0 1012 0v8a8 8 0 01-16 0"/></g>
-    </g>
-    {/* datum punteado que fluye */}
-    <line className="bd-datum" x1="0" y1="700" x2="1440" y2="700" stroke="currentColor" strokeWidth="1.4" strokeDasharray="10 10"/>
-  </svg>;
-}
-
-/* Gráficas SVG ligeras (sin librerías) */
-function Donut({segments,size=150,thickness=22,center,sub}){
-  const total=segments.reduce((a,s)=>a+(s.value||0),0)||1;
-  const r=(size-thickness)/2, c=2*Math.PI*r; let off=0;
-  return <div className="donut-wrap"><svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="donut">
-    <g transform={`rotate(-90 ${size/2} ${size/2})`}>
-      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--line)" strokeWidth={thickness}/>
-      {segments.map((s,i)=>{const len=(s.value/total)*c; const el=<circle key={i} cx={size/2} cy={size/2} r={r} fill="none" stroke={s.color} strokeWidth={thickness} strokeDasharray={`${len} ${c-len}`} strokeDashoffset={-off}/>; off+=len; return el;})}
-    </g>
-    {center!==undefined && <text x="50%" y="46%" textAnchor="middle" className="donut-c">{center}</text>}
-    {sub && <text x="50%" y="60%" textAnchor="middle" className="donut-s">{sub}</text>}
-  </svg></div>;
-}
-/* Gemelo Digital: visualizacion SVG que reacciona solo a datos reales de un APU
-   guardado (estructura de costo real via calcAPU, familia/confianza real de la IA
-   o el catalogo base). Sin BIM 3D ni metricas inventadas: si no hay APU, EmptyState. */
-function twinFamilyIcon(apu){
-  const t = `${apu?.family||''} ${apu?.concept||''}`.toLowerCase();
-  if(/concreto|losa|zapata|firme|columna/.test(t)) return 'concreto';
-  if(/acero|varilla|fierro|estructura met/.test(t)) return 'acero';
-  if(/pintura|pintar|esmalte|vinil/.test(t)) return 'pintura';
-  if(/imperm/.test(t)) return 'impermeabilizante';
-  if(/excavaci|zanja/.test(t)) return 'excavacion';
-  if(/block|tabique|muro/.test(t)) return 'block';
-  return 'doc';
-}
-function twinOrigin(apu){
-  if(apu.aiGenerated) return 'Generado por IA';
-  if(apu.templateFallback) return 'Plantilla técnica (IA no disponible)';
-  if(apu.templateGenerated) return 'Catálogo base ZOEMEC';
-  return 'Editado manualmente';
-}
-function DigitalTwin({apu, compact=false, onOpen}){
-  if(!apu){
-    return <div className={'twin-card'+(compact?' compact':'')+' empty-illustration'}>
-      <div className="empty-illustration-media">
-        <img src="/images/dashboard/zoemec-dashboard-web.webp" alt="Gemelo Digital en espera"/>
-      </div>
-      <div className="empty-illustration-copy">
-        <h3>Gemelo Digital del Proyecto</h3>
-        <p>Una representación digital del proyecto que concentra planos, APU, documentos, presupuestos, evidencias, avances y conocimiento técnico para que ZOE pueda analizar toda la obra.</p>
-        <p>Actívalo importando documentos o creando y guardando tu primer APU: ZOE extrae, clasifica y enlaza evidencia automáticamente.</p>
-        <div className="empty-actions"><button onClick={()=>onOpen?onOpen():null}>Crear APU</button></div>
-      </div>
-    </div>;
-  }
-  const t = calcAPU(apu);
-  const direct = t.direct || 0;
-  const layers = [
-    { key:'mat', label:'Materiales', value:t.mat, color:'#4FB8A8' },
-    { key:'mo', label:'Mano de obra', value:t.mo, color:'#C9A24A' },
-    { key:'equipo', label:'Equipo', value:t.equipo, color:'#9D6FD0' },
-    { key:'herramienta', label:'Herramienta', value:t.herramienta, color:'#B54A62' }
-  ];
-  const confidence = Number(apu.confidence || 88);
-  const risky = confidence < 80;
-  const severeRisk = confidence < 65;
-  let cursor = 0;
-  return <div className={'twin-card'+(compact?' compact':'')+(risky?' risky':'')} onClick={onOpen} role={onOpen?'button':undefined}>
-    <div className="twin-head">
-      <span className="twin-icon"><Icon name={twinFamilyIcon(apu)} size={compact?18:24}/></span>
-      <div><b>{apu.concept || apu.clave || 'Concepto sin nombre'}</b><small>{apu.family || 'Sin clasificar'}</small></div>
-      <span className={'twin-confidence'+(risky?' risky':'')}>{confidence}%</span>
-    </div>
-    <svg className="twin-stack" viewBox="0 0 300 22" preserveAspectRatio="none" width="100%" height="22" aria-label="Estructura de costo directo">
-      {direct>0 ? layers.map(l=>{ const w=(l.value/direct)*300; const el=<rect key={l.key} x={cursor} y="0" width={Math.max(0,w)} height="22" fill={l.color}/>; cursor+=w; return el; }) : <rect x="0" y="0" width="300" height="22" fill="var(--line)"/>}
-    </svg>
-    <div className="twin-legend">{layers.map(l=><span key={l.key}><i style={{background:l.color}}/>{l.label} <b>{direct?Math.round((l.value/direct)*100):0}%</b></span>)}</div>
-    <div className="twin-foot">
-      <div><small>P.U. total</small><b>{money(t.total)}</b></div>
-      <div><small>Origen</small><b>{twinOrigin(apu)}</b></div>
-    </div>
-    {confidence < 80 && <div className={`twin-warning${severeRisk ? ' critical' : ''}`}><Icon name="bell" size={13}/> {severeRisk ? `Riesgo alto: confianza ${confidence}%. Revisa antes de aprobar.` : `Confianza baja (${confidence}%). Revisa biblioteca y evidencias antes de entregar.`}</div>}
-  </div>;
-}
-function Spark({points,h=72,color='var(--teal)'}){
-  const w=300, max=Math.max(...points), min=Math.min(...points), rng=(max-min)||1, step=w/(points.length-1);
-  const pts=points.map((p,i)=>`${i*step},${h-((p-min)/rng)*(h-14)-7}`).join(' ');
-  return <svg viewBox={`0 0 ${w} ${h}`} className="spark" preserveAspectRatio="none" width="100%" height={h}>
-    <polygon points={`0,${h} ${pts} ${w},${h}`} fill="var(--mint)"/>
-    <polyline points={pts} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round"/>
-  </svg>;
-}
-
-import { matchPrice, parseExcelToCatalog, cleanText, normalizeUnitLabel, parseExcelToAPU, parseRobustConceptCatalog, parseConceptText } from './lib/excelImport.js';
-
-async function exportRowsExcel(rows, fileName){
-  const safeName = fileName.replace(/[\\/:*?"<>|]/g, '-');
-  const data = rows.map(row => row.map(excelCell));
-  try{
-    const result = writeXlsxFile(data);
-    if(result && typeof result.toFile === 'function') return await result.toFile(safeName);
-    return await result;
-  }catch(error){
-    exportRowsCSV(rows, safeName.replace(/\.xlsx$/i, '.csv'));
-  }
-}
-function excelCell(value){
-  if(value === null) return null;
-  if(value && typeof value === 'object' && !Array.isArray(value) && Object.prototype.hasOwnProperty.call(value,'value')){
-    const base = excelCell(value.value);
-    return {...base, ...value, value:value.value ?? base?.value ?? '', type:value.type ?? base?.type ?? String};
-  }
-  if(value == null) return { value: '', type: String };
-  if(typeof value === 'number' && Number.isFinite(value)) return { value, type: Number, format: '#,##0.00' };
-  if(typeof value === 'boolean') return { value, type: Boolean };
-  return { value: String(value), type: String };
-}
-const XLS = {
-  title:{fontWeight:'bold', fontSize:16, color:'#ffffff', backgroundColor:'#2A1740', align:'center', alignVertical:'center'},
-  subtitle:{fontWeight:'bold', color:'#6F3FA7', backgroundColor:'#F2ECF8', align:'center'},
-  head:{fontWeight:'bold', color:'#ffffff', backgroundColor:'#2A1740', align:'center'},
-  section:{fontWeight:'bold', color:'#2A1740', backgroundColor:'#EDE3F6'},
-  total:{fontWeight:'bold', color:'#2A1740', backgroundColor:'#F6F0FB'},
-  grand:{fontWeight:'bold', color:'#ffffff', backgroundColor:'#2A1740'},
-  label:{fontWeight:'bold', color:'#2A1740', backgroundColor:'#F7F2FA'},
-  note:{color:'#6D6078', backgroundColor:'#FBF8FD', wrap:true},
-  input:{backgroundColor:'#FFFDF7', color:'#1F162A'},
-  calc:{backgroundColor:'#F7F2FA', format:'$#,##0.00'},
-  formula:{color:'#6D6078', backgroundColor:'#FBF8FD', wrap:true},
-  money:{format:'$#,##0.00'},
-  qty:{format:'#,##0.0000'},
-  pct:{format:'0.00%'},
-  ok:{fontWeight:'bold', color:'#166534', backgroundColor:'#ECFDF3'}
-};
-const xcell = (value, style={}) => ({ value, ...style });
-const fcell = (formula, style={}) => ({ value:String(formula || '').replace(/^=/,''), type:'Formula', ...XLS.money, ...style });
-const styleHeader = (row) => row.map(value => xcell(value, XLS.head));
-const styleSection = (label) => [xcell(label, XLS.section)];
-async function exportWorkbookExcel(sheets, fileName){
-  const safeName = fileName.replace(/[\\/:*?"<>|]/g, '-');
-  const workbook = sheets.map(sheet => ({
-    sheet: sheet.sheet,
-    data: sheet.rows.map(row => row.map(excelCell)),
-    columns: sheet.widths?.map(width => ({ width })),
-    stickyRowsCount: sheet.stickyRowsCount || 0
-  }));
-  try{
-    const result = writeXlsxFile(workbook, { fontFamily:'Arial', fontSize:10 });
-    if(result && typeof result.toFile === 'function') return await result.toFile(safeName);
-    return await writeXlsxFile(workbook, { fontFamily:'Arial', fontSize:10, fileName:safeName });
-  }catch(error){
-    console.error('No pude generar XLSX, exporto CSV de respaldo:', error);
-    const flat = sheets.flatMap(sheet => [[sheet.sheet], ...sheet.rows, []]);
-    exportRowsCSV(flat, safeName.replace(/\.xlsx$/i, '.csv'));
-    throw error;
-  }
-}
-function exportRowsCSV(rows, fileName){
-  const safeName = fileName.replace(/[\\/:*?"<>|]/g, '-');
-  const csv = rows.map(row => row.map(value => {
-    const text = String(value ?? '').replace(/"/g, '""');
-    return /[",\n\r]/.test(text) ? `"${text}"` : text;
-  }).join(',')).join('\n');
-  const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = safeName;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
 /* ---------- Mascota / asistente ZOEMIC ---------- */
-function HardHat({size=46}){
-  return <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden="true">
-    <circle cx="32" cy="38" r="16" fill="#ffe0c2"/>
-    <path d="M22 36c0 6 4 11 10 11s10-5 10-11" fill="none" stroke="var(--petrol)" strokeWidth="2" strokeLinecap="round"/>
-    <circle cx="27" cy="38" r="1.8" fill="var(--petrol)"/><circle cx="37" cy="38" r="1.8" fill="var(--petrol)"/>
-    <path d="M16 30a16 16 0 0132 0z" fill="#D6A23E"/>
-    <rect x="13" y="29" width="38" height="4.5" rx="2.2" fill="#c08f2f"/>
-    <rect x="30.5" y="14" width="3" height="14" rx="1.5" fill="#c08f2f"/>
-  </svg>;
-}
 function assistantReply(q, context={}){
   const t=q.toLowerCase();
   const r=(...m)=>m.filter(Boolean).join(' ');
@@ -1049,8 +582,9 @@ const ZOE_VOICE_SUPPORTED = typeof window!=='undefined' && Boolean(window.Speech
 const ZOE_SPEECH_SUPPORTED = typeof window!=='undefined' && Boolean(window.speechSynthesis);
 function Assistant({ context={}, setModule }){
   const [open,setOpen]=useState(false);
-  const [msgs,setMsgs]=useLocalState('zoemec-zoe-thread', [ZOE_SEED_MSG]);
-  const [threads,setThreads]=useLocalState('zoemec-zoe-history', []);
+  const zoeUid = context?.user?.uid;
+  const [msgs,setMsgs]=useLocalState('zoemec-zoe-thread', [ZOE_SEED_MSG], zoeUid);
+  const [threads,setThreads]=useLocalState('zoemec-zoe-history', [], zoeUid);
   const [showHistory,setShowHistory]=useState(false);
   const [q,setQ]=useState('');
   const [busy,setBusy]=useState(false);
@@ -1348,23 +882,12 @@ function Shell({children,user,logout,module,setModule,company,apus,clients,proje
     <main className="main">
       <header className="topbar">
         <TopSearch apus={apus} clients={clients} projects={projects} setModule={setModule}/>
-        <div className="user"><CloudBadge user={user}/><NotificationBell/><span className="avatar">{user.initials}</span><div><b>{user.name}</b><small>{user.isAdmin ? 'Administrador' : user.plan}</small></div><button onClick={logout}>Salir</button></div>
+        <div className="user"><CloudBadge user={user}/><NotificationBell user={user}/><span className="avatar">{user.initials}</span><div><b>{user.name}</b><small>{user.isAdmin ? 'Administrador' : user.plan}</small></div><button onClick={logout}>Salir</button></div>
       </header>
       {children}
     </main>
     <Assistant/>
   </div>
-}
-
-function PageHead({kicker,title,desc,action}){return <div className="page-head"><div><span>{kicker}</span><h1>{title}</h1><p>{desc}</p></div>{action}</div>}
-
-function InfoCard({title,value,subtitle,actionLabel,onAction}){
-  return <div className="info-card">
-    <small>{title}</small>
-    <b>{value}</b>
-    <span>{subtitle}</span>
-    {actionLabel && <button className="soft" onClick={onAction}>{actionLabel}</button>}
-  </div>;
 }
 
 function ProjectsPlaceholder({onCreate, onImport}){
@@ -1461,6 +984,21 @@ function Dashboard({setModule,apus,clients,budgets,projects,user}){
     return ()=>{ alive=false; };
   }, [user]);
   return <section className="ai-os"><PageHead kicker="ZOEMEC AI OS" title="Copiloto de costos de construcción" desc="Un centro visual donde documentos, modelos, evidencia y APUs viven en el mismo flujo tecnico." action={<button onClick={()=>setModule('apu')}>Pedir a ZOE que cotice</button>} />
+    <div className="demo-hero">
+      <h2>De un concepto de obra a un APU completo con IA</h2>
+      <p>Pega un concepto o importa un catálogo de Excel. ZOEMEC identifica recursos, rendimientos, procedimiento constructivo, seguridad, calidad y criterios de medición para construir un análisis de precio unitario editable y trazable.</p>
+      <div className="demo-hero-actions">
+        <button onClick={()=>setModule('apu')}><Icon name="apu" size={17}/> Generar APU con IA</button>
+        <button className="ghost-up" onClick={()=>setModule('apu')}><Icon name="presupuestos" size={17}/> Importar catálogo Excel</button>
+      </div>
+      <div className="demo-hero-steps">
+        <div className="demo-hero-step"><b>1</b><span>Describe</span></div>
+        <div className="demo-hero-step"><b>2</b><span>Analiza</span></div>
+        <div className="demo-hero-step"><b>3</b><span>Calcula</span></div>
+        <div className="demo-hero-step"><b>4</b><span>Valida</span></div>
+        <div className="demo-hero-step"><b>5</b><span>Entrega</span></div>
+      </div>
+    </div>
     <div className="kpi-row">
       <div className="kpi-tile"><small>Proyectos</small><b>{projectCount}</b><span>{projectCount ? `${projectCount} en cartera` : 'Crea el primero'}</span></div>
       <div className="kpi-tile"><small>APUs generados</small><b>{apus.length}</b><span>{apus.length ? 'Matrices con IA' : 'Sin APUs aún'}</span></div>
@@ -1522,539 +1060,66 @@ function Dashboard({setModule,apus,clients,budgets,projects,user}){
     </div>
   </section>
 }
-function EmptyState({icon,title,text,actionLabel,onAction}){
-  return <div className="empty-state">
-    {icon && <span className="empty-state-icon"><Icon name={icon} size={30}/></span>}
-    {title ? <><h3>{title}</h3><p>{text}</p></> : <p>{text}</p>}
-    {actionLabel && onAction && <button className="soft" onClick={onAction}>{actionLabel}</button>}
-  </div>;
-}
 
-/* ====================================================================
-   MOTOR APU - Metodología mexicana (RLOPSRM Art. 191, 220)
-   Estructura de fila por insumo:
-     materials : [descripción, cantidad, unidad, precioBase, merma%]
-     labor     : [descripción, jornadas, unidad, salarioBase, FSR]
-     equipment : [descripción, cantidad, unidad, costoHorario]
-   ==================================================================== */
-
-const APU_STANDARD_FACTORS = Object.freeze({
-  herramienta:3,
-  indCampo:8,
-  indOficina:7,
-  finance:2,
-  utility:10,
-  cargos:0.5,
-  iva:16
-});
-function canonicalAPUText(value){
-  return cleanText(value ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim();
-}
-function stableHash(value){
-  const text = canonicalAPUText(value);
-  let hash = 2166136261;
-  for(let i=0;i<text.length;i++){
-    hash ^= text.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(36).toUpperCase().padStart(6,'0').slice(0,6);
-}
-function conceptApuKey(item={}){
-  return [
-    item.code || item.clave || '',
-    item.concept || item.description || '',
-    normalizeUnitLabel(item.unit || ''),
-    Number(item.referencePU || 0) ? Number(item.referencePU || 0).toFixed(4) : ''
-  ].map(canonicalAPUText).join('|');
-}
-function cloneApuRows(rows=[]){
-  return rows.map(row => Array.isArray(row) ? [...row] : row);
-}
-function cloneAPU(apu={}){
-  return {
-    ...apu,
-    materials:cloneApuRows(apu.materials),
-    labor:cloneApuRows(apu.labor),
-    equipment:cloneApuRows(apu.equipment),
-    aiNotes:[...(apu.aiNotes || [])]
-  };
-}
-function applyConceptMetadata(apu, item={}, index=0, sourceFile='Catalogo de conceptos'){
-  const next = cloneAPU(apu);
-  next.clave = String(item.code || item.clave || next.clave || `APU-${index+1}`).slice(0,24);
-  next.concept = cleanText(item.concept || item.description || next.concept).replace(/\s+/g,' ').trim();
-  next.unit = normalizeUnitLabel(item.unit || next.unit);
-  next.sourceQty = Number(item.qty || item.sourceQty || 1) || 1;
-  next.referencePU = Number(item.referencePU || 0) || 0;
-  next.sourceFile = sourceFile;
-  next.sourceSection = item.section || item.sourceSection || '';
-  next.rowNumber = item.rowNumber || index + 1;
-  next.cacheKey = conceptApuKey({...item, concept:next.concept, unit:next.unit});
-  return next;
-}
-function standardizeAPU(base, item={}, index=0, sourceFile='Catalogo de conceptos'){
-  const next = applyConceptMetadata(base, item, index, sourceFile);
-  next.herramienta = APU_STANDARD_FACTORS.herramienta;
-  next.indCampo = APU_STANDARD_FACTORS.indCampo;
-  next.indOficina = APU_STANDARD_FACTORS.indOficina;
-  next.finance = APU_STANDARD_FACTORS.finance;
-  next.utility = APU_STANDARD_FACTORS.utility;
-  next.cargos = APU_STANDARD_FACTORS.cargos;
-  next.iva = APU_STANDARD_FACTORS.iva;
-  next.materials = cloneApuRows(next.materials).map(r => [cleanText(r[0]), Number(r[1]) || 0, normalizeUnitLabel(r[2]), Number(r[3]) || 0, Number(r[4]) || 0]);
-  next.labor = cloneApuRows(next.labor).map(r => [cleanText(r[0]), Number(r[1]) || 0, normalizeUnitLabel(r[2]), Number(r[3]) || 0, Number(r[4]) || 1]);
-  next.equipment = cloneApuRows(next.equipment).map(r => [cleanText(r[0]), Number(r[1]) || 0, normalizeUnitLabel(r[2]), Number(r[3]) || 0]);
-  next.aiNotes = [
-    'APU estandarizado: insumos, rendimientos, precios, FSR e indirectos salen del catalogo base ZOEMEC.',
-    ...(next.aiNotes || [])
-  ].filter(Boolean);
-  return next;
-}
-/* A diferencia de standardizeAPU (que fuerza la plantilla local), esta funcion
-   conserva los materiales/mano de obra/equipo y los % que la IA realmente devolvio,
-   solo normaliza texto/unidades/numeros y le aplica la metadata del concepto. */
-function finalizeAIAPU(aiDraft={}, item={}, index=0, sourceFile='OpenAI API'){
-  const next = applyConceptMetadata(aiDraft, item, index, sourceFile);
-  next.materials = cloneApuRows(next.materials).map(r => [cleanText(r[0]), Number(r[1]) || 0, normalizeUnitLabel(r[2]), Number(r[3]) || 0, Number(r[4]) || 0]);
-  next.labor = cloneApuRows(next.labor).map(r => [cleanText(r[0]), Number(r[1]) || 0, normalizeUnitLabel(r[2]), Number(r[3]) || 0, Number(r[4]) || 1]);
-  next.equipment = cloneApuRows(next.equipment).map(r => [cleanText(r[0]), Number(r[1]) || 0, normalizeUnitLabel(r[2]), Number(r[3]) || 0]);
-  next.herramienta = Number(aiDraft.herramienta ?? APU_STANDARD_FACTORS.herramienta);
-  next.indCampo = Number(aiDraft.indCampo ?? APU_STANDARD_FACTORS.indCampo);
-  next.indOficina = Number(aiDraft.indOficina ?? APU_STANDARD_FACTORS.indOficina);
-  next.finance = Number(aiDraft.finance ?? APU_STANDARD_FACTORS.finance);
-  next.utility = Number(aiDraft.utility ?? APU_STANDARD_FACTORS.utility);
-  next.cargos = Number(aiDraft.cargos ?? APU_STANDARD_FACTORS.cargos);
-  next.iva = Number(aiDraft.iva ?? APU_STANDARD_FACTORS.iva);
-  next.family = aiDraft.family || next.family;
-  next.sat = aiDraft.sat || next.sat;
-  next.confidence = Number(aiDraft.confidence || 92);
-  next.templateGenerated = false;
-  next.aiGenerated = true;
-  next.templateFallback = false;
-  next.aiNotes = [
-    'Generado por IA (OpenAI) para este concepto exacto. Revisa y ajusta antes de aprobar.',
-    ...(aiDraft.aiNotes || [])
-  ].filter(Boolean);
-  return applyMarketPrices(next);
-}
-/* Cuando la IA no responde (sin API key, sin conexion, timeout), se usa la matriz
-   tecnica real del catalogo base ZOEMEC como respaldo editable, para no romper el
-   flujo. No son datos inventados: son valores estandar del catalogo tecnico. */
-function templateFallbackAPU(item={}, catalog, index=0, sourceFile='Plantilla tecnica ZOEMEC', reason=''){
-  const next = standardAPUForConcept(item, catalog, index, sourceFile);
-  next.templateFallback = true;
-  next.aiGenerated = false;
-  next.aiNotes = [
-    `Plantilla tecnica aplicada: la IA no respondio en este entorno${reason ? ' (' + reason + ')' : ''}. Esta matriz usa el catalogo base ZOEMEC editable.`,
-    ...(next.aiNotes || [])
-  ].filter(Boolean);
-  return next;
-}
-const MARKET_PRICES_KEY = 'zoemec-market-prices';
-function readMarketPrices(){
-  try{ return JSON.parse(localStorage.getItem(MARKET_PRICES_KEY)) || {}; }catch{ return {}; }
-}
-function saveMarketPrice(desc, registro){
-  try{
-    const all = readMarketPrices();
-    all[String(desc).trim().toLowerCase()] = registro;
-    localStorage.setItem(MARKET_PRICES_KEY, JSON.stringify(all));
-  }catch{ /* almacenamiento no disponible */ }
-}
-function applyMarketPrices(apu){
-  const all = readMarketPrices();
-  if(!Object.keys(all).length) return apu;
-  const sources = { ...(apu.marketSources || {}) };
-  let touched = false;
-  const applyRows = (rows) => (rows || []).map(r => {
-    const key = String(r?.[0] || '').trim().toLowerCase();
-    const m = all[key];
-    if(m && Number(m.price) > 0){
-      const nr = [...r];
-      nr[3] = Number(m.price);
-      sources[String(r[0]).trim()] = m;
-      touched = true;
-      return nr;
+/* Convierte los renglones-objeto del esquema v2 (ver src/domain/apuSchema.js)
+   de vuelta al formato de arreglo posicional v1 [desc,cantidad,unidad,precio,merma|FSR].
+   Se usa solo para mantener funcionando la compatibilidad v1 (totals=calcAPU(apu),
+   "Guardar", "Agregar al presupuesto", MatrixTable legacy) cuando la IA responde
+   en v2: el contenido rico (procedimiento, calidad, seguridad, fuentes, confianza
+   desglosada) vive completo en apuV2/professionalApu, esto es solo el espejo v1. */
+function v2RowsToLegacy(kind, rows){
+  return (Array.isArray(rows) ? rows : []).map(r => {
+    if(kind === 'materials') return [r.descripcion, Number(r.consumo || 0), r.unidad, Number(r.precioUnitario || 0), Number(r.desperdicioPct || 0)];
+    if(kind === 'labor'){
+      const qty = Number(r.rendimiento) > 0 && Number(r.cuadrilla) > 0 ? Number(r.cuadrilla) / Number(r.rendimiento) : Number(r.cantidad || 0);
+      return [r.descripcion, qty, r.unidad, Number(r.salarioBase || 0), Number(r.fsr || 1)];
     }
-    return r;
+    return [r.descripcion, Number(r.cantidad || 0), r.unidad, Number(r.tarifa || 0)];
   });
-  const materials = applyRows(apu.materials);
-  const labor = applyRows(apu.labor);
-  const equipment = applyRows(apu.equipment);
-  if(!touched) return apu;
-  return { ...apu, materials, labor, equipment, marketSources: sources };
 }
-function standardAPUForConcept(item, catalog, index=0, sourceFile='Catalogo de conceptos'){
-  const base = makeAPUFromConcept(item?.concept || item?.description || String(item || ''), catalog);
-  return applyMarketPrices(standardizeAPU(base, item || {}, index, sourceFile));
-}
-function makeAPUFromConcept(concept, catalog){
-  const c = concept || 'Muro de block hueco de concreto de 15 cm asentado con mortero cemento-arena';
-  const t = c.toLowerCase();
-  // Plafon / tablaroca manda: menciones como "pintura anticorrosiva" dentro de las
-  // inclusiones de un falso plafon NO deben clasificar el concepto como pintura.
-  const isSuspendedCeiling = /falso\s*plaf|plaf[oó]n(d)?\s+de\s+(tablaroca|yeso|tablacemento)|suspensi[oó]n\s*oculta|colganter[ií]a|canal\s*list[oó]n|perfacinta|redimix/.test(t);
-  const isDrywallConcept = isSuspendedCeiling || /tablaroca|durock|tablacemento|trasdosado|cajillo|panel.*yeso/.test(t);
-  const isPaintingConcept = !isDrywallConcept && (
-    /pua\s*501|pua501|mapla|suministro y aplicaci[oó]n de pintura|pintar|repint|esmalte|vin[ií]lic|acr[ií]l|ep[oó]x|sellador vin/.test(t)
-    || (/(muro|muros|plaf[oó]n|plafones)/.test(t) && /(pintura|recubrimiento|preparaci[oó]n de la superficie|lija|lavado)/.test(t))
-  );
-  let tipo;
-  if(isSuspendedCeiling) tipo='plafon_suspendido';
-  else if(isDrywallConcept) tipo='tablaroca';
-  else if(isPaintingConcept) tipo='pintura';
-  else if(/escalera|barandal|herrer|ptr|perfil tubular|estructura metal|soldadur|acero.*calibre|bastidor.*acero/.test(t)) tipo='estructura_metalica';
-  else if(/plaf|fald|tablaroca|durock|tablacemento|trasdosado|cajillo|enchape|panel.*yeso|yeso|antimoho|anti moho/.test(t)) tipo='tablaroca';
-  else if(/marmol|granito|cubierta|barra lavamanos/.test(t)) tipo='marmol_granito';
-  else if(/registro|tapa de acceso|tapa registro|paso de instalaciones/.test(t)) tipo='registro';
-  else if(/aplanado|repellado|enjarre|plaster|uniblock|resane|emboquillado|chukum/.test(t)) tipo='aplanado';
-  else if(/pintura|pintar|esmalte|vinil|acril|epox|primario|sellador vin/.test(t)) tipo='pintura';
-  else if(/plaf|fald|tablaroca|durock|tablacemento|trasdosado|cajillo|enchape|panel.*yeso|yeso|antimoho|anti moho/.test(t)) tipo='tablaroca';
-  else if(/porcelanato|loseta|azulejo|cer[aá]mic|lambr|piso|zoclo|boquilla|sardinel/.test(t)) tipo='piso';
-  else if(/marmol|m[aá]rmol|granito|cubierta|barra lavamanos/.test(t)) tipo='marmol_granito';
-  else if(/aplanado|repellado|enjarre|plaster|uniblock|resane|emboquillado|chukum/.test(t)) tipo='aplanado';
-  else if(/sellado|sello|silicon|silic[oó]n|calafate|junta|espuma/.test(t)) tipo='sello';
-  if(!tipo){
-  if(/bomba|electrobomba|equipo de bombeo|bombeo hidr[aá]ulico|motobomba/.test(t)) tipo='bomba';
-  else if(/tuber[ií]a|tubo\s|tubos\s|conducci[oó]n hidr[aá]ulica|red hidr[aá]ulica|l[ií]nea hidr[aá]ulica|bajada pluvial|drenaje sanitario/.test(t)) tipo='tuberia';
-  else if(/lavabo|durock|ptr|mueble.*bañ|mueble.*ban|base.*lavabo|cer[aá]mico/.test(t)) tipo='lavabo_ptr';
-  else if(/estructura met[aá]lica|astm|a500|fy\s*=?\s*46|soldadur|perfil de acero|placa.*acero|grout|primario anticorrosivo|montaje.*estructura|fabricaci[oó]n.*estructura/.test(t)) tipo='estructura_metalica';
-  else if(/acero|varilla|castillo|cadena|armad|fierro|malla/.test(t)) tipo='acero';
-  else if(/concreto|losa|zapata|firme|cimentaci|colado|columna de conc/.test(t)) tipo='concreto';
-  else if(isPaintingConcept) tipo='pintura';
-  else if(/block|tabique|tabic[oó]n|muro|partici[oó]n|mamposter|junteo/.test(t)) tipo='block';
-  else if(/pintura|pintar|esmalte|vinil/.test(t)) tipo='pintura';
-  else if(/impermeabiliz/.test(t)) tipo='imper';
-  else if(/aplanado|repellado|enjarre|yeso|resane/.test(t)) tipo='aplanado';
-  else if(/piso|cer[aá]mic|loseta|porcelanato|azulejo/.test(t)) tipo='piso';
-  else if(/limpieza\s*(y|,)?\s*trazo|trazo\s*y\s*nivelaci[oó]n|trazo\s+topogr[aá]fico|desyerbe|chapeo|limpieza\s+(inicial|del\s+terreno|del\s+predio|del\s+solar)/.test(t)) tipo='limpieza_trazo';
-  else if(/desmonte|desenra[ií]ce|destronque/.test(t)) tipo='desmonte_mecanico';
-  else if(/acarreo/.test(t) && /cami[oó]n|volteo|for[aá]neo/.test(t)) tipo='acarreo_camion';
-  else if(/excavaci[oó]n?.*(m[aá]quina|mec[aá]nica|retroexcavadora|excavadora)|retroexcavadora|excavadora/.test(t)) tipo='excavacion_mecanica';
-  else if(/excavaci|zanja|despalme/.test(t)) tipo='excavacion';
-  else tipo='generico';
-
-  }
-  const unmatched = tipo === 'generico';
-  const TPL = {
-    lavabo_ptr:{ unit:'m',
-      materials:[['Perfil PTR de acero de 2" x 2" cal. 14',1.15,'m',92,0],['Tablero de cemento Durock 12.7 mm',0.65,'m²',210,0],['Anclajes, fijaciones, tornillería y soldadura',1,'lote',25,0],['Pasta, cinta y malla para juntas',0.18,'jgo',85,3],['Pintura anticorrosiva / primario',0.08,'L',98,3],['Materiales misceláneos de ajuste y protección',0.04,'jgo',120,0]],
-      labor:[['Cuadrilla de herrero + ayudante',0.035,'jor',1400,1],['Trazo, nivelación y presentación',0.015,'jor',700,1],['Resanes, cortes y adecuaciones',0.02,'jor',700,1],['Limpieza, retiro y protección del área',0.02,'jor',470,1]],
-      equipment:[['Equipo de protección y andamios (5% de M.O.)',0.05,'(%MO)',49],['Soldadora y herramienta de corte',0.03,'día',120]] },
-    tablaroca:{ unit:'m²',
-      materials:[['Panel de yeso / tablacemento 12.7 mm segun especificacion',1.05,'m²',210,5],['Poste o canal metalico galvanizado',1.25,'m',38,5],['Canal de amarre y refuerzos',0.55,'m',32,5],['Tornilleria, taquetes y fijaciones',0.18,'jgo',85,3],['Cinta y compuesto para juntas',0.22,'kg',42,5],['Pasta / sellador de acabado',0.12,'L',70,5],['Materiales miscelaneos y proteccion',0.04,'jgo',120,0]],
-      labor:[['Instalador de panel (oficial)',0.12,'jor',420,1.85],['Ayudante instalador',0.12,'jor',285,1.82],['Trazo, plomeo y nivelacion',0.025,'jor',420,1.85],['Tratamiento de juntas y resanes',0.05,'jor',380,1.85],['Limpieza y retiro de desperdicio',0.035,'jor',258,1.82]],
-      equipment:[['Andamio / escalera de trabajo',0.04,'día',120],['Herramienta electrica de corte y fijacion',0.03,'día',150],['Equipo de seguridad personal',0.02,'día',90]] },
-    plafon_suspendido:{ unit:'m²',
-      materials:[
-        ['Panel de yeso (tablaroca) 12.7 mm segun especificacion',1.05,'m²',95,8],
-        ['Canaleta de carga 38 mm cal. 22 con pintura anticorrosiva',0.95,'m',38,5],
-        ['Canal liston para suspension oculta',2.3,'m',30,5],
-        ['Colganteria de alambre galvanizado No. 14',0.12,'kg',48,5],
-        ['Alambre recocido No. 16 para amarres',0.05,'kg',38,3],
-        ['Ancla de agujero tipo Ramset con fulminante',1.5,'pza',9,3],
-        ['Tornilleria S-1" y fijaciones para panel',0.18,'jgo',85,3],
-        ['Perfacinta para tratamiento de juntas',1.5,'m',3,5],
-        ['Compuesto Redimix para juntas y resanes',0.9,'kg',22,5]
-      ],
-      labor:[
-        ['Tablaroquero oficial (suspension oculta hasta 4.00 m)',0.1,'jor',420,1.85],
-        ['Ayudante instalador',0.1,'jor',285,1.82],
-        ['Trazo, nivelacion y balanceado de colganteria',0.03,'jor',420,1.85],
-        ['Tratamiento de juntas: perfacinta y Redimix',0.05,'jor',380,1.85],
-        ['Limpieza y retiro de desperdicio',0.03,'jor',258,1.82]
-      ],
-      equipment:[
-        ['Andamio de trabajo hasta 4.00 m de altura',0.06,'día',120],
-        ['Herramienta electrica: rotomartillo y atornillador',0.04,'día',150],
-        ['Equipo de seguridad personal',0.02,'día',90]
-      ] },
-    sello:{ unit:'ml',
-      materials:[['Sellador elastomerico / silicon anti hongos',0.12,'cartucho',95,5],['Primer o limpiador de superficie',0.03,'L',85,3],['Cinta de respaldo o espuma de poliuretano',0.08,'m',18,5],['Material de limpieza y proteccion',0.03,'jgo',60,0]],
-      labor:[['Oficial aplicador de sellos',0.035,'jor',380,1.85],['Ayudante',0.025,'jor',258,1.82],['Preparacion, limpieza y retiro',0.02,'jor',258,1.82]],
-      equipment:[['Pistola calafateadora y herramienta menor',0.02,'día',60],['Escalera / andamio proporcional',0.02,'día',120]] },
-    marmol_granito:{ unit:'m²',
-      materials:[['Adhesivo flexible para piedra natural',0.22,'bulto',220,5],['Boquilla / resina de junta',0.28,'kg',85,5],['Anclajes, separadores y niveladores',0.12,'jgo',120,3],['Material de limpieza y proteccion',0.05,'jgo',90,0]],
-      labor:[['Colocador especializado en marmol/granito',0.16,'jor',520,1.85],['Ayudante colocador',0.16,'jor',285,1.82],['Trazo, cortes y ajuste de piezas',0.06,'jor',520,1.85],['Limpieza final y proteccion',0.04,'jor',258,1.82]],
-      equipment:[['Cortadora con disco diamantado',0.05,'día',180],['Pulidora / herramienta menor',0.04,'día',150],['Equipo de izaje o apoyo proporcional',0.02,'día',200]] },
-    registro:{ unit:'pza',
-      materials:[['Marco y tapa de registro segun medida especificada',1,'pza',480,3],['Canal / perfil galvanizado para soporte',1.2,'m',38,5],['Tornilleria, taquetes y fijaciones',0.12,'jgo',85,3],['Panel de cierre o placa de ajuste',0.35,'m²',210,5],['Pasta, cinta y resane perimetral',0.15,'kg',42,5],['Material de limpieza y proteccion',0.03,'jgo',60,0]],
-      labor:[['Oficial instalador',0.18,'jor',420,1.85],['Ayudante instalador',0.18,'jor',285,1.82],['Trazo, nivelacion y ajuste de vano',0.04,'jor',420,1.85],['Resane y limpieza final',0.04,'jor',258,1.82]],
-      equipment:[['Herramienta electrica de corte y fijacion',0.05,'día',150],['Escalera / andamio proporcional',0.03,'día',120],['Equipo de seguridad personal',0.02,'día',90]] },
-    estructura_metalica:{ unit:'kg',
-      materials:[['Acero estructural ASTM A500 Fy=46 KSI (incl. desperdicio)',1.05,'kg',46.5,0],['Soldadura E-7018 y consumibles de taller',0.03,'kg',120,0],['Primario anticorrosivo alquidálico de alta resistencia',0.02,'L',110,0],['Grout, anclajes y placas base proporcionales',0.015,'jgo',180,0]],
-      labor:[['Cuadrilla de montadores y soldadores calificados',0.012,'jor',1650,1],['Trazo, plomeo y verificación de montaje',0.004,'jor',900,1],['Habilitado, limpieza y protección de soldadura',0.004,'jor',780,1]],
-      equipment:[['Grúa / equipo de izaje proporcional',0.015,'hr',550],['Soldadora, extensiones y herramienta de montaje',0.018,'hr',180],['Herramienta menor y equipo de protección (EPP)',0.08,'(%MO)',19.8]] },
-    concreto:{ unit:'m³',
-      materials:[['Cemento gris CPC 30R',7,'bulto',225,3],['Arena',0.55,'m³',480,5],['Grava 19 mm',0.75,'m³',520,5],['Agua',0.18,'m³',65,0],['Curacreto / membrana de curado',0.12,'L',68,3],['Clavo y madera auxiliar para niveles',0.015,'jgo',180,5]],
-      labor:[['Oficial albañil',0.22,'jor',380,1.85],['Ayudante / peón',0.22,'jor',258,1.82],['Cabo de obra',0.03,'jor',520,1.85],['Limpieza y curado',0.08,'jor',258,1.82]],
-      equipment:[['Revolvedora 1 saco',0.25,'hr',95],['Vibrador de concreto',0.2,'hr',110],['Herramienta de nivelación',0.05,'día',90]] },
-    acero:{ unit:'kg',
-      materials:[['Acero de refuerzo fy=4200',1.05,'kg',26.5,2],['Alambre recocido cal. 18',0.03,'kg',32,3]],
-      labor:[['Fierrero (oficial)',0.018,'jor',400,1.85],['Ayudante',0.018,'jor',258,1.82]],
-      equipment:[['Cizalla / dobladora',0.01,'día',180]] },
-    pintura:{ unit:'m²',
-      materials:[['Pintura vinílica / acrílica según especificación',0.18,'L',85,5],['Sellador vinílico 5x1 / primario según sustrato',0.06,'L',70,5],['Diluyente / agua limpia para aplicación',0.02,'L',28,0],['Lija fina para preparación de superficie',0.08,'pza',18,0],['Cinta masking para cortes y remates',0.05,'rollo',42,0],['Plástico, cartón y protección de áreas',0.08,'m²',12,0],['Rodillo, brocha y charola proporcional',0.035,'jgo',145,0]],
-      labor:[['Pintor oficial',0.055,'jor',360,1.85],['Ayudante de pintor',0.045,'jor',258,1.82],['Preparación, lavado ligero, lijado y limpieza de superficie',0.025,'jor',258,1.82],['Protección de áreas, cortes y limpieza final',0.02,'jor',258,1.82]],
-      equipment:[['Andamio / escalera de trabajo',0.04,'día',120],['Herramienta de aplicación: extensiones, rodillos y brochas',0.025,'día',75],['Equipo de seguridad personal',0.015,'día',90]] },
-    imper:{ unit:'m²',
-      materials:[['Impermeabilizante acrílico',1.6,'L',78,5],['Membrana de refuerzo',0.3,'m²',22,5],['Sellador / primario',0.15,'L',60,5]],
-      labor:[['Aplicador (oficial)',0.05,'jor',360,1.85],['Ayudante',0.05,'jor',258,1.82]],
-      equipment:[['Equipo de aplicación',0.03,'día',90]] },
-    aplanado:{ unit:'m²',
-      materials:[['Cemento gris CPC 30R',0.09,'bulto',225,3],['Cal hidratada',0.04,'bulto',95,3],['Arena cernida',0.025,'m³',480,5],['Agua',0.012,'m³',65,0],['Sellador / aditivo de adherencia',0.04,'L',85,3],['Materiales misceláneos',0.03,'jgo',120,0],['Plástico y protección de áreas',0.04,'m²',12,5]],
-      labor:[['Albañil (oficial)',0.18,'jor',380,1.85],['Peón',0.18,'jor',258,1.82],['Resanes, cortes y adecuaciones',0.08,'jor',380,1.85],['Limpieza, acarreos y retiro al término',0.06,'jor',258,1.82]],
-      equipment:[['Andamio / regla',0.04,'día',120],['Herramienta menor especializada',0.03,'día',85],['Carretilla y equipo de acarreo',0.02,'día',75]] },
-    piso:{ unit:'m²',
-      materials:[['Loseta cerámica 30x30',1.05,'m²',135,8],['Adhesivo / pegazulejo',0.18,'bulto',135,5],['Boquilla / junteador',0.3,'kg',28,5]],
-      labor:[['Colocador (oficial)',0.12,'jor',400,1.85],['Ayudante',0.12,'jor',258,1.82]],
-      equipment:[['Cortadora de loseta',0.03,'día',150]] },
-    excavacion:{ unit:'m³',
-      materials:[],
-      labor:[['Peón (excavación manual)',0.6,'jor',258,1.82],['Cabo de obra',0.03,'jor',380,1.85]],
-      equipment:[['Herramienta de excavación (pala, pico, barreta)',0.05,'día',60]] },
-    limpieza_trazo:{ unit:'m²',
-      materials:[['Cal para trazo',0.05,'kg',12,0],['Estacas de madera',0.08,'pza',8,5],['Hilo nylon para trazo',0.02,'rollo',35,0],['Pintura en aerosol para referencias',0.01,'pza',55,0]],
-      labor:[['Cuadrilla de trazo y nivelación (topógrafo/albañil oficial)',0.02,'jor',480,1.85],['Ayudante de trazo',0.02,'jor',258,1.82]],
-      equipment:[['Equipo topográfico básico (nivel, estadal, cinta)',0.015,'día',180],['Herramienta menor',0.02,'día',60]] },
-    desmonte_mecanico:{ unit:'m²',
-      materials:[],
-      labor:[['Operador de maquinaria pesada',0.015,'jor',650,1.85],['Peón de apoyo',0.02,'jor',258,1.82]],
-      equipment:[['Tractor / retroexcavadora para desmonte',0.04,'hr',850],['Combustible y consumibles de equipo (costo horario)',0.04,'hr',180]] },
-    excavacion_mecanica:{ unit:'m³',
-      materials:[],
-      labor:[['Operador de excavadora / retroexcavadora',0.025,'jor',650,1.85],['Peón de apoyo',0.03,'jor',258,1.82]],
-      equipment:[['Excavadora / retroexcavadora',0.06,'hr',950],['Combustible y consumibles de equipo (costo horario)',0.06,'hr',150]] },
-    acarreo_camion:{ unit:'m³',
-      materials:[],
-      labor:[['Operador de camión de volteo',0.02,'jor',480,1.85],['Ayudante de maniobras',0.01,'jor',258,1.82]],
-      equipment:[['Camión de volteo 7 m³ (costo por hora/ciclo, editable segun distancia)',0.08,'hr',680],['Cargador frontal (carga de material, si aplica)',0.015,'hr',780]] },
-    block:{ unit:'m²',
-      materials:[['Block hueco 15x20x40',12.5,'pza',16.5,3],['Cemento gris CPC 30R',0.16,'bulto',225,3],['Arena cernida',0.035,'m³',480,5],['Agua',0.012,'m³',65,0],['Alambre / plomeo / nivelación',0.015,'jgo',90,0],['Materiales misceláneos',0.02,'jgo',120,0]],
-      labor:[['Albañil (oficial)',0.35,'jor',380,1.85],['Peón',0.35,'jor',258,1.82],['Trazo, plomeo y nivelación',0.04,'jor',380,1.85],['Acarreos internos y limpieza',0.05,'jor',258,1.82]],
-      equipment:[['Andamio / equipo básico',0.05,'día',280],['Revolvedora 1 saco',0.04,'hr',95],['Herramienta de corte y ajuste',0.02,'día',90]] },
-    bomba:{ unit:'pza',
-      materials:[['Bomba centrifuga / sumergible segun especificacion',1,'pza',8500,0],['Base o soporte antivibratorio',1,'jgo',420,0],['Valvulas de conexion (check y compuerta)',2,'pza',380,0],['Conexiones electricas, cable y proteccion termica',1,'lote',650,0],['Accesorios de acople e instalacion',1,'jgo',280,3]],
-      labor:[['Instalador electromecanico (oficial)',0.8,'jor',520,1.85],['Ayudante instalador',0.8,'jor',285,1.82],['Pruebas, arranque y ajuste de equipo',0.2,'jor',520,1.85]],
-      equipment:[['Polipasto / equipo de izaje proporcional',0.15,'día',220],['Herramienta electrica y de conexion',0.1,'día',150],['Equipo de seguridad personal',0.05,'día',90]] },
-    tuberia:{ unit:'m',
-      materials:[['Tubo segun diametro y material especificado',1.05,'m',95,3],['Coples y conexiones proporcionales',0.3,'pza',45,3],['Pegamento / soldadura segun material de tuberia',0.06,'lote',85,0],['Soporteria y abrazaderas',0.25,'pza',38,3]],
-      labor:[['Tubero / plomero (oficial)',0.09,'jor',400,1.85],['Ayudante',0.09,'jor',258,1.82],['Pruebas hidrostaticas y ajuste de juntas',0.02,'jor',400,1.85]],
-      equipment:[['Herramienta de corte y union de tuberia',0.03,'día',110],['Equipo de prueba de presion',0.02,'día',150]] },
-    generico:{ unit:'pza',
-      materials:[['Pendiente de cotización: insumo principal no identificado automáticamente',1,'pza',0,0],['Pendiente de cotización: materiales complementarios y de fijación',1,'lote',0,0]],
-      labor:[['Oficial (revisar cuadrilla segun concepto)',0.1,'jor',380,1.85],['Ayudante',0.1,'jor',258,1.82]],
-      equipment:[['Herramienta menor y equipo de apoyo (revisar segun concepto)',0.05,'día',100]] }
-  };
-  const tpl = TPL[tipo];
-  const normalizeApuRow = (r) => {
-    const nr = [...r];
-    nr[0] = cleanText(nr[0]);
-    nr[2] = normalizeUnitLabel(nr[2]);
-    return nr;
-  };
-  const useCat = (arr) => arr.map(r=>{
-    const m = matchPrice(r[0],catalog);
-    const nr = normalizeApuRow(r);
-    if(m){
-      nr[3]=m.precio;
-      if(m.unidad) nr[2]=normalizeUnitLabel(m.unidad);
-    }
-    return nr;
-  });
-  const materials = useCat(tpl.materials);
-  const labor = tpl.labor.map(normalizeApuRow);
-  const equipment = tpl.equipment.map(normalizeApuRow);
-  if(/calafate|sellado|junta/.test(t)) materials.push(normalizeApuRow(['Calafateo / sellador de juntas',0.08,'L',95,5]));
-  if(/resane|adecuacion|adecuaci[oó]n|corte|elevaci[oó]n/.test(t)) labor.push(['Cortes, elevaciones, resanes y adecuaciones',0.07,'jor',380,1.85]);
-  if(/retiro|limpieza|termino|t[eé]rmino/.test(t)) labor.push(['Retiro al término, limpieza fina y carga manual',0.06,'jor',258,1.82]);
-  if(/acarreo|acarreos/.test(t)) equipment.push(['Equipo menor para acarreos internos',0.04,'día',110]);
-  const standardClave = 'APU-' + stableHash(c);
-  const TPL_META = {
-    plafon_suspendido:{ confidence:88, sat:'72152400' },
-    pintura:{ confidence:88, sat:'72151300' },
-    lavabo_ptr:{ confidence:98, sat:'72101500' },
-    estructura_metalica:{ confidence:97, sat:'72101700' },
-    bomba:{ confidence:90, sat:'40101700' },
-    tuberia:{ confidence:88, sat:'72101507' },
-    limpieza_trazo:{ confidence:85, sat:'72101505' },
-    desmonte_mecanico:{ confidence:83, sat:'72101503' },
-    excavacion_mecanica:{ confidence:85, sat:'72101503' },
-    acarreo_camion:{ confidence:82, sat:'78101800' },
-    generico:{ confidence:45, sat:'72100000' }
-  };
-  const meta = { family: APU_FAMILY_LABELS[tipo] || tipo, confidence: TPL_META[tipo]?.confidence ?? 88, sat: TPL_META[tipo]?.sat ?? '72100000' };
+function legacyShimFromV2(v2, fallbackConcept, sourceFile){
+  const dims = v2.confidence || {};
+  const confidence = Math.round(((Number(dims.precios)||0) + (Number(dims.rendimientos)||0) + (Number(dims.cantidades)||0) + (Number(dims.composicion)||0)) / 4) || 0;
   return {
-    id:standardClave, clave:standardClave, concept:cleanText(c), unit:normalizeUnitLabel(tpl.unit), templateGenerated:true,
-    materials, labor, equipment,
-    herramienta:APU_STANDARD_FACTORS.herramienta, indCampo:APU_STANDARD_FACTORS.indCampo, indOficina:APU_STANDARD_FACTORS.indOficina, finance:APU_STANDARD_FACTORS.finance, utility:APU_STANDARD_FACTORS.utility, cargos:APU_STANDARD_FACTORS.cargos, iva:APU_STANDARD_FACTORS.iva,
-    family: meta.family,
-    confidence: meta.confidence,
-    sat: meta.sat,
-    incomplete: unmatched,
-    aiNotes: unmatched ? ['APU INCOMPLETO: no se identifico con precision la familia tecnica del concepto. Los materiales marcados "Pendiente de cotización" tienen precio $0.00 y no deben tomarse como precio final; captura precios reales antes de exportar.'] : [],
-    date:new Date().toLocaleDateString('es-MX')
+    id: 'APU-' + uid(),
+    clave: v2.clave || ('APU-' + uid().slice(0, 4)),
+    concept: v2.concept || fallbackConcept,
+    unit: v2.unit || 'pza',
+    materials: v2RowsToLegacy('materials', v2.materials),
+    labor: v2RowsToLegacy('labor', v2.labor),
+    equipment: v2RowsToLegacy('equipment', v2.equipment),
+    herramienta: Number(v2.herramientaMenor?.porcentaje ?? APU_DEFAULT_FACTORS.herramienta),
+    indCampo: Number(v2.factores?.indCampo ?? APU_DEFAULT_FACTORS.indCampo),
+    indOficina: Number(v2.factores?.indOficina ?? APU_DEFAULT_FACTORS.indOficina),
+    finance: Number(v2.factores?.finance ?? APU_DEFAULT_FACTORS.finance),
+    utility: Number(v2.factores?.utility ?? APU_DEFAULT_FACTORS.utility),
+    cargos: Number(v2.factores?.cargos ?? APU_DEFAULT_FACTORS.cargos),
+    iva: Number(v2.factores?.iva ?? APU_DEFAULT_FACTORS.iva),
+    family: 'APU generado con IA',
+    confidence,
+    sat: '72100000',
+    sourceFile: sourceFile || 'OpenAI API',
+    aiGenerated: true,
+    templateGenerated: false,
+    templateFallback: false,
+    aiNotes: (v2.supuestos || []).map(s => s?.texto || s).filter(Boolean),
+    date: new Date().toLocaleDateString('es-MX')
   };
 }
-
-function rowImporte(kind, r){
-  const cant = Number(r[1])||0;
-  if(kind==='materials') return cant * (Number(r[3])||0) * (1 + (Number(r[4])||0)/100);
-  if(kind==='labor')     return cant * (Number(r[3])||0) * (Number(r[4])||0); // jornadas × salarioBase × FSR
-  return cant * (Number(r[3])||0); // equipo: cantidad × costo horario
-}
-
-function calcAPU(apu){
-  const sumKind = (kind)=> (apu[kind]||[]).reduce((a,r)=>a+rowImporte(kind,r),0);
-  const mat = sumKind('materials');
-  const mo  = sumKind('labor');
-  const equipo = sumKind('equipment');
-  const herramienta = mo * (Number(apu.herramienta)||0)/100;     // % de mano de obra
-  const direct = mat + mo + equipo + herramienta;                // Costo Directo
-  const indPct = (Number(apu.indCampo)||0) + (Number(apu.indOficina)||0);
-  const indirect = direct * indPct/100;                          // Indirectos (campo + oficina)
-  const finance  = (direct + indirect) * (Number(apu.finance)||0)/100;
-  const utility  = (direct + indirect + finance) * (Number(apu.utility)||0)/100;
-  const cargos   = (direct + indirect + finance + utility) * (Number(apu.cargos)||0)/100;
-  const pu = direct + indirect + finance + utility + cargos;     // Precio Unitario (P.U.O.T., sin IVA)
-  const iva = pu * (Number(apu.iva)||0)/100;
-  return { mat, mo, equipo, herramienta, direct, indirect, finance, utility, cargos, pu, iva, total: pu };
-}
-function auditSource(apu, kind, row){
-  const desc = String(row?.[0] || '').toLowerCase();
-  const market = apu.marketSources?.[String(row?.[0] || '').trim()];
-  if(market) return `Precio de mercado (${market.date}): ${market.source}${market.url ? ' | ' + market.url : ''}`;
-  if(apu.templateGenerated && apu.sourceFile) return `Plantilla ZOEMEC | partida de: ${apu.sourceFile}`;
-  if(apu.templateGenerated) return 'Plantilla ZOEMEC / revisar precios';
-  if(apu.sourceFile) return `Excel completo: ${apu.sourceFile}`;
-  if(apu.referencePU) return 'Concepto importado con P.U. de referencia';
-  if(desc.includes('nuevo ')) return 'Usuario';
-  if(Number(apu.confidence || 0) >= 92) return 'IA ZOEMEC validada';
-  return 'IA ZOEMEC / revisar';
-}
-function auditFormula(kind, row){
-  if(kind === 'materials') return 'Cantidad x P. base x (1 + Merma %)';
-  if(kind === 'labor') return 'Jornadas x Salario base x FSR';
-  return 'Cantidad x Costo horario';
-}
-function auditRow(kind, row, index, apu){
-  const prefix = kind === 'materials' ? 'MAT' : kind === 'labor' ? 'MO' : 'EQ';
-  const qty = Number(row?.[1]) || 0;
-  const unit = String(row?.[2] || '');
-  const base = Number(row?.[3]) || 0;
-  const factor = kind === 'materials' ? Number(row?.[4] || 0) : kind === 'labor' ? Number(row?.[4] || 1) : 0;
-  const importe = rowImporte(kind, row);
-  const rendimiento = qty > 0 ? `${num(1 / qty)} ${apu.unit || 'u'} / ${unit || 'insumo'}` : 'Sin rendimiento';
-  const detalle = kind === 'materials'
-    ? `${num(qty)} x ${money(base)} x (1 + ${num(factor)}%) = ${money(importe)}`
-    : kind === 'labor'
-    ? `${num(qty)} x ${money(base)} x ${num(factor)} = ${money(importe)}`
-    : `${num(qty)} x ${money(base)} = ${money(importe)}`;
-  return {
-    kind,
-    code: `${prefix}-${String(index+1).padStart(3,'0')}`,
-    desc: String(row?.[0] || ''),
-    qty,
-    unit,
-    base,
-    factor,
-    importe,
-    formula: auditFormula(kind, row),
-    detalle,
-    rendimiento,
-    source: auditSource(apu, kind, row),
-    confidence: Number(apu.confidence || 88),
-    notes: kind === 'labor' ? 'Salario real = salario base x FSR' : kind === 'materials' ? 'Incluye merma cuando aplica' : 'Costo horario o cargo proporcional'
-  };
-}
-function buildAuditModel(apu, totals){
-  const materials = (apu.materials || []).map((r,i)=>auditRow('materials', r, i, apu));
-  const labor = (apu.labor || []).map((r,i)=>auditRow('labor', r, i, apu));
-  const equipment = (apu.equipment || []).map((r,i)=>auditRow('equipment', r, i, apu));
-  const all = [...materials, ...labor, ...equipment];
-  const explosion = materials.map(r => ({
-    code:r.code,
-    desc:r.desc,
-    unit:r.unit,
-    qtyUnit:r.qty,
-    qtyTotal:(Number(apu.sourceQty || 1) || 1) * r.qty,
-    pu:r.base,
-    importeTotal:(Number(apu.sourceQty || 1) || 1) * r.importe,
-    source:r.source
-  }));
-  const formulas = [
-    ['Materiales', 'SUMA(Cantidad x P. base x (1 + Merma %))', totals.mat],
-    ['Mano de obra', 'SUMA(Jornadas x Salario base x FSR)', totals.mo],
-    ['Equipo / maquinaria', 'SUMA(Cantidad x Costo horario)', totals.equipo],
-    ['Herramienta menor', `Mano de obra x ${num(apu.herramienta)}%`, totals.herramienta],
-    ['Costo directo', 'Materiales + Mano de obra + Equipo + Herramienta menor', totals.direct],
-    ['Indirectos', `Costo directo x (${num(apu.indCampo)}% campo + ${num(apu.indOficina)}% oficina)`, totals.indirect],
-    ['Financiamiento', `(Costo directo + indirectos) x ${num(apu.finance)}%`, totals.finance],
-    ['Utilidad', `(Costo directo + indirectos + financiamiento) x ${num(apu.utility)}%`, totals.utility],
-    ['Cargos adicionales', `Subtotal x ${num(apu.cargos)}%`, totals.cargos],
-    ['Precio unitario sin IVA', 'Costo directo + indirectos + financiamiento + utilidad + cargos', totals.pu],
-    ['IVA informativo', `Precio unitario x ${num(apu.iva)}%`, totals.iva]
-  ];
-  return { materials, labor, equipment, all, explosion, formulas };
-}
-function normalizeAIAPU(raw, fallbackConcept){
-  const text = (v, fallback='') => String(v ?? fallback).trim();
-  const numeric = (v, fallback=0) => {
-    const n = Number(String(v ?? '').replace(/[^0-9.\-]/g,''));
-    return Number.isFinite(n) ? n : fallback;
-  };
-  const cleanRows = (rows, defaults) => Array.isArray(rows)
-    ? rows.map(r => defaults.map((d,i)=> (i===0 || i===2) ? text(r?.[i], d) : numeric(r?.[i], d)))
-    : [];
-  return {
-    id:'APU-'+uid(),
-    clave:'APU-'+uid().slice(0,4),
-    concept: text(raw.concept, fallbackConcept),
-    unit: text(raw.unit || 'pza').replace('m2','m²').replace('m3','m³'),
-    materials: cleanRows(raw.materials, ['Material',1,'pza',0,0]),
-    labor: cleanRows(raw.labor, ['Mano de obra',0.01,'jor',0,1]),
-    equipment: cleanRows(raw.equipment, ['Equipo',0,'hr',0]),
-    herramienta: Number(raw.herramienta ?? 3),
-    indCampo: Number(raw.indCampo ?? 5),
-    indOficina: Number(raw.indOficina ?? 5),
-    finance: Number(raw.finance ?? 1),
-    utility: Number(raw.utility ?? 12),
-    cargos: Number(raw.cargos ?? 0),
-    iva: Number(raw.iva ?? 16),
-    family: raw.family || 'APU generado con IA',
-    confidence: Number(raw.confidence || 92),
-    sat: raw.sat || '72100000',
-    aiNotes: Array.isArray(raw.notes) ? raw.notes : [],
-    date:new Date().toLocaleDateString('es-MX')
-  };
-}
-function makeEmptyAPU(){
-  return {
-    id:'APU-'+uid(),
-    clave:'APU-'+uid(),
-    concept:'',
-    unit:'m²',
-    materials:[],
-    labor:[],
-    equipment:[],
-    herramienta:0,
-    indCampo:0,
-    indOficina:0,
-    finance:0,
-    utility:0,
-    cargos:0,
-    iva:16,
-    family:'pendiente',
-    confidence:0,
-    sat:'',
-    aiNotes:[]
-  };
-}
-function aiServerUrl(path=''){ return path; }
 
 function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog}){
   const [concept,setConcept]=useState('');
   const [apu,setApu]=useState(()=>makeEmptyAPU());
+  const [apuV2,setApuV2]=useState(()=>finalizeProfessionalAPU(migrateLegacyApuToV2(makeEmptyAPU())));
+  // skipMigrateIdRef: cuando generateAI ya construyo un apuV2 rico (procedimiento,
+  // calidad, seguridad, fuentes, confianza real desde el esquema v2), este efecto
+  // NO debe pisarlo con la migracion vacia de apuV1->v2 solo porque apu.id cambio.
+  const skipMigrateIdRef=useRef(null);
+  useEffect(()=>{
+    if(skipMigrateIdRef.current === apu.id){ skipMigrateIdRef.current = null; return; }
+    setApuV2(finalizeProfessionalAPU(migrateLegacyApuToV2(apu)));
+  },[apu.id]);
+  const [showExecutive,setShowExecutive]=useState(false);
   const [aiOpen,setAiOpen]=useState(false);
   const [excelInfo,setExcelInfo]=useState(null);
   const [aiStatus,setAiStatus]=useState('');
@@ -2076,8 +1141,10 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     setBatchAPUs([]);
     setAiStatus('');
     setBatchBusy(false);
+    setShowExecutive(false);
   };
   const totals=calcAPU(apu);
+  const professionalApu=useMemo(()=>finalizeProfessionalAPU({...apuV2,cantidadObra:Number(apuV2.cantidadObra||excelInfo?.qty||apu.sourceQty||1)}),[apuV2,excelInfo?.qty,apu.sourceQty]);
   const userUsage = usage?.[user?.email] || {apusCreated:0};
   const isFree = user?.role !== 'admin' && (user?.plan || 'Gratis') === 'Gratis';
   const requireApuAccess = () => {
@@ -2138,37 +1205,52 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     setApu(next);
     setExcelInfo(parsed.referencePU ? {fileName:'Texto pegado',concept:parsed.concept,unit:next.unit,qty:parsed.qty,referencePU:parsed.referencePU,catalog:[]} : null);
     setAiStatus('APU estandarizado desde catalogo base ZOEMEC.');
+    setShowExecutive(true);
   };
   const [aiBusy,setAiBusy]=useState(false);
+  // requestSeq: guarda contra respuestas tardias (Prueba 5 del sprint: usuario
+  // dispara una generacion, cambia de concepto/sale del modulo antes de que
+  // responda, y la respuesta tardia NO debe contaminar el desarrollo activo).
+  const aiRequestSeqRef=useRef(0);
   const generateAI=async()=>{
     if(!requireApuAccess()) return;
     if(!concept.trim()){ alert('Pega o sube un concepto real para generar con IA.'); return; }
     if(aiBusy) return;
+    const requestId = ++aiRequestSeqRef.current;
     setAiBusy(true);
-    setAiStatus('Analizando el concepto...');
+    setAiStatus('Analizando el alcance del concepto...');
     const parsed=parseConceptText(concept);
     const controller=new AbortController();
-    const timer=window.setTimeout(()=>controller.abort(), 30000);
+    const timer=window.setTimeout(()=>controller.abort(), 45000);
     try{
-      setAiStatus('Consultando biblioteca y catálogo de precios...');
+      setAiStatus('Generando recursos: mano de obra, materiales, herramienta y equipo...');
       const res=await fetch(aiServerUrl('/api/generate-apu'),{
         method:'POST',
         headers:await authHeaders(),
-        body:JSON.stringify({concept:parsed.concept,catalog}),
+        body:JSON.stringify({concept:parsed.concept,catalog,schema:'v2'}),
         signal:controller.signal
       });
       const data=await res.json().catch(()=>({}));
       if(!res.ok) throw new Error(data?.error || 'No se pudo generar con IA.');
-      setAiStatus('Generando matriz APU...');
-      const aiDraft=normalizeAIAPU(data.apu, parsed.concept);
-      const next=finalizeAIAPU(aiDraft, {concept:parsed.concept, unit:parsed.unit || aiDraft.unit, qty:parsed.qty, referencePU:parsed.referencePU}, 0, 'OpenAI API');
-      setAiStatus('Validando resultados y aplicando precios de catálogo...');
-      setConcept(next.concept);
-      setApu(next);
-      setExcelInfo({fileName:'OpenAI API',concept:next.concept,unit:next.unit,qty:parsed.qty,referencePU:parsed.referencePU,catalog});
-      setAiStatus(`IA lista: ${next.family} (${next.confidence}%)`);
+      if(requestId !== aiRequestSeqRef.current) return; // respuesta tardia de un intento anterior: se descarta
+      setAiStatus('Calculando rendimientos, seguridad, procedimiento y medicion...');
+      const v2 = finalizeProfessionalAPU({
+        ...data.apu,
+        proyecto: apuV2.proyecto || '', cliente: apuV2.cliente || '', ubicacion: apuV2.ubicacion || '', moneda: apuV2.moneda || 'MXN',
+        cantidadObra: Number(parsed.qty || 1) || 1
+      });
+      const shim = legacyShimFromV2(v2, parsed.concept, 'OpenAI API');
+      setAiStatus('Validando resultado...');
+      skipMigrateIdRef.current = shim.id;
+      setConcept(v2.concept || shim.concept);
+      setApu(shim);
+      setApuV2({ ...v2, id: shim.id });
+      setExcelInfo({fileName:'OpenAI API',concept:shim.concept,unit:shim.unit,qty:parsed.qty,referencePU:parsed.referencePU,catalog});
+      setAiStatus(`IA lista: ${v2.confidence.level} confianza ${v2.confidence.score}%`);
       setAiOpen(false);
+      setShowExecutive(true);
     }catch(err){
+      if(requestId !== aiRequestSeqRef.current) return;
       const reason = err?.name==='AbortError' ? 'la IA tardo demasiado en responder' : friendlyServiceError(err,'servidor no disponible');
       const next = templateFallbackAPU({concept:parsed.concept, unit:parsed.unit, qty:parsed.qty, referencePU:parsed.referencePU}, catalog, 0, 'Plantilla tecnica ZOEMEC', reason);
       setConcept(next.concept);
@@ -2176,9 +1258,10 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       setExcelInfo({fileName:'Plantilla tecnica ZOEMEC',concept:next.concept,unit:next.unit,qty:parsed.qty,referencePU:parsed.referencePU,catalog});
       setAiStatus(`Plantilla tecnica aplicada (IA no disponible): ${next.family}`);
       setAiOpen(false);
+      setShowExecutive(true);
     }finally{
+      if(requestId === aiRequestSeqRef.current) setAiBusy(false);
       window.clearTimeout(timer);
-      setAiBusy(false);
     }
   };
   const importExcel=async(file)=>{ if(!file) return; if(/\.xls$/i.test(file.name)){alert('Este lector trabaja con .xlsx o .csv. Abre tu archivo en Excel y guárdalo como .xlsx.');return;} try{ const cat=await parseExcelToCatalog(file); if(!cat.length){alert('No detecté columnas de descripción y precio en el Excel. Revisa que tenga encabezados como "Descripción" y "Precio".');return;} setCatalog(cat); alert(`Catálogo importado: ${cat.length} insumos con precio. Al generar el APU usaré tus precios reales cuando coincidan.`); }catch(err){ alert(`No pude leer el archivo: ${err?.message || 'formato no compatible'}. Usa .xlsx o .csv.`); } };
@@ -2379,20 +1462,77 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   const exportPDF=async()=>{
     if(!hasConceptBatch && isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; }
     setExportBusy(true);
-    try{ hasConceptBatch ? await exportConceptBatchPDF() : exportAPUPDFPro(apu,totals,company); }
+    try{ hasConceptBatch ? await exportConceptBatchPDF() : exportAPUPdfV2(professionalApu); }
     finally{ setExportBusy(false); }
     if(isFree && !hasConceptBatch) markApuUsed();
   };
   const exportExcel=async()=>{
     if(!hasConceptBatch && isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; }
     setExportBusy(true);
-    try{ if(hasConceptBatch) await exportConceptBatch(); else await exportAPUExcel(apu,totals,company); }
+    try{ if(hasConceptBatch) await exportConceptBatch(); else await exportAPUExcelV2(professionalApu); }
     finally{ setExportBusy(false); }
     if(isFree && !hasConceptBatch) markApuUsed();
+  };
+  const findV2Prices=async(current)=>{
+    const resources=['materials','labor','equipment'].flatMap(kind=>(current[kind]||[]).map((row,index)=>({kind,index,row})));
+    const found=await Promise.all(resources.map(async({kind,index,row})=>{
+      try{const res=await fetch('/api/market-price',{method:'POST',headers:await authHeaders(),body:JSON.stringify({description:row.descripcion,unit:row.unidad,kind})});const data=await readJsonSafe(res);const q=data?.quote;if(!res.ok||!(Number(q?.price)>0))return null;const currentPrice=Number(row.precioUnitario??row.salarioBase??row.tarifa??0);return {kind,index,resource:row.descripcion,current:currentPrice,priceRecord:makePriceRecord({description:row.descripcion,price:q.price,unit:row.unidad,originalUnit:q.originalUnit||row.unidad,currency:q.currency||current.moneda||'MXN',supplier:q.supplier||null,sourceName:q.source||null,sourceUrl:q.url||null,sourceType:'ESTIMATED',priceDate:q.date||null,consultedAt:new Date().toISOString(),confidence:q.confidence||0,verified:false})};}catch{return null;}
+    }));return found.filter(Boolean);
   };
 
   return <section><PageHead kicker="APU Inteligente" title="Análisis de Precio Unitario" desc="Metodología RLOPSRM: salario real con FSR, herramienta menor sobre mano de obra, indirectos de campo y oficina, financiamiento, utilidad y cargos adicionales." action={<div className="head-actions"><button className="secondary" onClick={generate}>Generar desarrollo</button><button className="ai-btn" onClick={()=>setAiOpen(o=>!o)}><Icon name="apu" size={17}/> Generar con IA</button></div>} />
     {isFree && <div className="trial-banner"><b>Plan gratis activo:</b> tienes {Math.max(0,1-(userUsage.apusCreated||0))} APU disponible. Para exportar y crear mas APUs activa un plan.</div>}
+    {showExecutive && <div className="panel executive-result">
+      <div className="exec-head">
+        <span className="exec-tag">APU GENERADO</span>
+        <h2>{professionalApu.concept || concept || 'Concepto sin definir'}</h2>
+        <div className="exec-pu"><b>{money(professionalApu.calculated.pu)}</b><span> / {professionalApu.unit}</span></div>
+      </div>
+      <div className="exec-breakdown">
+        <Cost label="Costo directo" v={professionalApu.calculated.direct}/>
+        <Cost label="Indirectos" v={professionalApu.calculated.indirect}/>
+        <Cost label="Financiamiento" v={professionalApu.calculated.finance}/>
+        <Cost label="Utilidad" v={professionalApu.calculated.utility}/>
+        <Cost label="Cargos adicionales" v={professionalApu.calculated.cargos}/>
+        <div className="grand"><span>PRECIO UNITARIO</span><b>{money(professionalApu.calculated.pu)}</b></div>
+      </div>
+      <div className="exec-confidence">
+        <b>Confianza del análisis: {professionalApu.confidence.score}% ({professionalApu.confidence.level})</b>
+        <small>{(() => {
+          const rows = ['materials','labor','equipment'].flatMap(k => professionalApu[k] || []);
+          const needsReview = rows.filter(r => !r.fuente?.proveedor || r.fuente?.estado === 'ESTIMADO_IA' || r.fuente?.estado === 'REQUIERE_VALIDACION').length;
+          return rows.length === 0 ? 'Sin recursos para evaluar.' : needsReview > 0 ? `${needsReview} de ${rows.length} precio(s)/renglones son estimados por IA o sin fuente y requieren validación.` : 'Todos los renglones tienen fuente identificada.';
+        })()}</small>
+      </div>
+      <div className="exec-validation">
+        <b>Validación técnica</b>
+        <span>{professionalApu.warnings.length === 0 ? 'Sin observaciones detectadas.' : `${professionalApu.warnings.length} verificación(es) requieren revisión.`}</span>
+        {professionalApu.warnings.length > 0 && <ul>{professionalApu.warnings.slice(0,6).map((w,i) => <li key={i}>{w.message}</li>)}</ul>}
+      </div>
+      <div className="exec-explain">
+        <b>Cómo construyó ZOEMEC este APU</b>
+        <ul>
+          <li>{professionalApu.concept ? '✓' : '—'} Interpretó el alcance</li>
+          <li>{(professionalApu.labor||[]).length > 0 ? '✓' : '—'} Identificó {(professionalApu.labor||[]).length} recurso(s) de mano de obra</li>
+          <li>{(professionalApu.materials||[]).length > 0 ? '✓' : '—'} Identificó {(professionalApu.materials||[]).length} insumo(s)</li>
+          <li>{((professionalApu.equipment||[]).length > 0 || (professionalApu.herramientaMenor?.detalle||[]).length > 0 || Number(professionalApu.herramientaMenor?.porcentaje) > 0) ? '✓' : '—'} Determinó herramienta y equipo</li>
+          <li>{(professionalApu.labor||[]).some(r => Number(r.rendimiento) > 0) ? '✓' : '—'} Calculó rendimiento</li>
+          <li>{(professionalApu.seguridad||[]).length > 0 ? '✓' : '—'} Analizó seguridad</li>
+          <li>{(professionalApu.procedimientoConstructivo||[]).length > 0 ? '✓' : '—'} Generó procedimiento constructivo</li>
+          <li>{professionalApu.criterioMedicion?.unidadMedicion ? '✓' : '—'} Validó criterio de medición</li>
+          <li>✓ Calculó precio unitario con Motor APU v2</li>
+        </ul>
+        {(professionalApu.supuestos||[]).length > 0 && <><b>Supuestos utilizados</b><ul>{professionalApu.supuestos.map((s,i) => <li key={i}>{s.texto || s}</li>)}</ul></>}
+      </div>
+      <div className="exec-actions">
+        <button onClick={exportPDF} disabled={exportBusy || batchBusy}>{exportBusy ? 'Generando PDF...' : 'Descargar PDF'}</button>
+        <button onClick={exportExcel} disabled={exportBusy || batchBusy}>{exportBusy ? 'Generando Excel...' : 'Descargar Excel'}</button>
+        <button className="secondary" onClick={()=>setShowExecutive(false)}>Editar análisis</button>
+        <button className="soft" onClick={()=>setShowExecutive(false)}>Ver ingeniería</button>
+        <button className="soft" onClick={()=>setShowExecutive(false)}>Ver fuentes</button>
+      </div>
+    </div>}
+    {!showExecutive && <>
     {aiOpen && <div className="panel ai-panel">
       <div className="ai-panel-head"><HardHat size={36}/><div><b>Generar con IA</b><small className="muted">Pega tu concepto y/o importa tu Excel de precios. Usaré tus precios reales donde coincidan los insumos.</small></div></div>
       <textarea className="ai-concept" value={concept} onChange={e=>setConcept(e.target.value)} placeholder="Pega aquí el concepto, ej. Muro de tabique rojo recocido asentado con mortero…"/>
@@ -2414,7 +1554,8 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       </div>}
       <div className="ai-note">El desarrollo se arma con tus precios importados, matrices base y metodologia ZOEMEC. La IA real se ejecuta por endpoints seguros en Vercel.</div>
     </div>}
-    <div className="apu-grid">
+    <ProfessionalApuEditor apu={professionalApu} onChange={setApuV2} user={user} onSave={saved=>setApus([saved,...apus.filter(x=>x.id!==saved.id)])} onFindPrices={findV2Prices} onExcel={exportExcel} onPdf={exportPDF}/>
+    <div className="apu-grid legacy-editor-compat">
       <div className="panel">
         <label>Concepto</label>
         <textarea value={concept} onChange={e=>setConcept(e.target.value)} />
@@ -2489,9 +1630,10 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         <div className="sc-clave">{a.clave} - {a.unit} - {a.date}</div>
         <div className="sc-concept">{a.concept}</div>
         <div className="sc-pu">{money(tt.pu)} <small>/ {a.unit}</small></div>
-        <div className="sc-actions"><button onClick={()=>setApu(a)}>Abrir</button><button className="del" onClick={()=>setApus(apus.filter(x=>x.id!==a.id))}>Borrar</button></div>
+        <div className="sc-actions"><button onClick={()=>{setApu(a);setShowExecutive(false);}}>Abrir</button><button className="del" onClick={()=>setApus(apus.filter(x=>x.id!==a.id))}>Borrar</button></div>
       </div>;})}</div>
     </div>}
+    </>}
   </section>
 }
 
@@ -2524,255 +1666,6 @@ function MatrixTable({kind,rows,updateRow,removeRow,onMarketPrice,priceBusy}){
   </table></div>
 }
 
-function Param({label,v,on}){return <div className="param"><label>{label}</label><input type="number" step="0.1" value={v} onChange={e=>on(e.target.value)}/></div>}
-function Cost({label,v}){return <div className="cost"><span>{label}</span><b>{money(v)}</b></div>}
-
-function exportAPUPDFPro(apu, totals, company){
-  const doc = new jsPDF('landscape', 'mm', 'letter');
-  const audit = buildAuditModel(apu, totals);
-  const W = doc.internal.pageSize.getWidth();
-  const H = doc.internal.pageSize.getHeight();
-  const M = 12;
-  const tableW = W - M*2;
-  const codeX = M + 2;
-  const descX = M + 26;
-  const unitX = W - 112;
-  const qtyX = W - 88;
-  const puX = W - 52;
-  const impX = W - M - 2;
-  const descW = unitX - descX - 10;
-  const purple = [42, 23, 64];
-  const violet = [111, 63, 167];
-  const soft = [246, 242, 250];
-  const line = [221, 211, 232];
-  let y = 14;
-  let page = 1;
-
-  const safe = (v) => cleanText(v).replace(/\s+/g, ' ').trim();
-  const mxn = (v) => money(v).replace('MX$', '$');
-  const code = (prefix,i)=>`${prefix}-${String(i+1).padStart(3,'0')}`;
-  const footer = () => {
-    doc.setFont('helvetica','normal');
-    doc.setFontSize(7.5);
-    doc.setTextColor(120);
-    doc.text('Generado por ZOEMEC IA - Version 2.1 - Revision tecnica editable por el usuario', M, H-8);
-    doc.text(`Pagina ${page}`, W-M, H-8, {align:'right'});
-  };
-  const addPage = () => { footer(); doc.addPage(); page += 1; y = 14; };
-  const check = (need=10) => { if(y + need > H - 18) addPage(); };
-  const title = (text) => {
-    check(12);
-    doc.setFont('helvetica','bold');
-    doc.setFontSize(9);
-    doc.setTextColor(...violet);
-    doc.text(text, M, y);
-    y += 6;
-  };
-
-  doc.setFillColor(...purple);
-  doc.roundedRect(M, y, W - M*2, 18, 1.5, 1.5, 'F');
-  doc.setTextColor(255);
-  doc.setFont('helvetica','bold');
-  doc.setFontSize(14);
-  doc.text('CEDULA DE ANALISIS DE PRECIO UNITARIO', M+4, y+8);
-  doc.setFont('helvetica','normal');
-  doc.setFontSize(8.5);
-  doc.text(`${company.name || 'ZOEMEC'} | ${company.address || 'Mexico'} | ${company.email || 'contacto@zoemec.mx'}`, M+4, y+14);
-  y += 25;
-
-  doc.setFillColor(...soft);
-  doc.setDrawColor(...line);
-  doc.roundedRect(M, y, W - M*2, 18, 1.5, 1.5, 'FD');
-  doc.setTextColor(40);
-  doc.setFontSize(8);
-  doc.setFont('helvetica','bold');
-  doc.text('Clave:', M+4, y+6); doc.text('Unidad:', M+62, y+6); doc.text('Fecha:', M+118, y+6);
-  doc.text('Familia:', M+4, y+13); doc.text('SAT:', M+118, y+13); doc.text('Confianza:', M+152, y+13);
-  doc.setFont('helvetica','normal');
-  doc.text(safe(apu.clave), M+18, y+6);
-  doc.text(safe(apu.unit), M+78, y+6);
-  doc.text(safe(apu.date || new Date().toLocaleDateString('es-MX')), M+132, y+6);
-  doc.text(safe(apu.family || 'APU general').slice(0, 56), M+22, y+13);
-  doc.text(safe(apu.sat || '72100000'), M+128, y+13);
-  doc.text(`${Number(apu.confidence || 88)}%`, M+170, y+13);
-  y += 25;
-
-  doc.setFont('helvetica','bold');
-  doc.setFontSize(8);
-  doc.setTextColor(...violet);
-  doc.text('CONCEPTO ANALIZADO', M, y);
-  y += 5;
-  doc.setFont('helvetica','normal');
-  doc.setFontSize(8.5);
-  doc.setTextColor(35);
-  const conceptLines = doc.splitTextToSize(safe(apu.concept), W - M*2);
-  doc.text(conceptLines, M, y);
-  y += conceptLines.length * 4.2 + 6;
-
-  const tableHeader = () => {
-    doc.setFillColor(...soft);
-    doc.setDrawColor(...line);
-    doc.rect(M, y, tableW, 7, 'FD');
-    doc.setTextColor(55);
-    doc.setFont('helvetica','bold');
-    doc.setFontSize(7.3);
-    doc.text('CODIGO', codeX, y+4.7);
-    doc.text('DESCRIPCION', descX, y+4.7);
-    doc.text('UNIDAD', unitX, y+4.7, {align:'center'});
-    doc.text('CANT.', qtyX, y+4.7, {align:'right'});
-    doc.text('P.U.', puX, y+4.7, {align:'right'});
-    doc.text('IMPORTE', impX, y+4.7, {align:'right'});
-    y += 7;
-  };
-
-  const section = (title) => {
-    check(16);
-    doc.setFillColor(...purple);
-    doc.rect(M, y, tableW, 7, 'F');
-    doc.setTextColor(255);
-    doc.setFont('helvetica','bold');
-    doc.setFontSize(8);
-    doc.text(title, M+2, y+4.8);
-    y += 7;
-    tableHeader();
-  };
-
-  const row = (prefix, idx, desc, unit, qty, pu, importe) => {
-    const descLines = doc.splitTextToSize(safe(desc), descW);
-    const rowH = Math.max(7, descLines.length * 3.8 + 2.8);
-    check(rowH + 2);
-    doc.setDrawColor(...line);
-    doc.line(M, y, W-M, y);
-    doc.setTextColor(35);
-    doc.setFont('helvetica','normal');
-    doc.setFontSize(7.7);
-    doc.text(code(prefix, idx), codeX, y+4.8);
-    doc.text(descLines, descX, y+4.8);
-    doc.text(safe(unit), unitX, y+4.8, {align:'center'});
-    doc.text(num(qty), qtyX, y+4.8, {align:'right'});
-    doc.text(mxn(pu), puX, y+4.8, {align:'right'});
-    doc.text(mxn(importe), impX, y+4.8, {align:'right'});
-    y += rowH;
-  };
-
-  section('MATERIALES');
-  apu.materials.forEach((r,i)=>{
-    const desc = `${r[0]}${Number(r[4]) ? ` (+${num(r[4])}% merma)` : ''}`;
-    row('MAT', i, desc, r[2], r[1], r[3], rowImporte('materials', r));
-  });
-  y += 3;
-  section('MANO DE OBRA');
-  apu.labor.forEach((r,i)=>{
-    const desc = `${safe(r[0])} | FSR ${num(r[4] || 1)} | Salario base ${mxn(r[3])}`;
-    row('MO', i, desc, r[2], r[1], Number(r[3]) * Number(r[4] || 1), rowImporte('labor', r));
-  });
-  y += 3;
-  section('HERRAMIENTA, EQUIPO Y MAQUINARIA');
-  apu.equipment.forEach((r,i)=>row('EQ', i, r[0], r[2], r[1], r[3], rowImporte('equipment', r)));
-  y += 5;
-
-  check(58);
-  const boxX = W - 108;
-  const sum = (label, value, strong=false, fill=false) => {
-    if(fill){
-      doc.setFillColor(238, 224, 247);
-      doc.rect(boxX, y-4.5, 96, 7, 'F');
-    }
-    doc.setDrawColor(...line);
-    doc.line(boxX, y+2.5, W-M, y+2.5);
-    doc.setTextColor(strong ? 35 : 75);
-    doc.setFont('helvetica', strong ? 'bold' : 'normal');
-    doc.setFontSize(strong ? 8.4 : 7.8);
-    doc.text(label, boxX+4, y);
-    doc.text(mxn(value), W-M-2, y, {align:'right'});
-    y += 7;
-  };
-  sum(`Herramienta menor (${num(apu.herramienta)}% M.O.)`, totals.herramienta);
-  sum('Costo directo', totals.direct, true);
-  sum(`Indirectos (${num(Number(apu.indCampo)+Number(apu.indOficina))}%)`, totals.indirect);
-  sum(`Financiamiento (${num(apu.finance)}%)`, totals.finance);
-  sum(`Utilidad (${num(apu.utility)}%)`, totals.utility);
-  if(Number(apu.cargos || 0)) sum(`Cargos adicionales (${num(apu.cargos)}%)`, totals.cargos);
-  sum('PRECIO UNITARIO (sin IVA)', totals.pu, true, true);
-  sum(`IVA ${num(apu.iva)}% (informativo)`, totals.iva);
-
-  y += 5;
-  title('FORMULAS BASE DEL ANALISIS');
-  audit.formulas.forEach(([label, formula, value]) => {
-    check(6);
-    doc.setFont('helvetica','normal');
-    doc.setFontSize(7.4);
-    doc.setTextColor(45);
-    doc.text(label, M, y);
-    doc.text(doc.splitTextToSize(formula, 135), M+45, y);
-    doc.text(mxn(value), W-M-2, y, {align:'right'});
-    y += 5.5;
-  });
-
-  addPage();
-  doc.setFont('helvetica','bold');
-  doc.setFontSize(13);
-  doc.setTextColor(...purple);
-  doc.text('ANEXO TECNICO AUDITABLE', M, y);
-  y += 8;
-  doc.setFont('helvetica','normal');
-  doc.setFontSize(8);
-  doc.setTextColor(65);
-  doc.text('Cada importe conserva formula, rendimiento, fuente y nivel de confianza para revision tecnica.', M, y);
-  y += 8;
-
-  const auditHeader = () => {
-    doc.setFillColor(...soft);
-    doc.setDrawColor(...line);
-    doc.rect(M, y, tableW, 7, 'FD');
-    doc.setTextColor(55);
-    doc.setFont('helvetica','bold');
-    doc.setFontSize(7);
-    doc.text('CODIGO', M+2, y+4.7);
-    doc.text('FORMULA / DETALLE', M+24, y+4.7);
-    doc.text('RENDIMIENTO', W-120, y+4.7);
-    doc.text('FUENTE', W-72, y+4.7);
-    doc.text('CONF.', W-M-2, y+4.7, {align:'right'});
-    y += 7;
-  };
-  auditHeader();
-  audit.all.forEach(r => {
-    const detail = `${r.desc}: ${r.detalle}`;
-    const detailLines = doc.splitTextToSize(detail, W-160);
-    const rowH = Math.max(8, detailLines.length * 3.6 + 3);
-    check(rowH + 2);
-    if(y < 20) auditHeader();
-    doc.setDrawColor(...line);
-    doc.line(M, y, W-M, y);
-    doc.setFont('helvetica','normal');
-    doc.setFontSize(7.2);
-    doc.setTextColor(35);
-    doc.text(r.code, M+2, y+4.7);
-    doc.text(detailLines, M+24, y+4.7);
-    doc.text(doc.splitTextToSize(r.rendimiento, 42), W-120, y+4.7);
-    doc.text(doc.splitTextToSize(r.source, 42), W-72, y+4.7);
-    doc.text(`${r.confidence}%`, W-M-2, y+4.7, {align:'right'});
-    y += rowH;
-  });
-
-  if(audit.explosion.length){
-    y += 5;
-    title('EXPLOSION DE MATERIALES');
-    audit.explosion.forEach(r => {
-      check(6);
-      doc.setFont('helvetica','normal');
-      doc.setFontSize(7.2);
-      doc.setTextColor(35);
-      doc.text(`${r.code} ${safe(r.desc).slice(0, 78)}`, M, y);
-      doc.text(`${num(r.qtyTotal)} ${r.unit}`, W-74, y, {align:'right'});
-      doc.text(mxn(r.importeTotal), W-M-2, y, {align:'right'});
-      y += 5;
-    });
-  }
-
-  footer();
-  doc.save(`${apu.clave}-APU-ZOEMEC.pdf`);
-}
 
 function isExportableConceptItem(item){
   const concept = String(item?.concept || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim();
@@ -2996,151 +1889,6 @@ function exportConceptsAPUPDF(concepts, catalog, company, preparedAPUs=[]){
   doc.save('APU-POR-CONCEPTO-ZOEMEC.pdf');
 }
 
-function buildCompleteAPUSheet(apu, totals, company, audit){
-  const rows = [];
-  const widths = [13,52,12,13,15,12,34,17,28];
-  const add = (row=[]) => {
-    const full = [...row];
-    while(full.length < widths.length) full.push(null);
-    rows.push(full);
-    return rows.length;
-  };
-  const span = (value, style=XLS.title) => [xcell(value, {...style, columnSpan:widths.length}), ...Array(widths.length-1).fill(null)];
-  const section = (label) => add(span(label, XLS.section));
-  const header = () => add(styleHeader(['Codigo','Descripcion','Unidad','Cantidad','P.U. / salario','Merma / FSR','Formula auditable','Importe','Fuente']));
-  const moneyFormula = (formula) => fcell(formula, XLS.calc);
-  const sumRange = (col, start, end) => end >= start ? `=SUM(${col}${start}:${col}${end})` : '=0';
-  const formulaNote = (text) => xcell(text, XLS.formula);
-  const inputNumber = (value, style={}) => xcell(Number(value || 0), {...XLS.input, ...style});
-
-  add(span(company.name || 'ZOEMEC', XLS.title));
-  add(span('CEDULA DE ANALISIS DE PRECIO UNITARIO AUDITABLE', XLS.subtitle));
-  add([xcell('Clave', XLS.label), apu.clave, xcell('Unidad', XLS.label), apu.unit, xcell('Fecha', XLS.label), apu.date, xcell('Confianza IA', XLS.label), `${apu.confidence || 88}%`]);
-  add([xcell('Familia', XLS.label), apu.family || 'APU general', xcell('Clave SAT', XLS.label), apu.sat || '72100000', xcell('Cantidad base', XLS.label), Number(apu.sourceQty || 1) || 1, xcell('P.U. referencia', XLS.label), Number(apu.referencePU || 0) || 0]);
-  add(span('CONCEPTO ANALIZADO', XLS.label));
-  add([xcell(apu.concept, {...XLS.note, columnSpan:widths.length}), ...Array(widths.length-1).fill(null)]);
-  add([]);
-  section('RESUMEN EJECUTIVO');
-  add(styleHeader(['Partida','Base de calculo','Importe','','Partida','Base de calculo','Importe','','']));
-  const resRow1 = add(['Materiales','Suma de insumos materiales',null,null,'Herramienta menor',`${apu.herramienta}% sobre M.O.`,null,null,null]);
-  const resRow2 = add(['Mano de obra','Jornadas x salario base x FSR',null,null,'Indirectos',`${Number(apu.indCampo || 0)+Number(apu.indOficina || 0)}% sobre C.D.`,null,null,null]);
-  const resRow3 = add(['Equipo / maquinaria','Cantidad x costo horario',null,null,'Precio unitario sin IVA','Resultado auditable',null,null,null]);
-  add([]);
-
-  section('MATERIALES');
-  header();
-  const matStart = rows.length + 1;
-  audit.materials.forEach(r => {
-    const n = rows.length + 1;
-    add([r.code,r.desc,r.unit,inputNumber(r.qty, XLS.qty),inputNumber(r.base, XLS.money),inputNumber(r.factor),formulaNote(`D${n} x E${n} x (1 + F${n}/100)`),moneyFormula(`=D${n}*E${n}*(1+F${n}/100)`),r.source]);
-  });
-  const matEnd = rows.length;
-  const matTotalRow = add([null,xcell('SUBTOTAL MATERIALES', XLS.total),null,null,null,null,null,moneyFormula(sumRange('H', matStart, matEnd)),null]);
-  add([]);
-
-  section('MANO DE OBRA  (salario real = salario base x FSR)');
-  header();
-  const laborStart = rows.length + 1;
-  audit.labor.forEach(r => {
-    const n = rows.length + 1;
-    add([r.code,r.desc,r.unit,inputNumber(r.qty, XLS.qty),inputNumber(r.base, XLS.money),inputNumber(r.factor),formulaNote(`D${n} x E${n} x F${n}`),moneyFormula(`=D${n}*E${n}*F${n}`),r.source]);
-  });
-  const laborEnd = rows.length;
-  const laborTotalRow = add([null,xcell('SUBTOTAL MANO DE OBRA', XLS.total),null,null,null,null,null,moneyFormula(sumRange('H', laborStart, laborEnd)),null]);
-  add([]);
-
-  section('EQUIPO / MAQUINARIA');
-  header();
-  const eqStart = rows.length + 1;
-  audit.equipment.forEach(r => {
-    const n = rows.length + 1;
-    add([r.code,r.desc,r.unit,inputNumber(r.qty, XLS.qty),inputNumber(r.base, XLS.money),null,formulaNote(`D${n} x E${n}`),moneyFormula(`=D${n}*E${n}`),r.source]);
-  });
-  const eqEnd = rows.length;
-  const eqTotalRow = add([null,xcell('SUBTOTAL EQUIPO', XLS.total),null,null,null,null,null,moneyFormula(sumRange('H', eqStart, eqEnd)),null]);
-  add([]);
-
-  section('INTEGRACION DEL PRECIO UNITARIO');
-  add(styleHeader(['Concepto','Formula tecnica','Base / porcentaje','','','','Formula Excel','Importe','']));
-  const hmRow = add(['Herramienta menor',`H${laborTotalRow} x ${Number(apu.herramienta || 0)}%`,`${apu.herramienta}% M.O.`,null,null,null,formulaNote(`H${laborTotalRow} x ${Number(apu.herramienta || 0)}%`),moneyFormula(`=H${laborTotalRow}*${Number(apu.herramienta || 0)}/100`),null]);
-  const directRow = add([xcell('COSTO DIRECTO', XLS.total),'Materiales + Mano de obra + Equipo + Herramienta',null,null,null,null,formulaNote(`H${matTotalRow}+H${laborTotalRow}+H${eqTotalRow}+H${hmRow}`),moneyFormula(`=H${matTotalRow}+H${laborTotalRow}+H${eqTotalRow}+H${hmRow}`),null]);
-  const indirectPct = Number(apu.indCampo || 0)+Number(apu.indOficina || 0);
-  const indirectRow = add(['Indirectos',`Costo directo x (${apu.indCampo}% campo + ${apu.indOficina}% oficina)`,`${indirectPct}%`,null,null,null,formulaNote(`H${directRow} x ${indirectPct}%`),moneyFormula(`=H${directRow}*${indirectPct}/100`),null]);
-  const financeRow = add(['Financiamiento',`(Costo directo + indirectos) x ${apu.finance}%`,`${apu.finance}%`,null,null,null,formulaNote(`(H${directRow}+H${indirectRow}) x ${apu.finance}%`),moneyFormula(`=(H${directRow}+H${indirectRow})*${Number(apu.finance || 0)}/100`),null]);
-  const utilityRow = add(['Utilidad',`(Costo directo + indirectos + financiamiento) x ${apu.utility}%`,`${apu.utility}%`,null,null,null,formulaNote(`(H${directRow}+H${indirectRow}+H${financeRow}) x ${apu.utility}%`),moneyFormula(`=(H${directRow}+H${indirectRow}+H${financeRow})*${Number(apu.utility || 0)}/100`),null]);
-  const chargesRow = add(['Cargos adicionales',`Subtotal anterior x ${apu.cargos}%`,`${apu.cargos}%`,null,null,null,formulaNote(`(H${directRow}+H${indirectRow}+H${financeRow}+H${utilityRow}) x ${apu.cargos}%`),moneyFormula(`=(H${directRow}+H${indirectRow}+H${financeRow}+H${utilityRow})*${Number(apu.cargos || 0)}/100`),null]);
-  const puRow = add([xcell('PRECIO UNITARIO SIN IVA', XLS.grand),'Costo directo + sobrecostos',null,null,null,null,formulaNote(`SUM(H${directRow}:H${chargesRow})`),fcell(`=SUM(H${directRow}:H${chargesRow})`, XLS.grand),null]);
-  add(['IVA informativo',`Precio unitario x ${apu.iva}%`,`${apu.iva}%`,null,null,null,formulaNote(`H${puRow} x ${apu.iva}%`),moneyFormula(`=H${puRow}*${Number(apu.iva || 0)}/100`),null]);
-  // Resumen ejecutivo ligado por formula a los subtotales reales: recalcula al editar cualquier insumo
-  rows[resRow1-1][2] = moneyFormula(`=H${matTotalRow}`);
-  rows[resRow1-1][6] = moneyFormula(`=H${hmRow}`);
-  rows[resRow2-1][2] = moneyFormula(`=H${laborTotalRow}`);
-  rows[resRow2-1][6] = moneyFormula(`=H${indirectRow}`);
-  rows[resRow3-1][2] = moneyFormula(`=H${eqTotalRow}`);
-  rows[resRow3-1][6] = fcell(`=H${puRow}`, XLS.grand);
-  add([]);
-
-  section('ANALISIS DE CUADRILLAS Y FSR');
-  add(styleHeader(['Oficio','Jornadas','Unidad','Salario base','FSR','Salario real','Importe','Rendimiento','']));
-  audit.labor.forEach(r => {
-    const n = rows.length + 1;
-    add([r.desc,inputNumber(r.qty, XLS.qty),r.unit,inputNumber(r.base, XLS.money),inputNumber(r.factor),fcell(`=D${n}*E${n}`, XLS.money),fcell(`=B${n}*D${n}*E${n}`, XLS.money),r.rendimiento,null]);
-  });
-  add([]);
-
-  section('EXPLOSION DE INSUMOS DEL CONCEPTO');
-  add(styleHeader(['Codigo','Descripcion','Unidad','Cantidad por unidad','Cantidad concepto','P.U.','Importe','Fuente','Formula']));
-  audit.explosion.forEach(r => {
-    const n = rows.length + 1;
-    add([r.code,r.desc,r.unit,inputNumber(r.qtyUnit, XLS.qty),inputNumber(r.qtyTotal, XLS.qty),inputNumber(r.pu, XLS.money),fcell(`=E${n}*F${n}`, XLS.money),r.source,formulaNote(`E${n} x F${n}`)]);
-  });
-  add([]);
-  section('SUPUESTOS Y TRAZABILIDAD');
-  add([xcell('Editable por el usuario', XLS.ok), xcell('Cantidades, precios, mermas, FSR, indirectos, financiamiento, utilidad y cargos se pueden modificar. Los importes se recalculan por formula.', {...XLS.note, columnSpan:8}), ...Array(7).fill(null)]);
-  add([xcell('Fuente principal', XLS.label), apu.sourceFile || 'Generacion IA ZOEMEC / captura del usuario', xcell('Partida / fila origen', XLS.label), `${apu.sourceSection || 'Sin partida'}${apu.rowNumber ? ` | fila ${apu.rowNumber}` : ''}`, xcell('Revision requerida', XLS.label), 'Validar rendimientos y precios contra catalogo vigente', null, null, null]);
-  return { sheet:`APU-${apu.clave}`.slice(0,31), rows, widths, stickyRowsCount:13 };
-}
-
-async function exportAPUExcel(apu, totals, company){
-  const audit = buildAuditModel(apu, totals);
-  const meta = [
-    [xcell(company.name || 'ZOEMEC', XLS.title)],
-    [xcell('CEDULA DE ANALISIS DE PRECIO UNITARIO AUDITABLE', XLS.subtitle)],
-    [xcell('Clave', XLS.section),apu.clave,xcell('Unidad', XLS.section),apu.unit,xcell('Fecha', XLS.section),apu.date],
-    [xcell('Familia detectada', XLS.section),apu.family || 'APU general',xcell('Clave SAT', XLS.section),apu.sat || '72100000',xcell('Confianza IA', XLS.section),`${apu.confidence || 88}%`],
-    [xcell('Concepto', XLS.section),apu.concept],
-    ['Cantidad de referencia', Number(apu.sourceQty || 1) || 1, 'P.U. referencia', Number(apu.referencePU || 0) || 0],
-    ['Criterio','La IA propone insumos; ZOEMEC calcula importes, formulas, rendimientos y trazabilidad.']
-  ];
-  const matrizHead = ['Tipo','Codigo','Descripcion','Cantidad','Unidad','Precio / salario / costo','Merma o FSR','Formula visible','Detalle numerico','Rendimiento','Fuente','Confianza','Importe'];
-  const matrizRows = audit.all.map(r=>[
-    r.kind === 'materials' ? 'Material' : r.kind === 'labor' ? 'Mano de obra' : 'Equipo',
-    r.code,r.desc,r.qty,r.unit,r.base,r.factor,r.formula,r.detalle,r.rendimiento,r.source,`${r.confidence}%`,r.importe
-  ]);
-  const sectionRows = (title, rows) => [
-    styleSection(title),
-    styleHeader(matrizHead.slice(1)),
-    ...rows.map(r=>[r.code,r.desc,r.qty,r.unit,r.base,r.factor,r.formula,r.detalle,r.rendimiento,r.source,`${r.confidence}%`,r.importe])
-  ];
-  const sobrecostos = [
-    styleHeader(['Concepto','Formula visible','Importe']),
-    ...audit.formulas
-  ];
-  const explosion = [
-    styleHeader(['Codigo','Descripcion','Unidad','Cantidad por unidad','Cantidad total concepto','P.U.','Importe total','Fuente']),
-    ...audit.explosion.map(r=>[r.code,r.desc,r.unit,r.qtyUnit,r.qtyTotal,r.pu,r.importeTotal,r.source])
-  ];
-  const trazabilidad = [
-    styleHeader(['Codigo','Descripcion','Fuente','Confianza','Nota tecnica']),
-    ...audit.all.map(r=>[r.code,r.desc,r.source,`${r.confidence}%`,r.notes]),
-    [],
-    styleSection('Notas IA / tecnicas'),
-    ...((apu.notes || []).length ? apu.notes.map(n=>[n]) : [['Sin notas adicionales']])
-  ];
-  const sheets = [buildCompleteAPUSheet(apu, totals, company, audit)];
-  await exportWorkbookExcel(sheets, `${apu.clave}-APU-AUDITABLE-ZOEMEC.xlsx`).catch(()=>alert('No pude generar el Excel. Inténtalo de nuevo.'));
-}
-
 function uniqueSheetName(base, used){
   const clean = String(base || 'APU').replace(/[\\/*?:[\]]/g,'-').slice(0,31) || 'APU';
   let name = clean;
@@ -3178,11 +1926,10 @@ function buildConceptCatalogSheet(concepts){
   return { sheet:'CATALOGO', rows, widths:[10,18,32,12,76,12,14,18,18], stickyRowsCount:4 };
 }
 async function exportConceptsAPUWorkbook(concepts, catalog, company, preparedAPUs=[]){
-  const used = new Set();
   const limited = concepts.filter(isExportableConceptItem);
-  const sheets = [buildConceptCatalogSheet(limited), ...limited.map((item, idx) => {
+  const professional = limited.map((item, idx) => {
     const base = preparedAPUs[idx] || makeAPUFromConcept(item.concept, catalog);
-    const apu = {
+    const legacy = {
       ...base,
       clave: String(item.code || base.clave || `APU-${idx+1}`).slice(0,24),
       concept: item.concept,
@@ -3193,30 +1940,32 @@ async function exportConceptsAPUWorkbook(concepts, catalog, company, preparedAPU
       sourceSection: item.section || base.sourceSection || '',
       rowNumber: item.rowNumber || base.rowNumber || idx+1
     };
-    const totals = calcAPU(apu);
-    const audit = buildAuditModel(apu, totals);
-    const sheet = buildCompleteAPUSheet(apu, totals, company, audit);
-    sheet.sheet = uniqueSheetName(`${String(idx+1).padStart(2,'0')}-${apu.clave || `APU-${idx+1}`}`, used);
-    return sheet;
-  })];
-  if(!sheets.length){
+    return finalizeProfessionalAPU({...migrateLegacyApuToV2(legacy),proyecto:company?.name||'',cliente:company?.client||'',cantidadObra:Number(item.qty||1)||1});
+  });
+  if(!professional.length){
     alert('No hay conceptos para exportar.');
     return;
   }
-  return await exportWorkbookExcel(sheets, `APU-POR-CONCEPTO-ZOEMEC.xlsx`);
+  return await exportAPUExcelV2(professional,{fileName:'APU-POR-CONCEPTO-ZOEMEC.xlsx'});
 }
 
 function Budgets({company,budgets,setBudgets,items,setItems}){
-  const total=items.reduce((a,i)=>a+Number(i.qty)*Number(i.pu),0), iva=total*.16;
+  // Antes el 16% estaba repetido como literal en 3 lugares (calculo, export
+  // Excel, export PDF) y no leia el campo "iva" de ningun APU. Ahora hay una
+  // sola tasa configurable por presupuesto (arranca en DEFAULT_IVA_RATE, la
+  // misma fuente unica que usa el motor APU) y se guarda con el presupuesto
+  // para que quede fija en su historial aunque el default cambie despues.
+  const [ivaRate,setIvaRate]=useState(DEFAULT_IVA_RATE);
+  const total=items.reduce((a,i)=>a+Number(i.qty)*Number(i.pu),0);
+  const safeIvaRate=toSafeNonNegativeNumber(ivaRate);
+  const iva=total*safeIvaRate/100;
   const update=(i,k,v)=>setItems(items.map((r,idx)=>idx===i?{...r,[k]:v}:r));
   const removeRow=(i)=>setItems(items.filter((_,idx)=>idx!==i));
-  const save=()=>{setBudgets([{id:'PRE-'+uid(),name:'Presupuesto ejecutivo',client:'Cliente por definir',items,total:total+iva,date:new Date().toLocaleDateString('es-MX')},...budgets]); alert('Presupuesto guardado');};
+  const save=()=>{setBudgets([{id:'PRE-'+uid(),name:'Presupuesto ejecutivo',client:'Cliente por definir',items,ivaRate:safeIvaRate,total:total+iva,date:new Date().toLocaleDateString('es-MX')},...budgets]); alert('Presupuesto guardado');};
   return <section><PageHead kicker="Presupuestos" title="Presupuesto profesional" desc="Captura conceptos con su precio unitario (sin IVA), calcula totales con IVA y exporta con membrete. Las calculadoras del Centro Técnico pueden enviar conceptos directo aquí." action={<button onClick={save}>Guardar presupuesto</button>} />
-    <div className="panel"><div className="apu-table-scroll"><table className="budget-table"><thead><tr><th>Concepto</th><th>Unidad</th><th>Cantidad</th><th>P.U. (sin IVA)</th><th>Importe</th><th></th></tr></thead><tbody>{items.map((it,i)=><tr key={i}><td><input value={it.concept} onChange={e=>update(i,'concept',e.target.value)}/></td><td><input value={it.unit} onChange={e=>update(i,'unit',e.target.value)}/></td><td><input type="number" value={it.qty} onChange={e=>update(i,'qty',e.target.value)}/></td><td><input type="number" value={it.pu} onChange={e=>update(i,'pu',e.target.value)}/></td><td>{money(it.qty*it.pu)}</td><td><a className="row-del" title="Eliminar concepto" onClick={()=>removeRow(i)}>✕</a></td></tr>)}</tbody></table></div><button className="soft" onClick={()=>setItems([...items,{concept:'Nuevo concepto',unit:'m²',qty:1,pu:0}])}>+ Agregar concepto</button><div className="totals"><Cost label="Subtotal" v={total}/><Cost label="IVA 16%" v={iva}/><div className="grand"><span>Total</span><b>{money(total+iva)}</b></div></div><div className="export-row"><button onClick={()=>exportBudgetExcel(items,total,iva)}>Exportar Excel</button><button onClick={()=>exportBudgetPDF(items,total,iva,company)}>Exportar PDF</button></div></div>
+    <div className="panel"><div className="apu-table-scroll"><table className="budget-table"><thead><tr><th>Concepto</th><th>Unidad</th><th>Cantidad</th><th>P.U. (sin IVA)</th><th>Importe</th><th></th></tr></thead><tbody>{items.map((it,i)=><tr key={i}><td><input value={it.concept} onChange={e=>update(i,'concept',e.target.value)}/></td><td><input value={it.unit} onChange={e=>update(i,'unit',e.target.value)}/></td><td><input type="number" value={it.qty} onChange={e=>update(i,'qty',e.target.value)}/></td><td><input type="number" value={it.pu} onChange={e=>update(i,'pu',e.target.value)}/></td><td>{money(it.qty*it.pu)}</td><td><a className="row-del" title="Eliminar concepto" onClick={()=>removeRow(i)}>✕</a></td></tr>)}</tbody></table></div><button className="soft" onClick={()=>setItems([...items,{concept:'Nuevo concepto',unit:'m²',qty:1,pu:0}])}>+ Agregar concepto</button><div className="totals"><Cost label="Subtotal" v={total}/><div className="iva-rate-row"><label htmlFor="budget-iva-rate">Tasa de IVA (%)</label><input id="budget-iva-rate" type="number" min="0" step="0.5" value={ivaRate} onChange={e=>setIvaRate(e.target.value)}/></div><Cost label={`IVA ${num(safeIvaRate)}%`} v={iva}/><div className="grand"><span>Total</span><b>{money(total+iva)}</b></div></div><div className="export-row"><button onClick={()=>exportBudgetExcel(items,total,iva,safeIvaRate)}>Exportar Excel</button><button onClick={()=>exportBudgetPDF(items,total,iva,company,safeIvaRate)}>Exportar PDF</button></div></div>
   </section>
 }
-function exportBudgetExcel(items,total,iva){const rows=[['PRESUPUESTO'],['Concepto','Unidad','Cantidad','P.U. (sin IVA)','Importe'],...items.map(i=>[i.concept,i.unit,i.qty,i.pu,Number(i.qty)*Number(i.pu)]),[],['Subtotal',total],['IVA 16%',iva],['Total',total+iva]];exportRowsExcel(rows,'Presupuesto-ZOEMEC.xlsx').catch(()=>alert('No pude generar el Excel. Inténtalo de nuevo.'));}
-function exportBudgetPDF(items,total,iva,company){const doc=new jsPDF();let y=16;doc.setFontSize(16);doc.text(company.name||'ZOEMEC',14,y);doc.setFontSize(13);doc.text('PRESUPUESTO EJECUTIVO',14,y+14);y+=28;items.forEach(i=>{doc.text(i.concept,14,y,{maxWidth:100});doc.text(i.unit,118,y);doc.text(String(i.qty),135,y);doc.text(money(i.pu),152,y);doc.text(money(i.qty*i.pu),174,y);y+=10;if(y>270){doc.addPage();y=18;}});y+=6;doc.text('Subtotal',130,y);doc.text(money(total),170,y);y+=8;doc.text('IVA 16%',130,y);doc.text(money(iva),170,y);y+=8;doc.text('Total',130,y);doc.text(money(total+iva),170,y);doc.save('Presupuesto-ZOEMEC.pdf');}
 
 function ClientsProjects({clients,setClients,projects,setProjects}){
   return <section><PageHead kicker="Centro de costos" title="Clientes y proyectos" desc="Administra clientes, contactos, RFC, obras, avances y presupuestos desde un solo módulo." />
@@ -3309,68 +2058,6 @@ function Clients({clients,setClients,embedded=false}){
     </div></div>}
     <div className="panel clients-panel"><input className="search" placeholder="Buscar cliente, contacto o correo..." value={q} onChange={e=>setQ(e.target.value)}/><div className="client-grid">{filtered.map(c=><div className="client-card" key={c.id}><div className="client-avatar">{(c.name||'C')[0]}</div><div><h2>{c.name}</h2><p>{c.type} - {c.contact}</p><small>{c.email || c.phone || 'Sin contacto registrado'}</small><small>RFC: {c.rfc || 'Pendiente'}</small><div className="client-stats"><span>{c.projects} proyectos</span><span>{c.budgets} presupuestos</span><b>{money(c.amount)}</b></div></div><em>{c.status}</em></div>)}</div>{!filtered.length && !clients.length && <EmptyState icon="clientes" title="Aún no tienes clientes en tu Centro de costos" text="Agrega tu primer cliente con datos de contacto y RFC para iniciar la cartera." actionLabel="+ Nuevo cliente" onAction={()=>setShowForm(true)}/>}{!filtered.length && clients.length>0 && <EmptyState text="No hay clientes con ese criterio de búsqueda."/>}</div>
   </section>
-}
-
-/* Taxonomia unica de disciplinas: la usan tanto la Biblioteca (para clasificar
-   documentos) como el motor de APU (para etiquetar la familia de un concepto,
-   via APU_FAMILY_LABELS mas abajo). Un documento y un APU con la misma familia
-   usan literalmente el mismo texto, para que "usar como fuente" tenga sentido. */
-const LIBRARY_DISCIPLINES=[
-  ['Acabados',['acabado','piso','azulejo','loseta','porcelanato','ceramico','pintura','aplanado','recubrimiento','boquilla','marmol','granito','sellador','registro','impermeabiliz']],
-  ['Albanileria',['albanileria','muro','block','tabique','castillo','cadena','mortero','aplanado']],
-  ['Tablaroca y Durock',['tablaroca','durock','yeso','plafon','bastidor','panel','lavabo']],
-  ['Electricidad',['electricidad','electrico','electrica','cfe','luminaria','cable','contacto','canalizacion','conduit']],
-  ['Hidrosanitaria',['hidrosanitario','hidraulica','sanitario','agua potable','drenaje','alcantarillado','tuberia','valvula','bomba','bombeo']],
-  ['Aire acondicionado',['aire acondicionado','hvac','ducto','difusor','chiller','minisplit']],
-  ['Estructura metalica',['estructura','metalica','acero','ptr','perfil','soldadura','herrerias','herreria']],
-  ['Cimentacion',['cimentacion','zapata','losa','contratrabe','pilote','plantilla','concreto']],
-  ['Terracerias',['terraceria','excavacion','relleno','compactacion','acarreo','base hidraulica']],
-  ['Urbanizacion',['urbanizacion','pavimento','banqueta','guarnicion','asfalto','adoquin']],
-  ['Equipamiento',['equipamiento','mobiliario','senaletica','senalizacion','juego','equipo']],
-  ['Limpieza y preliminares',['limpieza','preliminar','trazo','nivelacion','demolicion','retiro']],
-  ['Gas e incendio',['gas','incendio','sprinkler','hidrante','extintor']]
-];
-/* Mapa tipo interno del motor APU -> familia compartida con la Biblioteca.
-   No cambia la clasificacion tecnica (tipo), solo la etiqueta que se muestra. */
-const APU_FAMILY_LABELS = {
-  concreto:'Cimentacion', acero:'Estructura metalica', estructura_metalica:'Estructura metalica',
-  block:'Albanileria', tablaroca:'Tablaroca y Durock', lavabo_ptr:'Tablaroca y Durock', plafon_suspendido:'Tablaroca y Durock',
-  pintura:'Acabados', aplanado:'Acabados', piso:'Acabados', marmol_granito:'Acabados', sello:'Acabados', registro:'Acabados', imper:'Acabados',
-  excavacion:'Terracerias', excavacion_mecanica:'Terracerias', desmonte_mecanico:'Terracerias', acarreo_camion:'Terracerias',
-  limpieza_trazo:'Limpieza y preliminares', tuberia:'Hidrosanitaria', bomba:'Hidrosanitaria', generico:'General'
-};
-function libKey(v=''){
-  return cleanText(v).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9.%/ -]/g,' ').replace(/\s+/g,' ').trim();
-}
-function detectLibraryFamily(name='', cat=''){
-  const key=libKey(`${name} ${cat}`);
-  const hit=LIBRARY_DISCIPLINES.find(([,terms])=>terms.some(t=>key.includes(libKey(t))));
-  return hit ? hit[0] : 'General';
-}
-function extractLibraryTags(name='', cat='', family=''){
-  const key=libKey(`${name} ${cat} ${family}`);
-  const tags=[
-    ['apu','APU'],['matriz','Matriz'],['matrices','Matriz'],['precio','Precio'],['costo','Costo'],
-    ['rendimiento','Rendimiento'],['mano de obra','Mano de obra'],['cuadrilla','Cuadrilla'],
-    ['fsr','FSR'],['catalogo','Catalogo'],['base','Base'],['norma','Norma'],['formato','Formato'],
-    ['excel','Excel'],['xlsx','Excel'],['pdf','PDF'],['obra publica','Obra publica'],['neodata','Neodata'],['opus','OPUS']
-  ].filter(([needle])=>key.includes(needle)).map(([,tag])=>tag);
-  const familyTags=family && family!=='General' ? [family] : [];
-  return [...new Set([...familyTags,...tags])].slice(0,7);
-}
-function enrichLibraryMeta(meta, classify){
-  const cat=meta.cat || classify(meta.name);
-  const family=meta.family || detectLibraryFamily(meta.name, cat);
-  const tags=meta.tags?.length ? meta.tags : extractLibraryTags(meta.name, cat, family);
-  const sourceType=['XLS','XLSX','CSV'].includes(meta.ext) ? 'Hoja de costos' : ['PDF'].includes(meta.ext) ? 'Documento tecnico' : ['JPG','JPEG','PNG','WEBP'].includes(meta.ext) ? 'Imagen tecnica' : 'Archivo tecnico';
-  return {...meta,cat,family,tags,sourceType,indexed:true,status:meta.status && meta.status!=='Pendiente de indice' ? meta.status : 'Indexado por metadata',confidence:Math.min(98,55+tags.length*7)};
-}
-function scoreLibraryFile(file,q=''){
-  const query=libKey(q);
-  if(!query) return 1;
-  const hay=libKey([file.name,file.cat,file.family,file.sourceType,...(file.tags||[])].join(' '));
-  const terms=query.split(' ').filter(Boolean);
-  return terms.reduce((n,t)=>n+(hay.includes(t)?2:0), hay.includes(query)?8:0);
 }
 
 function GoogleDrivePanel({user, onImported}){
@@ -3542,7 +2229,7 @@ const LIBRARY_DEMO_SEED = [
 
 function Library({user}){
   const fileInputRef=useRef(null);
-  const [files,setFiles]=useLocalState('zoemec-biblioteca',[]);
+  const [files,setFiles]=useLocalState('zoemec-biblioteca',[],user?.uid);
   const [uploading,setUploading]=useState(false);
   const [q,setQ]=useState('');
   const [type,setType]=useState('Todos');
@@ -3747,263 +2434,6 @@ function AcademyPanel(){
   </div>;
 }
 
-/* Centro Técnico: calculadora de block + calculadora de FSR real (Art. 191 RLOPSRM) */
-/* ---------- Calculadoras del Centro Técnico ---------- */
-function NField({label,value,on,step}){return <div className="nf"><label>{label}</label><input type="number" step={step||'any'} value={value} onChange={e=>on(e.target.value)}/></div>;}
-function ORow({label,val,total}){return <div className={"o"+(total?" total":"")}><span>{label}</span><b>{val}</b></div>;}
-/* Envía el resultado de una calculadora directo al módulo de Presupuestos (ventaja vs OPUS/Neodata) */
-function sendToBudget(p){
-  const qty=Number(p?.qty)||0, pu=Number(p?.pu)||0;
-  if(!p?.concept || qty<=0 || pu<=0 || !isFinite(pu)){ alert('Captura cantidades y precios válidos antes de enviar a presupuesto.'); return; }
-  window.dispatchEvent(new CustomEvent('zoemec-budget-add',{detail:{concept:p.concept,unit:p.unit||'lote',qty:+qty.toFixed(2),pu:+pu.toFixed(2)}}));
-  alert(`"${p.concept}" se agregó a Presupuestos con cantidad y P.U. calculados.`);
-}
-function copyCalcResult(title,out){
-  const text=`${title}\n${out}`;
-  navigator.clipboard?.writeText(text).then(()=>alert('Resultado copiado al portapapeles.')).catch(()=>alert(text));
-}
-function CalcCard({icon,title,sub,children,out,budget,copyText}){
-  return <div className="panel calc">
-    <div className="calc-head"><span className="ci"><Icon name={icon} size={20}/></span><div><h2>{title}</h2>{sub && <small className="muted">{sub}</small>}</div></div>
-    {children}
-    <div className="calc-out">{out}</div>
-    {(budget||copyText) && <div className="calc-actions">
-      {copyText && <button className="ghost" onClick={()=>copyCalcResult(title,copyText)}>Copiar</button>}
-      {budget && <button onClick={()=>sendToBudget(budget)}>→ Presupuesto</button>}
-    </div>}
-  </div>;
-}
-const n2 = x => (Number(x)||0).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2});
-
-function ConcreteCalc(){
-  const [s,setS]=useState({l:3,a:3,h:0.1,fc:'200',cem:225,are:480,gra:520});
-  const set=(k,v)=>setS({...s,[k]:v});
-  const DOS={'100':[5.5,0.56,0.69],'150':[6.2,0.54,0.68],'200':[7.0,0.51,0.66],'250':[8.0,0.50,0.65],'300':[9.0,0.49,0.63]};
-  const vol=(+s.l||0)*(+s.a||0)*(+s.h||0), d=DOS[s.fc];
-  const cem=vol*d[0], are=vol*d[1], gra=vol*d[2], agua=vol*180;
-  const cost=cem*(+s.cem)+are*(+s.are)+gra*(+s.gra);
-  return <CalcCard icon="concreto" title="Concreto hidráulico" sub="Volumen, dosificación y costo de material"
-    budget={{concept:`Concreto hidráulico f'c=${s.fc} kg/cm² hecho en obra`,unit:'m³',qty:vol,pu:vol>0?cost/vol:0}}
-    copyText={`Volumen: ${n2(vol)} m³ | Cemento: ${Math.ceil(cem)} bultos | Arena: ${n2(are)} m³ | Grava: ${n2(gra)} m³ | Costo: ${money(cost)}`}
-    out={<><ORow label="Volumen" val={n2(vol)+' m³'}/><ORow label="Cemento" val={Math.ceil(cem)+' bulto'}/><ORow label="Arena" val={n2(are)+' m³'}/><ORow label="Grava" val={n2(gra)+' m³'}/><ORow label="Agua" val={Math.round(agua)+' L'}/><ORow label="Costo de material" val={money(cost)} total/></>}>
-    <div className="calc-row"><NField label="Largo (m)" value={s.l} on={v=>set('l',v)}/><NField label="Ancho (m)" value={s.a} on={v=>set('a',v)}/><NField label="Espesor (m)" value={s.h} on={v=>set('h',v)}/></div>
-    <div className="calc-row"><div className="nf"><label>Resistencia f'c</label><select value={s.fc} onChange={e=>set('fc',e.target.value)}>{Object.keys(DOS).map(k=><option key={k} value={k}>{k} kg/cm²</option>)}</select></div><NField label="Cemento ($/bulto)" value={s.cem} on={v=>set('cem',v)}/></div>
-    <div className="calc-row"><NField label="Arena ($/m³)" value={s.are} on={v=>set('are',v)}/><NField label="Grava ($/m³)" value={s.gra} on={v=>set('gra',v)}/></div>
-  </CalcCard>;
-}
-
-function SteelCalc(){
-  const [s,setS]=useState({pzas:20,largo:6,diam:'1/2',merma:5,precio:26.5});
-  const set=(k,v)=>setS({...s,[k]:v});
-  const KGM={'3/8':0.560,'1/2':0.994,'5/8':1.552,'3/4':2.235,'1':3.973};
-  const kg=(+s.pzas||0)*(+s.largo||0)*KGM[s.diam];
-  const kgM=kg*(1+(+s.merma||0)/100);
-  const cost=kgM*(+s.precio);
-  return <CalcCard icon="acero" title="Acero de refuerzo" sub="Peso por varilla, merma y costo"
-    budget={{concept:`Acero de refuerzo fy=4200 var. ${s.diam}" (incluye merma)`,unit:'kg',qty:kgM,pu:+s.precio||0}}
-    copyText={`Acero: ${n2(kg)} kg | Con merma: ${n2(kgM)} kg | Costo: ${money(cost)}`}
-    out={<><ORow label="Peso de acero" val={n2(kg)+' kg'}/><ORow label={`Con merma (${n2(s.merma)}%)`} val={n2(kgM)+' kg'}/><ORow label="Costo de acero" val={money(cost)} total/></>}>
-    <div className="calc-row"><NField label="Piezas (varillas)" value={s.pzas} on={v=>set('pzas',v)}/><NField label="Largo c/u (m)" value={s.largo} on={v=>set('largo',v)}/></div>
-    <div className="calc-row"><div className="nf"><label>Diámetro</label><select value={s.diam} onChange={e=>set('diam',e.target.value)}>{Object.keys(KGM).map(k=><option key={k} value={k}>{k}" ({KGM[k]} kg/m)</option>)}</select></div><NField label="Merma (%)" value={s.merma} on={v=>set('merma',v)}/></div>
-    <NField label="Precio acero ($/kg)" value={s.precio} on={v=>set('precio',v)}/>
-  </CalcCard>;
-}
-
-function BlockCalc(){
-  const [s,setS]=useState({area:30,piezas:12.5,precio:16.5,cem:225,arena:480});
-  const set=(k,v)=>setS({...s,[k]:v});
-  const blocks=Math.ceil((+s.area||0)*(+s.piezas||0));
-  const cemBultos=(+s.area||0)*0.16, arenaM3=(+s.area||0)*0.035;
-  const cost=blocks*(+s.precio)+cemBultos*(+s.cem)+arenaM3*(+s.arena);
-  return <CalcCard icon="block" title="Muro de block" sub="Piezas, mortero de junteo y costo"
-    budget={{concept:'Muro de block de concreto 15 cm asentado con mortero',unit:'m²',qty:+s.area||0,pu:(+s.area||0)>0?cost/(+s.area):0}}
-    copyText={`Blocks: ${blocks} pza | Cemento: ${Math.ceil(cemBultos)} bultos | Arena: ${n2(arenaM3)} m³ | Costo: ${money(cost)}`}
-    out={<><ORow label="Blocks" val={blocks+' pza'}/><ORow label="Cemento (junteo)" val={Math.ceil(cemBultos)+' bulto'}/><ORow label="Arena" val={n2(arenaM3)+' m³'}/><ORow label="Costo de material" val={money(cost)} total/></>}>
-    <div className="calc-row"><NField label="Área de muro (m²)" value={s.area} on={v=>set('area',v)}/><NField label="Blocks por m²" value={s.piezas} on={v=>set('piezas',v)}/></div>
-    <div className="calc-row"><NField label="Precio block ($/pza)" value={s.precio} on={v=>set('precio',v)}/><NField label="Cemento ($/bulto)" value={s.cem} on={v=>set('cem',v)}/></div>
-    <NField label="Arena ($/m³)" value={s.arena} on={v=>set('arena',v)}/>
-  </CalcCard>;
-}
-
-function PaintCalc(){
-  const [s,setS]=useState({area:100,rend:10,manos:2,precio:85});
-  const set=(k,v)=>setS({...s,[k]:v});
-  const litros=(+s.area||0)*(+s.manos||0)/(+s.rend||1);
-  const cubetas=Math.ceil(litros/19), cost=litros*(+s.precio);
-  return <CalcCard icon="pintura" title="Pintura" sub="Litros por rendimiento y manos"
-    budget={{concept:`Pintura vinílica a ${s.manos} manos`,unit:'m²',qty:+s.area||0,pu:(+s.area||0)>0?cost/(+s.area):0}}
-    copyText={`Litros: ${n2(litros)} L | Cubetas 19 L: ${cubetas} | Costo: ${money(cost)}`}
-    out={<><ORow label="Litros" val={n2(litros)+' L'}/><ORow label="Cubetas 19 L" val={cubetas+' pza'}/><ORow label="Costo de pintura" val={money(cost)} total/></>}>
-    <div className="calc-row"><NField label="Área (m²)" value={s.area} on={v=>set('area',v)}/><NField label="Rendimiento (m²/L)" value={s.rend} on={v=>set('rend',v)}/></div>
-    <div className="calc-row"><NField label="Manos / capas" value={s.manos} on={v=>set('manos',v)}/><NField label="Precio ($/L)" value={s.precio} on={v=>set('precio',v)}/></div>
-  </CalcCard>;
-}
-
-function WaterproofCalc(){
-  const [s,setS]=useState({area:80,rend:1.2,capas:2,precio:78});
-  const set=(k,v)=>setS({...s,[k]:v});
-  const litros=(+s.area||0)*(+s.capas||0)/(+s.rend||1);
-  const cubetas=Math.ceil(litros/19), cost=litros*(+s.precio);
-  return <CalcCard icon="impermeabilizante" title="Impermeabilizante" sub="Material por capas de aplicación"
-    budget={{concept:`Impermeabilizante acrílico a ${s.capas} capas`,unit:'m²',qty:+s.area||0,pu:(+s.area||0)>0?cost/(+s.area):0}}
-    copyText={`Material: ${n2(litros)} L | Cubetas: ${cubetas} | Costo: ${money(cost)}`}
-    out={<><ORow label="Material" val={n2(litros)+' L'}/><ORow label="Cubetas 19 L" val={cubetas+' pza'}/><ORow label="Costo de material" val={money(cost)} total/></>}>
-    <div className="calc-row"><NField label="Área (m²)" value={s.area} on={v=>set('area',v)}/><NField label="Rendimiento (m²/L)" value={s.rend} on={v=>set('rend',v)}/></div>
-    <div className="calc-row"><NField label="Capas" value={s.capas} on={v=>set('capas',v)}/><NField label="Precio ($/L)" value={s.precio} on={v=>set('precio',v)}/></div>
-  </CalcCard>;
-}
-
-function ExcavationCalc(){
-  const [s,setS]=useState({l:10,a:0.6,prof:0.8,abund:25,precio:180});
-  const set=(k,v)=>setS({...s,[k]:v});
-  const banco=(+s.l||0)*(+s.a||0)*(+s.prof||0);
-  const suelto=banco*(1+(+s.abund||0)/100), cost=banco*(+s.precio);
-  return <CalcCard icon="excavacion" title="Excavación" sub="Volumen en banco, abundamiento y mano de obra"
-    budget={{concept:'Excavación a mano en material tipo B',unit:'m³',qty:banco,pu:+s.precio||0}}
-    copyText={`Banco: ${n2(banco)} m³ | Suelto: ${n2(suelto)} m³ | Costo M.O.: ${money(cost)}`}
-    out={<><ORow label="Volumen en banco" val={n2(banco)+' m³'}/><ORow label={`Vol. suelto (+${n2(s.abund)}%)`} val={n2(suelto)+' m³'}/><ORow label="Costo mano de obra" val={money(cost)} total/></>}>
-    <div className="calc-row"><NField label="Largo (m)" value={s.l} on={v=>set('l',v)}/><NField label="Ancho (m)" value={s.a} on={v=>set('a',v)}/><NField label="Profundidad (m)" value={s.prof} on={v=>set('prof',v)}/></div>
-    <div className="calc-row"><NField label="Abundamiento (%)" value={s.abund} on={v=>set('abund',v)}/><NField label="Precio M.O. ($/m³)" value={s.precio} on={v=>set('precio',v)}/></div>
-  </CalcCard>;
-}
-
-function FoundationCalc(){
-  const [s,setS]=useState({l:12,a:0.6,h:0.25,exc:180,conc:2450,plantilla:0.05});
-  const set=(k,v)=>setS({...s,[k]:v});
-  const vol=(+s.l||0)*(+s.a||0)*(+s.h||0);
-  const excVol=(+s.l||0)*(+s.a||0)*((+s.h||0)+(+s.plantilla||0));
-  const plantVol=(+s.l||0)*(+s.a||0)*(+s.plantilla||0);
-  const cost=excVol*(+s.exc||0)+(vol+plantVol)*(+s.conc||0);
-  return <CalcCard icon="concreto" title="Cimentación" sub="Excavación, plantilla y concreto por tramo"
-    budget={{concept:'Cimentación de concreto (excavación, plantilla y colado)',unit:'m³',qty:vol,pu:vol>0?cost/vol:0}}
-    copyText={`Excavación: ${n2(excVol)} m³ | Plantilla: ${n2(plantVol)} m³ | Concreto: ${n2(vol)} m³ | Costo: ${money(cost)}`}
-    out={<><ORow label="Excavación" val={n2(excVol)+' m³'}/><ORow label="Plantilla" val={n2(plantVol)+' m³'}/><ORow label="Concreto cimentación" val={n2(vol)+' m³'}/><ORow label="Costo estimado" val={money(cost)} total/></>}>
-    <div className="calc-row"><NField label="Largo (m)" value={s.l} on={v=>set('l',v)}/><NField label="Ancho (m)" value={s.a} on={v=>set('a',v)}/><NField label="Peralte (m)" value={s.h} on={v=>set('h',v)}/></div>
-    <div className="calc-row"><NField label="Plantilla (m)" value={s.plantilla} on={v=>set('plantilla',v)} step="0.01"/><NField label="Excavación ($/m³)" value={s.exc} on={v=>set('exc',v)}/><NField label="Concreto ($/m³)" value={s.conc} on={v=>set('conc',v)}/></div>
-  </CalcCard>;
-}
-
-function StoneCalc(){
-  const [s,setS]=useState({l:10,a:0.6,h:0.8,piedra:520,cemento:225,arena:480,mo:650});
-  const set=(k,v)=>setS({...s,[k]:v});
-  const vol=(+s.l||0)*(+s.a||0)*(+s.h||0);
-  const piedra=vol*1.15, cem=vol*3.1, arena=vol*0.42;
-  const cost=piedra*(+s.piedra||0)+cem*(+s.cemento||0)+arena*(+s.arena||0)+vol*(+s.mo||0);
-  return <CalcCard icon="block" title="Piedra" sub="Mampostería de piedra braza con mortero"
-    budget={{concept:'Mampostería de piedra braza asentada con mortero cemento-arena',unit:'m³',qty:vol,pu:vol>0?cost/vol:0}}
-    copyText={`Volumen: ${n2(vol)} m³ | Piedra: ${n2(piedra)} m³ | Cemento: ${Math.ceil(cem)} bultos | Arena: ${n2(arena)} m³ | Costo: ${money(cost)}`}
-    out={<><ORow label="Volumen muro" val={n2(vol)+' m³'}/><ORow label="Piedra braza" val={n2(piedra)+' m³'}/><ORow label="Cemento" val={Math.ceil(cem)+' bultos'}/><ORow label="Arena" val={n2(arena)+' m³'}/><ORow label="Costo estimado" val={money(cost)} total/></>}>
-    <div className="calc-row"><NField label="Largo (m)" value={s.l} on={v=>set('l',v)}/><NField label="Ancho (m)" value={s.a} on={v=>set('a',v)}/><NField label="Altura (m)" value={s.h} on={v=>set('h',v)}/></div>
-    <div className="calc-row"><NField label="Piedra ($/m³)" value={s.piedra} on={v=>set('piedra',v)}/><NField label="Cemento ($/bulto)" value={s.cemento} on={v=>set('cemento',v)}/><NField label="M.O. ($/m³)" value={s.mo} on={v=>set('mo',v)}/></div>
-    <NField label="Arena ($/m³)" value={s.arena} on={v=>set('arena',v)}/>
-  </CalcCard>;
-}
-
-function ChainCalc(){
-  const [s,setS]=useState({l:12,b:0.15,h:0.2,varillas:4,diam:'3/8',sep:0.2,conc:2450,acero:26.5});
-  const set=(k,v)=>setS({...s,[k]:v});
-  const KGM={'3/8':0.560,'1/2':0.994,'5/8':1.552};
-  const vol=(+s.l||0)*(+s.b||0)*(+s.h||0);
-  const longKg=(+s.l||0)*(+s.varillas||0)*KGM[s.diam];
-  const estribos=Math.ceil((+s.l||0)/((+s.sep||0.2)||0.2))+1;
-  const per=Math.max(0,2*((+s.b||0)+(+s.h||0)-0.08));
-  const estrKg=estribos*per*0.25;
-  const kg=(longKg+estrKg)*1.05;
-  const cost=vol*(+s.conc||0)+kg*(+s.acero||0);
-  return <CalcCard icon="acero" title="Cadena" sub="Concreto, varillas longitudinales y estribos"
-    budget={{concept:`Cadena de concreto armado ${s.b}x${s.h} m con ${s.varillas} var. ${s.diam}"`,unit:'m',qty:+s.l||0,pu:(+s.l||0)>0?cost/(+s.l):0}}
-    copyText={`Concreto: ${n2(vol)} m³ | Estribos: ${estribos} pza | Acero: ${n2(kg)} kg | Costo: ${money(cost)}`}
-    out={<><ORow label="Concreto" val={n2(vol)+' m³'}/><ORow label="Estribos" val={estribos+' pza'}/><ORow label="Acero estimado" val={n2(kg)+' kg'}/><ORow label="Costo material" val={money(cost)} total/></>}>
-    <div className="calc-row"><NField label="Largo (m)" value={s.l} on={v=>set('l',v)}/><NField label="Base (m)" value={s.b} on={v=>set('b',v)}/><NField label="Peralte (m)" value={s.h} on={v=>set('h',v)}/></div>
-    <div className="calc-row"><NField label="Varillas" value={s.varillas} on={v=>set('varillas',v)}/><div className="nf"><label>Diámetro</label><select value={s.diam} onChange={e=>set('diam',e.target.value)}>{Object.keys(KGM).map(k=><option key={k}>{k}</option>)}</select></div><NField label="Estribos cada (m)" value={s.sep} on={v=>set('sep',v)} step="0.05"/></div>
-    <div className="calc-row"><NField label="Concreto ($/m³)" value={s.conc} on={v=>set('conc',v)}/><NField label="Acero ($/kg)" value={s.acero} on={v=>set('acero',v)}/></div>
-  </CalcCard>;
-}
-
-function ColumnTieCalc(){
-  const [s,setS]=useState({pzas:4,h:2.6,b:0.15,d:0.15,varillas:4,diam:'3/8',sep:0.2,conc:2450,acero:26.5});
-  const set=(k,v)=>setS({...s,[k]:v});
-  const KGM={'3/8':0.560,'1/2':0.994,'5/8':1.552};
-  const vol=(+s.pzas||0)*(+s.h||0)*(+s.b||0)*(+s.d||0);
-  const longKg=(+s.pzas||0)*(+s.h||0)*(+s.varillas||0)*KGM[s.diam];
-  const estribos=(+s.pzas||0)*(Math.ceil((+s.h||0)/((+s.sep||0.2)||0.2))+1);
-  const per=Math.max(0,2*((+s.b||0)+(+s.d||0)-0.08));
-  const estrKg=estribos*per*0.25;
-  const kg=(longKg+estrKg)*1.05;
-  const cost=vol*(+s.conc||0)+kg*(+s.acero||0);
-  return <CalcCard icon="acero" title="Castillo" sub="Castillos de concreto armado por pieza"
-    budget={{concept:`Castillo de concreto armado ${s.b}x${s.d} m, h=${s.h} m`,unit:'pza',qty:+s.pzas||0,pu:(+s.pzas||0)>0?cost/(+s.pzas):0}}
-    copyText={`Concreto: ${n2(vol)} m³ | Estribos: ${estribos} pza | Acero: ${n2(kg)} kg | Costo: ${money(cost)}`}
-    out={<><ORow label="Concreto" val={n2(vol)+' m³'}/><ORow label="Estribos" val={estribos+' pza'}/><ORow label="Acero estimado" val={n2(kg)+' kg'}/><ORow label="Costo material" val={money(cost)} total/></>}>
-    <div className="calc-row"><NField label="Piezas" value={s.pzas} on={v=>set('pzas',v)}/><NField label="Altura c/u (m)" value={s.h} on={v=>set('h',v)}/><NField label="Sección b (m)" value={s.b} on={v=>set('b',v)}/><NField label="Sección d (m)" value={s.d} on={v=>set('d',v)}/></div>
-    <div className="calc-row"><NField label="Varillas" value={s.varillas} on={v=>set('varillas',v)}/><div className="nf"><label>Diámetro</label><select value={s.diam} onChange={e=>set('diam',e.target.value)}>{Object.keys(KGM).map(k=><option key={k}>{k}</option>)}</select></div><NField label="Estribos cada (m)" value={s.sep} on={v=>set('sep',v)} step="0.05"/></div>
-    <div className="calc-row"><NField label="Concreto ($/m³)" value={s.conc} on={v=>set('conc',v)}/><NField label="Acero ($/kg)" value={s.acero} on={v=>set('acero',v)}/></div>
-  </CalcCard>;
-}
-
-function PlasterCalc(){
-  const [s,setS]=useState({area:80,esp:1.5,cemento:225,arena:480,mo:95});
-  const set=(k,v)=>setS({...s,[k]:v});
-  const factor=(+s.esp||1.5)/1.5;
-  const cem=(+s.area||0)*0.09*factor, arena=(+s.area||0)*0.025*factor;
-  const cost=cem*(+s.cemento||0)+arena*(+s.arena||0)+(+s.area||0)*(+s.mo||0);
-  return <CalcCard icon="pintura" title="Aplanado" sub="Mortero cemento-arena por espesor"
-    budget={{concept:`Aplanado de mortero cemento-arena, espesor ${s.esp} cm`,unit:'m²',qty:+s.area||0,pu:(+s.area||0)>0?cost/(+s.area):0}}
-    copyText={`Área: ${n2(s.area)} m² | Cemento: ${Math.ceil(cem)} bultos | Arena: ${n2(arena)} m³ | Costo: ${money(cost)}`}
-    out={<><ORow label="Área" val={n2(s.area)+' m²'}/><ORow label="Cemento" val={Math.ceil(cem)+' bultos'}/><ORow label="Arena" val={n2(arena)+' m³'}/><ORow label="Costo estimado" val={money(cost)} total/></>}>
-    <div className="calc-row"><NField label="Área (m²)" value={s.area} on={v=>set('area',v)}/><NField label="Espesor (cm)" value={s.esp} on={v=>set('esp',v)} step="0.1"/></div>
-    <div className="calc-row"><NField label="Cemento ($/bulto)" value={s.cemento} on={v=>set('cemento',v)}/><NField label="Arena ($/m³)" value={s.arena} on={v=>set('arena',v)}/><NField label="M.O. ($/m²)" value={s.mo} on={v=>set('mo',v)}/></div>
-  </CalcCard>;
-}
-
-function SlabCalc(){
-  const [s,setS]=useState({area:60,esp:0.1,conc:2450,malla:48,mo:85});
-  const set=(k,v)=>setS({...s,[k]:v});
-  const vol=(+s.area||0)*(+s.esp||0);
-  const malla=(+s.area||0)*1.05;
-  const cost=vol*(+s.conc||0)+malla*(+s.malla||0)+(+s.area||0)*(+s.mo||0);
-  return <CalcCard icon="concreto" title="Firme" sub="Firme de concreto con malla proporcional"
-    budget={{concept:`Firme de concreto de ${Math.round((+s.esp||0)*100)} cm con malla electrosoldada`,unit:'m²',qty:+s.area||0,pu:(+s.area||0)>0?cost/(+s.area):0}}
-    copyText={`Concreto: ${n2(vol)} m³ | Malla: ${n2(malla)} m² | Costo: ${money(cost)}`}
-    out={<><ORow label="Concreto" val={n2(vol)+' m³'}/><ORow label="Malla / refuerzo" val={n2(malla)+' m²'}/><ORow label="Área firme" val={n2(s.area)+' m²'}/><ORow label="Costo estimado" val={money(cost)} total/></>}>
-    <div className="calc-row"><NField label="Área (m²)" value={s.area} on={v=>set('area',v)}/><NField label="Espesor (m)" value={s.esp} on={v=>set('esp',v)} step="0.01"/></div>
-    <div className="calc-row"><NField label="Concreto ($/m³)" value={s.conc} on={v=>set('conc',v)}/><NField label="Malla/refuerzo ($/m²)" value={s.malla} on={v=>set('malla',v)}/><NField label="M.O. ($/m²)" value={s.mo} on={v=>set('mo',v)}/></div>
-  </CalcCard>;
-}
-
-function FSRCalc(){
-  const [s,setS]=useState({tp:365,tl:250,ps:0.27});
-  const set=(k,v)=>setS({...s,[k]:v});
-  const tp=+s.tp||0, tl=+s.tl||1, ps=+s.ps||0;
-  const fsr=(ps*(tp/tl))+(tp/tl);
-  return <CalcCard icon="fsr" title="Factor de Salario Real" sub="Art. 191 RLOPSRM - Fsr = Ps x (Tp/Tl) + (Tp/Tl)"
-    copyText={`FSR = ${fsr.toFixed(4)} (Tp=${s.tp}, Tl=${s.tl}, Ps=${s.ps})`}
-    out={<><ORow label="Relación pagado/laborado" val={(tp/tl).toFixed(4)}/><ORow label="FSR" val={fsr.toFixed(4)} total/></>}>
-    <div className="calc-row"><NField label="Tp — días pagados/año" value={s.tp} on={v=>set('tp',v)}/><NField label="Tl — días laborados/año" value={s.tl} on={v=>set('tl',v)}/></div>
-    <NField label="Ps — obligaciones obrero-patronales (fracción)" value={s.ps} on={v=>set('ps',v)} step="0.01"/>
-    <small className="muted">Úsalo en la columna FSR del APU.</small>
-  </CalcCard>;
-}
-
-const CALC_GROUPS={
-  'Estructura':[['Cimentación',FoundationCalc],['Cadena',ChainCalc],['Castillo',ColumnTieCalc],['Concreto',ConcreteCalc],['Acero',SteelCalc],['Firme',SlabCalc]],
-  'Albañilería':[['Piedra',StoneCalc],['Muro de block',BlockCalc],['Aplanado',PlasterCalc]],
-  'Acabados':[['Pintura',PaintCalc],['Impermeabilizante',WaterproofCalc]],
-  'Terracerías':[['Excavación',ExcavationCalc]],
-  'Costos':[['FSR',FSRCalc]]
-};
-function TechnicalCenter({embedded=false}){
-  const [cat,setCat]=useState('Todas');
-  const cats=['Todas',...Object.keys(CALC_GROUPS)];
-  const list=cat==='Todas' ? Object.values(CALC_GROUPS).flat() : CALC_GROUPS[cat];
-  return <section>{!embedded && <PageHead kicker="Centro Técnico" title="Calculadoras de obra" desc="Cuantifica y costea al instante. Todas las cantidades, rendimientos y precios son editables, y cada resultado puede enviarse directo a Presupuestos." />}
-    {embedded && <div className="module-subhead"><div><small>Centro técnico</small><h2>Calculadoras de obra</h2></div></div>}
-    <div className="lib-tabs calc-tabs">{cats.map(c=><button key={c} className={cat===c?'active':''} onClick={()=>setCat(c)}>{c}</button>)}</div>
-    <div className="calc-wrap">
-      {list.map(([name,C])=><C key={name}/>)}
-    </div></section>;
-}
-
 function TechnicalOffice({company,setCompany,catalog,setCatalog}){
   return <section><PageHead kicker="Oficina Técnica" title="Centro técnico y configuración" desc="Calculadoras de obra, membrete, logo, plantillas y catálogo de precios en un solo módulo." />
     <div className="combined-stack">
@@ -4200,7 +2630,9 @@ function PlansAccess({user}){
     }
     setPaying(`${method}-${plan}`);
     try{
-      const data=await apiPost('/api/create-checkout', { plan, method, uid:user.uid, email:user.email, name:user.name });
+      // uid/email/name ya no se mandan: el servidor toma la identidad del ID
+      // token verificado (ver api/create-checkout.mjs), nunca de este body.
+      const data=await apiPost('/api/create-checkout', { plan, method });
       if(data.url) window.location.href=data.url;
       else alert('El checkout respondio sin URL. Revisa el endpoint de Vercel.');
     }catch(err){
@@ -4234,344 +2666,6 @@ function Reports({clients,apus,budgets}){
   const bars=[['Presupuestos enviados',Math.min(100,budgets.length*10),'#9D6FD0'],['APU creados',Math.min(100,apus.length*10),'#2A1740'],['Clientes nuevos',Math.min(100,clients.length*10),'#C7A35C']];
   const alerts=hasData ? [...apus.slice(0,2).map(a=>`APU ${a.clave || a.id} disponible para revisar`), ...budgets.slice(0,2).map(b=>`Presupuesto ${b.name} en cartera`)] : [];
   return <section><PageHead kicker="Reportes" title="Tablero ejecutivo" desc="Ventas, presupuestos, clientes, APUs, avances, utilidad y rendimiento de la oficina." action={<button>Exportar reporte</button>} /><div className="report-hero"><div><small>Venta potencial</small><b>{money(total)}</b><span>acumulado</span></div><div><small>Pipeline</small><b>{budgets.length ? 'Activo' : '0%'}</b><span>tasa de cierre</span></div><div><small>Productividad</small><b>{apus.length}</b><span>APU generados</span></div><div><small>Clientes</small><b>{clients.length}</b><span>activos</span></div></div><div className="dash-charts report-grid"><div className="panel"><h2>Cotizacion mensual</h2><Spark points={budgets.length ? budgets.slice(-8).map(b=>Math.max(1,(Number(b.total)||0)/1000)) : [0,0,0,0,0,0,0,0]} h={110}/><div className="chart-foot"><span>{budgets.length ? 'Presupuestos reales' : 'Sin datos reales'}</span><b>{budgets.length ? 'Actualizado' : '0% acumulado'}</b></div></div><div className="panel chart-donut"><h2>Cartera por tipo de obra</h2><Donut segments={segs} center={hasData ? '100%' : '0%'} sub="cartera"/><div className="donut-legend">{segs.length ? segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>) : <EmptyState text="Sin datos para graficar."/>}</div></div></div><div className="report-bottom"><div className="panel"><h2>Resumen mensual</h2>{bars.map(([label,val,color])=><div className="bar-row" key={label}><span>{label}</span><i><b style={{width:val+'%',background:color}}></b></i><em className="bar-val">{val}%</em></div>)}</div><div className="panel"><h2>Alertas ejecutivas</h2>{alerts.length ? alerts.map(a=><div className="activity" key={a}><Icon name="bell" size={15}/> {a}</div>) : <EmptyState text="Sin alertas hasta que existan movimientos reales."/>}</div></div></section>
-}
-
-const AI_COST_ESTIMATE = { apu:0.02, visual:0.09, assistant:0.006 };
-
-function AdminPanel({user}){
-  const [tab,setTab]=useState('resumen');
-  const [users,setUsers]=useState(null);
-  const [usersErr,setUsersErr]=useState('');
-  const [library,setLibrary]=useState(null);
-  const [libraryErr,setLibraryErr]=useState('');
-  const [config,setConfig]=useState(null);
-  const [health,setHealth]=useState(null);
-  const [logs,setLogs]=useState(null);
-  const [logsErr,setLogsErr]=useState('');
-  const [oneDriveAdmin,setOneDriveAdmin]=useState(null);
-  const [platformStatus,setPlatformStatus]=useState(null);
-  const [savingUid,setSavingUid]=useState(null);
-  const [savingConfig,setSavingConfig]=useState(false);
-
-  const loadUsers=async()=>{
-    setUsers(null); setUsersErr('');
-    try{
-      const snap=await getDocs(collection(db,'users'));
-      setUsers(snap.docs.map(d=>({id:d.id,...d.data()})));
-    }catch(err){ setUsersErr(friendlyServiceError(err,'No se pudo leer la lista de usuarios.')); setUsers([]); }
-  };
-  const loadLibrary=async()=>{
-    setLibrary(null); setLibraryErr('');
-    try{ const snap=await getDocs(collection(db,'library')); setLibrary(snap.docs.map(d=>({id:d.id,...d.data()}))); }
-    catch(err){ setLibraryErr(friendlyServiceError(err,'No se pudo leer la biblioteca (permisos, indice o red).')); setLibrary([]); }
-  };
-  const loadConfig=async()=>{
-    setConfig(null);
-    try{ const snap=await getDoc(doc(db,'config','platform')); setConfig(snap.exists()?snap.data():{}); }
-    catch{ setConfig({}); }
-  };
-  const loadHealth=async()=>{
-    setHealth(null);
-    try{
-      const res=await fetch('/api/health', { headers: await authHeaders() });
-      const data=await res.json().catch(()=>null);
-      if(!data) throw new Error('El servicio de diagnostico no respondio con datos validos.');
-      if(!res.ok) throw new Error(data?.error || 'No se pudo consultar el estado del sistema.');
-      setHealth(data);
-    }catch(err){ setHealth({error:friendlyServiceError(err,'No se pudo consultar el estado del sistema.')}); }
-  };
-  const loadLogs=async()=>{
-    setLogs(null); setLogsErr('');
-    try{
-      const snap=await getDocs(query(collection(db,'visual_requests'), orderBy('createdAt','desc'), limit(50)));
-      setLogs(snap.docs.map(d=>({id:d.id,...d.data()})));
-    }catch(err){ setLogsErr(friendlyServiceError(err,'No se pudieron leer los registros de Visual IA.')); setLogs([]); }
-  };
-  const loadOneDriveAdmin=async()=>{
-    setOneDriveAdmin(null);
-    try{ const data=await apiPost('/api/onedrive',{action:'status'}); setOneDriveAdmin(data); }
-    catch(err){ setOneDriveAdmin({error:friendlyServiceError(err,'No se pudo consultar OneDrive.')}); }
-  };
-  const [odTest,setOdTest]=useState(null);
-  const [odTesting,setOdTesting]=useState(false);
-  const testOneDriveConnection=async()=>{
-    setOdTesting(true); setOdTest(null);
-    try{
-      const data=await apiPost('/api/onedrive',{action:'listRoot'});
-      setOdTest({ ok:true, count:(data.items||[]).length });
-    }catch(err){ setOdTest({ ok:false, message:friendlyServiceError(err,'No se pudo probar la conexion.') }); }
-    finally{ setOdTesting(false); }
-  };
-  const [gdTest,setGdTest]=useState(null);
-  const [gdTesting,setGdTesting]=useState(false);
-  const testGoogleDriveConnection=async()=>{
-    setGdTesting(true); setGdTest(null);
-    try{
-      const data=await apiPost('/api/google-drive',{action:'list'});
-      setGdTest({ ok:true, count:(data.items||[]).length });
-    }catch(err){ setGdTest({ ok:false, message:friendlyServiceError(err,'No se pudo probar la conexion.') }); }
-    finally{ setGdTesting(false); }
-  };
-
-  useEffect(()=>{ loadUsers(); },[]);
-  useEffect(()=>{
-    if(tab==='biblioteca' && library===null) loadLibrary();
-    if(tab==='config' && config===null) loadConfig();
-    if(tab==='servicios'){
-      if(health===null) loadHealth();
-      if(oneDriveAdmin===null) loadOneDriveAdmin();
-      if(library===null) loadLibrary();
-      if(platformStatus===null) apiGetSafe('/api/status').then(setPlatformStatus);
-    }
-    if(tab==='ia' && logs===null) loadLogs();
-    if(tab==='resumen'){
-      if(library===null) loadLibrary();
-      if(logs===null) loadLogs();
-    }
-    if(tab==='diagnostico'){
-      if(health===null) loadHealth();
-      if(oneDriveAdmin===null) loadOneDriveAdmin();
-      if(platformStatus===null) apiGetSafe('/api/status').then(setPlatformStatus);
-    }
-  },[tab]);
-
-  const updateUser=async(uid,patch)=>{
-    setSavingUid(uid);
-    try{
-      await setDoc(doc(db,'users',uid), patch, {merge:true});
-      setUsers(list=>list.map(u=>u.id===uid?{...u,...patch}:u));
-    }catch(err){ alert(`No pude actualizar el usuario: ${friendlyServiceError(err)}`); }
-    finally{ setSavingUid(null); }
-  };
-  const saveConfig=async()=>{
-    setSavingConfig(true);
-    try{ await setDoc(doc(db,'config','platform'), config||{}, {merge:true}); alert('Configuración guardada.'); }
-    catch(err){ alert(`No pude guardar la configuración: ${friendlyServiceError(err)}`); }
-    finally{ setSavingConfig(false); }
-  };
-
-  const tabs=[['resumen','Resumen'],['usuarios','Usuarios'],['servicios','Servicios'],['biblioteca','Biblioteca'],['ia','IA y consumo'],['config','Configuración'],['diagnostico','Diagnóstico']];
-  const Busy=()=><div className="ai-note-busy"><span className="asst-dots"><i/><i/><i/></span><b>Cargando datos reales de Firestore...</b></div>;
-  const usageTotals=(users||[]).reduce((acc,u)=>{
-    Object.values(u.usage||{}).forEach(monthUsage=>{
-      Object.entries(monthUsage||{}).forEach(([feature,count])=>{ acc[feature]=(acc[feature]||0)+Number(count||0); });
-    });
-    return acc;
-  },{});
-
-  return <section>
-    <PageHead kicker="Panel Admin" title="Administración de la plataforma" desc="Resumen ejecutivo, usuarios, servicios (Firebase, OpenAI, OneDrive), biblioteca, IA y consumo, configuración y diagnóstico, con datos reales de Firestore." />
-    <div className="admin-tabs">{tabs.map(([id,label])=><button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}>{label}</button>)}</div>
-
-    {tab==='resumen' && (()=>{
-      const totalUsers=users?.length||0;
-      const activeUsers=(users||[]).filter(u=>u.active!==false).length;
-      const plans=['Gratis','Inicial','Profesional','Empresa'];
-      const palette=['#B8A4CC','#9D6FD0','#6F3FA7','#2A1740'];
-      const segs=plans.map((p,i)=>({label:p,value:(users||[]).filter(u=>(u.role==='admin'?'Empresa':(u.plan||'Gratis'))===p).length,color:palette[i]})).filter(s=>s.value>0);
-      const totalCalls=(usageTotals.apu||0)+(usageTotals.visual||0)+(usageTotals.assistant||0);
-      const planCounts=plans.map(p=>({plan:p,count:(users||[]).filter(u=>(u.plan||'Gratis')===p).length,active:(users||[]).filter(u=>(u.plan||'Gratis')===p && u.active!==false).length}));
-      const groups={};
-      (users||[]).forEach(u=>{ const k=u.companyName||'Sin nombre de empresa'; (groups[k]=groups[k]||[]).push(u); });
-      const companyRows=Object.entries(groups).sort((a,b)=>b[1].length-a[1].length);
-      return <div className="panel admin-panel-body">
-        <div className="admin-panel-head"><h2>Resumen ejecutivo</h2><button className="soft" onClick={loadUsers}>Actualizar</button></div>
-        {users===null ? <Busy/> : <>
-          <div className="kpi-row">
-            <div className="kpi-tile"><small>Usuarios</small><b>{totalUsers}</b><span>{activeUsers} activos</span></div>
-            <div className="kpi-tile"><small>Documentos en Biblioteca</small><b>{library!==null ? library.length : '…'}</b><span>Firestore · colección library</span></div>
-            <div className="kpi-tile"><small>Peticiones Visual IA</small><b>{logs!==null ? logs.length : '…'}</b><span>últimas registradas</span></div>
-            <div className="kpi-tile"><small>Llamadas IA totales (mes)</small><b>{totalCalls}</b><span>APU + Visual IA + asistente</span></div>
-          </div>
-          <div className="dash-charts">
-            <div className="panel"><h2>Distribución de planes</h2>{segs.length ? <Donut segments={segs} center={totalUsers} sub="usuarios"/> : <EmptyState text="Sin usuarios con plan asignado."/>}
-              <div className="donut-legend">{segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>)}</div>
-            </div>
-            <div className="panel"><h2>Uso de IA por función</h2><Spark points={[usageTotals.apu||0,usageTotals.visual||0,usageTotals.assistant||0,totalCalls]}/>
-              <div className="chart-foot"><span>APU {usageTotals.apu||0} · Visual {usageTotals.visual||0} · Asistente {usageTotals.assistant||0}</span><b>Mes en curso</b></div>
-            </div>
-          </div>
-          <div className="admin-panel-head" style={{marginTop:'6px'}}><h2 style={{fontSize:'.95rem'}}>Planes y licencias</h2></div>
-          <div className="admin-plan-grid">{planCounts.map(c=><div className="admin-plan-card" key={c.plan}><b>{c.plan}</b><span className="admin-plan-count">{c.count}</span><small>{c.active} activos</small></div>)}</div>
-          <div className="admin-panel-head" style={{marginTop:'14px'}}><h2 style={{fontSize:'.95rem'}}>Empresas <small className="hint">({companyRows.length})</small></h2></div>
-          {!companyRows.length ? <EmptyState icon="oficina" title="Sin organizaciones aún" text="El nombre de empresa se registra cuando un usuario lo captura en Oficina técnica."/> :
-          <div className="admin-table-wrap"><table className="data-table admin-table">
-            <thead><tr><th>Empresa</th><th>Usuarios</th><th>Planes</th></tr></thead>
-            <tbody>{companyRows.map(([name,us])=><tr key={name}><td>{name}</td><td>{us.length}</td><td>{[...new Set(us.map(u=>u.plan||'Gratis'))].join(', ')}</td></tr>)}</tbody>
-          </table></div>}
-        </>}
-      </div>;
-    })()}
-
-    {tab==='usuarios' && <div className="panel admin-panel-body">
-      <div className="admin-panel-head"><h2>Usuarios <small className="hint">({users?.length ?? '…'})</small></h2><button className="soft" onClick={loadUsers}>Actualizar</button></div>
-      {users===null ? <Busy/> :
-       usersErr ? <EmptyState icon="admin" title="No se pudo cargar" text={usersErr}/> :
-       !users.length ? <EmptyState icon="clientes" title="Sin usuarios registrados" text="Cuando alguien se registre en ZOEMEC aparecerá aquí."/> :
-       <div className="admin-table-wrap"><table className="data-table admin-table">
-         <thead><tr><th>Usuario</th><th>Correo</th><th>Empresa</th><th>Rol</th><th>Plan</th><th>Estado</th><th>APUs</th></tr></thead>
-         <tbody>{users.map(u=><tr key={u.id}>
-           <td>{u.name||'—'}</td>
-           <td>{u.email||'—'}</td>
-           <td>{u.companyName||'—'}</td>
-           <td><select value={u.role||'user'} disabled={savingUid===u.id} onChange={e=>updateUser(u.id,{role:e.target.value})}><option value="user">Usuario</option><option value="admin">Administrador</option></select></td>
-           <td><select value={u.plan||'Gratis'} disabled={savingUid===u.id} onChange={e=>updateUser(u.id,{plan:e.target.value})}><option>Gratis</option><option>Inicial</option><option>Profesional</option><option>Empresa</option></select></td>
-           <td><button className={'admin-status-toggle '+(u.active!==false?'ok':'off')} disabled={savingUid===u.id} onClick={()=>updateUser(u.id,{active:u.active===false})}>{u.active!==false?'Activo':'Inactivo'}</button></td>
-           <td>{u.apusCreated||0}</td>
-         </tr>)}</tbody>
-       </table></div>}
-    </div>}
-
-    {tab==='biblioteca' && <div className="panel admin-panel-body">
-      <div className="admin-panel-head"><h2>Biblioteca <small className="hint">({library?.length ?? '…'})</small></h2><button className="soft" onClick={loadLibrary}>Actualizar</button></div>
-      {library===null ? <Busy/> :
-       libraryErr ? <EmptyState icon="admin" title="No se pudo cargar" text={libraryErr}/> :
-       !library.length ? <EmptyState icon="biblioteca" title="Sin documentos en Firestore" text="Los documentos que los usuarios suben a la Biblioteca aparecerán aquí."/> :
-      <div className="admin-table-wrap"><table className="data-table admin-table">
-        <thead><tr><th>Documento</th><th>Categoría</th><th>Visibilidad</th><th>Propietario</th><th>Tamaño</th></tr></thead>
-        <tbody>{library.map(f=><tr key={f.id}><td>{f.name||'—'}</td><td>{f.cat||'—'}</td><td>{f.visibility||'private'}</td><td className="admin-uid">{f.ownerUid?String(f.ownerUid).slice(0,8):'—'}</td><td>{f.size||'—'}</td></tr>)}</tbody>
-      </table></div>}
-    </div>}
-
-    {tab==='ia' && (()=>{
-      const month=(()=>{ const n=new Date(); return `${n.getUTCFullYear()}-${String(n.getUTCMonth()+1).padStart(2,'0')}`; })();
-      const rows=(users||[]).map(u=>{
-        const cur=u.usage?.[month]||{};
-        return { id:u.id, name:u.name||u.email||'—', plan:u.role==='admin'?'Empresa':(u.plan||'Gratis'),
-          apu:Number(cur.apu||0), visual:Number(cur.visual||0), assistant:Number(cur.assistant||0),
-          last:u.lastAiUseAt?.toDate ? u.lastAiUseAt.toDate().toLocaleString('es-MX') : '—' };
-      }).filter(r=>r.apu||r.visual||r.assistant).sort((a,b)=>(b.apu+b.visual+b.assistant)-(a.apu+a.visual+a.assistant));
-      const estimated=(usageTotals.apu||0)*AI_COST_ESTIMATE.apu + (usageTotals.visual||0)*AI_COST_ESTIMATE.visual + (usageTotals.assistant||0)*AI_COST_ESTIMATE.assistant;
-      return <div className="panel admin-panel-body">
-        <div className="admin-panel-head"><h2>IA y consumo</h2><button className="soft" onClick={()=>{loadUsers();loadLogs();}}>Actualizar</button></div>
-        {users===null ? <Busy/> : <>
-          <div className="admin-cost-grid">
-            <div className="admin-cost-card"><small>Llamadas APU (mes)</small><b>{usageTotals.apu||0}</b></div>
-            <div className="admin-cost-card"><small>Llamadas Visual IA (mes)</small><b>{usageTotals.visual||0}</b></div>
-            <div className="admin-cost-card"><small>Llamadas asistente (mes)</small><b>{usageTotals.assistant||0}</b></div>
-            <div className="admin-cost-card"><small>Costo estimado (USD)</small><b>${estimated.toFixed(2)}</b></div>
-          </div>
-          <div className="admin-metric-note">Este costo es una <b>estimación orientativa</b> calculada con precios de referencia por llamada (APU ${AI_COST_ESTIMATE.apu}, Visual IA ${AI_COST_ESTIMATE.visual}, asistente ${AI_COST_ESTIMATE.assistant}), no es la facturación real de OpenAI. Para el gasto exacto se requiere conectar la API de facturación de OpenAI (ver pestaña Diagnóstico).</div>
-
-          <div className="admin-panel-head" style={{marginTop:'16px'}}><h2 style={{fontSize:'.95rem'}}>Uso por usuario <small className="hint">mes {month}</small></h2></div>
-          {!rows.length ? <EmptyState icon="apu" title="Sin uso de IA este mes" text="Cuando los usuarios generen APUs, usen Visual IA o al asistente, el consumo aparecerá aquí (contador real por usuario en Firestore)."/> :
-          <div className="admin-table-wrap"><table className="data-table admin-table">
-            <thead><tr><th>Usuario</th><th>Plan</th><th>APU</th><th>Visual IA</th><th>Asistente</th><th>Último uso</th></tr></thead>
-            <tbody>{rows.map(r=><tr key={r.id}><td>{r.name}</td><td>{r.plan}</td><td>{r.apu}</td><td>{r.visual}</td><td>{r.assistant}</td><td>{r.last}</td></tr>)}</tbody>
-          </table></div>}
-
-          <div className="admin-panel-head" style={{marginTop:'16px'}}><h2 style={{fontSize:'.95rem'}}>Logs de Visual IA <small className="hint">últimos {logs?.length ?? '…'}</small></h2></div>
-          {logs===null ? <Busy/> :
-           logsErr ? <EmptyState icon="admin" title="No se pudo cargar" text={logsErr}/> :
-           !logs.length ? <EmptyState icon="tecnico" title="Sin registros todavía" text="Cada solicitud de Visual IA queda registrada en Firestore (colección visual_requests) con usuario, modo y resultado."/> :
-           <div className="admin-log-list">{logs.map(l=><div className="admin-log-row" key={l.id}>
-             <span>{l.createdAt?.toDate ? l.createdAt.toDate().toLocaleString('es-MX') : '—'}</span>
-             <b>{l.email || l.uid || 'Usuario'} · {l.fileName || 'sin archivo'}</b>
-             <span>{l.mode || '—'}</span>
-             <span>{l.imageGenerated ? 'Render generado' : (l.imageError ? 'Solo análisis (sin render)' : 'Solo texto')}</span>
-           </div>)}</div>}
-        </>}
-      </div>;
-    })()}
-
-    {tab==='config' && <div className="panel admin-panel-body">
-      <div className="admin-panel-head"><h2>Configuración de la plataforma</h2></div>
-      {config===null ? <Busy/> : <>
-        <div className="field-grid">
-          <div className="nf"><label>Correo de soporte</label><input value={config.supportEmail||''} onChange={e=>setConfig({...config,supportEmail:e.target.value})} placeholder="soporte@zoemec.mx"/></div>
-          <div className="nf wide"><label>Aviso para todos los usuarios</label><input value={config.announcement||''} onChange={e=>setConfig({...config,announcement:e.target.value})} placeholder="Ej. Mantenimiento programado el sábado"/></div>
-        </div>
-        <button onClick={saveConfig} disabled={savingConfig}>{savingConfig?'Guardando...':'Guardar configuración'}</button>
-      </>}
-    </div>}
-
-    {tab==='servicios' && (()=>{
-      const connectedUsers=(users||[]).filter(u=>u.oneDrive?.refreshToken).length;
-      const onedriveDocs=(library||[]).filter(f=>f.source==='onedrive').length;
-      const gdriveDocs=(library||[]).filter(f=>f.source==='google-drive').length;
-      const envVars=[
-        ['VITE_ONEDRIVE_CLIENT_ID (cliente)', isOneDriveConfigured()],
-        ['ONEDRIVE_CLIENT_ID (servidor)', Boolean(oneDriveAdmin?.env?.ONEDRIVE_CLIENT_ID)],
-        ['ONEDRIVE_CLIENT_SECRET (servidor)', Boolean(oneDriveAdmin?.env?.ONEDRIVE_CLIENT_SECRET)],
-        ['ONEDRIVE_TENANT_ID (servidor, opcional)', Boolean(oneDriveAdmin?.env?.ONEDRIVE_TENANT_ID)]
-      ];
-      const missingVars=envVars.filter(([,present])=>!present);
-      const gdriveConfigured=Boolean(platformStatus?.googleDriveConfigured);
-      return <div className="panel admin-panel-body">
-        <div className="admin-panel-head"><h2>Servicios</h2><button className="soft" onClick={()=>{loadHealth();loadOneDriveAdmin();}}>Actualizar</button></div>
-        <div className="admin-panel-head" style={{marginTop:0}}><h2 style={{fontSize:'.95rem'}}>Firebase y OpenAI</h2></div>
-        {health===null ? <Busy/> :
-         health.error ? <EmptyState icon="admin" title="No se pudo consultar" text={health.error}/> :
-         <div className="admin-health-grid">{Object.entries(health.checks||{}).map(([key,c])=><div className={'admin-health-card '+c.status} key={key}>
-           <b>{c.label||key}</b>
-           <span className="admin-health-status">{c.status==='ok'?'Operativo':c.status==='error'?'Con errores':'No disponible'}</span>
-           <p>{c.detail}</p>
-         </div>)}</div>}
-
-        <div className="admin-panel-head" style={{marginTop:'16px'}}><h2 style={{fontSize:'.95rem'}}>Google Drive</h2></div>
-        <div className="admin-cost-grid">
-          <div className="admin-cost-card"><small>Configurado en el servidor</small><b>{gdriveConfigured ? 'Sí' : 'No'}</b></div>
-          <div className="admin-cost-card"><small>Documentos importados de Drive</small><b>{library===null ? '…' : gdriveDocs}</b></div>
-        </div>
-        {!gdriveConfigured && <div className="od-config-warning"><Icon name="alerta" size={18}/><div>Faltan variables de servidor: <b>GOOGLE_DRIVE_CLIENT_ID</b>, <b>GOOGLE_DRIVE_CLIENT_SECRET</b>, <b>GOOGLE_DRIVE_REFRESH_TOKEN</b> y <b>GOOGLE_DRIVE_FOLDER_ID</b> en Vercel. Este detalle solo es visible aquí; los usuarios ven "Google Drive no configurado" sin más detalle técnico.</div></div>}
-        <div className="visual-actions"><button className="soft" onClick={testGoogleDriveConnection} disabled={gdTesting}>{gdTesting?'Probando...':'Probar conexión'}</button></div>
-        {gdTest && (gdTest.ok
-          ? <div className="admin-metric-note">Conexión correcta: se encontraron {gdTest.count} elemento(s) en la carpeta raíz de Google Drive (respuesta sanitizada, sin nombres de archivo).</div>
-          : <EmptyState icon="admin" title="La prueba de conexión falló" text={gdTest.message}/>)}
-
-        <div className="admin-panel-head" style={{marginTop:'16px'}}><h2 style={{fontSize:'.95rem'}}>OneDrive</h2></div>
-        {oneDriveAdmin===null ? <Busy/> :
-         oneDriveAdmin.error ? <EmptyState icon="admin" title="No se pudo consultar" text={oneDriveAdmin.error}/> : <>
-          <div className="admin-cost-grid">
-            <div className="admin-cost-card"><small>Configurado en el servidor</small><b>{oneDriveAdmin.configured ? 'Sí' : 'No'}</b></div>
-            <div className="admin-cost-card"><small>Tu cuenta admin</small><b>{oneDriveAdmin.connected ? 'Conectada' : 'No conectada'}</b></div>
-            <div className="admin-cost-card"><small>Usuarios con OneDrive conectado</small><b>{connectedUsers}</b></div>
-            <div className="admin-cost-card"><small>Documentos importados de OneDrive</small><b>{library===null ? '…' : onedriveDocs}</b></div>
-            <div className="admin-cost-card"><small>Última sincronización (tu cuenta)</small><b>{oneDriveAdmin.connectedAt?.toDate ? oneDriveAdmin.connectedAt.toDate().toLocaleString('es-MX') : (oneDriveAdmin.connectedAt || '—')}</b></div>
-          </div>
-          <div className="admin-table-wrap"><table className="data-table admin-table">
-            <thead><tr><th>Variable</th><th>Estado</th></tr></thead>
-            <tbody>{envVars.map(([name,present])=><tr key={name}><td>{name}</td><td>{present ? 'Detectada' : 'Faltante'}</td></tr>)}</tbody>
-          </table></div>
-          {missingVars.length > 0 && <div className="od-config-warning"><Icon name="alerta" size={18}/><div>Faltan {missingVars.length} variable(s) para activar OneDrive por completo: {missingVars.map(([name])=>name).join(', ')}. Este detalle solo es visible aquí; los usuarios ven "Biblioteca local disponible".</div></div>}
-          <div className="visual-actions"><button className="soft" onClick={testOneDriveConnection} disabled={odTesting || !oneDriveAdmin.connected}>{odTesting?'Probando...':'Probar conexión'}</button></div>
-          {!oneDriveAdmin.connected && <p className="muted">Conecta tu cuenta de OneDrive (desde Biblioteca o el indicador de nube) para poder probar la conexión real con Microsoft Graph.</p>}
-          {odTest && (odTest.ok
-            ? <div className="admin-metric-note">Conexión correcta: se encontraron {odTest.count} archivo(s)/carpeta(s) en la raíz de OneDrive (respuesta sanitizada, sin nombres de archivo).</div>
-            : <EmptyState icon="admin" title="La prueba de conexión falló" text={odTest.message}/>)}
-        </>}
-      </div>;
-    })()}
-
-    {tab==='diagnostico' && (()=>{
-      const envRows=[
-        ['Firebase Storage/Firestore', health?.checks?.firebase?.status==='ok'],
-        ['OpenAI (OPENAI_API_KEY)', health?.checks?.openai?.status==='ok'],
-        ['Google Drive (CLIENT_ID/SECRET/REFRESH_TOKEN)', Boolean(platformStatus?.googleDriveConfigured)],
-        ['OneDrive cliente (VITE_ONEDRIVE_CLIENT_ID)', isOneDriveConfigured()],
-        ['OneDrive servidor (ONEDRIVE_CLIENT_ID/SECRET)', Boolean(oneDriveAdmin?.env?.ONEDRIVE_CLIENT_ID && oneDriveAdmin?.env?.ONEDRIVE_CLIENT_SECRET)],
-        ['Lista de administradores (VITE_ADMIN_EMAILS)', ADMIN_EMAILS.length > 0]
-      ];
-      return <div className="panel admin-panel-body">
-        <div className="admin-panel-head"><h2>Diagnóstico</h2><button className="soft" onClick={()=>{loadHealth();loadOneDriveAdmin();}}>Actualizar</button></div>
-        <div className="admin-panel-head" style={{marginTop:0}}><h2 style={{fontSize:'.95rem'}}>Tu sesión</h2></div>
-        <div className="admin-cost-grid">
-          <div className="admin-cost-card"><small>Correo detectado</small><b>{user?.email || '—'}</b></div>
-          <div className="admin-cost-card"><small>Rol detectado</small><b>{user?.role || 'user'}</b></div>
-          <div className="admin-cost-card"><small>isAdmin</small><b>{user?.isAdmin ? 'true' : 'false'}</b></div>
-          <div className="admin-cost-card"><small>Plan</small><b>{user?.plan || '—'}</b></div>
-        </div>
-        <div className="admin-metric-note">isAdmin se calcula con isAdminUser(): rol normalizado (admin/administrator/administrador/superadmin), custom claim de Firebase (admin===true) o correo en VITE_ADMIN_EMAILS. En desarrollo, este mismo detalle se imprime en la consola del navegador al iniciar sesión.</div>
-
-        <div className="admin-panel-head" style={{marginTop:'16px'}}><h2 style={{fontSize:'.95rem'}}>Variables y servicios detectados</h2></div>
-        <div className="admin-table-wrap"><table className="data-table admin-table">
-          <thead><tr><th>Servicio / variable</th><th>Estado</th></tr></thead>
-          <tbody>{envRows.map(([name,ok])=><tr key={name}><td>{name}</td><td>{ok ? 'Detectado' : 'Faltante o sin confirmar'}</td></tr>)}</tbody>
-        </table></div>
-        <div className="admin-metric-note">Ninguna fila muestra el valor real de una variable, solo si esta presente. Para el detalle de cada servicio revisa la pestaña Servicios.</div>
-      </div>;
-    })()}
-  </section>;
 }
 
 createRoot(document.getElementById('root')).render(<App />);

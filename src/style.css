@@ -466,6 +466,8 @@ progress::-moz-progress-bar{background:var(--teal)}
 .budget-table input:hover{border-color:var(--line)}
 .budget-table input:focus{background:#fff;border-color:var(--teal)}
 .totals{max-width:320px;margin-left:auto;margin-top:14px}
+.iva-rate-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;font-size:.84rem;color:var(--muted)}
+.iva-rate-row input{width:64px;padding:5px 7px;border:1px solid var(--line);border-radius:6px;text-align:right;font-family:var(--mono)}
 .export-row{display:flex;gap:10px;margin-top:16px;justify-content:flex-end}
 
 /* ====================================================================
@@ -1991,3 +1993,33 @@ svg.ic{display:block;flex:none}
 .admin-health-card.ok .admin-health-status{background:#E6F6EE;color:#1B7A46}
 .admin-health-card.error .admin-health-status{background:#FBE9EC;color:var(--danger)}
 .admin-health-card.not_available .admin-health-status{background:#F1EEF4;color:var(--muted)}
+
+/* ---------- Resultado ejecutivo del APU (pantalla limpia antes del editor) ---------- */
+.executive-result{display:flex;flex-direction:column;gap:18px}
+.exec-head{display:flex;flex-direction:column;gap:6px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.exec-tag{align-self:flex-start;font-family:var(--mono);font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;background:var(--mint);color:var(--petrol);padding:4px 10px;border-radius:20px;font-weight:700}
+.exec-head h2{margin:0;font-family:var(--display);font-size:1.4rem;color:var(--ink)}
+.exec-pu{display:flex;align-items:baseline;gap:6px}
+.exec-pu b{font-family:var(--display);font-size:2rem;color:var(--petrol)}
+.exec-pu span{color:var(--muted)}
+.exec-breakdown{display:flex;flex-direction:column;gap:2px}
+.exec-confidence,.exec-validation,.exec-explain{border-top:1px solid var(--line);padding-top:14px;display:flex;flex-direction:column;gap:6px}
+.exec-confidence small,.exec-validation span{color:var(--muted);font-size:.82rem}
+.exec-validation ul,.exec-explain ul{margin:4px 0 0;padding-left:18px;color:var(--muted);font-size:.82rem;line-height:1.5}
+.exec-explain ul{list-style:none;padding-left:0}
+.exec-explain li{padding:2px 0}
+.exec-actions{display:flex;flex-wrap:wrap;gap:10px;padding-top:14px;border-top:1px solid var(--line)}
+
+/* ---------- Modo demostración: hero de Inicio (concepto/Excel -> APU con IA) ---------- */
+.demo-hero{background:linear-gradient(135deg,var(--petrol) 0%,#1E2E4A 100%);border-radius:20px;padding:28px 30px;color:#fff;box-shadow:var(--shadow-sm);margin-bottom:20px}
+.demo-hero h2{margin:0 0 10px;font-family:var(--display);font-size:1.6rem;color:#fff}
+.demo-hero p{margin:0 0 18px;color:rgba(255,255,255,.82);max-width:62ch;line-height:1.55}
+.demo-hero-actions{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:20px}
+.demo-hero-actions button{border-radius:999px;padding:11px 20px;font-weight:700}
+.demo-hero-actions button.ghost-up{background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.35)}
+.demo-hero-steps{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+.demo-hero-step{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);border-radius:14px;padding:10px 12px;text-align:center}
+.demo-hero-step b{display:block;font-family:var(--mono);color:#C9A24A;font-size:.72rem;letter-spacing:.08em;text-transform:uppercase}
+.demo-hero-step span{display:block;margin-top:4px;font-size:.82rem;color:#fff}
+@media (max-width:760px){.demo-hero-steps{grid-template-columns:repeat(2,1fr)}}
+.legacy-editor-compat{display:none!important}.professional-apu-editor{display:grid;gap:16px}.pro-toolbar{display:flex;gap:8px;flex-wrap:wrap}.pro-header-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.pro-header-grid label{display:grid;gap:5px}.pro-section{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px}.pro-list-row{display:flex;gap:8px;margin:8px 0}.pro-list-row textarea{flex:1}.pro-economy{display:flex;gap:14px;flex-wrap:wrap;align-items:center;padding:18px;background:#132e52;color:#fff;border-radius:12px}.pro-economy strong{font-size:1.2rem;color:#9ee6b4}.validation-panel{padding:14px;border:1px solid #e4b64d;background:#fff8df;border-radius:12px}.pro-modal{position:fixed;inset:0;background:#0008;z-index:1000;display:grid;place-items:center}.pro-modal>div{background:white;padding:22px;border-radius:14px;max-width:900px;max-height:80vh;overflow:auto}.price-state{font-size:.7rem;font-weight:700}

@@ -21,7 +21,15 @@ service cloud.firestore {
 
     match /users/{uid} {
       allow read: if isOwner(uid) || isAdmin();
-      allow create: if isOwner(uid);
+      // El propio dueno solo puede crear su perfil con privilegios de arranque
+      // fijos (role=user, plan=Gratis, active=true): evita que alguien use el
+      // SDK de cliente directo para crearse ya como admin/Empresa antes de que
+      // la app cree el documento por su cuenta. Un admin real (Admin SDK, que
+      // ignora estas reglas) sigue pudiendo crear perfiles con otros valores.
+      allow create: if isOwner(uid)
+        && request.resource.data.role == 'user'
+        && request.resource.data.plan == 'Gratis'
+        && request.resource.data.active == true;
       allow update: if isAdmin()
         || (
           isOwner(uid)
@@ -33,12 +41,29 @@ service cloud.firestore {
     }
 
     match /devices/{deviceId} {
-      allow read, create: if signedIn();
+      // "get" (un id de dispositivo conocido, el que ya trae el propio
+      // navegador en localStorage) sigue abierto a cualquier cuenta
+      // autenticada: el flujo de registro necesita poder comprobar si ESE
+      // deviceId especifico ya se uso, sin importar quien lo registro antes.
+      // "list" (consultar/enumerar TODA la coleccion) ahora es solo para
+      // administradores: antes cualquier cuenta autenticada podia hacer
+      // getDocs(collection(db,'devices')) y obtener email+uid de todos los
+      // usuarios registrados en la plataforma.
+      allow get: if signedIn();
+      allow list: if isAdmin();
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
       allow update, delete: if isAdmin();
     }
 
     match /library/{docId} {
-      allow read: if signedIn();
+      // La lectura solo se concede a: el administrador, el dueno del
+      // documento, o cualquier usuario autenticado cuando el documento es
+      // explicitamente global. Antes cualquier cuenta autenticada podia leer
+      // TODA la coleccion, incluidos archivos marcados "private" de otros
+      // usuarios/empresas (y su downloadURL firmada de larguisima duracion).
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (signedIn() && resource.data.visibility == 'global');
       allow create: if signedIn()
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.visibility in ['private', 'global']

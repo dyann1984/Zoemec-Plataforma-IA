@@ -1,4 +1,5 @@
 import { matchPrice, normalizeUnitLabel, cleanText } from './excelImport.js';
+import { APU_DEFAULT_FACTORS } from './apuCalc.js';
 
 export const ALERT_LEVELS = { critical: 'critical', warning: 'warning', informative: 'informative' };
 
@@ -109,13 +110,13 @@ export function buildUniversalAPU(item = {}, catalog = [], index = 0, sourceFile
     materials: template.materials.map(r => [cleanText(r[0]), Number(r[1]) || 0, normalizeUnitLabel(r[2]), Number(r[3]) || 0, Number(r[4]) || 0]),
     labor: template.labor.map(r => [cleanText(r[0]), Number(r[1]) || 0, normalizeUnitLabel(r[2]), Number(r[3]) || 0, Number(r[4]) || 1]),
     equipment: template.equipment.map(r => [cleanText(r[0]), Number(r[1]) || 0, normalizeUnitLabel(r[2]), Number(r[3]) || 0]),
-    herramienta: 3,
-    indCampo: 8,
-    indOficina: 7,
-    finance: 2,
-    utility: 10,
-    cargos: 0.5,
-    iva: 16,
+    herramienta: APU_DEFAULT_FACTORS.herramienta,
+    indCampo: APU_DEFAULT_FACTORS.indCampo,
+    indOficina: APU_DEFAULT_FACTORS.indOficina,
+    finance: APU_DEFAULT_FACTORS.finance,
+    utility: APU_DEFAULT_FACTORS.utility,
+    cargos: APU_DEFAULT_FACTORS.cargos,
+    iva: APU_DEFAULT_FACTORS.iva,
     family: detected.family,
     confidence: detected.type === 'generico' ? 76 : 92,
     sat: '72100000',

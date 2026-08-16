@@ -846,7 +846,12 @@ svg.ic{display:block;flex:none}
 .ai-panel{margin-bottom:16px;border-top:3px solid var(--gold)}
 .ai-panel-head{display:flex;align-items:center;gap:12px;margin-bottom:12px}
 .ai-panel-head b{display:block;color:var(--ink)}
+.ai-panel input,.ai-panel textarea,.ai-panel select{color:var(--ink)}
 .ai-concept{min-height:64px;margin-bottom:10px}
+.ai-unit-qty-row{display:flex;flex-wrap:wrap;align-items:flex-end;gap:14px;margin-bottom:10px}
+.ai-unit-qty-row label{display:flex;flex-direction:column;gap:4px;font-size:.76rem;color:var(--muted);font-family:var(--mono);text-transform:uppercase;letter-spacing:.05em}
+.ai-unit-qty-row input{min-width:120px;padding:8px 10px;border-radius:8px;border:1px solid var(--line)}
+.ai-unit-qty-row small{flex-basis:100%;color:var(--muted)}
 .ai-panel-foot{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .cat-badge{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:.78rem;color:var(--petrol);
   background:var(--mint);border:1px solid var(--line);padding:6px 11px;border-radius:20px}
@@ -1722,6 +1727,16 @@ svg.ic{display:block;flex:none}
 .twin-step{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;background:rgba(255,255,255,.04);color:#e9ddff;font-size:.78rem}
 .twin-step .arrow{opacity:.6;margin-left:6px}
 .twin-wrapper{border-radius:16px;padding:8px;background:linear-gradient(180deg,rgba(255,255,255,.02),rgba(255,255,255,.01));}
+.digital-twin,.digital-twin-empty{border-radius:12px;padding:14px 16px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1)}
+.digital-twin{cursor:pointer;display:flex;flex-wrap:wrap;gap:16px;align-items:baseline}
+.digital-twin:hover{background:rgba(255,255,255,.08)}
+.dt-row{display:flex;flex-direction:column;gap:2px}
+.dt-row small{font-family:var(--mono);font-size:.66rem;text-transform:uppercase;letter-spacing:.08em;color:rgba(255,255,255,.55)}
+.dt-row b{color:#fff;font-size:1.05rem}
+.dt-row span{color:rgba(255,255,255,.6);font-size:.78rem}
+.digital-twin-empty{display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.digital-twin-empty p{margin:0;color:rgba(255,255,255,.75);font-size:.86rem}
+.digital-twin-empty button{border-radius:999px;padding:8px 16px}
 
 /* Status grid: tarjetas dentro de .os-side, que en realidad renderiza sobre un
    fondo claro/translucido (.os-side>div hereda el "glass" claro de .os-grid),

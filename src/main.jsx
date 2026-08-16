@@ -911,6 +911,29 @@ function ActivityPlaceholder({onCreateApu,onOpenLibrary}){
   </div>;
 }
 
+/* Vista compacta del APU activo dentro del panel "Gemelo digital" del Dashboard.
+   Defensiva ante las dos formas de APU que pueden llegar en `apus` (v1 con
+   renglones-arreglo y confidence numerico, o v2/profesional con renglones-objeto
+   y confidence desglosado): nunca inventa un PU o confianza que no pueda calcular. */
+function DigitalTwin({apu, compact, onOpen}){
+  if(!apu){
+    return <div className={`digital-twin-empty${compact ? ' compact' : ''}`}>
+      <p>Genera tu primer APU para activar el gemelo digital del proyecto.</p>
+      <button onClick={onOpen}>Generar APU con IA</button>
+    </div>;
+  }
+  let pu = Number(apu.calculated?.pu);
+  if(!Number.isFinite(pu) || pu <= 0){
+    try{ pu = calcAPU(apu).pu; }catch{ pu = 0; }
+  }
+  const confidenceScore = typeof apu.confidence === 'number' ? apu.confidence : Number(apu.confidence?.score);
+  return <div className={`digital-twin${compact ? ' compact' : ''}`} onClick={onOpen} role="button" tabIndex={0}>
+    <div className="dt-row"><small>Concepto activo</small><b>{apu.concept || apu.clave || 'APU sin concepto'}</b></div>
+    <div className="dt-row"><small>Precio unitario</small><b>{pu > 0 ? money(pu) : '—'}</b><span>/ {apu.unit || 'u'}</span></div>
+    <div className="dt-row"><small>Confianza</small><b>{Number.isFinite(confidenceScore) ? `${Math.round(confidenceScore)}%` : '—'}</b></div>
+  </div>;
+}
+
 function Dashboard({setModule,apus,clients,budgets,projects,user}){
   const [remoteStatus,setRemoteStatus] = useState(null);
   const [oneDriveStatus,setOneDriveStatus] = useState(null);
@@ -1109,6 +1132,13 @@ function legacyShimFromV2(v2, fallbackConcept, sourceFile){
 
 function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog}){
   const [concept,setConcept]=useState('');
+  // Unidad/Cantidad explicitas (opcionales): parseConceptText adivina unidad y
+  // cantidad del texto pegado, pero un concepto en lenguaje natural puede traer
+  // numeros que no son la cantidad (ej. "tuberia de 3 a 6 pulgadas" hace que el
+  // parser tome "3" en vez de la cantidad real). Si el usuario captura estos
+  // campos, tienen prioridad sobre lo que el parser adivino.
+  const [aiUnit,setAiUnit]=useState('');
+  const [aiQty,setAiQty]=useState('');
   const [apu,setApu]=useState(()=>makeEmptyAPU());
   const [apuV2,setApuV2]=useState(()=>finalizeProfessionalAPU(migrateLegacyApuToV2(makeEmptyAPU())));
   // skipMigrateIdRef: cuando generateAI ya construyo un apuV2 rico (procedimiento,
@@ -1134,6 +1164,8 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   const resetAPUForm = () => {
     clearFileInputs();
     setConcept('');
+    setAiUnit('');
+    setAiQty('');
     setApu(makeEmptyAPU());
     setAiOpen(false);
     setExcelInfo(null);
@@ -1200,6 +1232,8 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     if(!requireApuAccess()) return;
     if(!concept.trim()){ alert('Pega o sube un concepto real para generar el APU.'); return; }
     const parsed=parseConceptText(concept);
+    if(aiUnit.trim()) parsed.unit=aiUnit.trim();
+    if(Number(aiQty)>0) parsed.qty=Number(aiQty);
     const next=standardAPUForConcept({concept:parsed.concept, unit:parsed.unit, qty:parsed.qty, referencePU:parsed.referencePU}, catalog, 0, 'Texto pegado');
     setConcept(parsed.concept);
     setApu(next);
@@ -1220,6 +1254,8 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     setAiBusy(true);
     setAiStatus('Analizando el alcance del concepto...');
     const parsed=parseConceptText(concept);
+    if(aiUnit.trim()) parsed.unit=aiUnit.trim();
+    if(Number(aiQty)>0) parsed.qty=Number(aiQty);
     const controller=new AbortController();
     const timer=window.setTimeout(()=>controller.abort(), 45000);
     try{
@@ -1536,6 +1572,11 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     {aiOpen && <div className="panel ai-panel">
       <div className="ai-panel-head"><HardHat size={36}/><div><b>Generar con IA</b><small className="muted">Pega tu concepto y/o importa tu Excel de precios. Usaré tus precios reales donde coincidan los insumos.</small></div></div>
       <textarea className="ai-concept" value={concept} onChange={e=>setConcept(e.target.value)} placeholder="Pega aquí el concepto, ej. Muro de tabique rojo recocido asentado con mortero…"/>
+      <div className="ai-unit-qty-row">
+        <label>Unidad (opcional)<input value={aiUnit} onChange={e=>setAiUnit(e.target.value)} placeholder="ej. m, m², kg, pza"/></label>
+        <label>Cantidad (opcional)<input type="number" min="0" step="any" value={aiQty} onChange={e=>setAiQty(e.target.value)} placeholder="ej. 80"/></label>
+        <small className="muted">Si el concepto trae números propios (medidas, diámetros), captura aquí la unidad y cantidad reales para no confundir al detector automático.</small>
+      </div>
       <div className="ai-panel-foot">
         <label className="up-btn ghost-up">Importar catálogo de precios<input ref={priceCatalogInputRef} type="file" accept=".xlsx,.csv" hidden onChange={e=>importExcel(e.target.files[0])}/></label>
         <label className="up-btn">Generar desde Excel completo<input ref={fullExcelInputRef} type="file" accept=".xlsx,.csv" hidden onChange={e=>importFullExcel(e.target.files[0])}/></label>

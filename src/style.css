@@ -2037,4 +2037,31 @@ svg.ic{display:block;flex:none}
 .demo-hero-step b{display:block;font-family:var(--mono);color:#C9A24A;font-size:.72rem;letter-spacing:.08em;text-transform:uppercase}
 .demo-hero-step span{display:block;margin-top:4px;font-size:.82rem;color:#fff}
 @media (max-width:760px){.demo-hero-steps{grid-template-columns:repeat(2,1fr)}}
+/* ---------- Selector de proyecto activo (topbar) y estado en tarjetas ---------- */
+.project-switcher{display:flex;align-items:center;gap:8px;background:var(--mint);border:1px solid var(--line);border-radius:999px;padding:6px 8px 6px 12px;color:var(--petrol)}
+.project-switcher select{border:none;background:transparent;font-weight:700;color:var(--petrol);max-width:220px;padding:2px 4px}
+.project-switcher select:focus{outline:2px solid var(--gold);border-radius:6px}
+.project-switcher button{border-radius:999px;padding:5px 12px;font-size:.78rem}
+.project-card{position:relative}
+.project-card.active{border-color:var(--teal);box-shadow:0 0 0 2px rgba(111,63,167,.18)}
+.project-active-badge{position:absolute;top:12px;right:12px;font-family:var(--mono);font-size:.64rem;text-transform:uppercase;letter-spacing:.06em;background:var(--teal);color:#fff;padding:3px 9px;border-radius:20px}
+.project-card>button.soft{margin-top:10px}
+/* ---------- Revision de duplicados de catalogo Excel (seccion 3/12 sprint) ---------- */
+.batch-review{margin-top:14px;border-top:1px solid rgba(255,255,255,.18);padding-top:14px;display:flex;flex-direction:column;gap:10px}
+.batch-review-head b{color:#fff;display:block}
+.batch-review-head p{margin:4px 0 0}
+.batch-review-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.batch-search{max-width:240px}
+.batch-count{margin-left:auto;font-family:var(--mono);font-size:.76rem;color:#e5d8f2}
+.batch-review-table{max-height:340px;overflow:auto;border-radius:10px;background:#fff;color:var(--ink)}
+.batch-review-table table{width:100%}
+.batch-review-table th{position:sticky;top:0;background:#EAF0F7;z-index:1}
+.batch-row-duplicate{opacity:.6}
+.dup-badge{margin-left:8px;font-family:var(--mono);font-size:.64rem;text-transform:uppercase;background:var(--gold);color:#3a2a06;padding:2px 8px;border-radius:20px}
+.batch-review-actions{display:flex;justify-content:flex-end}
+.batch-result{margin-top:14px;border-top:1px solid rgba(255,255,255,.18);padding-top:14px;display:flex;flex-direction:column;gap:12px}
+.batch-result>b{color:#fff;font-family:var(--mono);letter-spacing:.06em}
+.batch-result-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;color:#fff}
+.batch-result-grid b{color:#C9A24A}
+.batch-result-actions{display:flex;flex-wrap:wrap;gap:10px}
 .legacy-editor-compat{display:none!important}.professional-apu-editor{display:grid;gap:16px}.pro-toolbar{display:flex;gap:8px;flex-wrap:wrap}.pro-header-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.pro-header-grid label{display:grid;gap:5px}.pro-section{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px}.pro-list-row{display:flex;gap:8px;margin:8px 0}.pro-list-row textarea{flex:1}.pro-economy{display:flex;gap:14px;flex-wrap:wrap;align-items:center;padding:18px;background:#132e52;color:#fff;border-radius:12px}.pro-economy strong{font-size:1.2rem;color:#9ee6b4}.validation-panel{padding:14px;border:1px solid #e4b64d;background:#fff8df;border-radius:12px}.pro-modal{position:fixed;inset:0;background:#0008;z-index:1000;display:grid;place-items:center}.pro-modal>div{background:white;padding:22px;border-radius:14px;max-width:900px;max-height:80vh;overflow:auto}.price-state{font-size:.7rem;font-weight:700}

@@ -208,6 +208,30 @@ function NoticeHost(){
   </div>;
 }
 
+/* Aislamiento por proyecto: envuelve una lista guardada por usuario (apus,
+   presupuestos, catalogo, budgetItems) para que se lea/escriba SOLO el
+   subconjunto del proyecto activo, sin cambiar el almacenamiento real (sigue
+   siendo una lista por usuario en Firestore/localStorage vía useCloudState).
+   Cualquier item sin projectId propio se etiqueta con el proyecto activo al
+   guardarse -- así ningún llamador existente (setApus([...]), setApus(prev=>...))
+   tuvo que cambiar: siguen operando sobre la vista ya filtrada, y esta funcion
+   la vuelve a fusionar con los items de los demás proyectos sin tocarlos. */
+function useProjectScoped(list, setList, activeProjectId){
+  const scopeKey = activeProjectId ?? null;
+  const scoped = useMemo(() => (list || []).filter(x => (x?.projectId ?? null) === scopeKey), [list, scopeKey]);
+  const setScoped = (next) => {
+    setList(prevList => {
+      const prev = prevList || [];
+      const others = prev.filter(x => (x?.projectId ?? null) !== scopeKey);
+      const prevScoped = prev.filter(x => (x?.projectId ?? null) === scopeKey);
+      const nextScoped = typeof next === 'function' ? next(prevScoped) : next;
+      const tagged = (nextScoped || []).map(x => (x && (x.projectId ?? null) === null) ? { ...x, projectId: scopeKey } : x);
+      return [...others, ...tagged];
+    });
+  };
+  return [scoped, setScoped];
+}
+
 function App(){
   const [screen, setScreen] = useState('landing');
   const [module, setModule] = useState('inicio');
@@ -229,12 +253,28 @@ function App(){
   const [accounts, setAccounts] = useLocalState('zoemec-accounts', [], user?.uid);
   const [usage, setUsage] = useLocalState('zoemec-usage', {}, user?.uid);
   const [company, setCompany] = useCloudState(user, 'zoemec-company', defaultCompany);
-  const [apus, setApus] = useCloudState(user, 'zoemec-apus', []);
+  const [rawApus, setRawApus] = useCloudState(user, 'zoemec-apus', []);
   const [clients, setClients] = useCloudState(user, 'zoemec-clients', []);
-  const [budgets, setBudgets] = useCloudState(user, 'zoemec-budgets', []);
+  const [rawBudgets, setRawBudgets] = useCloudState(user, 'zoemec-budgets', []);
   const [projects, setProjects] = useCloudState(user, 'zoemec-projects', []);
-  const [catalog, setCatalog] = useCloudState(user, 'zoemec-catalogo', []);
-  const [budgetItems, setBudgetItems] = useCloudState(user, 'zoemec-budget-items', [{concept:'Muro de block 15 cm',unit:'m²',qty:120,pu:825.39},{concept:'Piso cerámico 30x30 cm',unit:'m²',qty:86,pu:384.51}]);
+  const [rawCatalog, setRawCatalog] = useCloudState(user, 'zoemec-catalogo', []);
+  const [rawBudgetItems, setRawBudgetItems] = useCloudState(user, 'zoemec-budget-items', [{concept:'Muro de block 15 cm',unit:'m²',qty:120,pu:825.39},{concept:'Piso cerámico 30x30 cm',unit:'m²',qty:86,pu:384.51}]);
+  // activeProjectId: aislamiento real de datos por proyecto (seccion 13/1 del
+  // sprint). apus/budgets/catalog/budgetItems que el resto de la app usa son
+  // la vista YA filtrada al proyecto activo; el almacenamiento completo (todas
+  // las obras del usuario) vive en raw* y nunca se expone directo a los modulos.
+  const [activeProjectId, setActiveProjectId] = useLocalState('zoemec-active-project', null, user?.uid);
+  useEffect(() => {
+    if(activeProjectId && !projects.some(p => p.id === activeProjectId)){
+      setActiveProjectId(projects[0]?.id || null);
+    } else if(!activeProjectId && projects.length){
+      setActiveProjectId(projects[0].id);
+    }
+  }, [projects, activeProjectId]);
+  const [apus, setApus] = useProjectScoped(rawApus, setRawApus, activeProjectId);
+  const [budgets, setBudgets] = useProjectScoped(rawBudgets, setRawBudgets, activeProjectId);
+  const [catalog, setCatalog] = useProjectScoped(rawCatalog, setRawCatalog, activeProjectId);
+  const [budgetItems, setBudgetItems] = useProjectScoped(rawBudgetItems, setRawBudgetItems, activeProjectId);
   useEffect(() => {
     const onAdd = (e) => { if(e?.detail) setBudgetItems(list => [...list, e.detail]); };
     window.addEventListener('zoemec-budget-add', onAdd);
@@ -520,17 +560,19 @@ function App(){
   };
 
   let content;
+  const activeProject = projects.find(p => p.id === activeProjectId) || null;
+  const needsProject = !projects.length;
   if(screen === 'landing') content = <Landing setScreen={setScreen} login={login} company={companyView} />;
   else if(screen === 'login') content = <Auth mode="login" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} company={companyView} />;
   else if(screen === 'register') content = <Auth mode="register" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} company={companyView} />;
   else if(!hasValidSession(user)) content = <Landing setScreen={setScreen} login={login} company={companyView} />;
-  else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView} apus={apus} clients={clients} projects={projects}>
-    {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} user={user} demoMode={DEMO_MODE} demoContext={DEMO_MODE ? createDemoContext() : null} />}
-    {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} />}
-    {module === 'presupuestos' && <Budgets company={companyView} budgets={budgets} setBudgets={setBudgets} items={budgetItems} setItems={setBudgetItems} />}
-    {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} />}
+  else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView} apus={apus} clients={clients} projects={projects} activeProject={activeProject} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId}>
+    {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} activeProject={activeProject} user={user} demoMode={DEMO_MODE} demoContext={DEMO_MODE ? createDemoContext() : null} />}
+    {module === 'apu' && (needsProject ? <NeedsProjectGate onCreate={()=>setModule('cartera')}/> : <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} activeProjectId={activeProjectId} />)}
+    {module === 'presupuestos' && (needsProject ? <NeedsProjectGate onCreate={()=>setModule('cartera')}/> : <Budgets company={companyView} budgets={budgets} setBudgets={setBudgets} items={budgetItems} setItems={setBudgetItems} />)}
+    {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={(pid)=>{ setRawApus(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgets(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawCatalog(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgetItems(l=>l.filter(x=>(x?.projectId??null)!==pid)); }} />}
     {module === 'biblioteca' && <Library user={user} />}
-    {module === 'tecnico' && <TechnicalOffice company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} />}
+    {module === 'tecnico' && (needsProject ? <NeedsProjectGate onCreate={()=>setModule('cartera')}/> : <TechnicalOffice company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} />)}
     {module === 'visual' && <VisualAI user={user} />}
     {module === 'comunidad' && <Community />}
     {module === 'planes' && <PlansAccess user={user} />}
@@ -860,7 +902,7 @@ function TopSearch({apus=[],clients=[],projects=[],setModule}){
   </div>;
 }
 
-function Shell({children,user,logout,module,setModule,company,apus,clients,projects}){
+function Shell({children,user,logout,module,setModule,company,apus,clients,projects,activeProject,activeProjectId,setActiveProjectId}){
   // Comunidad y Planes y acceso se ocultan temporalmente del menu principal
   // (fase de concurso: se mantienen en el codigo, solo no se muestran en la navegacion).
   const menu = [
@@ -882,12 +924,31 @@ function Shell({children,user,logout,module,setModule,company,apus,clients,proje
     <main className="main">
       <header className="topbar">
         <TopSearch apus={apus} clients={clients} projects={projects} setModule={setModule}/>
+        {projects.length>0 && <div className="project-switcher" title="Proyecto activo: los APUs, presupuestos y catálogo que veas y guardes pertenecen solo a este proyecto.">
+          <Icon name="proyectos" size={15}/>
+          <select value={activeProjectId||''} onChange={e=>setActiveProjectId(e.target.value)} aria-label="Proyecto activo">
+            {projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <button type="button" className="ghost-up" onClick={()=>setModule('cartera')}>+ Nuevo</button>
+        </div>}
         <div className="user"><CloudBadge user={user}/><NotificationBell user={user}/><span className="avatar">{user.initials}</span><div><b>{user.name}</b><small>{user.isAdmin ? 'Administrador' : user.plan}</small></div><button onClick={logout}>Salir</button></div>
       </header>
       {children}
     </main>
-    <Assistant/>
   </div>
+}
+
+/* Se muestra en APU/Presupuestos/Oficina técnica cuando el usuario todavia no
+   tiene ningun proyecto: esos tres modulos trabajan sobre datos aislados por
+   proyecto activo (ver useProjectScoped en App), asi que sin un proyecto no
+   hay donde guardar nada de forma trazable. */
+function NeedsProjectGate({onCreate}){
+  return <section><div className="panel" style={{textAlign:'center',padding:'40px 24px'}}>
+    <Icon name="proyectos" size={34}/>
+    <h2 style={{margin:'14px 0 6px'}}>Crea tu primer proyecto para continuar</h2>
+    <p className="muted" style={{maxWidth:480,margin:'0 auto 18px'}}>APUs, presupuestos y catálogo se guardan dentro de un proyecto para que nunca se mezclen entre obras distintas. Crea uno (toma 10 segundos) y vuelve aquí.</p>
+    <button onClick={onCreate}>+ Crear proyecto</button>
+  </div></section>;
 }
 
 function ProjectsPlaceholder({onCreate, onImport}){
@@ -934,7 +995,7 @@ function DigitalTwin({apu, compact, onOpen}){
   </div>;
 }
 
-function Dashboard({setModule,apus,clients,budgets,projects,user}){
+function Dashboard({setModule,apus,clients,budgets,projects,activeProject:activeProjectProp,user}){
   const [remoteStatus,setRemoteStatus] = useState(null);
   const [oneDriveStatus,setOneDriveStatus] = useState(null);
   const [libraryCount,setLibraryCount] = useState(null);
@@ -942,7 +1003,7 @@ function Dashboard({setModule,apus,clients,budgets,projects,user}){
   const [libraryError,setLibraryError] = useState('');
   const monto = budgets.reduce((a,b)=>a+(b.total||0),0);
   const pr = projects || [];
-  const activeProject = pr[0] || null;
+  const activeProject = activeProjectProp || pr[0] || null;
   const latestApu = apus[0] || null;
   const activeBudget = budgets[0] || null;
   const budgetCount = budgets.length;
@@ -1031,8 +1092,8 @@ function Dashboard({setModule,apus,clients,budgets,projects,user}){
     <div className="os-grid">
       <div className="os-command">
         <div className="os-command-head"><span>Inteligencia del proyecto en vivo</span><b>{monto ? money(monto) : 'Sin presupuesto aun'}</b></div>
-        <h2>{pr[0]?.name || 'Espacio de trabajo de construcción digital'}</h2>
-        <p>{pr[0]?.client || 'Importa un concepto o crea un APU para encender el modelo de costos.'}</p>
+        <h2>{activeProject?.name || 'Espacio de trabajo de construcción digital'}</h2>
+        <p>{activeProject?.client || 'Importa un concepto o crea un APU para encender el modelo de costos.'}</p>
         <p className="os-summary">{projectCount ? `${projectCount} proyectos activos · ${budgetCount} presupuestos disponibles` : 'Activa tu flujo con el primer proyecto, APU y presupuesto.'}</p>
         <div className="os-prompt"><i>ZOE</i><span>Convierte el siguiente alcance en una matriz APU trazable...</span><button onClick={()=>setModule('apu')}>Iniciar</button></div>
         <div className="os-pipeline">{pipeline.map((p,i)=><button key={p[0]} className={p[2]} onClick={()=>setModule(i<2?'biblioteca':i<5?'apu':'presupuestos')}><b>{p[0]}</b><span>{p[1]}</span></button>)}</div>
@@ -1049,14 +1110,14 @@ function Dashboard({setModule,apus,clients,budgets,projects,user}){
             <DigitalTwin apu={apus[0]} compact onOpen={()=>setModule('apu')}/>
           </div>
           <div className="twin-insights">
-            <InfoCard title="Proyecto" value={pr[0]?.name || '—'} subtitle={pr[0] ? `${pr[0].progress || 0}% avance` : 'Sin proyecto activo'} actionLabel={pr[0] ? 'Ver proyecto' : 'Crear proyecto'} onAction={()=>setModule(pr[0]? 'cartera' : 'cartera')}/>
+            <InfoCard title="Proyecto" value={activeProject?.name || '—'} subtitle={activeProject ? `${activeProject.progress || 0}% avance` : 'Sin proyecto activo'} actionLabel={activeProject ? 'Ver proyecto' : 'Crear proyecto'} onAction={()=>setModule('cartera')}/>
             <InfoCard title="IA" value={apus.length? 'Activa': 'Inactiva'} subtitle={apus.length? `${apus.length} APUs disponibles` : 'Genera tu primer APU para activar ZOE'} actionLabel="Copiloto" onAction={()=>setModule('apu')}/>
           </div>
         </div>
       </div>
       <div className="os-side">
         <div className="status-grid">
-          <div className="status-card"><small>Proyecto</small><b>{pr[0]?.name || '—'}</b><span>{pr[0] ? `${pr[0].client || ''}` : 'Crea o importa un proyecto'}</span></div>
+          <div className="status-card"><small>Proyecto</small><b>{activeProject?.name || '—'}</b><span>{activeProject ? `${activeProject.client || ''}` : 'Crea o importa un proyecto'}</span></div>
           <div className="status-card"><small>IA</small><b>{apus.length ? 'Activa' : 'Inactiva'}</b><span>{apus.length ? `Última confianza ${Math.round((apus[0]?.confidence||0)*100)/100}` : 'Genera un APU para activar'}</span></div>
                   <div className="status-card"><small>Biblioteca</small><b>{libraryCount !== null ? `${libraryCount} documentos` : '—'}</b><span>{libraryCount !== null ? (libraryCount > 0 ? 'Biblioteca técnica detectada' : 'Sin documentos aún: sube tu primera base') : (libraryError || 'Sin datos de biblioteca')}</span></div>
           <div className="status-card"><small>OneDrive</small><b>{oneDriveOk ? 'Conectado' : 'No conectado'}</b><span>{oneDriveOk ? 'Archivos de proyecto accesibles' : 'Sincroniza documentos y planos'}</span></div>
@@ -1130,7 +1191,7 @@ function legacyShimFromV2(v2, fallbackConcept, sourceFile){
   };
 }
 
-function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog}){
+function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog,activeProjectId}){
   const [concept,setConcept]=useState('');
   // Unidad/Cantidad explicitas (opcionales): parseConceptText adivina unidad y
   // cantidad del texto pegado, pero un concepto en lenguaje natural puede traer
@@ -1156,6 +1217,14 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   const [conceptBatch,setConceptBatch]=useState(null);
   const [batchAPUs,setBatchAPUs]=useState([]);
   const [batchBusy,setBatchBusy]=useState(false);
+  // Revision de duplicados del catalogo Excel (seccion 3/12 del sprint): en vez
+  // de una pared de N renglones, se agrupan por conceptApuKey (mismo criterio
+  // que ya usaba buildBatchAPUs para reusar APUs) y solo el primero de cada
+  // grupo queda preseleccionado. batchSelection=null significa "sin catalogo
+  // cargado todavia"; una vez cargado, siempre es un Set (aunque este vacio).
+  const [batchSelection,setBatchSelection]=useState(null);
+  const [batchSearch,setBatchSearch]=useState('');
+  const [batchResult,setBatchResult]=useState(null);
   const priceCatalogInputRef = useRef(null);
   const fullExcelInputRef = useRef(null);
   const conceptCatalogInputRef = useRef(null);
@@ -1174,6 +1243,70 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     setAiStatus('');
     setBatchBusy(false);
     setShowExecutive(false);
+    setBatchSelection(null);
+    setBatchSearch('');
+    setBatchResult(null);
+  };
+  // Clave de agrupacion SOLO para la revision de duplicados en pantalla: a
+  // diferencia de conceptApuKey (que ademas usa clave/codigo y P.U. de
+  // referencia, pensada para el cache de generacion con IA de buildBatchAPUs),
+  // aqui interesa detectar "es el mismo concepto tecnico" sin importar que cada
+  // renglon duplicado en un Excel real casi siempre trae un codigo/fila
+  // distinto -- si se usara conceptApuKey aqui, ningun duplicado real se
+  // agruparia nunca porque el codigo ya los distingue.
+  const duplicateGroupKey = (item) => `${String(item?.concept||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim()}|${normalizeUnitLabel(item?.unit||'')}`;
+  const batchGroups = useMemo(() => {
+    const groups = new Map();
+    (conceptBatch?.concepts || []).forEach((item, index) => {
+      const key = duplicateGroupKey(item);
+      if(!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(index);
+    });
+    return groups;
+  }, [conceptBatch]);
+  useEffect(() => {
+    if(!conceptBatch?.concepts?.length){ setBatchSelection(null); return; }
+    const sel = new Set();
+    batchGroups.forEach(indices => sel.add(indices[0]));
+    setBatchSelection(sel);
+    setBatchResult(null);
+  }, [conceptBatch]);
+  const batchDuplicateRows = conceptBatch?.concepts ? conceptBatch.concepts.length - batchGroups.size : 0;
+  const batchFilteredRows = useMemo(() => {
+    const list = conceptBatch?.concepts || [];
+    const q = batchSearch.trim().toLowerCase();
+    return list
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => !q || String(item.concept||'').toLowerCase().includes(q) || String(item.code||'').toLowerCase().includes(q));
+  }, [conceptBatch, batchSearch]);
+  const toggleBatchRow = (index) => setBatchSelection(prev => { const n = new Set(prev); n.has(index) ? n.delete(index) : n.add(index); return n; });
+  const selectAllBatchRows = () => setBatchSelection(new Set((conceptBatch?.concepts||[]).map((_,i)=>i)));
+  const selectUniqueBatchRows = () => { const sel=new Set(); batchGroups.forEach(indices=>sel.add(indices[0])); setBatchSelection(sel); };
+  const selectNoBatchRows = () => setBatchSelection(new Set());
+  const generateSelectedBatch = async () => {
+    if(!conceptBatch?.concepts?.length || batchBusy) return;
+    const selectedList = conceptBatch.concepts.filter((_, i) => batchSelection?.has(i)).filter(isExportableConceptItem);
+    if(!selectedList.length){ alert('Selecciona al menos un concepto valido (con descripcion) para generar.'); return; }
+    setBatchBusy(true);
+    setBatchResult(null);
+    try{
+      const apuList = await buildBatchAPUs(selectedList);
+      const taggedApus = apuList.map(a => ({ ...a, projectId: activeProjectId }));
+      setApus(prev => [...taggedApus, ...prev.filter(x => !taggedApus.some(t => t.clave === x.clave))]);
+      const items = apuList.map(a => ({ concept: a.concept, unit: a.unit, qty: Number(a.sourceQty || 1) || 1, pu: calcAPU(a).pu }));
+      const subtotal = items.reduce((s, it) => s + Number(it.qty) * Number(it.pu), 0);
+      const iva = subtotal * DEFAULT_IVA_RATE / 100;
+      const sourceName=String(conceptBatch.fileName||'catálogo Excel').replace(/\.(xlsx|xls|csv)$/i,'');
+      const budget = { id:'PRE-'+uid(), name:`Presupuesto ${sourceName}`, client:'Cliente por definir', items, ivaRate:DEFAULT_IVA_RATE, total:subtotal+iva, date:new Date().toLocaleDateString('es-MX') };
+      setBudgets(prev => [budget, ...prev]);
+      const errors = apuList.filter(a => a.templateFallback).length;
+      setBatchResult({ conceptsTotal: conceptBatch.concepts.length, selected: selectedList.length, generated: apuList.length, review: errors, errors: 0, budget });
+      setAiStatus(`Presupuesto generado: ${apuList.length} APUs guardados en este proyecto.`);
+    }catch(error){
+      alert(`No se pudo generar el lote seleccionado: ${error?.message || 'error desconocido'}.`);
+    }finally{
+      setBatchBusy(false);
+    }
   };
   const totals=calcAPU(apu);
   const professionalApu=useMemo(()=>finalizeProfessionalAPU({...apuV2,cantidadObra:Number(apuV2.cantidadObra||excelInfo?.qty||apu.sourceQty||1)}),[apuV2,excelInfo?.qty,apu.sourceQty]);
@@ -1246,6 +1379,19 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   // dispara una generacion, cambia de concepto/sale del modulo antes de que
   // responda, y la respuesta tardia NO debe contaminar el desarrollo activo).
   const aiRequestSeqRef=useRef(0);
+  // Cambiar de proyecto activo mientras este componente sigue montado (el
+  // usuario no sale de "APU Inteligente", solo cambia el selector de proyecto)
+  // debe limpiar el borrador en pantalla e invalidar cualquier generacion de
+  // IA en curso: si no, el resultado de esa IA (o el borrador visible)
+  // apareceria sobre el proyecto equivocado al terminar de responder.
+  const activeProjectIdRef=useRef(activeProjectId);
+  useEffect(()=>{
+    if(activeProjectIdRef.current === activeProjectId) return;
+    activeProjectIdRef.current = activeProjectId;
+    aiRequestSeqRef.current++;
+    setAiBusy(false);
+    resetAPUForm();
+  },[activeProjectId]);
   const generateAI=async()=>{
     if(!requireApuAccess()) return;
     if(!concept.trim()){ alert('Pega o sube un concepto real para generar con IA.'); return; }
@@ -1493,21 +1639,26 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   };
   const save=()=>{ if(!requireApuAccess()) return; setApus([apu,...apus.filter(x=>x.id!==apu.id)]); markApuUsed(); alert('APU guardado');};
   const addBudget=()=>{ if(!requireApuAccess()) return; setBudgets([{id:'PRE-'+uid(), name:'Presupuesto desde APU', client:'Cliente por definir', items:[{concept:apu.concept, unit:apu.unit, qty:1, pu:totals.pu}], total:totals.pu, date:new Date().toLocaleDateString('es-MX')},...budgets]); markApuUsed(); alert('Agregado a presupuestos (PU sin IVA)');};
-  const hasConceptBatch = (conceptBatch?.concepts || []).filter(isExportableConceptItem).length > 1;
+  // Nota: la exportacion masiva por catalogo (multiples APUs) ya no pasa por
+  // aqui -- vive en el panel de revision de duplicados (generateSelectedBatch
+  // + los botones propios de "PRESUPUESTO GENERADO"), para que el usuario
+  // siempre vea y controle que conceptos se estan generando/exportando en
+  // lote, en vez de que "Descargar PDF/Excel" del APU activo cambie de
+  // comportamiento en silencio solo porque alguna vez se subio un catalogo.
   const [exportBusy,setExportBusy]=useState(false);
   const exportPDF=async()=>{
-    if(!hasConceptBatch && isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; }
+    if(isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; }
     setExportBusy(true);
-    try{ hasConceptBatch ? await exportConceptBatchPDF() : exportAPUPdfV2(professionalApu); }
+    try{ exportAPUPdfV2(professionalApu); }
     finally{ setExportBusy(false); }
-    if(isFree && !hasConceptBatch) markApuUsed();
+    if(isFree) markApuUsed();
   };
   const exportExcel=async()=>{
-    if(!hasConceptBatch && isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; }
+    if(isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; }
     setExportBusy(true);
-    try{ if(hasConceptBatch) await exportConceptBatch(); else await exportAPUExcelV2(professionalApu); }
+    try{ await exportAPUExcelV2(professionalApu); }
     finally{ setExportBusy(false); }
-    if(isFree && !hasConceptBatch) markApuUsed();
+    if(isFree) markApuUsed();
   };
   const findV2Prices=async(current)=>{
     const resources=['materials','labor','equipment'].flatMap(kind=>(current[kind]||[]).map((row,index)=>({kind,index,row})));
@@ -1583,8 +1734,6 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         <label className="up-btn ghost-up">Subir catálogo de conceptos<input ref={conceptCatalogInputRef} type="file" accept=".xlsx,.csv" hidden onChange={e=>importConceptCatalog(e.target.files[0])}/></label>
         {catalog.length>0 && <span className="cat-badge"><Icon name="presupuestos" size={14}/> Catálogo: {catalog.length} insumos</span>}
         <button onClick={generateAI} disabled={aiBusy}>{aiBusy?'Generando...':'Generar APU con IA real'}</button><button className="soft" type="button" onClick={resetAPUForm}>Limpiar</button>
-        {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatch} disabled={batchBusy}>{batchBusy?'Generando con IA...':`Descargar Excel: ${conceptBatch.concepts.length} hojas APU`}</button>}
-        {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatchPDF}>Descargar PDF: {conceptBatch.concepts.length} APUs</button>}
       </div>
       {aiStatus && <div className={'ai-note'+(aiBusy?' ai-note-busy':'')}>{aiBusy && <span className="asst-dots"><i/><i/><i/></span>}<b>{aiStatus}</b></div>}
       {excelInfo && <div className="excel-preview">
@@ -1594,6 +1743,56 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         <div><small>P.U. referencia</small><b>{excelInfo.referencePU ? money(excelInfo.referencePU) : 'No detectado'}</b></div>
       </div>}
       <div className="ai-note">El desarrollo se arma con tus precios importados, matrices base y metodologia ZOEMEC. La IA real se ejecuta por endpoints seguros en Vercel.</div>
+      {conceptBatch?.concepts?.length>0 && !batchResult && <div className="batch-review">
+        <div className="batch-review-head">
+          <b>Catálogo: {conceptBatch.concepts.length} registros → {batchGroups.size} conceptos únicos{batchDuplicateRows>0 ? ` (${batchDuplicateRows} duplicados agrupados)` : ''}</b>
+          <p className="muted">Se preseleccionó automáticamente un renglón por concepto único. Revisa, busca y ajusta antes de generar.</p>
+        </div>
+        <div className="batch-review-toolbar">
+          <input className="batch-search" value={batchSearch} onChange={e=>setBatchSearch(e.target.value)} placeholder="Buscar por clave o concepto..."/>
+          <button type="button" className="soft" onClick={selectAllBatchRows}>Seleccionar todos</button>
+          <button type="button" className="soft" onClick={selectUniqueBatchRows}>Solo únicos</button>
+          <button type="button" className="soft" onClick={selectNoBatchRows}>Ninguno</button>
+          <span className="batch-count">{batchSelection?.size || 0} de {conceptBatch.concepts.length} seleccionados</span>
+        </div>
+        <div className="batch-review-table">
+          <table className="data-table">
+            <thead><tr><th></th><th>Clave</th><th>Concepto</th><th>Unidad</th><th>Cantidad</th><th>P.U. ref.</th></tr></thead>
+            <tbody>{batchFilteredRows.map(({item,index})=>{
+              const group = batchGroups.get(duplicateGroupKey(item)) || [];
+              const isDuplicate = group.length>1;
+              const isFirstOfGroup = group[0]===index;
+              return <tr key={index} className={isDuplicate && !isFirstOfGroup ? 'batch-row-duplicate' : ''}>
+                <td><input type="checkbox" checked={batchSelection?.has(index)||false} onChange={()=>toggleBatchRow(index)}/></td>
+                <td>{item.code || `CON-${index+1}`}</td>
+                <td>{item.concept}{isDuplicate && <span className="dup-badge">{isFirstOfGroup?`${group.length} coincidencias`:'duplicado'}</span>}</td>
+                <td>{item.unit||'—'}</td>
+                <td>{num(item.qty||1)}</td>
+                <td>{item.referencePU?money(item.referencePU):'—'}</td>
+              </tr>;
+            })}</tbody>
+          </table>
+        </div>
+        <div className="batch-review-actions">
+          <button onClick={generateSelectedBatch} disabled={batchBusy || !batchSelection?.size}>{batchBusy?'Generando APUs con IA...':`Generar ${batchSelection?.size||0} APU(s) con IA y crear presupuesto`}</button>
+        </div>
+      </div>}
+      {batchResult && <div className="batch-result">
+        <b>PRESUPUESTO GENERADO</b>
+        <div className="batch-result-grid">
+          <span>Conceptos: <b>{batchResult.conceptsTotal}</b></span>
+          <span>Seleccionados: <b>{batchResult.selected}</b></span>
+          <span>APUs generados: <b>{batchResult.generated}</b></span>
+          <span>Con plantilla de respaldo: <b>{batchResult.review}</b></span>
+          <span>Subtotal: <b>{money(batchResult.budget.items.reduce((s,it)=>s+Number(it.qty)*Number(it.pu),0))}</b></span>
+          <span>Total con IVA: <b>{money(batchResult.budget.total)}</b></span>
+        </div>
+        <div className="batch-result-actions">
+          <button onClick={()=>exportBudgetExcel(batchResult.budget.items, batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.total-batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.ivaRate)}>Descargar presupuesto Excel</button>
+          <button onClick={()=>exportBudgetPDF(batchResult.budget.items, batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.total-batchResult.budget.total/(1+batchResult.budget.ivaRate/100), company, batchResult.budget.ivaRate)}>Descargar presupuesto PDF</button>
+          <button className="soft" onClick={resetAPUForm}>Cerrar</button>
+        </div>
+      </div>}
     </div>}
     <ProfessionalApuEditor apu={professionalApu} onChange={setApuV2} user={user} onSave={saved=>setApus([saved,...apus.filter(x=>x.id!==saved.id)])} onFindPrices={findV2Prices} onExcel={exportExcel} onPdf={exportPDF}/>
     <div className="apu-grid legacy-editor-compat">
@@ -1658,9 +1857,8 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         <div className="actions-col">
           <button onClick={save}>Guardar</button>
           <button onClick={addBudget}>Agregar al presupuesto</button>
-          <button onClick={exportPDF} disabled={exportBusy || batchBusy}>{exportBusy ? 'Generando PDF...' : hasConceptBatch ? `Descargar PDF por concepto (${conceptBatch.concepts.length})` : 'Descargar PDF con formato'}</button>
-          {conceptBatch?.concepts?.length>0 && !hasConceptBatch && <button onClick={exportConceptBatchPDF}>PDF por concepto ({conceptBatch.concepts.length})</button>}
-          <button onClick={exportExcel} disabled={exportBusy || batchBusy}>{exportBusy ? 'Generando Excel...' : hasConceptBatch ? (batchBusy ? 'Generando Excel por concepto...' : `Descargar Excel por concepto (${conceptBatch.concepts.length})`) : 'Descargar Excel'}</button>
+          <button onClick={exportPDF} disabled={exportBusy || batchBusy}>{exportBusy ? 'Generando PDF...' : 'Descargar PDF con formato'}</button>
+          <button onClick={exportExcel} disabled={exportBusy || batchBusy}>{exportBusy ? 'Generando Excel...' : 'Descargar Excel'}</button>
         </div>
       </div>
     </div>
@@ -2003,40 +2201,82 @@ function Budgets({company,budgets,setBudgets,items,setItems}){
   const update=(i,k,v)=>setItems(items.map((r,idx)=>idx===i?{...r,[k]:v}:r));
   const removeRow=(i)=>setItems(items.filter((_,idx)=>idx!==i));
   const save=()=>{setBudgets([{id:'PRE-'+uid(),name:'Presupuesto ejecutivo',client:'Cliente por definir',items,ivaRate:safeIvaRate,total:total+iva,date:new Date().toLocaleDateString('es-MX')},...budgets]); alert('Presupuesto guardado');};
+  const openSaved=(b)=>{ setItems(b.items||[]); setIvaRate(Number(b.ivaRate ?? DEFAULT_IVA_RATE)); window.scrollTo({top:0,behavior:'smooth'}); };
+  const removeSaved=(id)=>{ if(!confirm('¿Eliminar este presupuesto guardado?')) return; setBudgets(budgets.filter(b=>b.id!==id)); };
+  const downloadSaved=(b,kind)=>{
+    const bItems=b.items||[];
+    const bTotal=bItems.reduce((a,i)=>a+Number(i.qty)*Number(i.pu),0);
+    const bIvaRate=toSafeNonNegativeNumber(b.ivaRate ?? DEFAULT_IVA_RATE);
+    const bIva=bTotal*bIvaRate/100;
+    kind==='pdf' ? exportBudgetPDF(bItems,bTotal,bIva,company,bIvaRate) : exportBudgetExcel(bItems,bTotal,bIva,bIvaRate);
+  };
   return <section><PageHead kicker="Presupuestos" title="Presupuesto profesional" desc="Captura conceptos con su precio unitario (sin IVA), calcula totales con IVA y exporta con membrete. Las calculadoras del Centro Técnico pueden enviar conceptos directo aquí." action={<button onClick={save}>Guardar presupuesto</button>} />
     <div className="panel"><div className="apu-table-scroll"><table className="budget-table"><thead><tr><th>Concepto</th><th>Unidad</th><th>Cantidad</th><th>P.U. (sin IVA)</th><th>Importe</th><th></th></tr></thead><tbody>{items.map((it,i)=><tr key={i}><td><input value={it.concept} onChange={e=>update(i,'concept',e.target.value)}/></td><td><input value={it.unit} onChange={e=>update(i,'unit',e.target.value)}/></td><td><input type="number" value={it.qty} onChange={e=>update(i,'qty',e.target.value)}/></td><td><input type="number" value={it.pu} onChange={e=>update(i,'pu',e.target.value)}/></td><td>{money(it.qty*it.pu)}</td><td><a className="row-del" title="Eliminar concepto" onClick={()=>removeRow(i)}>✕</a></td></tr>)}</tbody></table></div><button className="soft" onClick={()=>setItems([...items,{concept:'Nuevo concepto',unit:'m²',qty:1,pu:0}])}>+ Agregar concepto</button><div className="totals"><Cost label="Subtotal" v={total}/><div className="iva-rate-row"><label htmlFor="budget-iva-rate">Tasa de IVA (%)</label><input id="budget-iva-rate" type="number" min="0" step="0.5" value={ivaRate} onChange={e=>setIvaRate(e.target.value)}/></div><Cost label={`IVA ${num(safeIvaRate)}%`} v={iva}/><div className="grand"><span>Total</span><b>{money(total+iva)}</b></div></div><div className="export-row"><button onClick={()=>exportBudgetExcel(items,total,iva,safeIvaRate)}>Exportar Excel</button><button onClick={()=>exportBudgetPDF(items,total,iva,company,safeIvaRate)}>Exportar PDF</button></div></div>
+    {budgets.length>0 && <div className="panel" style={{marginTop:16}}>
+      <h2>Presupuestos guardados de este proyecto <small className="hint">({budgets.length})</small></h2>
+      <div className="saved-grid">{budgets.map(b=>{
+        const bItems=b.items||[];
+        const bTotal=bItems.reduce((a,i)=>a+Number(i.qty)*Number(i.pu),0);
+        const bIvaRate=toSafeNonNegativeNumber(b.ivaRate ?? DEFAULT_IVA_RATE);
+        const bWithIva=bTotal*(1+bIvaRate/100);
+        return <div className="saved-card" key={b.id}>
+          <div className="sc-clave">{b.name||'Presupuesto'} · {b.date}</div>
+          <div className="sc-concept">{bItems.length} concepto(s) · {b.client||'Cliente por definir'}</div>
+          <div className="sc-pu">{money(bWithIva)} <small>con IVA</small></div>
+          <div className="sc-actions">
+            <button onClick={()=>openSaved(b)}>Abrir</button>
+            <button onClick={()=>downloadSaved(b,'pdf')}>PDF</button>
+            <button onClick={()=>downloadSaved(b,'excel')}>Excel</button>
+            <button className="del" onClick={()=>removeSaved(b.id)}>Borrar</button>
+          </div>
+        </div>;
+      })}</div>
+    </div>}
   </section>
 }
 
-function ClientsProjects({clients,setClients,projects,setProjects}){
+function ClientsProjects({clients,setClients,projects,setProjects,activeProjectId,setActiveProjectId,setModule,onDeleteProjectData}){
   return <section><PageHead kicker="Centro de costos" title="Clientes y proyectos" desc="Administra clientes, contactos, RFC, obras, avances y presupuestos desde un solo módulo." />
     <div className="combined-stack">
-      <Projects projects={projects} setProjects={setProjects} embedded />
+      <Projects projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={onDeleteProjectData} embedded />
       <Clients clients={clients} setClients={setClients} embedded />
     </div>
   </section>;
 }
 
-function Projects({projects,setProjects,embedded=false}){
+function Projects({projects,setProjects,activeProjectId,setActiveProjectId,setModule,onDeleteProjectData,embedded=false}){
   const list = projects || [];
   useEffect(()=>{
     const cleaned=list.filter(p=>!(p?.name==='Nuevo proyecto' && p?.client==='Cliente por definir' && Number(p?.budget||0)===0 && Number(p?.progress||0)===0));
     if(cleaned.length!==list.length) setProjects(cleaned);
   }, []);
   const [showForm,setShowForm]=useState(false);
-  const [draft,setDraft]=useState({name:'',client:'',budget:'',progress:0,status:'Anteproyecto'});
+  const [startPrompt,setStartPrompt]=useState(false);
+  const [draft,setDraft]=useState({name:'',client:'',ubicacion:'',moneda:'MXN',budget:'',progress:0,status:'Anteproyecto'});
   const add = () => setShowForm(true);
   const save = () => {
     if(!draft.name.trim() || !draft.client.trim()){
       alert('Captura nombre del proyecto y cliente.');
       return;
     }
-    setProjects([{id:'PRO-'+uid(),name:draft.name.trim(),client:draft.client.trim(),progress:Number(draft.progress)||0,budget:Number(draft.budget)||0,status:draft.status||'Anteproyecto'}, ...list]);
-    setDraft({name:'',client:'',budget:'',progress:0,status:'Anteproyecto'});
+    const next={id:'PRO-'+uid(),name:draft.name.trim(),client:draft.client.trim(),ubicacion:draft.ubicacion.trim(),moneda:draft.moneda||'MXN',progress:Number(draft.progress)||0,budget:Number(draft.budget)||0,status:draft.status||'Anteproyecto'};
+    setProjects([next, ...list]);
+    // Proyecto nuevo = espacio realmente vacio y activo de inmediato (seccion 15
+    // del sprint): sin esto, el usuario creaba el proyecto pero seguia viendo
+    // los APUs/presupuesto del proyecto que tuviera activo antes.
+    setActiveProjectId?.(next.id);
+    setDraft({name:'',client:'',ubicacion:'',moneda:'MXN',budget:'',progress:0,status:'Anteproyecto'});
     setShowForm(false);
+    setStartPrompt(true);
   };
   const update = (i,k,v) => setProjects(list.map((p,idx)=>idx===i?{...p,[k]:v}:p));
-  const remove = (i) => setProjects(list.filter((_,idx)=>idx!==i));
+  const remove = (i) => {
+    const removed=list[i];
+    if(!confirm(`¿Eliminar "${removed?.name||'este proyecto'}"? También se borrarán sus APUs, presupuestos y catálogo guardados.`)) return;
+    setProjects(list.filter((_,idx)=>idx!==i));
+    if(removed?.id) onDeleteProjectData?.(removed.id);
+    if(removed && removed.id===activeProjectId) setActiveProjectId?.(list.find((p,idx)=>idx!==i)?.id || null);
+  };
   return <section>{!embedded && <PageHead kicker="Proyectos" title="Control de obra y proyectos" desc="Vista ejecutiva de obras, avance, presupuesto, cliente y estado." action={<button onClick={add}>+ Nuevo proyecto</button>} />}
     {embedded && <div className="module-subhead"><div><small>Proyectos</small><h2>Control de obra y avance</h2></div><button onClick={add}>+ Nuevo proyecto</button></div>}
     {showForm && <div className="record-modal" role="dialog" aria-modal="true">
@@ -2046,19 +2286,34 @@ function Projects({projects,setProjects,embedded=false}){
       <div className="field-grid">
         <div className="nf"><label>Nombre del proyecto</label><input value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})} placeholder="Ej. Remodelacion local comercial"/></div>
         <div className="nf"><label>Cliente</label><input value={draft.client} onChange={e=>setDraft({...draft,client:e.target.value})} placeholder="Nombre del cliente o empresa"/></div>
+        <div className="nf"><label>Ubicación</label><input value={draft.ubicacion} onChange={e=>setDraft({...draft,ubicacion:e.target.value})} placeholder="Ciudad, estado"/></div>
+        <div className="nf"><label>Moneda</label><select value={draft.moneda} onChange={e=>setDraft({...draft,moneda:e.target.value})}><option>MXN</option><option>USD</option></select></div>
         <div className="nf"><label>Presupuesto estimado</label><input type="number" value={draft.budget} onChange={e=>setDraft({...draft,budget:e.target.value})} placeholder="0.00"/></div>
         <div className="nf"><label>Estado</label><select value={draft.status} onChange={e=>setDraft({...draft,status:e.target.value})}><option>Anteproyecto</option><option>Cotizacion</option><option>En ejecucion</option><option>Pausado</option><option>Cerrado</option></select></div>
         <div className="nf wide"><label>Avance inicial: {draft.progress}%</label><input type="range" min="0" max="100" value={draft.progress} onChange={e=>setDraft({...draft,progress:e.target.value})}/></div>
       </div>
-      <div className="form-actions"><button className="secondary" onClick={()=>setDraft({name:'',client:'',budget:'',progress:0,status:'Anteproyecto'})}>Limpiar</button><button onClick={save}>Guardar proyecto</button></div>
+      <div className="form-actions"><button className="secondary" onClick={()=>setDraft({name:'',client:'',ubicacion:'',moneda:'MXN',budget:'',progress:0,status:'Anteproyecto'})}>Limpiar</button><button onClick={save}>Crear y comenzar</button></div>
     </div></div>}
-    {list.length ? <div className="cards-3">{list.map((p,i)=><div className="project-card" key={i}>
+    {startPrompt && <div className="record-modal" role="dialog" aria-modal="true">
+      <div className="record-backdrop" onClick={()=>setStartPrompt(false)}></div>
+      <div className="panel record-form" style={{maxWidth:420,textAlign:'center'}}>
+        <h2>Proyecto creado y activo</h2>
+        <p className="muted">Es un espacio limpio: sin APUs, presupuesto ni catálogo previos. ¿Cómo quieres comenzar?</p>
+        <div className="form-actions" style={{justifyContent:'center'}}>
+          <button onClick={()=>{setStartPrompt(false);setModule?.('apu');}}>Pegar concepto / Generar con IA</button>
+          <button className="secondary" onClick={()=>{setStartPrompt(false);setModule?.('apu');}}>Importar Excel</button>
+        </div>
+      </div>
+    </div>}
+    {list.length ? <div className="cards-3">{list.map((p,i)=><div className={`project-card${p.id===activeProjectId?' active':''}`} key={p.id||i}>
+      {p.id===activeProjectId && <span className="project-active-badge">Proyecto activo</span>}
       <span>{p.status}</span>
       <h2><input value={p.name} onChange={e=>update(i,'name',e.target.value)} /></h2>
       <p><input value={p.client} onChange={e=>update(i,'client',e.target.value)} /></p>
       <b>{money(p.budget)}</b>
       <progress value={p.progress} max="100"/>
       <small>{p.progress}% de avance - <a onClick={()=>remove(i)} style={{color:'var(--danger)'}}>eliminar</a></small>
+      {p.id!==activeProjectId && <button className="soft" onClick={()=>setActiveProjectId?.(p.id)}>Usar este proyecto</button>}
     </div>)}</div> : <div className="panel"><EmptyState icon="proyectos" title="Tu cartera de proyectos está vacía" text="Crea el primer proyecto para activar el seguimiento de avance y presupuesto." actionLabel="+ Nuevo proyecto" onAction={add}/></div>}</section>
 }
 function Clients({clients,setClients,embedded=false}){

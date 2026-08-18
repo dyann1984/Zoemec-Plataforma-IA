@@ -2,6 +2,7 @@ import http from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { generateAPU, generateAPUv2, answerAssistant } from '../api/_openaiApuCore.mjs';
+import { searchMarketReferences } from '../api/_priceIntelligenceCore.mjs';
 
 const PORT = Number(process.env.ZOEMEC_AI_PORT || 8787);
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
@@ -41,6 +42,10 @@ const server = http.createServer(async (req, res) => {
     if(req.url === '/api/assistant'){
       const answer = await answerAssistant(payload);
       return endJson(res, 200, { answer });
+    }
+    if(req.url === '/api/price-intelligence'){
+      const result = await searchMarketReferences(payload);
+      return endJson(res, 200, result);
     }
     endJson(res, 404, { error:'Not found' });
   }catch(error){

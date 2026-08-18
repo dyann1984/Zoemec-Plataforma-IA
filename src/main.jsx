@@ -39,6 +39,7 @@ import {
   conceptApuKey, applyConceptMetadataV2, templateFallbackAPU,
   saveMarketPrice, standardAPUForConcept, makeAPUFromConcept, makeEmptyAPU
 } from './domain/apuGeneration.js';
+import { enrichAPUWithMarketPrices } from './domain/priceIntelligence.js';
 import { libKey, enrichLibraryMeta, scoreLibraryFile } from './domain/library.js';
 import { TechnicalCenter } from './features/technical-center/TechnicalCenter.jsx';
 import { AdminPanel } from './features/admin/AdminPanel.jsx';
@@ -1665,7 +1666,19 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     }
     if(data){
       const withMeta = applyConceptMetadataV2(data.apu, item, index, sourceFile);
-      const v2 = finalizeProfessionalAPU(withMeta);
+      // Price Intelligence real: busca precio de mercado (web_search real,
+      // ver api/_priceIntelligenceCore.mjs) para cada recurso propuesto por la
+      // IA ANTES de calcular con el Motor APU v2, para que el precio unitario
+      // final se calcule con evidencia de mercado cuando existe, no solo con
+      // la estimacion de la IA. Si la busqueda falla, el renglon conserva su
+      // precio ESTIMADO_IA original (nunca bloquea la generacion del APU).
+      let enriched = withMeta;
+      try{
+        setAiStatus(`Buscando precios de mercado reales para "${item.concept?.slice(0,60) || 'concepto'}"...`);
+        const result = await enrichAPUWithMarketPrices(withMeta, { location: activeProject?.ubicacion || '', dateBase: withMeta.fechaBase });
+        enriched = result.apu;
+      }catch{ /* si Price Intelligence falla por completo, se sigue con el APU tal cual la IA lo genero */ }
+      const v2 = finalizeProfessionalAPU(enriched);
       v2.aiGenerated = true;
       v2.templateFallback = false;
       v2.family = data.apu?.family || v2.family;

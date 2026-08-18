@@ -95,8 +95,62 @@ export function buildProfessionalSummarySheet(apus){
   return {sheet:'RESUMEN',rows,widths:[16,50,10,12,16,18,14,16,14,16,20,12],stickyRowsCount:2};
 }
 
+/* Hoja agregada del lote completo: una fila POR REFERENCIA REAL encontrada
+   (Price Intelligence, ver src/domain/priceIntelligence.js) en cualquier
+   concepto -- a diferencia de la seccion "15. FUENTES DE PRECIOS" de cada
+   hoja individual (que solo muestra 1 proveedor por renglon), aqui se ve
+   cada fuente consultada por separado con su presentacion/conversion/outlier,
+   para poder defender "esta es la mediana de estas N fuentes reales". Los
+   recursos sin ninguna referencia (busqueda sin evidencia, ESTIMADO_IA)
+   tambien aparecen, con una sola fila que deja constancia de que se intento
+   la busqueda y no hubo resultado -- nunca se omiten en silencio. */
+export function buildPriceIntelligenceSheet(apus){
+  const list=Array.isArray(apus)?apus:[apus];
+  const finalized=list.map(raw=>finalizeProfessionalAPU(raw));
+  const rows=[[asCell('FUENTES DE PRECIOS -- LOTE COMPLETO (Price Intelligence)',{...XLS.title,columnSpan:14}),...Array(13).fill(null)],
+    ['Concepto (clave)','Recurso','Descripcion','Proveedor','URL','Precio original','Presentacion original','Unidad original','Factor conversion','Precio normalizado','Fecha','Outlier','Nivel de evidencia','Precio recomendado (mediana)'].map(v=>asCell(v,XLS.head))];
+  let any=false;
+  finalized.forEach(apu=>{
+    ['materials','labor','equipment','seguridad'].forEach(kind=>{
+      (apu[kind]||[]).forEach(row=>{
+        const pr=row.priceRecord;
+        // evidenceLevel solo lo pone priceRecordFromMarketIntelligence: un
+        // priceRecord generico (el que finalizeProfessionalAPU crea por
+        // defecto para CUALQUIER renglon, aunque nunca se haya intentado
+        // buscar precio de mercado) no debe aparecer aqui como "sin
+        // evidencia" -- eso ensuciaria la hoja con renglones que ni siquiera
+        // pasaron por Price Intelligence.
+        if(!pr || pr.evidenceLevel==null) return;
+        const refs=Array.isArray(pr.references)?pr.references:[];
+        if(!refs.length){
+          rows.push([apu.clave,kind,row.descripcion,asCell('Sin evidencia externa',{color:'#8A6B2E'}),'','','','','','','','',apuEvidenceLabel(pr.evidenceLevel||'ESTIMADO_IA'),'']);
+          any=true;
+          return;
+        }
+        refs.forEach(ref=>{
+          any=true;
+          rows.push([
+            apu.clave,kind,row.descripcion,ref.proveedor,ref.url,
+            Number(ref.precioOriginal||0),ref.presentacionOriginal,ref.unidadOriginal,
+            Number(ref.factorConversion||1),Number(ref.precioNormalizado||0),ref.fecha,
+            ref.outlier?asCell('SI',{color:'#B54A62',fontWeight:'bold'}):'NO',
+            apuEvidenceLabel(pr.evidenceLevel),
+            pr.stats?.mediana!=null?Number(pr.stats.mediana):''
+          ]);
+        });
+      });
+    });
+  });
+  return any?{sheet:'FUENTES_PRECIOS',rows,widths:[16,10,42,20,30,12,16,12,10,14,12,8,16,16],stickyRowsCount:2}:null;
+}
+function apuEvidenceLabel(level){
+  return level==='MERCADO'?'MERCADO (varias fuentes)':level==='REFERENCIAL'?'REFERENCIAL (una fuente)':level==='VALIDADO'?'VALIDADO':'ESTIMADO IA (sin evidencia)';
+}
+
 export async function exportAPUExcelV2(apus,options={}){
-  const list=Array.isArray(apus)?apus:[apus]; const sheets=[buildProfessionalSummarySheet(list),...list.map(buildProfessionalAPUSheet)];
+  const list=Array.isArray(apus)?apus:[apus];
+  const priceSheet=buildPriceIntelligenceSheet(list);
+  const sheets=[buildProfessionalSummarySheet(list),...list.map(buildProfessionalAPUSheet),...(priceSheet?[priceSheet]:[])];
   await exportWorkbookExcel(sheets,options.fileName||'APU-PROFESIONAL-ZOEMEC.xlsx',options.writeXlsxFileImpl||writeXlsxFileBrowser); return sheets;
 }
 

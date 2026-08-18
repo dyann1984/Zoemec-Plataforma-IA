@@ -28,6 +28,16 @@ export function makePriceRecord(input = {}){
     supplier: text(input.supplier), sourceName: text(input.sourceName), sourceUrl: text(input.sourceUrl),
     sourceType, priceDate: text(input.priceDate), consultedAt: text(input.consultedAt),
     confidence: clamp(input.confidence), verified: sourceType === PRICE_SOURCE_TYPE.VERIFIED && Boolean(input.verified),
+    // Price Intelligence (busqueda real de mercado, ver api/_priceIntelligenceCore.mjs):
+    // referencias individuales encontradas (cada una con su propia presentacion/
+    // unidad/factor de conversion/url) y estadisticas (min/mediana/promedio/max/
+    // nFuentes) calculadas en codigo, nunca por el modelo. evidenceLevel es la
+    // clasificacion determinista (VALIDADO/MERCADO/REFERENCIAL/ESTIMADO_IA) segun
+    // src/domain/apuSchema.js#PRICE_EVIDENCE_LEVEL. Vacios/null por defecto: no
+    // rompe ningun llamador existente que no busque precios de mercado.
+    references: Array.isArray(input.references) ? input.references : [],
+    stats: input.stats || null,
+    evidenceLevel: text(input.evidenceLevel) || null,
     createdAt: text(input.createdAt) || new Date().toISOString()
   };
 }

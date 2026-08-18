@@ -39,6 +39,40 @@ export function apuDataStateLabel(estado){
   return APU_DATA_STATE_LABEL[estado] || 'REQUIERE VALIDACIÓN';
 }
 
+/* Semantica de integracion de un recurso (material/equipo/EPP) al precio
+   unitario. Un costo de cuadrilla (EPP, equipo rentado por jornada, herramienta
+   comprada por lote) NUNCA es directamente "cantidad x precio" por unidad de
+   obra -- eso solo es correcto para consumo verdaderamente proporcional
+   (POR_UNIDAD_OBRA). El motor (src/lib/apuCalc.js) exige esta clave por
+   renglon y nunca la infiere: si falta, calcula con el valor por defecto
+   POR_UNIDAD_OBRA pero el renglon queda marcado como pendiente de revision en
+   findApuNumericIssuesV2, nunca se acepta en silencio como correcto. */
+export const RESOURCE_INTEGRATION = Object.freeze({
+  POR_UNIDAD_OBRA: 'POR_UNIDAD_OBRA', // consumo directamente proporcional a 1 unidad del concepto
+  POR_JORNADA: 'POR_JORNADA',         // costo de uso diario / rendimiento diario de la cuadrilla
+  POR_LOTE: 'POR_LOTE',               // costo fijo repartido entre la cantidad contractual total
+  AMORTIZABLE: 'AMORTIZABLE',         // precio de adquisicion x factor de uso / vida util / rendimiento diario
+  PORCENTAJE_MO: 'PORCENTAJE_MO'      // herramienta menor como % de mano de obra
+});
+export const RESOURCE_INTEGRATION_LABEL = Object.freeze({
+  [RESOURCE_INTEGRATION.POR_UNIDAD_OBRA]: 'Por unidad de obra',
+  [RESOURCE_INTEGRATION.POR_JORNADA]: 'Por jornada (prorrateado)',
+  [RESOURCE_INTEGRATION.POR_LOTE]: 'Por lote (repartido en la cantidad contractual)',
+  [RESOURCE_INTEGRATION.AMORTIZABLE]: 'Amortizable (vida util)',
+  [RESOURCE_INTEGRATION.PORCENTAJE_MO]: '% de mano de obra'
+});
+
+/* Nivel de evidencia de un precio de mercado (Price Intelligence). Distinto
+   de APU_DATA_STATE: ese describe el estado del renglon del APU; este
+   describe la solidez de la referencia de precio en si (cuantas fuentes
+   coincidieron, si vino de busqueda web real o quedo sin evidencia externa). */
+export const PRICE_EVIDENCE_LEVEL = Object.freeze({
+  VALIDADO: 'VALIDADO',       // fuente directa (catalogo/proveedor cargado por el usuario) y especificacion coincidente
+  MERCADO: 'MERCADO',         // varias fuentes de busqueda web concordantes
+  REFERENCIAL: 'REFERENCIAL', // evidencia parcial (una sola fuente, o dispersion alta entre fuentes)
+  ESTIMADO_IA: 'ESTIMADO_IA'  // sin evidencia externa suficiente
+});
+
 function makeEmptyFuente(estado = APU_DATA_STATE.REQUIERE_VALIDACION){
   return { proveedor: null, fecha: null, region: null, estado };
 }
@@ -248,6 +282,11 @@ export function normalizeAIApuToV2(raw = {}, fallbackConcept = ''){
     consumo: coerceNumber(row?.[1], 0),
     desperdicioPct: coerceNumber(row?.[4], 0),
     precioUnitario: coerceNumber(row?.[3], 0),
+    // Semantica de integracion (RESOURCE_INTEGRATION): la IA la propone
+    // explicitamente; si no viene, queda null (nunca se inventa aqui -- el
+    // motor de calculo la trata como POR_UNIDAD_OBRA por defecto pero la
+    // marca pendiente de revision, ver findApuNumericIssuesV2 en apuCalc.js).
+    integracion: coerceText(sourcesRaw[index]?.integracion, '') || null,
     fuente: {
       proveedor: coerceText(sourcesRaw[index]?.proveedor, '') || null,
       fecha: null,
@@ -280,25 +319,47 @@ export function normalizeAIApuToV2(raw = {}, fallbackConcept = ''){
   });
 
   const equipmentRaw = Array.isArray(raw.equipment) ? raw.equipment : [];
-  const equipment = equipmentRaw.map((row, index) => ({
+  const equipmentDetailsRaw = Array.isArray(raw.equipmentDetails) ? raw.equipmentDetails : [];
+  const equipment = equipmentRaw.map((row, index) => {
+    const detail = equipmentDetailsRaw[index] || {};
+    return {
     clave: `EQ-${String(index + 1).padStart(3, '0')}`,
     descripcion: coerceText(row?.[0], 'Equipo'),
     unidad: coerceText(row?.[2], 'hr'),
     cantidad: coerceNumber(row?.[1], 0),
     tarifa: coerceNumber(row?.[3], 0),
     rendimiento: null,
+    // Semantica de integracion (RESOURCE_INTEGRATION), propuesta por la IA,
+    // NUNCA inferida aqui. rendimientoDiario/vidaUtilDias/factorUso solo
+    // aplican segun integracion (ver calcEquipmentRow en apuCalc.js).
+    integracion: coerceText(detail.integracion, '') || null,
+    rendimientoDiario: detail.rendimientoDiario != null ? coerceNumber(detail.rendimientoDiario, 0) || null : null,
+    vidaUtilDias: detail.vidaUtilDias != null ? coerceNumber(detail.vidaUtilDias, 0) || null : null,
+    factorUso: detail.factorUso != null ? coerceNumber(detail.factorUso, 1) : null,
+    modalidad: coerceText(detail.modalidad, '') || null,
     fuente: { proveedor: null, fecha: null, region: null, estado: APU_DATA_STATE.ESTIMADO_IA }
-  }));
+    };
+  });
 
   const seguridadRaw = Array.isArray(raw.seguridad) ? raw.seguridad : [];
-  const seguridad = seguridadRaw.map((row, index) => ({
+  const seguridadDetailsRaw = Array.isArray(raw.seguridadDetails) ? raw.seguridadDetails : [];
+  const seguridad = seguridadRaw.map((row, index) => {
+    const detail = seguridadDetailsRaw[index] || {};
+    return {
     clave: `SEG-${String(index + 1).padStart(3, '0')}`,
     descripcion: coerceText(row?.[0], 'EPP'),
     unidad: coerceText(row?.[2], 'pza'),
     cantidad: coerceNumber(row?.[1], 0),
     precioUnitario: coerceNumber(row?.[3], 0),
+    // EPP reutilizable (integracion:'AMORTIZABLE'): ver calcSeguridadRow en
+    // apuCalc.js. Nunca se infiere: si la IA no la propone, queda null.
+    integracion: coerceText(detail.integracion, '') || null,
+    rendimientoDiario: detail.rendimientoDiario != null ? coerceNumber(detail.rendimientoDiario, 0) || null : null,
+    vidaUtilDias: detail.vidaUtilDias != null ? coerceNumber(detail.vidaUtilDias, 0) || null : null,
+    factorReposicion: detail.factorReposicion != null ? coerceNumber(detail.factorReposicion, 1) : null,
     observaciones: ''
-  }));
+    };
+  });
 
   const procedimientoConstructivo = Array.isArray(raw.procedimientoConstructivo)
     ? raw.procedimientoConstructivo.map(step => coerceText(step)).filter(Boolean).slice(0, 10)

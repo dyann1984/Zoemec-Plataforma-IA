@@ -110,13 +110,34 @@ export function calcAPU(apu = {}){
    motor que usa la UI/exportacion actuales sin ningun cambio; calcAPUv2 es
    aditivo y todavia no esta conectado a ninguna pantalla. */
 
-/* Material: importe = consumo x (1 + %desperdicio) x precio unitario.
-   Equivalente exacto de rowImporte('materials', ...) para el esquema v2. */
-export function calcMaterialRow(row = {}){
+/* Semantica de integracion de un recurso al precio unitario (RESOURCE_INTEGRATION
+   en src/domain/apuSchema.js, no importado aqui para mantener este modulo sin
+   dependencias -- se compara por el string literal). Un renglon sin
+   "integracion" NUNCA se interpreta como "ya revisado": calcula con el valor
+   por defecto POR_UNIDAD_OBRA (identico al comportamiento historico de este
+   motor, asi que los APUs existentes sin este campo no cambian de precio),
+   pero queda marcado para revision en findApuNumericIssuesV2 -- ver ahi. */
+const POR_UNIDAD_OBRA = 'POR_UNIDAD_OBRA';
+const POR_JORNADA = 'POR_JORNADA';
+const POR_LOTE = 'POR_LOTE';
+const AMORTIZABLE = 'AMORTIZABLE';
+
+/* Material: importe = consumo x (1 + %desperdicio) x precio unitario, igual
+   que siempre (POR_UNIDAD_OBRA, el caso normal: el consumo YA esta expresado
+   por unidad de concepto). Si el renglon declara integracion:'POR_LOTE'
+   (ej. "materiales de proteccion temporal del area" comprados una sola vez
+   para toda la obra), el importe se reparte entre ctx.cantidadContractual en
+   vez de aplicarse completo a cada unidad. */
+export function calcMaterialRow(row = {}, ctx = {}){
   const consumo = toSafeNonNegativeNumber(row?.consumo);
   const desperdicioPct = toSafeNonNegativeNumber(row?.desperdicioPct);
   const precioUnitario = toSafeNonNegativeNumber(row?.precioUnitario);
-  return consumo * (1 + desperdicioPct / 100) * precioUnitario;
+  const importeBase = consumo * (1 + desperdicioPct / 100) * precioUnitario;
+  if(row?.integracion === POR_LOTE){
+    const cantidadContractual = toSafeNonNegativeNumber(ctx.cantidadContractual);
+    return cantidadContractual > 0 ? importeBase / cantidadContractual : 0;
+  }
+  return importeBase;
 }
 
 /* Cantidad de jornadas por unidad de concepto: si hay cuadrilla+rendimiento
@@ -138,15 +159,41 @@ export function calcLaborRow(row = {}){
   return cant * salarioReal;
 }
 
-/* Equipo/maquinaria: importe = cantidad x tarifa, igual que rowImporte
-   ('equipment', ...). El campo "rendimiento" del renglon v2 se conserva en el
-   esquema para trazabilidad/futuras fases, pero no participa en esta formula
-   todavia: decidir su semantica exacta (cantidad por cuadrilla vs. cantidad
-   ya normalizada por unidad) es un cambio de UI/captura, fuera de esta fase. */
-export function calcEquipmentRow(row = {}){
-  const cantidad = toSafeNonNegativeNumber(row?.cantidad);
+/* Equipo/maquinaria: la formula depende de integracion (nunca se infiere):
+   - POR_UNIDAD_OBRA (por defecto, comportamiento historico): cantidad x tarifa.
+     Correcto para equipo cuyo uso realmente escala con cada unidad (ej. una
+     herramienta consumible por unidad).
+   - POR_JORNADA: costo de uso diario (tarifa, ya multiplicada por "cantidad"
+     de equipos identicos si aplica) / rendimiento diario de la cuadrilla que
+     lo usa. Ej: renta de andamio $500/dia, cuadrilla rinde 20 m/dia -> $25/m.
+   - POR_LOTE: costo fijo (renta o compra puntual) repartido entre la cantidad
+     contractual total del concepto (ctx.cantidadContractual), no entre cada
+     unidad individualmente.
+   - AMORTIZABLE: equipo propiedad del contratista. Se amortiza el precio de
+     adquisicion x factor de uso entre su vida util en jornadas y lo que la
+     cuadrilla produce por jornada. */
+export function calcEquipmentRow(row = {}, ctx = {}){
+  const integracion = row?.integracion || POR_UNIDAD_OBRA;
+  // "cantidad" solo se asume 1 (un equipo) cuando esta ausente -- un 0
+  // explicito significa "cero equipos" y debe seguir dando importe 0.
+  const cantidad = row?.cantidad == null ? 1 : toSafeNonNegativeNumber(row.cantidad);
   const tarifa = toSafeNonNegativeNumber(row?.tarifa);
-  return cantidad * tarifa;
+  if(integracion === POR_JORNADA){
+    const rendimientoDiario = toSafeNonNegativeNumber(row?.rendimientoDiario);
+    return rendimientoDiario > 0 ? (tarifa * cantidad) / rendimientoDiario : 0;
+  }
+  if(integracion === POR_LOTE){
+    const cantidadContractual = toSafeNonNegativeNumber(ctx.cantidadContractual);
+    return cantidadContractual > 0 ? (tarifa * cantidad) / cantidadContractual : 0;
+  }
+  if(integracion === AMORTIZABLE){
+    const vidaUtilDias = toSafeNonNegativeNumber(row?.vidaUtilDias);
+    const rendimientoDiario = toSafeNonNegativeNumber(row?.rendimientoDiario);
+    const factorUso = toSafeNonNegativeNumber(row?.factorUso) || 1;
+    if(!(vidaUtilDias > 0) || !(rendimientoDiario > 0)) return 0;
+    return (tarifa * cantidad * factorUso) / vidaUtilDias / rendimientoDiario;
+  }
+  return cantidad * tarifa; // POR_UNIDAD_OBRA
 }
 
 /* Herramienta menor por renglon de detalle (modo 'detalle'): importe =
@@ -158,11 +205,38 @@ export function calcHerramientaDetalleRow(row = {}){
   return cantidad * costo * pctDepreciacion / 100;
 }
 
-/* Seguridad y proteccion: importe = cantidad x precio unitario. */
-export function calcSeguridadRow(row = {}){
-  const cantidad = toSafeNonNegativeNumber(row?.cantidad);
+/* Seguridad y EPP: por defecto (POR_UNIDAD_OBRA) importe = cantidad x precio
+   unitario -- correcto solo para EPP desechable/consumible por unidad real
+   (ej. tapabocas por m2 en un area contaminada). Para EPP REUTILIZABLE
+   (casco, botas, lentes, arnes, careta, proteccion auditiva) un trabajador NO
+   compra un casco nuevo por cada unidad de obra: el costo se amortiza sobre
+   la cuadrilla completa y se reparte entre lo que esa cuadrilla produce por
+   jornada (integracion:'AMORTIZABLE'):
+     costoAmortizadoCuadrilla = precioUnitario x cantidad(trabajadores/piezas) x factorReposicion
+     costoPorJornada          = costoAmortizadoCuadrilla / vidaUtilDias
+     costoPorUnidadDeObra     = costoPorJornada / rendimientoDiario
+   Formula auditable: cada factor queda visible en el renglon del APU (fuente
+   de datos: propuesta explicita de la IA, nunca inferida por el motor). Si
+   falta vidaUtilDias o rendimientoDiario el importe amortizado es 0 (no se
+   inventa un valor) y el renglon se marca en findApuNumericIssuesV2. */
+export function calcSeguridadRow(row = {}, ctx = {}){
+  const integracion = row?.integracion || POR_UNIDAD_OBRA;
+  const cantidad = row?.cantidad == null ? 1 : toSafeNonNegativeNumber(row.cantidad);
   const precioUnitario = toSafeNonNegativeNumber(row?.precioUnitario);
-  return cantidad * precioUnitario;
+  if(integracion === AMORTIZABLE){
+    const vidaUtilDias = toSafeNonNegativeNumber(row?.vidaUtilDias);
+    const rendimientoDiario = toSafeNonNegativeNumber(row?.rendimientoDiario);
+    const factorReposicion = toSafeNonNegativeNumber(row?.factorReposicion) || 1;
+    if(!(vidaUtilDias > 0) || !(rendimientoDiario > 0)) return 0;
+    const costoAmortizadoCuadrilla = precioUnitario * cantidad * factorReposicion;
+    const costoPorJornada = costoAmortizadoCuadrilla / vidaUtilDias;
+    return costoPorJornada / rendimientoDiario;
+  }
+  if(integracion === POR_LOTE){
+    const cantidadContractual = toSafeNonNegativeNumber(ctx.cantidadContractual);
+    return cantidadContractual > 0 ? (precioUnitario * cantidad) / cantidadContractual : 0;
+  }
+  return cantidad * precioUnitario; // POR_UNIDAD_OBRA
 }
 
 /* Calculo completo de un APU en esquema v2: agrega seguridad al costo
@@ -170,7 +244,10 @@ export function calcSeguridadRow(row = {}){
    obra o por detalle de renglones segun apu.herramientaMenor.modo. Cuando hay
    cantidadObra, agrega importeTotal = precio unitario x cantidad de obra. */
 export function calcAPUv2(apu = {}){
-  const sum = (rows, calcRow) => (Array.isArray(rows) ? rows : []).reduce((a, r) => a + calcRow(r), 0);
+  // Contexto compartido por renglones POR_LOTE: la cantidad contractual total
+  // del concepto (no de cada renglon) es lo que reparte un costo fijo.
+  const ctx = { cantidadContractual: toSafeNonNegativeNumber(apu.cantidadObra) };
+  const sum = (rows, calcRow) => (Array.isArray(rows) ? rows : []).reduce((a, r) => a + calcRow(r, ctx), 0);
   const mat = sum(apu.materials, calcMaterialRow);
   const mo = sum(apu.labor, calcLaborRow);
   const equipo = sum(apu.equipment, calcEquipmentRow);
@@ -214,6 +291,30 @@ export function findApuNumericIssues(apu = {}, totals = calcAPU(apu)){
    los arrays v1 -donde cada posicion siempre existe por convencion-, en v2
    cuadrilla/rendimiento y cantidad son alternativos entre si, asi que un
    campo ausente no es un error, es una via valida distinta. */
+/* Verifica que un renglon de equipo/seguridad traiga "integracion" explicita
+   y, segun cual sea, los campos que esa formula necesita (ver calcEquipmentRow
+   / calcSeguridadRow arriba). Nunca corrige el renglon: solo reporta que
+   falta, para que quede visible antes de aprobar/exportar el APU (punto de
+   validacion "equipo fijo prorrateado correctamente" / "EPP amortizado"). */
+function checkResourceIntegration(issues, kind, index, row){
+  const integracion = row?.integracion;
+  if(!integracion){
+    issues.push({ code: 'missing_integration', kind, index, message: `Renglon ${index + 1} de ${kind} no trae "integracion" explicita: se calculo como POR_UNIDAD_OBRA por defecto, revisar si corresponde.` });
+    return;
+  }
+  if(integracion === 'POR_JORNADA' || integracion === 'AMORTIZABLE'){
+    if(!(Number(row?.rendimientoDiario) > 0)){
+      issues.push({ code: 'missing_rendimiento_diario', kind, index, message: `Renglon ${index + 1} de ${kind} usa integracion "${integracion}" pero no trae "rendimientoDiario" (>0): el importe se calcula como 0 hasta que se indique.` });
+    }
+  }
+  if(integracion === 'AMORTIZABLE' && !(Number(row?.vidaUtilDias) > 0)){
+    issues.push({ code: 'missing_vida_util', kind, index, message: `Renglon ${index + 1} de ${kind} usa integracion "AMORTIZABLE" pero no trae "vidaUtilDias" (>0): el importe se calcula como 0 hasta que se indique.` });
+  }
+  if(integracion === 'POR_LOTE' && !(Number(row?.cantidad) >= 0)){
+    issues.push({ code: 'missing_cantidad_lote', kind, index, message: `Renglon ${index + 1} de ${kind} usa integracion "POR_LOTE" pero "cantidad" no es un numero valido.` });
+  }
+}
+
 function checkV2Field(issues, kind, index, field, rawValue){
   if(rawValue === undefined || rawValue === null) return;
   const value = Number(rawValue);
@@ -242,10 +343,27 @@ export function findApuNumericIssuesV2(apu = {}, totals = calcAPUv2(apu)){
   (Array.isArray(apu.equipment) ? apu.equipment : []).forEach((row, index) => {
     checkV2Field(issues, 'equipment', index, 'cantidad', row?.cantidad);
     checkV2Field(issues, 'equipment', index, 'tarifa', row?.tarifa);
+    checkResourceIntegration(issues, 'equipment', index, row);
   });
   (Array.isArray(apu.seguridad) ? apu.seguridad : []).forEach((row, index) => {
     checkV2Field(issues, 'seguridad', index, 'cantidad', row?.cantidad);
     checkV2Field(issues, 'seguridad', index, 'precioUnitario', row?.precioUnitario);
+    checkResourceIntegration(issues, 'seguridad', index, row);
+  });
+  // Cuadrilla no duplicada (punto de validacion explicito): mas de 2 renglones
+  // de mano de obra suele significar que se fragmento un mismo ciclo de
+  // produccion (corte + traslado + limpieza) en "cuadrillas" separadas en vez
+  // de una sola cuadrilla con un rendimiento combinado. No es un error duro
+  // (pueden ser oficios realmente distintos, ej. electricista + plomero), asi
+  // que se reporta como advertencia para revision humana, no se corrige solo.
+  const laborRows = Array.isArray(apu.labor) ? apu.labor : [];
+  if(laborRows.length > 2){
+    issues.push({ code: 'possible_crew_fragmentation', kind: 'labor', message: `${laborRows.length} renglones de mano de obra: verificar que representen oficios realmente distintos y no el mismo ciclo de produccion fragmentado en varias "cuadrillas".` });
+  }
+  laborRows.forEach((row, index) => {
+    if(row?.cuadrilla != null && Number(row.cuadrilla) > 0 && (row?.rendimiento == null || Number(row.rendimiento) <= 0)){
+      issues.push({ code: 'zero_rendimiento', kind: 'labor', index, message: `Renglon ${index + 1} de mano de obra tiene cuadrilla pero rendimiento ausente o 0: no se puede prorratear el costo por unidad de obra.` });
+    }
   });
   const hm = apu.herramientaMenor || {};
   if(hm.modo === 'detalle'){

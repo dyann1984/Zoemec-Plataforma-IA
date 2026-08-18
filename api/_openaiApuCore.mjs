@@ -207,11 +207,13 @@ Devuelve SOLO JSON valido con esta forma:
   "confidence": 0-100,
   "sat": "clave SAT sugerida",
   "materials": [["descripcion completa", cantidad, "unidad", precioUnitario, mermaPorcentaje]],
-  "materialSources": [{ "proveedor": "nombre real solo si viene del catalogo, si no null", "region": "region o null" }],
+  "materialSources": [{ "proveedor": "nombre real solo si viene del catalogo, si no null", "region": "region o null", "integracion": "POR_UNIDAD_OBRA o POR_LOTE" }],
   "labor": [["descripcion completa", jornadas, "jor", salarioBase, fsr]],
-  "laborDetails": [{ "cuadrilla": numeroDeTrabajadores, "rendimiento": unidadesPorJornada, "jornada": horasPorJornada }],
-  "equipment": [["descripcion completa", cantidad, "unidad", costo]],
+  "laborDetails": [{ "cuadrilla": numeroDeTrabajadores, "rendimiento": unidadesDeConceptoPorJornadaDeTODALaCuadrilla, "jornada": horasPorJornada }],
+  "equipment": [["descripcion completa", cantidad, "unidad", tarifa]],
+  "equipmentDetails": [{ "integracion": "POR_UNIDAD_OBRA|POR_JORNADA|POR_LOTE|AMORTIZABLE", "rendimientoDiario": numeroOnull, "vidaUtilDias": numeroOnull, "factorUso": numeroOnull, "modalidad": "renta_jornada|costo_horario|costo_diario|costo_lote|propio_contratista" }],
   "seguridad": [["EPP o proteccion", cantidad, "unidad", precioUnitario]],
+  "seguridadDetails": [{ "integracion": "AMORTIZABLE para EPP reutilizable (casco, botas, lentes, arnes, careta, proteccion auditiva) o POR_UNIDAD_OBRA para EPP desechable/consumible", "rendimientoDiario": numeroOnull, "vidaUtilDias": numeroOnull, "factorReposicion": numeroOnull }],
   "procedimientoConstructivo": ["paso 1", "paso 2", "..."],
   "controlCalidad": [{ "especificacion": "texto", "criterio": "texto verificable" }],
   "criterioMedicion": { "incluye": ["que incluye el precio"], "excluye": ["que no incluye"] },
@@ -226,6 +228,19 @@ Devuelve SOLO JSON valido con esta forma:
   "notes": ["supuestos tecnicos explicitos, uno por elemento de la lista"]
 }
 
+Reglas obligatorias sobre INTEGRACION DE RECURSOS (obligatorio, no lo omitas):
+- Cada renglon de equipo y seguridad DEBE traer su "integracion" explicita en equipmentDetails/seguridadDetails. Nunca dejes que el sistema la adivine.
+- POR_UNIDAD_OBRA: solo cuando el consumo escala realmente con cada unidad del concepto (ej. un consumible que se gasta proporcionalmente).
+- POR_JORNADA: equipo rentado por dia cuyo costo se reparte entre lo que la cuadrilla produce en un dia. Ejemplo INCORRECTO: renta de andamio $500 cargada completa a CADA metro de una obra de 80 m. Ejemplo CORRECTO: integracion:"POR_JORNADA", rendimientoDiario:20 (si la cuadrilla avanza 20 m/dia) -> el motor calcula $500/20 = $25/m automaticamente. NUNCA hagas tu esa division: solo entrega tarifa y rendimientoDiario.
+- AMORTIZABLE: para EPP REUTILIZABLE (casco, botas, lentes, arnes, careta, proteccion auditiva) y equipo propiedad del contratista. Ejemplo INCORRECTO: "1 casco = $250" convertido en $250 por cada m² de una obra de 613.76 m². Ejemplo CORRECTO: integracion:"AMORTIZABLE", cantidad:numeroDeTrabajadores, vidaUtilDias:180 (vida util tipica de un casco en obra), rendimientoDiario:igualQueLaCuadrillaQueLoUsa, factorReposicion:1. El motor amortiza: (precio x trabajadores x factorReposicion) / vidaUtilDias / rendimientoDiario.
+- POR_LOTE: costo fijo de la obra completa (ej. "materiales de proteccion temporal del area", comprados una sola vez). El motor lo reparte entre la cantidad contractual total, no lo repitas tu por unidad.
+- Nunca inventes numeros de relleno para rendimientoDiario/vidaUtilDias/factorUso/factorReposicion: si no tienes una estimacion razonable, usa el mismo rendimientoDiario que declaraste en laborDetails para la cuadrilla que usa ese recurso (mismo ciclo de produccion).
+
+Reglas obligatorias sobre MANO DE OBRA (obligatorio):
+- Agrupa TODA la mano de obra de un mismo ciclo de produccion en una sola cuadrilla (labor con 1-2 renglones: oficial + ayudante, o un tercero solo si es un oficio realmente distinto como electricista/soldador). El "rendimiento" declarado en laborDetails debe ser el de la cuadrilla completa terminando el ciclo, no el de una sub-tarea aislada.
+- PROHIBIDO fragmentar un mismo ciclo en varias "cuadrillas": para un concepto como "desmantelamiento de tuberia" (corte + traslado + limpieza), NO generes 3 renglones de labor (uno para corte, otro para traslado, otro para limpieza) como si fueran 3 cuadrillas independientes -- son la MISMA cuadrilla trabajando su jornada. Usa como mucho 2 renglones (oficial+ayudante) con UN rendimiento combinado que ya incluya las 3 actividades.
+- Solo usa renglones de labor adicionales cuando se trate de oficios genuinamente distintos con especialidad y salario propios (ej. soldador certificado ademas de albañiles).
+
 Reglas obligatorias:
 - No cambies el concepto. Si el usuario pide estructura metalica, no generes lavabo, block, concreto ni otro tema.
 - Si el concepto trae unidad entre parentesis como (KG), (M2), (PZA), esa unidad manda.
@@ -235,6 +250,7 @@ Reglas obligatorias:
 - Para concreto usa concreto/premezclado o cemento/arena/grava/agua solo si el concepto lo pide.
 - "laborDetails" debe tener EXACTAMENTE el mismo numero de elementos que "labor", en el mismo orden (uno por renglon de mano de obra).
 - "materialSources" debe tener EXACTAMENTE el mismo numero de elementos que "materials", en el mismo orden. Si no hay evidencia real de proveedor (no viene del catalogo), usa proveedor:null -- NUNCA inventes un nombre de proveedor real.
+- "equipmentDetails" debe tener EXACTAMENTE el mismo numero de elementos que "equipment", y "seguridadDetails" EXACTAMENTE el mismo numero que "seguridad", ambos en el mismo orden.
 - "seguridad" incluye como minimo el EPP basico aplicable a la actividad (casco, guantes, lentes, etc. segun corresponda); puede ir vacio solo si el concepto es puramente administrativo/de oficina.
 - "procedimientoConstructivo" son pasos de ejecucion en orden, especificos del concepto (no genericos de relleno).
 - "criterioMedicion" debe reflejar que unidad se mide y que excluye explicitamente (acabados adicionales, materiales no listados, etc.).

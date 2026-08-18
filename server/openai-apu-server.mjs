@@ -6,10 +6,11 @@ import { generateAPU, generateAPUv2, answerAssistant } from '../api/_openaiApuCo
 const PORT = Number(process.env.ZOEMEC_AI_PORT || 8787);
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 
-loadEnv();
+loadEnv('.env');
+loadEnv('.env.local');
 
-function loadEnv(){
-  const envPath = join(process.cwd(), '.env');
+function loadEnv(fileName){
+  const envPath = join(process.cwd(), fileName);
   if(!existsSync(envPath)) return;
   const lines = readFileSync(envPath, 'utf8').split(/\r?\n/);
   for(const line of lines){

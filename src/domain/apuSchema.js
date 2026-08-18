@@ -25,6 +25,20 @@ export const APU_DATA_STATE = Object.freeze({
   REQUIERE_VALIDACION: 'REQUIERE_VALIDACION'
 });
 
+/* Etiqueta visible (UI + Excel/PDF) para cada estado de procedencia de precio.
+   Un precio ESTIMADO_IA o ASUMIDO nunca debe mostrarse como si estuviera
+   comprobado: el texto en pantalla es tan importante como el dato interno. */
+export const APU_DATA_STATE_LABEL = Object.freeze({
+  [APU_DATA_STATE.VERIFICADO]: 'FUENTE EXTERNA VALIDADA',
+  [APU_DATA_STATE.IMPORTADO]: 'IMPORTADO',
+  [APU_DATA_STATE.ESTIMADO_IA]: 'ESTIMADO IA',
+  [APU_DATA_STATE.ASUMIDO]: 'BASE ZOEMEC',
+  [APU_DATA_STATE.REQUIERE_VALIDACION]: 'REQUIERE VALIDACIÓN'
+});
+export function apuDataStateLabel(estado){
+  return APU_DATA_STATE_LABEL[estado] || 'REQUIERE VALIDACIÓN';
+}
+
 function makeEmptyFuente(estado = APU_DATA_STATE.REQUIERE_VALIDACION){
   return { proveedor: null, fecha: null, region: null, estado };
 }

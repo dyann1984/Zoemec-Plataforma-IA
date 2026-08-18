@@ -63,10 +63,40 @@ export function cloneAPU(apu={}){
 }
 export function applyConceptMetadata(apu, item={}, index=0, sourceFile='Catalogo de conceptos'){
   const next = cloneAPU(apu);
+  // id propio SIEMPRE por renglon del catalogo: el contenido (materiales/mano de
+  // obra) puede reutilizarse entre conceptos duplicados via cacheKey, pero cada
+  // renglon del Excel original es una entidad distinta en "apus" (guardado,
+  // borrado, key de React) y no puede compartir id con otro renglon aunque
+  // ambos hayan usado la misma clave tecnica (standardClave = hash del texto).
+  next.id = 'APU-' + uid();
   next.clave = String(item.code || item.clave || next.clave || `APU-${index+1}`).slice(0,24);
   next.concept = cleanText(item.concept || item.description || next.concept).replace(/\s+/g,' ').trim();
   next.unit = normalizeUnitLabel(item.unit || next.unit);
   next.sourceQty = Number(item.qty || item.sourceQty || 1) || 1;
+  next.referencePU = Number(item.referencePU || 0) || 0;
+  next.sourceFile = sourceFile;
+  next.sourceSection = item.section || item.sourceSection || '';
+  next.rowNumber = item.rowNumber || index + 1;
+  next.cacheKey = conceptApuKey({...item, concept:next.concept, unit:next.unit});
+  return next;
+}
+/* Equivalente de applyConceptMetadata para el esquema v2 (renglones-objeto):
+   la IA solo propone recursos tecnicos (mano de obra, materiales, equipo,
+   seguridad, procedimiento...); la identidad economica del concepto --
+   clave, descripcion, unidad y cantidad -- SIEMPRE viene del renglon
+   original del catalogo importado, nunca de lo que el modelo devuelva.
+   referencePU (P.U. del Excel fuente) se conserva aparte para poder
+   compararlo contra el P.U. que calcule el motor v2 (ver
+   buildProfessionalSummarySheet en apuExportV2.js). */
+export function applyConceptMetadataV2(apuV2, item={}, index=0, sourceFile='Catalogo de conceptos'){
+  const next = { ...apuV2 };
+  // Ver nota en applyConceptMetadata: id propio por renglon, nunca compartido
+  // entre conceptos aunque reutilicen la misma matriz generada.
+  next.id = 'APU-' + uid();
+  next.clave = String(item.code || item.clave || next.clave || `APU-${index+1}`).slice(0,24);
+  next.concept = cleanText(item.concept || item.description || next.concept).replace(/\s+/g,' ').trim();
+  next.unit = normalizeUnitLabel(item.unit || next.unit);
+  next.cantidadObra = Number(item.qty || item.sourceQty || next.cantidadObra || 1) || 1;
   next.referencePU = Number(item.referencePU || 0) || 0;
   next.sourceFile = sourceFile;
   next.sourceSection = item.section || item.sourceSection || '';

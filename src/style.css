@@ -842,35 +842,59 @@ svg.ic{display:block;flex:none}
 
 /* ====================================================================
    PANEL "GENERAR CON IA" (pegar concepto / importar Excel)
+   .ai-panel tiene fondo morado oscuro con texto claro (ver bloque
+   ".ai-panel{background:...}" mas abajo). Los sub-bloques de esta seccion
+   (.excel-preview, .apu-detect, .ai-decisions) son TARJETAS CLARAS anidadas
+   dentro de ese panel oscuro: sus reglas de color deben ir prefijadas con
+   ".ai-panel" para tener mas especificidad que ".ai-panel b/small/p" y no
+   heredar el texto claro pensado para el fondo morado (bug: texto blanco
+   sobre tarjeta blanca).
    ==================================================================== */
 .ai-panel{margin-bottom:16px;border-top:3px solid var(--gold)}
 .ai-panel-head{display:flex;align-items:center;gap:12px;margin-bottom:12px}
-.ai-panel-head b{display:block;color:var(--ink)}
+.ai-panel-head b{display:block;color:#fff}
 .ai-panel input,.ai-panel textarea,.ai-panel select{color:var(--ink)}
-.ai-concept{min-height:64px;margin-bottom:10px}
+.ai-concept{min-height:150px;margin-bottom:10px;line-height:1.5;resize:vertical}
 .ai-unit-qty-row{display:flex;flex-wrap:wrap;align-items:flex-end;gap:14px;margin-bottom:10px}
-.ai-unit-qty-row label{display:flex;flex-direction:column;gap:4px;font-size:.76rem;color:var(--muted);font-family:var(--mono);text-transform:uppercase;letter-spacing:.05em}
-.ai-unit-qty-row input{min-width:120px;padding:8px 10px;border-radius:8px;border:1px solid var(--line)}
-.ai-unit-qty-row small{flex-basis:100%;color:var(--muted)}
+.ai-panel .ai-unit-qty-row label{display:flex;flex-direction:column;gap:4px;font-size:.76rem;color:#e5d8f2;font-family:var(--mono);text-transform:uppercase;letter-spacing:.05em}
+.ai-unit-qty-row input{min-width:120px;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:#fff;color:var(--ink)}
+.ai-panel .ai-unit-qty-row small{flex-basis:100%;color:#e5d8f2}
+.ai-panel-primary-action{margin-bottom:14px}
+.ai-panel-primary-action .ai-btn{padding:14px 26px;font-size:1rem}
 .ai-panel-foot{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .cat-badge{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:.78rem;color:var(--petrol);
   background:var(--mint);border:1px solid var(--line);padding:6px 11px;border-radius:20px}
 .ai-panel-foot>button{margin-left:auto}
 .ai-note{font-size:.78rem;color:var(--muted);margin-top:10px;line-height:1.4}
+.ai-panel .ai-note{color:#e5d8f2}
 .ai-note-busy{display:flex;align-items:center;gap:9px;color:var(--petrol);background:var(--mint);border:1px solid var(--line);border-radius:12px;padding:9px 12px}
 .ai-note-busy .asst-dots{padding:0;border:0;background:transparent}
 .inline-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0 16px}
 .inline-tools .up-btn{margin-left:0;padding:9px 13px}
 .excel-preview{display:grid;grid-template-columns:1.1fr 1.8fr .9fr .9fr;gap:8px;margin-top:12px}
 .excel-preview div{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px}
-.excel-preview small{display:block;color:var(--muted);font-size:.68rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px}
-.excel-preview b{display:block;color:var(--ink);font-size:.86rem;line-height:1.25}
+.ai-panel .excel-preview small{display:block;color:var(--muted);font-size:.68rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px}
+.ai-panel .excel-preview b{display:block;color:var(--ink);font-size:.86rem;line-height:1.25}
 .apu-detect{display:grid;grid-template-columns:1.7fr .8fr .9fr;gap:8px;margin:0 0 14px}
 .apu-detect div{background:var(--mint);border:1px solid var(--line);border-radius:10px;padding:9px 11px}
-.apu-detect small{display:block;color:var(--muted);font-size:.66rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:3px}
-.apu-detect b{display:block;color:var(--ink);font-size:.82rem;line-height:1.25}
+.ai-panel .apu-detect small{display:block;color:var(--muted);font-size:.66rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:3px}
+.ai-panel .apu-detect b{display:block;color:var(--ink);font-size:.82rem;line-height:1.25}
 .ai-decisions{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 14px}
 .ai-decisions span{font-size:.76rem;color:var(--petrol);background:#fff;border:1px solid var(--line);border-radius:20px;padding:6px 10px}
+/* Estado de la generacion: diferencia sin ambiguedad IA real vs plantilla de contingencia */
+.ai-origin-banner{display:flex;align-items:center;gap:10px;border-radius:14px;padding:10px 14px;margin:0 0 14px;font-size:.86rem;line-height:1.4}
+.ai-origin-banner b{display:block;font-size:.82rem}
+.ai-origin-banner.contingency{background:#FFF8E7;border:1px solid #E4B64D;color:#6b4e0a}
+.ai-origin-banner.contingency b{color:#8a5a00}
+.ai-origin-banner.real{background:#EAF7F0;border:1px solid #6FBE8F;color:#1f5c3a}
+.ai-origin-banner.real b{color:#1f7a4d}
+/* Seccion "Entregables" del resultado (PDF/Excel agrupados con encabezado) */
+.exec-deliverables{border-top:1px solid var(--line);padding-top:14px}
+.exec-deliverables-label{display:block;font-family:var(--mono);font-size:.68rem;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:8px}
+.exec-checklist{list-style:none;padding-left:0;margin:4px 0 0;display:flex;flex-direction:column;gap:4px}
+.exec-checklist li{display:flex;align-items:center;gap:8px;padding:2px 0}
+.exec-checklist .chk-ok{color:var(--ok);font-weight:700}
+.exec-checklist .chk-pending{color:var(--gold-ink);font-weight:700}
 .trial-banner{display:flex;align-items:center;gap:8px;background:linear-gradient(135deg,#FFF8E7,#F7F1FC);border:1px solid #D6B05A;border-left:4px solid var(--gold);border-radius:14px;padding:12px 16px;margin:0 0 16px;color:var(--ink);box-shadow:var(--shadow-sm)}
 .trial-banner b{color:var(--petrol)}
 .fallback-banner{display:flex;align-items:center;gap:8px;background:#F2F6FF;border:1px solid #A9C2EA;border-left:4px solid #3E6FD9;border-radius:14px;padding:10px 14px;margin:0 0 14px;color:var(--ink);font-size:.86rem;line-height:1.4}
@@ -2064,4 +2088,124 @@ svg.ic{display:block;flex:none}
 .batch-result-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;color:#fff}
 .batch-result-grid b{color:#C9A24A}
 .batch-result-actions{display:flex;flex-wrap:wrap;gap:10px}
-.legacy-editor-compat{display:none!important}.professional-apu-editor{display:grid;gap:16px}.pro-toolbar{display:flex;gap:8px;flex-wrap:wrap}.pro-header-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.pro-header-grid label{display:grid;gap:5px}.pro-section{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px}.pro-list-row{display:flex;gap:8px;margin:8px 0}.pro-list-row textarea{flex:1}.pro-economy{display:flex;gap:14px;flex-wrap:wrap;align-items:center;padding:18px;background:#132e52;color:#fff;border-radius:12px}.pro-economy strong{font-size:1.2rem;color:#9ee6b4}.validation-panel{padding:14px;border:1px solid #e4b64d;background:#fff8df;border-radius:12px}.pro-modal{position:fixed;inset:0;background:#0008;z-index:1000;display:grid;place-items:center}.pro-modal>div{background:white;padding:22px;border-radius:14px;max-width:900px;max-height:80vh;overflow:auto}.price-state{font-size:.7rem;font-weight:700}
+.legacy-editor-compat{display:none!important}
+
+/* ==================================================================
+   APU Inteligente · rediseño de presentacion (stepper, hero, KPIs)
+   ================================================================== */
+.apu-workspace{max-width:1240px;margin:0 auto}
+
+.apu-stepper{display:flex;align-items:center;gap:0;margin:14px 0 18px;flex-wrap:wrap}
+.apu-step{display:flex;align-items:center;gap:8px;color:var(--muted);font-family:var(--display);font-size:.82rem;font-weight:600}
+.apu-step:not(:last-child)::after{content:"";width:28px;height:1px;background:var(--line-2);margin:0 10px}
+.apu-step-dot{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:var(--mint);color:var(--muted);font-family:var(--mono);font-size:.72rem;font-weight:700;flex:none}
+.apu-step.current{color:var(--ink)}
+.apu-step.current .apu-step-dot{background:linear-gradient(120deg,var(--teal),var(--gold));color:#fff}
+.apu-step.done .apu-step-dot{background:var(--teal);color:#fff}
+.apu-step.done{color:var(--ink-text)}
+@media (max-width:760px){.apu-step-label{display:none}.apu-step:not(:last-child)::after{width:14px;margin:0 4px}}
+
+.apu-project-status{margin-bottom:14px}
+.apu-project-pill{display:inline-flex;align-items:center;gap:7px;background:var(--mint);color:var(--petrol);border-radius:999px;padding:7px 14px;font-size:.82rem;font-weight:600}
+.apu-project-pill.muted{background:var(--gold-soft);color:var(--gold-ink)}
+.apu-project-pill a{color:var(--gold-ink);text-decoration:underline;font-weight:700;cursor:pointer}
+
+.apu-hero-actions{display:flex;flex-wrap:wrap;gap:12px;margin:4px 0 8px}
+.apu-hero-actions .hero-primary{padding:14px 26px;font-size:1rem}
+.apu-hero-actions .hero-secondary{margin-left:0;padding:13px 20px}
+.link-inline{background:none;box-shadow:none;color:var(--teal);padding:4px 0 14px;font-weight:600;font-size:.84rem;text-decoration:underline;text-underline-offset:3px;display:inline-block}
+.link-inline:hover{transform:none;box-shadow:none;color:var(--gold-ink)}
+
+.exec-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:8px 0 20px}
+.exec-kpi-card{background:var(--card);border:1px solid var(--line);border-radius:var(--r-sm);padding:14px 16px;box-shadow:var(--shadow-sm);display:flex;flex-direction:column;gap:3px}
+.exec-kpi-card small{font-family:var(--mono);font-size:.68rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.exec-kpi-card b{font-family:var(--display);font-size:1.3rem;color:var(--ink)}
+.exec-kpi-card span{font-size:.76rem;color:var(--muted)}
+.exec-kpi-card.gold{border-color:var(--gold);background:linear-gradient(160deg,#fff,var(--gold-soft))}
+.exec-kpi-card.gold b{color:var(--gold-ink);font-size:1.5rem}
+.exec-kpi-card.ok b{color:var(--ok)}
+.exec-kpi-card.warn b{color:var(--danger)}
+.exec-kpi-breakdown{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:var(--r-sm);padding:12px 16px}
+.exec-kpi-seg{display:flex;align-items:center;gap:7px;font-size:.8rem;color:var(--ink-text)}
+.exec-kpi-seg i{width:10px;height:10px;border-radius:3px;display:inline-block}
+.exec-kpi-seg b{font-family:var(--mono);color:var(--ink)}
+
+/* A. Encabezado ejecutivo */
+.apu-exec-header{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:18px 20px;margin:18px 0 12px;box-shadow:var(--shadow-sm)}
+.apu-exec-header-top{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.apu-exec-clave{font-family:var(--mono);font-size:.76rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);background:var(--mint);padding:3px 10px;border-radius:20px}
+.apu-exec-origin{display:inline-flex;align-items:center;gap:6px;font-size:.76rem;font-weight:700;padding:4px 11px;border-radius:20px}
+.apu-exec-origin.contingency{background:#FFF8E7;color:#8a5a00;border:1px solid #E4B64D}
+.apu-exec-origin.real{background:#EAF7F0;color:#1f7a4d;border:1px solid #6FBE8F}
+.apu-exec-origin.base{background:var(--mint);color:var(--petrol);border:1px solid var(--line)}
+.apu-exec-concept{margin:0 0 12px;font-family:var(--display);font-size:1.3rem;line-height:1.3;color:var(--ink)}
+.apu-exec-header-meta{display:flex;flex-wrap:wrap;gap:22px}
+.apu-exec-header-meta span{display:flex;flex-direction:column;gap:2px}
+.apu-exec-header-meta small{font-family:var(--mono);font-size:.66rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+.apu-exec-header-meta b{font-family:var(--display);font-size:.98rem;color:var(--ink)}
+
+/* B. Desglose economico (detalle, junto a las tarjetas KPI protagonistas) */
+.apu-breakdown-detail{display:flex;flex-wrap:wrap;gap:10px 24px;background:var(--card);border:1px solid var(--line);border-radius:var(--r-sm);padding:12px 18px;margin-bottom:20px}
+.apu-breakdown-detail .cost{flex:1;min-width:170px;border:0;padding:0}
+
+/* C. Tarjetas de recursos */
+.apu-resource-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px}
+.apu-resource-card{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:var(--r-sm);padding:14px 16px;box-shadow:var(--shadow-sm)}
+.apu-resource-icon{font-size:1.5rem;line-height:1;flex:none}
+.apu-resource-card b{display:block;font-family:var(--display);font-size:.92rem;color:var(--ink);margin-bottom:2px}
+.apu-resource-card span{font-size:.78rem;color:var(--muted);font-family:var(--mono)}
+
+/* Detalle tecnico plegable (confianza/validacion/trazabilidad) */
+.exec-detail{display:flex;flex-direction:column;gap:0;margin-bottom:20px}
+.exec-detail-toggle{margin-bottom:20px}
+
+.ai-progress{display:flex;flex-direction:column;gap:6px;padding:12px 4px}
+.ai-progress-row{display:flex;align-items:center;gap:10px;font-size:.85rem;color:var(--muted);opacity:.55;transition:.25s opacity,.25s color}
+.ai-progress-row.past{opacity:.85;color:var(--ink-text)}
+.ai-progress-row.current{opacity:1;color:var(--ink);font-weight:600}
+.ai-progress-dot{width:8px;height:8px;border-radius:50%;background:var(--line-2);flex:none}
+.ai-progress-row.current .ai-progress-dot{background:var(--gold);box-shadow:0 0 0 4px var(--gold-soft);animation:aiProgressPulse 1.1s ease-in-out infinite}
+.ai-progress-row.past .ai-progress-dot{background:var(--teal-2)}
+@keyframes aiProgressPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.3)}}
+
+/* ==================================================================
+   Editor profesional v2 · accordion por secciones, toolbar compacta
+   ================================================================== */
+.professional-apu-editor{display:grid;gap:14px}
+.pro-toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;position:relative}
+.pro-toolbar-more{position:relative;margin-left:auto}
+.pro-toolbar-more-menu{position:absolute;right:0;top:calc(100% + 6px);background:var(--card);border:1px solid var(--line);border-radius:var(--r-sm);box-shadow:var(--shadow);padding:6px;display:flex;flex-direction:column;gap:4px;z-index:15;min-width:180px}
+.pro-toolbar-more-menu button{width:100%;justify-content:flex-start;text-align:left}
+.pro-toolbar-group-label{font-family:var(--mono);font-size:.68rem;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin-left:8px;padding-left:8px;border-left:1px solid var(--line-2)}
+.pro-section-title{font-family:var(--display);font-size:.92rem;font-weight:700;color:var(--petrol);margin:22px 0 10px;padding-top:14px;border-top:1px solid var(--line)}
+.pro-section-title-first{margin-top:0;padding-top:0;border-top:0}
+.pro-header-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;background:var(--card);border:1px solid var(--line);border-radius:var(--r-sm);padding:16px}
+.pro-header-grid label{display:grid;gap:5px;font-size:.78rem;color:var(--muted);font-weight:600}
+.pro-accordion-group{display:flex;flex-direction:column;gap:10px}
+.pro-accordion{background:var(--card);border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden}
+.pro-accordion.open{border-color:var(--line-2);box-shadow:var(--shadow-sm)}
+.pro-accordion-head{width:100%;display:flex;align-items:center;gap:12px;background:transparent;color:var(--ink);box-shadow:none;border-radius:0;padding:14px 16px;font-family:var(--body);font-weight:600;text-align:left}
+.pro-accordion-head:hover{background:var(--mint);transform:none;box-shadow:none}
+.pro-accordion-title{flex:none;font-family:var(--display)}
+.pro-accordion-summary{flex:1;color:var(--muted);font-family:var(--mono);font-size:.8rem;text-align:right;margin-right:6px}
+.pro-accordion-caret{flex:none;width:22px;height:22px;border-radius:50%;background:var(--mint);color:var(--teal);display:grid;place-items:center;font-weight:700}
+.pro-accordion.open .pro-accordion-caret{background:var(--teal);color:#fff}
+.pro-accordion-body{padding:0 16px 16px;border-top:1px solid var(--line)}
+.pro-list-row{display:flex;gap:8px;margin:8px 0}
+.pro-list-row textarea{flex:1}
+.pro-economy{display:flex;gap:14px;flex-wrap:wrap;align-items:center;padding:18px 20px;background:linear-gradient(120deg,var(--petrol),var(--ink));color:#fff;border-radius:var(--r)}
+.pro-economy strong{font-size:1.3rem;color:var(--gold);font-family:var(--display)}
+.validation-panel{padding:14px 16px;border:1px solid var(--gold);background:var(--gold-soft);border-radius:var(--r-sm);color:var(--gold-ink)}
+.pro-modal{position:fixed;inset:0;background:rgba(23,16,32,.55);z-index:1000;display:grid;place-items:center}
+.pro-modal>div{background:var(--card);padding:22px;border-radius:var(--r);max-width:900px;max-height:80vh;overflow:auto;box-shadow:var(--shadow)}
+.price-state{font-size:.7rem;font-weight:700}
+
+/* Tablas del editor: legibilidad sin estirar la app entera */
+.pro-accordion .apu-table-scroll{overflow-x:auto;margin:12px 0 8px}
+.pro-accordion .data-table{font-size:.86rem}
+.pro-accordion .data-table th{padding:8px 10px}
+.pro-accordion .data-table td{padding:6px 10px}
+.pro-accordion .data-table input{padding:8px 10px;font-size:.86rem}
+
+@media (max-width:1024px){.exec-kpis{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:640px){.exec-kpis{grid-template-columns:1fr}.apu-hero-actions{flex-direction:column}.apu-hero-actions button,.apu-hero-actions .up-btn{width:100%;justify-content:center}}

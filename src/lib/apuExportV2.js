@@ -2,11 +2,12 @@ import writeXlsxFileBrowser from 'write-excel-file/browser';
 import { jsPDF } from 'jspdf';
 import { calcAPUv2 } from './apuCalc.js';
 import { finalizeProfessionalAPU } from '../domain/apuProfessional.js';
+import { apuDataStateLabel } from '../domain/apuSchema.js';
 import { xcell, fcell, XLS, exportWorkbookExcel, money, num } from './apuExport.js';
 
 const COLORS={labor:'#123F78',materials:'#D56A00',tools:'#2F7D3A',equipment:'#1578B7',safety:'#B5263D',procedure:'#6D2D91',quality:'#D5A900',measure:'#078C88'};
 const safeSheet=value=>String(value||'APU').replace(/[\\/?*\[\]:]/g,'-').slice(0,31);
-const sourceText=row=>row?.fuente?.sourceName||row?.fuente?.proveedor||row?.fuente?.estado||'FUENTE PENDIENTE';
+const sourceText=row=>row?.fuente?.sourceName||row?.fuente?.proveedor||apuDataStateLabel(row?.fuente?.estado);
 const asCell=(value,style={})=>xcell(value,style);
 const formula=(value,style={})=>fcell(value,{...XLS.calc,...style});
 
@@ -25,12 +26,12 @@ export function buildProfessionalAPUSheet(rawApu){
 
   span('1. MANO DE OBRA',COLORS.labor); head(['No.','Clave','Descripcion','Unidad','Cuadrilla','Rendimiento','Jornada','Salario base','FSR','Importe','Fuente','Estado']);
   const moStart=rows.length+1;
-  (apu.labor||[]).forEach((r,i)=>{const n=rows.length+1;add([i+1,r.clave,r.descripcion,r.unidad,Number(r.cuadrilla||0),Number(r.rendimiento||0),Number(r.jornada||0),asCell(Number(r.salarioBase||0),XLS.input),asCell(Number(r.fsr||1),XLS.input),formula(Number(r.rendimiento)>0?`=E${n}/F${n}*H${n}*I${n}`:`=${Number(r.cantidad||0)}*H${n}*I${n}`),sourceText(r),r.fuente?.estado||'FUENTE PENDIENTE']);});
+  (apu.labor||[]).forEach((r,i)=>{const n=rows.length+1;add([i+1,r.clave,r.descripcion,r.unidad,Number(r.cuadrilla||0),Number(r.rendimiento||0),Number(r.jornada||0),asCell(Number(r.salarioBase||0),XLS.input),asCell(Number(r.fsr||1),XLS.input),formula(Number(r.rendimiento)>0?`=E${n}/F${n}*H${n}*I${n}`:`=${Number(r.cantidad||0)}*H${n}*I${n}`),sourceText(r),apuDataStateLabel(r.fuente?.estado)]);});
   const moEnd=rows.length; const moTotal=subtotal('SUBTOTAL MANO DE OBRA',moStart,moEnd); add([]);
 
   span('2. MATERIALES Y CONSUMIBLES',COLORS.materials); head(['No.','Clave','Descripcion','Unidad','Cantidad','Desperdicio %','Cantidad neta','Precio unitario','', 'Importe','Fuente','Estado']);
   const matStart=rows.length+1;
-  (apu.materials||[]).forEach((r,i)=>{const n=rows.length+1;add([i+1,r.clave,r.descripcion,r.unidad,asCell(Number(r.consumo||0),XLS.input),asCell(Number(r.desperdicioPct||0),XLS.input),formula(`=E${n}*(1+F${n}/100)`,XLS.qty),asCell(Number(r.precioUnitario||0),XLS.input),null,formula(`=G${n}*H${n}`),sourceText(r),r.fuente?.estado||'FUENTE PENDIENTE']);});
+  (apu.materials||[]).forEach((r,i)=>{const n=rows.length+1;add([i+1,r.clave,r.descripcion,r.unidad,asCell(Number(r.consumo||0),XLS.input),asCell(Number(r.desperdicioPct||0),XLS.input),formula(`=E${n}*(1+F${n}/100)`,XLS.qty),asCell(Number(r.precioUnitario||0),XLS.input),null,formula(`=G${n}*H${n}`),sourceText(r),apuDataStateLabel(r.fuente?.estado)]);});
   const matEnd=rows.length; const matTotal=subtotal('SUBTOTAL MATERIALES',matStart,matEnd); add([]);
 
   span('3. HERRAMIENTA MENOR',COLORS.tools); head(['No.','Clave','Descripcion','Unidad','Cantidad','Depreciacion %','','Valor adquisicion','','Importe','Fuente','']);
@@ -39,7 +40,7 @@ export function buildProfessionalAPUSheet(rawApu){
   const toolEnd=rows.length; const toolTotal=apu.herramientaMenor?.modo==='detalle'?subtotal('SUBTOTAL HERRAMIENTA',toolStart,toolEnd):add([null,asCell('SUBTOTAL HERRAMIENTA (% M.O.)',{columnSpan:8,fontWeight:'bold',align:'right'}),...Array(7).fill(null),formula(`=J${moTotal}*${Number(apu.herramientaMenor?.porcentaje||0)}/100`,{fontWeight:'bold'}),null,null]); add([]);
 
   span('4. EQUIPO, MAQUINARIA Y ANDAMIOS',COLORS.equipment); head(['No.','Clave','Descripcion','Unidad','Cantidad','Tarifa','Rendimiento','','','Importe','Fuente','Estado']);
-  const eqStart=rows.length+1;(apu.equipment||[]).forEach((r,i)=>{const n=rows.length+1;add([i+1,r.clave,r.descripcion,r.unidad,Number(r.cantidad||0),Number(r.tarifa||0),Number(r.rendimiento||0),null,null,formula(`=E${n}*F${n}`),sourceText(r),r.fuente?.estado||'FUENTE PENDIENTE']);});
+  const eqStart=rows.length+1;(apu.equipment||[]).forEach((r,i)=>{const n=rows.length+1;add([i+1,r.clave,r.descripcion,r.unidad,Number(r.cantidad||0),Number(r.tarifa||0),Number(r.rendimiento||0),null,null,formula(`=E${n}*F${n}`),sourceText(r),apuDataStateLabel(r.fuente?.estado)]);});
   const eqEnd=rows.length;const eqTotal=subtotal('SUBTOTAL EQUIPO',eqStart,eqEnd);add([]);
 
   span('5. SEGURIDAD Y PROTECCION',COLORS.safety);head(['No.','Clave','Descripcion','Unidad','Cantidad','Precio','','','','Importe','Observaciones','']);
@@ -62,7 +63,7 @@ export function buildProfessionalAPUSheet(rawApu){
   add(['IMPORTE TOTAL',null,null,null,null,null,null,null,`${Number(apu.cantidadObra||0)} ${apu.unit}`,formula(`=J${pu}*${Number(apu.cantidadObra||0)}`,{fontWeight:'bold'}),null,null]);add([]);
 
   span('15. FUENTES DE PRECIOS',COLORS.measure);head(['Recurso','Clave','Descripcion','Unidad','Precio','Fecha','Proveedor','Tipo','Verificado','Fuente','URL','Confianza']);
-  ['materials','labor','equipment'].flatMap(k=>(apu[k]||[]).map(r=>[k,r])).forEach(([kind,r])=>add([kind,r.clave,r.descripcion,r.unidad,Number(r.precioUnitario??r.salarioBase??r.tarifa??0),r.fuente?.fecha||'',r.fuente?.proveedor||'',r.fuente?.sourceType||r.fuente?.estado||'ESTIMADO',r.fuente?.estado==='VERIFICADO'?'SI':'NO',r.fuente?.sourceName||'',r.fuente?.sourceUrl||'',Number(r.fuente?.confidence||0)]));add([]);
+  ['materials','labor','equipment'].flatMap(k=>(apu[k]||[]).map(r=>[k,r])).forEach(([kind,r])=>add([kind,r.clave,r.descripcion,r.unidad,Number(r.precioUnitario??r.salarioBase??r.tarifa??0),r.fuente?.fecha||'',r.fuente?.proveedor||'',apuDataStateLabel(r.fuente?.estado),r.fuente?.estado==='VERIFICADO'?'SI':'NO',r.fuente?.sourceName||'',r.fuente?.sourceUrl||'',Number(r.fuente?.confidence||0)]));add([]);
   span('16-17. SUPUESTOS, CONFIANZA Y FIRMAS');(apu.supuestos||[]).forEach((v,i)=>add([i+1,asCell(v.texto||v,{columnSpan:11,wrap:true}),...Array(10).fill(null)]));
   add([asCell('Confianza',XLS.label),`${apu.confidence.score}% ${apu.confidence.level}`,asCell('Precios',XLS.label),`${apu.confidence.dimensions.precios}%`,asCell('Rendimientos',XLS.label),`${apu.confidence.dimensions.rendimientos}%`,asCell('Riesgos',XLS.label),apu.confidence.risks,asCell('Estado',XLS.label),apu.validationStatus,null,null]);
   add([asCell('Elaboro',XLS.label),apu.elaboro||'',null,asCell('Reviso',XLS.label),apu.reviso||'',null,asCell('Aprobo',XLS.label),apu.aprobo||'',null,asCell('Version',XLS.label),apu.version||'V1',null]);
@@ -70,13 +71,28 @@ export function buildProfessionalAPUSheet(rawApu){
 }
 
 export function buildProfessionalSummarySheet(apus){
-  const rows=[[asCell('RESUMEN GENERAL DEL PRESUPUESTO',{...XLS.title,columnSpan:10}),...Array(9).fill(null)],['Clave','Concepto','Unidad','Cantidad','PU sin IVA','Importe sin IVA','IVA','Importe con IVA','Estado','Confianza'].map(v=>asCell(v,XLS.head))];
+  const rows=[[asCell('RESUMEN GENERAL DEL PRESUPUESTO',{...XLS.title,columnSpan:12}),...Array(11).fill(null)],['Clave','Concepto','Unidad','Cantidad','PU original (Excel)','PU calculado (Motor v2)','Diferencia','Importe sin IVA','IVA','Importe con IVA','Estado','Confianza'].map(v=>asCell(v,XLS.head))];
   const finalized=apus.map(raw=>finalizeProfessionalAPU(raw));
-  finalized.forEach(a=>rows.push([a.clave,a.concept,a.unit,Number(a.cantidadObra||0),Number(a.calculated.pu||0),Number(a.calculated.importeTotal||0),Number(a.calculated.iva||0)*Number(a.cantidadObra||0),Number(a.calculated.importeTotal||0)+Number(a.calculated.iva||0)*Number(a.cantidadObra||0),a.validationStatus,`${a.confidence.score}%`]));
+  finalized.forEach(a=>{
+    const puCalc=Number(a.calculated.pu||0);
+    const puOriginal=Number(a.referencePU||0);
+    const diferencia=puOriginal>0?puCalc-puOriginal:null;
+    rows.push([
+      a.clave,a.concept,a.unit,Number(a.cantidadObra||0),
+      puOriginal>0?puOriginal:asCell('Sin referencia',{color:'#8A6B2E'}),
+      puCalc,
+      diferencia==null?asCell('—',{color:'#8A6B2E'}):asCell(diferencia,{color:Math.abs(diferencia)>puOriginal*0.15?'#B54A62':'#211A29',fontWeight:Math.abs(diferencia)>puOriginal*0.15?'bold':'normal'}),
+      Number(a.calculated.importeTotal||0),
+      Number(a.calculated.iva||0)*Number(a.cantidadObra||0),
+      Number(a.calculated.importeTotal||0)+Number(a.calculated.iva||0)*Number(a.cantidadObra||0),
+      a.validationStatus,
+      `${a.confidence.score}%`
+    ]);
+  });
   const first=3,last=rows.length;
-  rows.push(['','','','',asCell('TOTALES',{fontWeight:'bold'}),formula(`=SUM(F${first}:F${last})`,{fontWeight:'bold'}),formula(`=SUM(G${first}:G${last})`,{fontWeight:'bold'}),formula(`=SUM(H${first}:H${last})`,{fontWeight:'bold'}),'','']);
+  rows.push(['','','','','','',asCell('TOTALES',{fontWeight:'bold'}),formula(`=SUM(H${first}:H${last})`,{fontWeight:'bold'}),formula(`=SUM(I${first}:I${last})`,{fontWeight:'bold'}),formula(`=SUM(J${first}:J${last})`,{fontWeight:'bold'}),'','']);
   rows.push(['Costo directo acumulado',finalized.reduce((s,a)=>s+a.calculated.direct*Number(a.cantidadObra||0),0),'Indirectos',finalized.reduce((s,a)=>s+a.calculated.indirect*Number(a.cantidadObra||0),0),'Financiamiento',finalized.reduce((s,a)=>s+a.calculated.finance*Number(a.cantidadObra||0),0),'Utilidad',finalized.reduce((s,a)=>s+a.calculated.utility*Number(a.cantidadObra||0),0),'Cargos',finalized.reduce((s,a)=>s+a.calculated.cargos*Number(a.cantidadObra||0),0)]);
-  return {sheet:'RESUMEN',rows,widths:[16,55,12,14,16,18,16,18,22,14],stickyRowsCount:2};
+  return {sheet:'RESUMEN',rows,widths:[16,50,10,12,16,18,14,16,14,16,20,12],stickyRowsCount:2};
 }
 
 export async function exportAPUExcelV2(apus,options={}){
@@ -97,6 +113,6 @@ export function exportAPUPdfV2(rawApu,options={}){
   section('3-5. HERRAMIENTA, EQUIPO Y SEGURIDAD',[47,125,58],['Rubro','Clave','Descripcion','Unidad','Cantidad','Tarifa/Precio','Fuente','Importe'],[...(apu.herramientaMenor?.detalle||[]).map(r=>['Herramienta',r.clave,r.descripcion,r.unidad,num(r.cantidad),money(r.valorAdquisicion),sourceText(r),money(Number(r.cantidad)*Number(r.valorAdquisicion)*Number(r.depreciacionPct)/100)]),...(apu.equipment||[]).map(r=>['Equipo',r.clave,r.descripcion,r.unidad,num(r.cantidad),money(r.tarifa),sourceText(r),money(Number(r.cantidad)*Number(r.tarifa))]),...(apu.seguridad||[]).map(r=>['Seguridad',r.clave,r.descripcion,r.unidad,num(r.cantidad),money(r.precioUnitario),r.observaciones||'',money(Number(r.cantidad)*Number(r.precioUnitario))])]);
   section('6-8. PROCEDIMIENTO, CALIDAD Y MEDICION',[109,45,145],['Tipo','Detalle'],[...(apu.procedimientoConstructivo||[]).map((v,i)=>[`Paso ${i+1}`,v]),...(apu.controlCalidad||[]).map(v=>['Calidad',`${v.especificacion||''}: ${v.criterio||''}`]),['Medicion',`Unidad contractual: ${apu.criterioMedicion?.unidadMedicion||apu.unit}. Criterio: ${apu.criterioMedicion?.criterio||''}. Incluye: ${(apu.criterioMedicion?.incluye||[]).join(', ')}. Excluye: ${(apu.criterioMedicion?.excluye||[]).join(', ')}. Forma de pago: ${apu.criterioMedicion?.formaPago||''}. Observaciones: ${apu.criterioMedicion?.observaciones||''}`]]);
   section('9-14. RESUMEN DEL COSTO',[18,63,120],['Mano de obra','Materiales','Herramienta','Equipo','Seguridad','Costo directo','Subtotal','IVA','PU','Total'],[[money(t.mo),money(t.mat),money(t.herramienta),money(t.equipo),money(t.seguridad),money(t.direct),money(t.subtotal??t.pu),money(t.iva),money(t.pu),money(t.importeTotal)]]);
-  section('15-17. FUENTES, SUPUESTOS Y CONFIANZA',[7,140,136],['Tipo','Recurso','Proveedor/Fuente','Fecha','Estado','Detalle'],[[ 'Confianza',apu.clave,'','','',`${apu.confidence.score}% ${apu.confidence.level} | Precios ${apu.confidence.dimensions.precios}% | Rendimientos ${apu.confidence.dimensions.rendimientos}% | Riesgos ${apu.confidence.risks}`],...['materials','labor','equipment'].flatMap(k=>(apu[k]||[]).map(r=>[k,r.descripcion,r.fuente?.proveedor||r.fuente?.sourceName||'FUENTE PENDIENTE',r.fuente?.fecha||'',r.fuente?.estado||'ESTIMADO',r.fuente?.sourceUrl||'']))]);
+  section('15-17. FUENTES, SUPUESTOS Y CONFIANZA',[7,140,136],['Tipo','Recurso','Proveedor/Fuente','Fecha','Estado','Detalle'],[[ 'Confianza',apu.clave,'','','',`${apu.confidence.score}% ${apu.confidence.level} | Precios ${apu.confidence.dimensions.precios}% | Rendimientos ${apu.confidence.dimensions.rendimientos}% | Riesgos ${apu.confidence.risks}`],...['materials','labor','equipment'].flatMap(k=>(apu[k]||[]).map(r=>[k,r.descripcion,r.fuente?.proveedor||r.fuente?.sourceName||'Sin proveedor',r.fuente?.fecha||'',apuDataStateLabel(r.fuente?.estado),r.fuente?.sourceUrl||'']))]);
   footer(); if(options.save!==false)doc.save(options.fileName||`${apu.clave}-APU-PROFESIONAL-ZOEMEC.pdf`); return {doc,apu};
 }

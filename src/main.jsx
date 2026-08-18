@@ -36,8 +36,8 @@ import { PageHead, InfoCard, EmptyState } from './components/ui/PageElements.jsx
 import { Param, Cost, NField, ORow } from './components/ui/FormFields.jsx';
 import { HardHat } from './components/ui/HardHat.jsx';
 import {
-  conceptApuKey, applyConceptMetadata, finalizeAIAPU, templateFallbackAPU,
-  saveMarketPrice, standardAPUForConcept, makeAPUFromConcept, normalizeAIAPU, makeEmptyAPU
+  conceptApuKey, applyConceptMetadataV2, templateFallbackAPU,
+  saveMarketPrice, standardAPUForConcept, makeAPUFromConcept, makeEmptyAPU
 } from './domain/apuGeneration.js';
 import { libKey, enrichLibraryMeta, scoreLibraryFile } from './domain/library.js';
 import { TechnicalCenter } from './features/technical-center/TechnicalCenter.jsx';
@@ -568,11 +568,11 @@ function App(){
   else if(!hasValidSession(user)) content = <Landing setScreen={setScreen} login={login} company={companyView} />;
   else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView} apus={apus} clients={clients} projects={projects} activeProject={activeProject} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId}>
     {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} activeProject={activeProject} user={user} demoMode={DEMO_MODE} demoContext={DEMO_MODE ? createDemoContext() : null} />}
-    {module === 'apu' && (needsProject ? <NeedsProjectGate onCreate={()=>setModule('cartera')}/> : <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} activeProjectId={activeProjectId} />)}
-    {module === 'presupuestos' && (needsProject ? <NeedsProjectGate onCreate={()=>setModule('cartera')}/> : <Budgets company={companyView} budgets={budgets} setBudgets={setBudgets} items={budgetItems} setItems={setBudgetItems} />)}
+    {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} />}
+    {module === 'presupuestos' && <Budgets company={companyView} budgets={budgets} setBudgets={setBudgets} items={budgetItems} setItems={setBudgetItems} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} />}
     {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={(pid)=>{ setRawApus(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgets(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawCatalog(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgetItems(l=>l.filter(x=>(x?.projectId??null)!==pid)); }} />}
     {module === 'biblioteca' && <Library user={user} />}
-    {module === 'tecnico' && (needsProject ? <NeedsProjectGate onCreate={()=>setModule('cartera')}/> : <TechnicalOffice company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} />)}
+    {module === 'tecnico' && <TechnicalOffice company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} needsProject={needsProject} onCreateProject={()=>setModule('cartera')} />}
     {module === 'visual' && <VisualAI user={user} />}
     {module === 'comunidad' && <Community />}
     {module === 'planes' && <PlansAccess user={user} />}
@@ -938,19 +938,6 @@ function Shell({children,user,logout,module,setModule,company,apus,clients,proje
   </div>
 }
 
-/* Se muestra en APU/Presupuestos/Oficina técnica cuando el usuario todavia no
-   tiene ningun proyecto: esos tres modulos trabajan sobre datos aislados por
-   proyecto activo (ver useProjectScoped en App), asi que sin un proyecto no
-   hay donde guardar nada de forma trazable. */
-function NeedsProjectGate({onCreate}){
-  return <section><div className="panel" style={{textAlign:'center',padding:'40px 24px'}}>
-    <Icon name="proyectos" size={34}/>
-    <h2 style={{margin:'14px 0 6px'}}>Crea tu primer proyecto para continuar</h2>
-    <p className="muted" style={{maxWidth:480,margin:'0 auto 18px'}}>APUs, presupuestos y catálogo se guardan dentro de un proyecto para que nunca se mezclen entre obras distintas. Crea uno (toma 10 segundos) y vuelve aquí.</p>
-    <button onClick={onCreate}>+ Crear proyecto</button>
-  </div></section>;
-}
-
 function ProjectsPlaceholder({onCreate, onImport}){
   return <div className="placeholder-card">
     <div className="ph-illustration"><img src="/images/dashboard/project-illustration.webp" alt="Proyectos"/></div>
@@ -972,6 +959,21 @@ function ActivityPlaceholder({onCreateApu,onOpenLibrary}){
   </div>;
 }
 
+/* Un APU guardado puede ser v1 (confidence numerico) o v2/profesional
+   (confidence.score desglosado): normaliza a un numero 0-100 en vez de
+   dejar pasar el objeto crudo a un calculo aritmetico (produce NaN). */
+function apuConfidenceScore(apu){
+  const c = apu?.confidence;
+  return typeof c === 'number' ? c : Number(c?.score) || 0;
+}
+
+/* Indicador de la lista "Como construyo ZOEMEC este APU": check verde para lo
+   realizado, circulo hueco ambar para lo pendiente/por revisar -- nunca un
+   guion ambiguo que no distingue "hecho" de "no aplica". */
+function doneIcon(ok){
+  return ok ? <span className="chk-ok" aria-hidden="true">✓</span> : <span className="chk-pending" aria-hidden="true">○</span>;
+}
+
 /* Vista compacta del APU activo dentro del panel "Gemelo digital" del Dashboard.
    Defensiva ante las dos formas de APU que pueden llegar en `apus` (v1 con
    renglones-arreglo y confidence numerico, o v2/profesional con renglones-objeto
@@ -987,7 +989,7 @@ function DigitalTwin({apu, compact, onOpen}){
   if(!Number.isFinite(pu) || pu <= 0){
     try{ pu = calcAPU(apu).pu; }catch{ pu = 0; }
   }
-  const confidenceScore = typeof apu.confidence === 'number' ? apu.confidence : Number(apu.confidence?.score);
+  const confidenceScore = apuConfidenceScore(apu);
   return <div className={`digital-twin${compact ? ' compact' : ''}`} onClick={onOpen} role="button" tabIndex={0}>
     <div className="dt-row"><small>Concepto activo</small><b>{apu.concept || apu.clave || 'APU sin concepto'}</b></div>
     <div className="dt-row"><small>Precio unitario</small><b>{pu > 0 ? money(pu) : '—'}</b><span>/ {apu.unit || 'u'}</span></div>
@@ -1118,7 +1120,7 @@ function Dashboard({setModule,apus,clients,budgets,projects,activeProject:active
       <div className="os-side">
         <div className="status-grid">
           <div className="status-card"><small>Proyecto</small><b>{activeProject?.name || '—'}</b><span>{activeProject ? `${activeProject.client || ''}` : 'Crea o importa un proyecto'}</span></div>
-          <div className="status-card"><small>IA</small><b>{apus.length ? 'Activa' : 'Inactiva'}</b><span>{apus.length ? `Última confianza ${Math.round((apus[0]?.confidence||0)*100)/100}` : 'Genera un APU para activar'}</span></div>
+          <div className="status-card"><small>IA</small><b>{apus.length ? 'Activa' : 'Inactiva'}</b><span>{apus.length ? `Última confianza ${Math.round(apuConfidenceScore(apus[0])*100)/100}%` : 'Genera un APU para activar'}</span></div>
                   <div className="status-card"><small>Biblioteca</small><b>{libraryCount !== null ? `${libraryCount} documentos` : '—'}</b><span>{libraryCount !== null ? (libraryCount > 0 ? 'Biblioteca técnica detectada' : 'Sin documentos aún: sube tu primera base') : (libraryError || 'Sin datos de biblioteca')}</span></div>
           <div className="status-card"><small>OneDrive</small><b>{oneDriveOk ? 'Conectado' : 'No conectado'}</b><span>{oneDriveOk ? 'Archivos de proyecto accesibles' : 'Sincroniza documentos y planos'}</span></div>
           <div className="status-card"><small>Firebase</small><b>{firebaseOk ? 'Listo' : 'No disponible'}</b><span>{firebaseOk ? 'Datos y usuarios sincronizados' : 'Revisa la configuración de plataforma'}</span></div>
@@ -1135,7 +1137,7 @@ function Dashboard({setModule,apus,clients,budgets,projects,activeProject:active
     </div>
     <div className="grid-3">
       <div className="panel"><h2>Proyectos recientes</h2>{pr.length ? pr.slice(0,4).map(p=><div className="project-row" key={p.name}><div><b>{p.name}</b><small>{p.client}</small></div><span>{p.progress}%</span><progress value={p.progress} max="100" /></div>) : <EmptyState text="Aún no hay proyectos reales. Crea el primero para alimentar este tablero."/>}</div>
-      <div className="panel"><h2>Últimos APUs</h2>{apus.length ? apus.slice(0,4).map((a,i)=><div className="mini-list-row" key={a.id||i}><Icon name="apu" size={15}/><b>{a.concept || a.clave || `APU ${i+1}`}</b><span>{a.confidence ? `${Math.round(a.confidence)}%` : '—'}</span></div>) : <EmptyState text="Genera tu primer APU para verlo aquí." actionLabel="Crear APU" onAction={()=>setModule('apu')}/>}</div>
+      <div className="panel"><h2>Últimos APUs</h2>{apus.length ? apus.slice(0,4).map((a,i)=><div className="mini-list-row" key={a.id||i}><Icon name="apu" size={15}/><b>{a.concept || a.clave || `APU ${i+1}`}</b><span>{apuConfidenceScore(a) ? `${Math.round(apuConfidenceScore(a))}%` : '—'}</span></div>) : <EmptyState text="Genera tu primer APU para verlo aquí." actionLabel="Crear APU" onAction={()=>setModule('apu')}/>}</div>
       <div className="panel"><h2>Últimos presupuestos</h2>{budgets.length ? budgets.slice(0,4).map((b,i)=><div className="mini-list-row" key={b.id||i}><Icon name="presupuestos" size={15}/><b>{b.name || `Presupuesto ${i+1}`}</b><span>{b.total ? money(b.total) : '—'}</span></div>) : <EmptyState text="Guarda un presupuesto para verlo aquí." actionLabel="Ir a presupuestos" onAction={()=>setModule('presupuestos')}/>}</div>
     </div>
     <div className="grid-2">
@@ -1191,7 +1193,95 @@ function legacyShimFromV2(v2, fallbackConcept, sourceFile){
   };
 }
 
-function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog,activeProjectId}){
+const APU_STEPS = ['Concepto','IA','Análisis','Validación','Entregables'];
+function ApuStepper({stepIndex}){
+  return <div className="apu-stepper">{APU_STEPS.map((s,i)=><div key={s} className={`apu-step${i===stepIndex?' current':i<stepIndex?' done':''}`}><span className="apu-step-dot">{i<stepIndex?'✓':i+1}</span><span className="apu-step-label">{s}</span></div>)}</div>;
+}
+
+/* Progreso puramente presentacional durante la llamada IA (una sola peticion
+   real a /api/generate-apu): NO afirma que cada etapa termino en el backend,
+   solo orienta al usuario mientras espera. El estado real (aiStatus) se
+   muestra aparte una vez que la llamada responde. */
+const AI_PROGRESS_STEPS = ['Analizando concepto...','Definiendo cuadrilla...','Calculando rendimientos...','Identificando materiales...','Evaluando equipo y herramienta...','Generando procedimiento...','Validando calidad y medición...','Construyendo APU...'];
+function AIProgress({active}){
+  const [i,setI]=useState(0);
+  useEffect(()=>{
+    if(!active){ setI(0); return; }
+    const id=window.setInterval(()=>setI(v=>(v+1)%AI_PROGRESS_STEPS.length), 1100);
+    return ()=>window.clearInterval(id);
+  },[active]);
+  if(!active) return null;
+  return <div className="ai-progress">{AI_PROGRESS_STEPS.map((s,idx)=><div key={s} className={`ai-progress-row${idx===i?' current':idx<i?' past':''}`}><span className="ai-progress-dot"/><span>{s}</span></div>)}</div>;
+}
+
+/* Tarjetas compactas con los numeros reales del APU (calcAPUv2 vía
+   finalizeProfessionalAPU): nunca valores inventados. Visibles antes del
+   editor tanto en modo edicion como en modo resultado. */
+function ExecutiveSummaryCards({apu}){
+  const hasContent = (apu?.materials?.length||0) + (apu?.labor?.length||0) > 0;
+  if(!hasContent) return null;
+  const t = apu.calculated || {};
+  const direct = t.direct || 0;
+  const segs = [['Materiales',t.mat,'#9D6FD0'],['Mano de obra',t.mo,'#2A1740'],['Equipo',t.equipo,'#B8A4CC'],['Herramienta',t.herramienta,'#C7A35C']];
+  const validado = apu.validationStatus === 'VALIDADO';
+  return <div className="exec-kpis">
+    <div className="exec-kpi-card gold"><small>Precio unitario</small><b>{money(t.pu)}</b><span>/ {apu.unit || 'unidad'}</span></div>
+    <div className="exec-kpi-card"><small>Costo directo</small><b>{money(direct)}</b><span>base del análisis</span></div>
+    <div className="exec-kpi-card"><small>Cantidad</small><b>{num(apu.cantidadObra)}</b><span>{apu.unit || 'unidad'}</span></div>
+    <div className="exec-kpi-card"><small>Importe</small><b>{money(t.importeTotal)}</b><span>sin IVA</span></div>
+    <div className="exec-kpi-card"><small>Confianza IA</small><b>{apu.confidence?.score ?? 0}%</b><span>{apu.confidence?.level || '—'}</span></div>
+    <div className={`exec-kpi-card${validado?' ok':' warn'}`}><small>Estado</small><b>{validado?'Validado':'Revisión necesaria'}</b><span>{(apu.warnings||[]).length} observación(es)</span></div>
+    <div className="exec-kpi-breakdown">{segs.map(([label,v,color])=><div key={label} className="exec-kpi-seg"><i style={{background:color}}/><span>{label}</span><b>{direct>0?Math.round((v||0)/direct*100):0}%</b></div>)}</div>
+  </div>;
+}
+
+/* A. Encabezado ejecutivo: identifica el concepto activo de un vistazo
+   (clave, concepto completo, unidad, cantidad, especialidad detectada y si
+   la matriz viene de IA real o de la plantilla de contingencia). apuLegacy
+   trae family/templateFallback/aiGenerated (solo existen en el objeto v1). */
+function ApuExecHeader({apu,apuLegacy}){
+  const origin = apuLegacy?.templateFallback
+    ? {label:'Plantilla de contingencia',cls:'contingency',icon:'⚠'}
+    : apuLegacy?.aiGenerated
+    ? {label:'Generado con OpenAI',cls:'real',icon:'✨'}
+    : {label:'Matriz base ZOEMEC',cls:'base',icon:'◆'};
+  return <div className="apu-exec-header">
+    <div className="apu-exec-header-top">
+      <span className="apu-exec-clave">{apu.clave || 'Sin clave'}</span>
+      <span className={`apu-exec-origin ${origin.cls}`}><span aria-hidden="true">{origin.icon}</span> {origin.label}</span>
+    </div>
+    <h2 className="apu-exec-concept">{apu.concept || 'Concepto sin definir'}</h2>
+    <div className="apu-exec-header-meta">
+      <span><small>Unidad</small><b>{apu.unit || '—'}</b></span>
+      <span><small>Cantidad</small><b>{num(apu.cantidadObra)}</b></span>
+      <span><small>Especialidad</small><b>{apuLegacy?.family || 'General'}</b></span>
+    </div>
+  </div>;
+}
+
+/* C. Recursos: conteo + importe real por categoria (mismos totales que
+   calcAPUv2 usa para el costo directo), para entender de un vistazo que
+   trae la matriz antes de abrir el detalle en la seccion D. */
+const RESOURCE_CARD_DEFS=[['labor','👷','Mano de obra','mo'],['materials','🧱','Materiales','mat'],['tools','🔧','Herramienta','herramienta'],['equipment','🚜','Equipo','equipo'],['seguridad','🦺','Seguridad','seguridad']];
+function ResourceCards({apu}){
+  const t=apu.calculated||{};
+  return <div className="apu-resource-cards">
+    {RESOURCE_CARD_DEFS.map(([key,icon,label,calcKey])=>{
+      const count=key==='tools' ? (apu.herramientaMenor?.detalle?.length||0) : (apu[key]?.length||0);
+      return <div className="apu-resource-card" key={key}>
+        <span className="apu-resource-icon" aria-hidden="true">{icon}</span>
+        <div><b>{label}</b><span>{count} recurso{count===1?'':'s'} · {money(t[calcKey]||0)}</span></div>
+      </div>;
+    })}
+  </div>;
+}
+
+function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog,activeProjectId,activeProject,onNeedProject}){
+  const requireProject=()=>{
+    if(activeProjectId) return true;
+    if(confirm('Para guardar necesitas un proyecto activo (asi tus APUs quedan asociados a una obra y nunca se mezclan con otra). ¿Crear o seleccionar un proyecto ahora?')) onNeedProject?.();
+    return false;
+  };
   const [concept,setConcept]=useState('');
   // Unidad/Cantidad explicitas (opcionales): parseConceptText adivina unidad y
   // cantidad del texto pegado, pero un concepto en lenguaje natural puede traer
@@ -1229,6 +1319,8 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   const fullExcelInputRef = useRef(null);
   const conceptCatalogInputRef = useRef(null);
   const mainExcelInputRef = useRef(null);
+  const conceptCardRef = useRef(null);
+  const conceptTextareaRef = useRef(null);
   const clearFileInputs = () => [priceCatalogInputRef, fullExcelInputRef, conceptCatalogInputRef, mainExcelInputRef].forEach(ref => { if(ref.current) ref.current.value = ''; });
   const resetAPUForm = () => {
     clearFileInputs();
@@ -1287,13 +1379,14 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     if(!conceptBatch?.concepts?.length || batchBusy) return;
     const selectedList = conceptBatch.concepts.filter((_, i) => batchSelection?.has(i)).filter(isExportableConceptItem);
     if(!selectedList.length){ alert('Selecciona al menos un concepto valido (con descripcion) para generar.'); return; }
+    if(!requireProject()) return;
     setBatchBusy(true);
     setBatchResult(null);
     try{
       const apuList = await buildBatchAPUs(selectedList);
       const taggedApus = apuList.map(a => ({ ...a, projectId: activeProjectId }));
       setApus(prev => [...taggedApus, ...prev.filter(x => !taggedApus.some(t => t.clave === x.clave))]);
-      const items = apuList.map(a => ({ concept: a.concept, unit: a.unit, qty: Number(a.sourceQty || 1) || 1, pu: calcAPU(a).pu }));
+      const items = apuList.map(a => ({ concept: a.concept, unit: a.unit, qty: Number(a.cantidadObra ?? a.sourceQty ?? 1) || 1, pu: a.calculated?.pu ?? calcAPU(a).pu }));
       const subtotal = items.reduce((s, it) => s + Number(it.qty) * Number(it.pu), 0);
       const iva = subtotal * DEFAULT_IVA_RATE / 100;
       const sourceName=String(conceptBatch.fileName||'catálogo Excel').replace(/\.(xlsx|xls|csv)$/i,'');
@@ -1402,24 +1495,45 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     const parsed=parseConceptText(concept);
     if(aiUnit.trim()) parsed.unit=aiUnit.trim();
     if(Number(aiQty)>0) parsed.qty=Number(aiQty);
-    const controller=new AbortController();
-    const timer=window.setTimeout(()=>controller.abort(), 45000);
+    // Un intento = una llamada con su propio timeout de 45 s; hasta 3 intentos
+    // en total, con espera mayor si OpenAI responde 429 (limite de tasa).
+    const attemptGenerate = async () => {
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), 45000);
+      try{
+        const res = await fetch(aiServerUrl('/api/generate-apu'), {
+          method:'POST',
+          headers:await authHeaders(),
+          body:JSON.stringify({concept:parsed.concept,catalog,schema:'v2'}),
+          signal:controller.signal
+        });
+        const data = await res.json().catch(()=>({}));
+        if(!res.ok){ const err = new Error(data?.error || 'No se pudo generar con IA.'); err.status = res.status; throw err; }
+        return data;
+      }finally{
+        window.clearTimeout(timer);
+      }
+    };
     try{
       setAiStatus('Generando recursos: mano de obra, materiales, herramienta y equipo...');
-      const res=await fetch(aiServerUrl('/api/generate-apu'),{
-        method:'POST',
-        headers:await authHeaders(),
-        body:JSON.stringify({concept:parsed.concept,catalog,schema:'v2'}),
-        signal:controller.signal
-      });
-      const data=await res.json().catch(()=>({}));
-      if(!res.ok) throw new Error(data?.error || 'No se pudo generar con IA.');
+      let data=null, lastAttemptError=null;
+      for(let tryNum=0; tryNum<3 && !data; tryNum++){
+        try{
+          if(tryNum>0){
+            setAiStatus(`Reintentando generación con IA (intento ${tryNum+1} de 3)...`);
+            await new Promise(r=>setTimeout(r, lastAttemptError?.status===429 ? 6000*tryNum : 2500*tryNum));
+          }
+          data = await attemptGenerate();
+        }catch(error){ lastAttemptError = error; }
+      }
+      if(!data) throw lastAttemptError || new Error('No se pudo generar con IA.');
       if(requestId !== aiRequestSeqRef.current) return; // respuesta tardia de un intento anterior: se descarta
       setAiStatus('Calculando rendimientos, seguridad, procedimiento y medicion...');
       const v2 = finalizeProfessionalAPU({
         ...data.apu,
         proyecto: apuV2.proyecto || '', cliente: apuV2.cliente || '', ubicacion: apuV2.ubicacion || '', moneda: apuV2.moneda || 'MXN',
-        cantidadObra: Number(parsed.qty || 1) || 1
+        cantidadObra: Number(parsed.qty || 1) || 1,
+        referencePU: Number(parsed.referencePU || 0) || 0
       });
       const shim = legacyShimFromV2(v2, parsed.concept, 'OpenAI API');
       setAiStatus('Validando resultado...');
@@ -1431,6 +1545,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       setAiStatus(`IA lista: ${v2.confidence.level} confianza ${v2.confidence.score}%`);
       setAiOpen(false);
       setShowExecutive(true);
+      alert('APU generado correctamente');
     }catch(err){
       if(requestId !== aiRequestSeqRef.current) return;
       const reason = err?.name==='AbortError' ? 'la IA tardo demasiado en responder' : friendlyServiceError(err,'servidor no disponible');
@@ -1443,7 +1558,6 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       setShowExecutive(true);
     }finally{
       if(requestId === aiRequestSeqRef.current) setAiBusy(false);
-      window.clearTimeout(timer);
     }
   };
   const importExcel=async(file)=>{ if(!file) return; if(/\.xls$/i.test(file.name)){alert('Este lector trabaja con .xlsx o .csv. Abre tu archivo en Excel y guárdalo como .xlsx.');return;} try{ const cat=await parseExcelToCatalog(file); if(!cat.length){alert('No detecté columnas de descripción y precio en el Excel. Revisa que tenga encabezados como "Descripción" y "Precio".');return;} setCatalog(cat); alert(`Catálogo importado: ${cat.length} insumos con precio. Al generar el APU usaré tus precios reales cuando coincidan.`); }catch(err){ alert(`No pude leer el archivo: ${err?.message || 'formato no compatible'}. Usa .xlsx o .csv.`); } };
@@ -1505,6 +1619,16 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       alert(`No pude leer la lista de conceptos: ${err?.message || 'formato no compatible'}. Revisa que tenga columnas Codigo, Concepto, Unidad, Cantidad y P.U.`);
     }
   };
+  /* Desarrolla UN concepto del catalogo en su matriz APU v2 completa (mano de
+     obra con cuadrilla/rendimiento/FSR, materiales, herramienta, equipo,
+     seguridad, procedimiento constructivo, control de calidad, medicion,
+     confianza desglosada): mismo motor generateAPUv2 que ya usa "Generar APU
+     con IA real" para un concepto suelto, aqui aplicado por cada renglon del
+     lote. La IA solo propone recursos tecnicos -- applyConceptMetadataV2
+     fuerza clave/descripcion/unidad/cantidad/P.U. de referencia desde el
+     renglon original del Excel despues, nunca antes; el motor v2
+     (calcAPUv2, via finalizeProfessionalAPU) es quien calcula los importes,
+     nunca el LLM. */
   const generateBatchAPU=async(item, index)=>{
     const conceptForAI = [
       item.code ? `Clave: ${item.code}` : '',
@@ -1513,13 +1637,14 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       item.referencePU ? `PU base de Excel: ${money(item.referencePU)}` : '',
       item.section ? `Partida: ${item.section}` : ''
     ].filter(Boolean).join('\n');
+    const sourceFile = conceptBatch?.fileName || 'Catalogo de conceptos';
     /* Un intento = una llamada con su propio timeout de 45 s (el reloj arranca
        cuando la petición sale de verdad, ya no mientras espera en cola). */
     const attempt = async () => {
       const controller = new AbortController();
       const timer = window.setTimeout(() => controller.abort(), 45000);
       try{
-        const res=await fetch(aiServerUrl('/api/generate-apu'),{method:'POST',headers:await authHeaders(),body:JSON.stringify({concept:conceptForAI,catalog,company,mode:'batch-concept',preserveOriginal:true}),signal:controller.signal});
+        const res=await fetch(aiServerUrl('/api/generate-apu'),{method:'POST',headers:await authHeaders(),body:JSON.stringify({concept:conceptForAI,catalog,company,mode:'batch-concept',preserveOriginal:true,schema:'v2'}),signal:controller.signal});
         const data=await readJsonSafe(res);
         if(!res.ok){ const err=new Error(data?.error || 'No fue posible generar con IA'); err.status=res.status; throw err; }
         return data;
@@ -1528,18 +1653,31 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       }
     };
     let data=null, lastError=null;
-    for(let tryNum=0; tryNum<2 && !data; tryNum++){
+    for(let tryNum=0; tryNum<3 && !data; tryNum++){
       try{
-        if(tryNum>0) await new Promise(r=>setTimeout(r, 2500)); // espera antes de reintentar (429/red)
+        if(tryNum>0){
+          // 429 (limite de tasa) espera mas que un error de red/timeout comun.
+          const backoff = lastError?.status===429 ? 6000*tryNum : 2500*tryNum;
+          await new Promise(r=>setTimeout(r, backoff));
+        }
         data = await attempt();
       }catch(error){ lastError = error; }
     }
     if(data){
-      const aiDraft=normalizeAIAPU(data.apu, item.concept);
-      return finalizeAIAPU(aiDraft, item, index, conceptBatch?.fileName || 'Catalogo de conceptos');
+      const withMeta = applyConceptMetadataV2(data.apu, item, index, sourceFile);
+      const v2 = finalizeProfessionalAPU(withMeta);
+      v2.aiGenerated = true;
+      v2.templateFallback = false;
+      v2.family = data.apu?.family || v2.family;
+      return v2;
     }
-    const reason = lastError?.name === 'AbortError' ? 'tiempo agotado' : (lastError?.message || 'sin detalle');
-    return templateFallbackAPU(item, catalog, index, conceptBatch?.fileName || 'Catalogo de conceptos', `IA externa no respondio tras 2 intentos: ${reason}`);
+    const reason = lastError?.name === 'AbortError' ? 'tiempo agotado' : lastError?.status===429 ? 'limite de tasa de OpenAI (429) tras reintentos' : (lastError?.message || 'sin detalle');
+    const fallbackV1 = templateFallbackAPU(item, catalog, index, sourceFile, `IA externa no respondio tras 3 intentos: ${reason}`);
+    const v2Fallback = finalizeProfessionalAPU(applyConceptMetadataV2(migrateLegacyApuToV2(fallbackV1), item, index, sourceFile));
+    v2Fallback.aiGenerated = false;
+    v2Fallback.templateFallback = true;
+    v2Fallback.family = fallbackV1.family;
+    return v2Fallback;
   };
 
   /* Procesa la lista en una cola con máximo N llamadas simultáneas.
@@ -1574,13 +1712,29 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       4,
       (done, total) => setAiStatus(`IA desarrollando APUs: ${done} de ${total} conceptos únicos...`)
     );
+    const sourceFile = conceptBatch?.fileName || 'Catalogo de conceptos';
     const byKey = new Map(generated.map((apu, index) => [conceptApuKey(groupList[index].item), apu]));
-    const out = list.map((item, index) => applyConceptMetadata(byKey.get(conceptApuKey(item)), item, index, conceptBatch?.fileName || 'Catalogo de conceptos'));
+    // Renglones duplicados reusan la misma matriz IA (mismo grupo/P.U.), pero cada
+    // uno conserva su propia clave/cantidad reales via applyConceptMetadataV2 --
+    // por eso se vuelve a finalizar (importeTotal depende de cantidadObra por renglon).
+    const out = list.map((item, index) => {
+      const base = byKey.get(conceptApuKey(item));
+      const v2 = finalizeProfessionalAPU(applyConceptMetadataV2(base, item, index, sourceFile));
+      v2.aiGenerated = Boolean(base?.aiGenerated);
+      v2.templateFallback = Boolean(base?.templateFallback);
+      v2.family = base?.family || v2.family;
+      return v2;
+    });
     const repeated = list.length - groups.size;
     setBatchAPUs(out);
     const first=out[0];
-    setApu(first);
-    setConcept(first.concept);
+    if(first){
+      const shim = {...legacyShimFromV2(first, first.concept, sourceFile), id:first.id, aiGenerated:Boolean(first.aiGenerated), templateFallback:Boolean(first.templateFallback), family:first.family||'APU generado con IA'};
+      skipMigrateIdRef.current = shim.id;
+      setApu(shim);
+      setApuV2({...first, id: shim.id});
+      setConcept(first.concept);
+    }
     setAiStatus(`Desarrollo listo: ${out.length} conceptos (${groups.size} únicos, ${repeated} repetidos reutilizados).`);
     return out;
   };
@@ -1598,7 +1752,10 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     }
     setBatchBusy(true);
     try{
-      const apuList = await buildBatchAPUs(list);
+      // Reusa el lote ya generado (batchAPUs) si coincide con la lista actual, en
+      // vez de volver a llamar a la IA: evita que Excel muestre un APU distinto
+      // al que ya se genero y se ve en pantalla (WEB debe coincidir con Excel/PDF).
+      const apuList = batchAPUs.length === list.length ? batchAPUs : await buildBatchAPUs(list);
       await exportConceptsAPUWorkbook(list, catalog, company, apuList);
       setAiStatus(`Excel generado: ${list.length} conceptos, una hoja APU por concepto.`);
     }catch(error){
@@ -1620,9 +1777,11 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     }
     setBatchBusy(true);
     try{
-      const apuList = await buildBatchAPUs(list);
-      exportConceptsAPUPDF(list, catalog, company, apuList);
-      setAiStatus(`PDF generado: ${list.length} conceptos, un APU por concepto.`);
+      // Mismo criterio que exportConceptBatch: reusa el lote ya generado para que
+      // el PDF coincida con lo mostrado en pantalla y con el Excel exportado.
+      const apuList = batchAPUs.length === list.length ? batchAPUs : await buildBatchAPUs(list);
+      await exportConceptsAPUPdfIndividual(list, catalog, apuList);
+      setAiStatus(`PDF generado: ${list.length} conceptos, un PDF individual por concepto.`);
     }catch(error){
       alert(`No pude descargar el PDF por concepto: ${error?.message || 'error desconocido'}.`);
     }finally{
@@ -1637,8 +1796,8 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       setDoc(doc(db, 'users', user.uid), { apusCreated:nextCount, updatedAt:serverTimestamp() }, { merge:true }).catch(console.error);
     }
   };
-  const save=()=>{ if(!requireApuAccess()) return; setApus([apu,...apus.filter(x=>x.id!==apu.id)]); markApuUsed(); alert('APU guardado');};
-  const addBudget=()=>{ if(!requireApuAccess()) return; setBudgets([{id:'PRE-'+uid(), name:'Presupuesto desde APU', client:'Cliente por definir', items:[{concept:apu.concept, unit:apu.unit, qty:1, pu:totals.pu}], total:totals.pu, date:new Date().toLocaleDateString('es-MX')},...budgets]); markApuUsed(); alert('Agregado a presupuestos (PU sin IVA)');};
+  const save=()=>{ if(!requireApuAccess()) return; if(!requireProject()) return; setApus([apu,...apus.filter(x=>x.id!==apu.id)]); markApuUsed(); alert('APU guardado');};
+  const addBudget=()=>{ if(!requireApuAccess()) return; if(!requireProject()) return; setBudgets([{id:'PRE-'+uid(), name:'Presupuesto desde APU', client:'Cliente por definir', items:[{concept:apu.concept, unit:apu.unit, qty:1, pu:totals.pu}], total:totals.pu, date:new Date().toLocaleDateString('es-MX')},...budgets]); markApuUsed(); alert('Agregado a presupuestos (PU sin IVA)');};
   // Nota: la exportacion masiva por catalogo (multiples APUs) ya no pasa por
   // aqui -- vive en el panel de revision de duplicados (generateSelectedBatch
   // + los botones propios de "PRESUPUESTO GENERADO"), para que el usuario
@@ -1667,75 +1826,39 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     }));return found.filter(Boolean);
   };
 
-  return <section><PageHead kicker="APU Inteligente" title="Análisis de Precio Unitario" desc="Metodología RLOPSRM: salario real con FSR, herramienta menor sobre mano de obra, indirectos de campo y oficina, financiamiento, utilidad y cargos adicionales." action={<div className="head-actions"><button className="secondary" onClick={generate}>Generar desarrollo</button><button className="ai-btn" onClick={()=>setAiOpen(o=>!o)}><Icon name="apu" size={17}/> Generar con IA</button></div>} />
+  const hasApuContent = (professionalApu.materials?.length||0) + (professionalApu.labor?.length||0) > 0;
+  const apuStepIndex = aiBusy ? 1 : showExecutive ? 3 : hasApuContent ? 2 : concept.trim() ? 1 : 0;
+
+  return <section className="apu-workspace"><PageHead kicker="APU Inteligente" title="Análisis de Precio Unitario" desc="Metodología RLOPSRM: salario real con FSR, herramienta menor sobre mano de obra, indirectos de campo y oficina, financiamiento, utilidad y cargos adicionales." />
+    <ApuStepper stepIndex={apuStepIndex}/>
+    <div className="apu-project-status">
+      {activeProject
+        ? <span className="apu-project-pill"><Icon name="proyectos" size={13}/> {activeProject.name}</span>
+        : <span className="apu-project-pill muted">Trabajando sin proyecto · <a onClick={onNeedProject}>crea o selecciona uno para guardar</a></span>}
+    </div>
     {isFree && <div className="trial-banner"><b>Plan gratis activo:</b> tienes {Math.max(0,1-(userUsage.apusCreated||0))} APU disponible. Para exportar y crear mas APUs activa un plan.</div>}
-    {showExecutive && <div className="panel executive-result">
-      <div className="exec-head">
-        <span className="exec-tag">APU GENERADO</span>
-        <h2>{professionalApu.concept || concept || 'Concepto sin definir'}</h2>
-        <div className="exec-pu"><b>{money(professionalApu.calculated.pu)}</b><span> / {professionalApu.unit}</span></div>
-      </div>
-      <div className="exec-breakdown">
-        <Cost label="Costo directo" v={professionalApu.calculated.direct}/>
-        <Cost label="Indirectos" v={professionalApu.calculated.indirect}/>
-        <Cost label="Financiamiento" v={professionalApu.calculated.finance}/>
-        <Cost label="Utilidad" v={professionalApu.calculated.utility}/>
-        <Cost label="Cargos adicionales" v={professionalApu.calculated.cargos}/>
-        <div className="grand"><span>PRECIO UNITARIO</span><b>{money(professionalApu.calculated.pu)}</b></div>
-      </div>
-      <div className="exec-confidence">
-        <b>Confianza del análisis: {professionalApu.confidence.score}% ({professionalApu.confidence.level})</b>
-        <small>{(() => {
-          const rows = ['materials','labor','equipment'].flatMap(k => professionalApu[k] || []);
-          const needsReview = rows.filter(r => !r.fuente?.proveedor || r.fuente?.estado === 'ESTIMADO_IA' || r.fuente?.estado === 'REQUIERE_VALIDACION').length;
-          return rows.length === 0 ? 'Sin recursos para evaluar.' : needsReview > 0 ? `${needsReview} de ${rows.length} precio(s)/renglones son estimados por IA o sin fuente y requieren validación.` : 'Todos los renglones tienen fuente identificada.';
-        })()}</small>
-      </div>
-      <div className="exec-validation">
-        <b>Validación técnica</b>
-        <span>{professionalApu.warnings.length === 0 ? 'Sin observaciones detectadas.' : `${professionalApu.warnings.length} verificación(es) requieren revisión.`}</span>
-        {professionalApu.warnings.length > 0 && <ul>{professionalApu.warnings.slice(0,6).map((w,i) => <li key={i}>{w.message}</li>)}</ul>}
-      </div>
-      <div className="exec-explain">
-        <b>Cómo construyó ZOEMEC este APU</b>
-        <ul>
-          <li>{professionalApu.concept ? '✓' : '—'} Interpretó el alcance</li>
-          <li>{(professionalApu.labor||[]).length > 0 ? '✓' : '—'} Identificó {(professionalApu.labor||[]).length} recurso(s) de mano de obra</li>
-          <li>{(professionalApu.materials||[]).length > 0 ? '✓' : '—'} Identificó {(professionalApu.materials||[]).length} insumo(s)</li>
-          <li>{((professionalApu.equipment||[]).length > 0 || (professionalApu.herramientaMenor?.detalle||[]).length > 0 || Number(professionalApu.herramientaMenor?.porcentaje) > 0) ? '✓' : '—'} Determinó herramienta y equipo</li>
-          <li>{(professionalApu.labor||[]).some(r => Number(r.rendimiento) > 0) ? '✓' : '—'} Calculó rendimiento</li>
-          <li>{(professionalApu.seguridad||[]).length > 0 ? '✓' : '—'} Analizó seguridad</li>
-          <li>{(professionalApu.procedimientoConstructivo||[]).length > 0 ? '✓' : '—'} Generó procedimiento constructivo</li>
-          <li>{professionalApu.criterioMedicion?.unidadMedicion ? '✓' : '—'} Validó criterio de medición</li>
-          <li>✓ Calculó precio unitario con Motor APU v2</li>
-        </ul>
-        {(professionalApu.supuestos||[]).length > 0 && <><b>Supuestos utilizados</b><ul>{professionalApu.supuestos.map((s,i) => <li key={i}>{s.texto || s}</li>)}</ul></>}
-      </div>
-      <div className="exec-actions">
-        <button onClick={exportPDF} disabled={exportBusy || batchBusy}>{exportBusy ? 'Generando PDF...' : 'Descargar PDF'}</button>
-        <button onClick={exportExcel} disabled={exportBusy || batchBusy}>{exportBusy ? 'Generando Excel...' : 'Descargar Excel'}</button>
-        <button className="secondary" onClick={()=>setShowExecutive(false)}>Editar análisis</button>
-        <button className="soft" onClick={()=>setShowExecutive(false)}>Ver ingeniería</button>
-        <button className="soft" onClick={()=>setShowExecutive(false)}>Ver fuentes</button>
-      </div>
-    </div>}
-    {!showExecutive && <>
-    {aiOpen && <div className="panel ai-panel">
-      <div className="ai-panel-head"><HardHat size={36}/><div><b>Generar con IA</b><small className="muted">Pega tu concepto y/o importa tu Excel de precios. Usaré tus precios reales donde coincidan los insumos.</small></div></div>
-      <textarea className="ai-concept" value={concept} onChange={e=>setConcept(e.target.value)} placeholder="Pega aquí el concepto, ej. Muro de tabique rojo recocido asentado con mortero…"/>
+    {/* H. Generacion: inicio natural del flujo, siempre visible arriba */}
+    <div className="panel ai-panel" ref={conceptCardRef}>
+      <div className="ai-panel-head"><HardHat size={36}/><div><b>Generar APU desde un concepto</b><small className="muted">Pega el concepto, alcance o especificación técnica de la partida. También puedes importar tu Excel de precios: usaré tus precios reales donde coincidan los insumos.</small></div></div>
+      <textarea ref={conceptTextareaRef} className="ai-concept" value={concept} onChange={e=>setConcept(e.target.value)} placeholder="Pega aquí el concepto de obra, alcance o especificación técnica…"/>
       <div className="ai-unit-qty-row">
         <label>Unidad (opcional)<input value={aiUnit} onChange={e=>setAiUnit(e.target.value)} placeholder="ej. m, m², kg, pza"/></label>
         <label>Cantidad (opcional)<input type="number" min="0" step="any" value={aiQty} onChange={e=>setAiQty(e.target.value)} placeholder="ej. 80"/></label>
         <small className="muted">Si el concepto trae números propios (medidas, diámetros), captura aquí la unidad y cantidad reales para no confundir al detector automático.</small>
       </div>
+      <div className="ai-panel-primary-action">
+        <button className="ai-btn" onClick={generateAI} disabled={aiBusy}><Icon name="apu" size={17}/> {aiBusy?'Generando...':'Generar APU con IA real'}</button>
+      </div>
       <div className="ai-panel-foot">
         <label className="up-btn ghost-up">Importar catálogo de precios<input ref={priceCatalogInputRef} type="file" accept=".xlsx,.csv" hidden onChange={e=>importExcel(e.target.files[0])}/></label>
-        <label className="up-btn">Generar desde Excel completo<input ref={fullExcelInputRef} type="file" accept=".xlsx,.csv" hidden onChange={e=>importFullExcel(e.target.files[0])}/></label>
+        <label className="up-btn ghost-up">Generar desde Excel completo<input ref={fullExcelInputRef} type="file" accept=".xlsx,.csv" hidden onChange={e=>importFullExcel(e.target.files[0])}/></label>
         <label className="up-btn ghost-up">Subir catálogo de conceptos<input ref={conceptCatalogInputRef} type="file" accept=".xlsx,.csv" hidden onChange={e=>importConceptCatalog(e.target.files[0])}/></label>
         {catalog.length>0 && <span className="cat-badge"><Icon name="presupuestos" size={14}/> Catálogo: {catalog.length} insumos</span>}
-        <button onClick={generateAI} disabled={aiBusy}>{aiBusy?'Generando...':'Generar APU con IA real'}</button><button className="soft" type="button" onClick={resetAPUForm}>Limpiar</button>
+        <button className="soft" type="button" onClick={resetAPUForm}>Crear manualmente / Limpiar</button>
       </div>
-      {aiStatus && <div className={'ai-note'+(aiBusy?' ai-note-busy':'')}>{aiBusy && <span className="asst-dots"><i/><i/><i/></span>}<b>{aiStatus}</b></div>}
+      <button type="button" className="link-inline" onClick={generate}>¿Prefieres partir de una matriz base sin IA? Generar desarrollo</button>
+      {aiBusy && <AIProgress active={aiBusy}/>}
+      {aiStatus && !aiBusy && <div className="ai-note"><b>{aiStatus}</b></div>}
       {excelInfo && <div className="excel-preview">
         <div><small>Archivo</small><b>{excelInfo.fileName}</b></div>
         <div><small>Concepto detectado</small><b>{excelInfo.concept}</b></div>
@@ -1790,11 +1913,62 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         <div className="batch-result-actions">
           <button onClick={()=>exportBudgetExcel(batchResult.budget.items, batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.total-batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.ivaRate)}>Descargar presupuesto Excel</button>
           <button onClick={()=>exportBudgetPDF(batchResult.budget.items, batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.total-batchResult.budget.total/(1+batchResult.budget.ivaRate/100), company, batchResult.budget.ivaRate)}>Descargar presupuesto PDF</button>
+          {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatch} disabled={batchBusy}>{batchBusy?'IA generando hojas...':`Excel completo por concepto (${conceptBatch.concepts.length} hojas)`}</button>}
+          {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatchPDF}>PDF individual por concepto ({conceptBatch.concepts.length})</button>}
           <button className="soft" onClick={resetAPUForm}>Cerrar</button>
         </div>
       </div>}
-    </div>}
-    <ProfessionalApuEditor apu={professionalApu} onChange={setApuV2} user={user} onSave={saved=>setApus([saved,...apus.filter(x=>x.id!==saved.id)])} onFindPrices={findV2Prices} onExcel={exportExcel} onPdf={exportPDF}/>
+    </div>
+
+    {hasApuContent && <>
+      {/* A. Encabezado ejecutivo */}
+      <ApuExecHeader apu={professionalApu} apuLegacy={apu}/>
+      {/* B. Resultado economico: PU protagonista + desglose */}
+      <ExecutiveSummaryCards apu={professionalApu}/>
+      <div className="apu-breakdown-detail">
+        <Cost label="Indirectos" v={professionalApu.calculated.indirect}/>
+        <Cost label="Financiamiento" v={professionalApu.calculated.finance}/>
+        <Cost label="Utilidad" v={professionalApu.calculated.utility}/>
+        <Cost label="Cargos adicionales" v={professionalApu.calculated.cargos}/>
+      </div>
+      {/* C. Recursos */}
+      <ResourceCards apu={professionalApu}/>
+      {showExecutive
+        ? <div className="panel exec-detail">
+          <div className="exec-confidence">
+            <b>Confianza del análisis: {professionalApu.confidence.score}% ({professionalApu.confidence.level})</b>
+            <small>{(() => {
+              const rows = ['materials','labor','equipment'].flatMap(k => professionalApu[k] || []);
+              const needsReview = rows.filter(r => !r.fuente?.proveedor || r.fuente?.estado === 'ESTIMADO_IA' || r.fuente?.estado === 'REQUIERE_VALIDACION').length;
+              return rows.length === 0 ? 'Sin recursos para evaluar.' : needsReview > 0 ? `${needsReview} de ${rows.length} precio(s)/renglones son estimados por IA o sin fuente y requieren validación.` : 'Todos los renglones tienen fuente identificada.';
+            })()}</small>
+          </div>
+          <div className="exec-validation">
+            <b>Validación técnica</b>
+            <span>{professionalApu.warnings.length === 0 ? 'Sin observaciones detectadas.' : `${professionalApu.warnings.length} verificación(es) requieren revisión.`}</span>
+            {professionalApu.warnings.length > 0 && <ul>{professionalApu.warnings.slice(0,6).map((w,i) => <li key={i}>{w.message}</li>)}</ul>}
+          </div>
+          <div className="exec-explain">
+            <b>Cómo construyó ZOEMEC este APU</b>
+            <ul className="exec-checklist">
+              <li>{doneIcon(Boolean(professionalApu.concept))} Interpretó el alcance</li>
+              <li>{doneIcon((professionalApu.labor||[]).length > 0)} Identificó {(professionalApu.labor||[]).length} recurso(s) de mano de obra</li>
+              <li>{doneIcon((professionalApu.materials||[]).length > 0)} Identificó {(professionalApu.materials||[]).length} insumo(s)</li>
+              <li>{doneIcon((professionalApu.equipment||[]).length > 0 || (professionalApu.herramientaMenor?.detalle||[]).length > 0 || Number(professionalApu.herramientaMenor?.porcentaje) > 0)} Determinó herramienta y equipo</li>
+              <li>{doneIcon((professionalApu.labor||[]).some(r => Number(r.rendimiento) > 0))} Calculó rendimiento</li>
+              <li>{doneIcon((professionalApu.seguridad||[]).length > 0)} Analizó seguridad</li>
+              <li>{doneIcon((professionalApu.procedimientoConstructivo||[]).length > 0)} Generó procedimiento constructivo</li>
+              <li>{doneIcon(Boolean(professionalApu.criterioMedicion?.unidadMedicion))} Validó criterio de medición</li>
+              <li>{doneIcon(true)} Calculó precio unitario con Motor APU v2</li>
+            </ul>
+            {(professionalApu.supuestos||[]).length > 0 && <><b>Supuestos utilizados</b><ul>{professionalApu.supuestos.map((s,i) => <li key={i}>{s.texto || s}</li>)}</ul></>}
+          </div>
+          <button type="button" className="link-inline" onClick={()=>setShowExecutive(false)}>Ocultar detalle técnico ▴</button>
+        </div>
+        : <button type="button" className="link-inline exec-detail-toggle" onClick={()=>setShowExecutive(true)}>Ver confianza, validación y trazabilidad técnica ▾</button>}
+    </>}
+
+    <ProfessionalApuEditor apu={professionalApu} onChange={setApuV2} user={user} onSave={saved=>{ if(!requireProject()) return; setApus([saved,...apus.filter(x=>x.id!==saved.id)]); }} onFindPrices={findV2Prices} onExcel={exportExcel} onPdf={exportPDF}/>
     <div className="apu-grid legacy-editor-compat">
       <div className="panel">
         <label>Concepto</label>
@@ -1865,14 +2039,23 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
 
     {apus.length>0 && <div className="panel" style={{marginTop:16}}>
       <h2>Mis APU guardados <small className="hint">({apus.length})</small></h2>
-      <div className="saved-grid">{apus.map(a=>{const tt=calcAPU(a);return <div className="saved-card" key={a.id}>
+      <div className="saved-grid">{apus.map(a=>{const pu=a.calculated?.pu ?? calcAPU(a).pu;return <div className="saved-card" key={a.id}>
         <div className="sc-clave">{a.clave} - {a.unit} - {a.date}</div>
         <div className="sc-concept">{a.concept}</div>
-        <div className="sc-pu">{money(tt.pu)} <small>/ {a.unit}</small></div>
-        <div className="sc-actions"><button onClick={()=>{setApu(a);setShowExecutive(false);}}>Abrir</button><button className="del" onClick={()=>setApus(apus.filter(x=>x.id!==a.id))}>Borrar</button></div>
+        <div className="sc-pu">{money(pu)} <small>/ {a.unit}</small></div>
+        <div className="sc-actions"><button onClick={()=>{
+          if(a.schemaVersion===2){
+            const shim={...legacyShimFromV2(a,a.concept,a.sourceFile||'Guardado'),id:a.id,aiGenerated:Boolean(a.aiGenerated),templateFallback:Boolean(a.templateFallback),family:a.family||'APU generado con IA'};
+            skipMigrateIdRef.current=shim.id;
+            setApu(shim);
+            setApuV2({...a,id:shim.id});
+          } else {
+            setApu(a);
+          }
+          setShowExecutive(false);
+        }}>Abrir</button><button className="del" onClick={()=>setApus(apus.filter(x=>x.id!==a.id))}>Borrar</button></div>
       </div>;})}</div>
     </div>}
-    </>}
   </section>
 }
 
@@ -2164,22 +2347,21 @@ function buildConceptCatalogSheet(concepts){
   rows.push([null,null,null,null,null,null,xcell('TOTAL REFERENCIA', XLS.grand), null, fcell(`=SUM(I5:I${rows.length-1})`, XLS.grand)]);
   return { sheet:'CATALOGO', rows, widths:[10,18,32,12,76,12,14,18,18], stickyRowsCount:4 };
 }
+/* Libro profesional con Portada (RESUMEN) + una hoja completa por concepto,
+   nunca solo el presupuesto: preparedAPUs ya viene v2 (buildBatchAPUs usa
+   generateAPUv2 + Motor APU v2), asi que solo hace falta re-aplicar la
+   metadata del renglon (por si el orden no coincide 1:1) sin volver a pasar
+   por migrateLegacyApuToV2 -- eso destruiria los renglones-objeto v2. Si
+   preparedAPUs[idx] no existe (llamado sin generar antes) se arma desde el
+   catalogo base ZOEMEC como respaldo, tambien en v2. */
 async function exportConceptsAPUWorkbook(concepts, catalog, company, preparedAPUs=[]){
   const limited = concepts.filter(isExportableConceptItem);
   const professional = limited.map((item, idx) => {
     const base = preparedAPUs[idx] || makeAPUFromConcept(item.concept, catalog);
-    const legacy = {
-      ...base,
-      clave: String(item.code || base.clave || `APU-${idx+1}`).slice(0,24),
-      concept: item.concept,
-      unit: item.unit || base.unit,
-      sourceQty: Number(item.qty || 1) || 1,
-      referencePU: Number(item.referencePU || 0) || 0,
-      sourceFile: base.sourceFile || 'Catalogo de conceptos',
-      sourceSection: item.section || base.sourceSection || '',
-      rowNumber: item.rowNumber || base.rowNumber || idx+1
-    };
-    return finalizeProfessionalAPU({...migrateLegacyApuToV2(legacy),proyecto:company?.name||'',cliente:company?.client||'',cantidadObra:Number(item.qty||1)||1});
+    const v2Base = base?.schemaVersion === 2 ? base : migrateLegacyApuToV2(base);
+    const sourceFile = base?.sourceFile || 'Catalogo de conceptos';
+    const withMeta = applyConceptMetadataV2(v2Base, item, idx, sourceFile);
+    return finalizeProfessionalAPU({...withMeta, proyecto:company?.name||withMeta.proyecto||'', cliente:company?.client||withMeta.cliente||''});
   });
   if(!professional.length){
     alert('No hay conceptos para exportar.');
@@ -2188,7 +2370,23 @@ async function exportConceptsAPUWorkbook(concepts, catalog, company, preparedAPU
   return await exportAPUExcelV2(professional,{fileName:'APU-POR-CONCEPTO-ZOEMEC.xlsx'});
 }
 
-function Budgets({company,budgets,setBudgets,items,setItems}){
+/* PDF por concepto: un PDF individual completo (misma plantilla que "Descargar
+   PDF" de un APU suelto) por cada concepto del lote -- no el resumen v1
+   antiguo de exportConceptsAPUPDF, que no entiende renglones-objeto v2. */
+async function exportConceptsAPUPdfIndividual(concepts, catalog, preparedAPUs=[]){
+  const limited = concepts.filter(isExportableConceptItem);
+  if(!limited.length){ alert('No hay conceptos para exportar.'); return; }
+  limited.forEach((item, idx) => {
+    const base = preparedAPUs[idx] || makeAPUFromConcept(item.concept, catalog);
+    const v2Base = base?.schemaVersion === 2 ? base : migrateLegacyApuToV2(base);
+    const sourceFile = base?.sourceFile || 'Catalogo de conceptos';
+    const withMeta = applyConceptMetadataV2(v2Base, item, idx, sourceFile);
+    const professional = finalizeProfessionalAPU(withMeta);
+    exportAPUPdfV2(professional, {fileName:`${professional.clave || 'APU-'+(idx+1)}-APU-PROFESIONAL-ZOEMEC.pdf`});
+  });
+}
+
+function Budgets({company,budgets,setBudgets,items,setItems,activeProjectId,onNeedProject}){
   // Antes el 16% estaba repetido como literal en 3 lugares (calculo, export
   // Excel, export PDF) y no leia el campo "iva" de ningun APU. Ahora hay una
   // sola tasa configurable por presupuesto (arranca en DEFAULT_IVA_RATE, la
@@ -2200,7 +2398,7 @@ function Budgets({company,budgets,setBudgets,items,setItems}){
   const iva=total*safeIvaRate/100;
   const update=(i,k,v)=>setItems(items.map((r,idx)=>idx===i?{...r,[k]:v}:r));
   const removeRow=(i)=>setItems(items.filter((_,idx)=>idx!==i));
-  const save=()=>{setBudgets([{id:'PRE-'+uid(),name:'Presupuesto ejecutivo',client:'Cliente por definir',items,ivaRate:safeIvaRate,total:total+iva,date:new Date().toLocaleDateString('es-MX')},...budgets]); alert('Presupuesto guardado');};
+  const save=()=>{ if(!activeProjectId){ if(confirm('Para guardar el presupuesto necesitas un proyecto activo. ¿Crear o seleccionar un proyecto ahora?')) onNeedProject?.(); return; } setBudgets([{id:'PRE-'+uid(),name:'Presupuesto ejecutivo',client:'Cliente por definir',items,ivaRate:safeIvaRate,total:total+iva,date:new Date().toLocaleDateString('es-MX')},...budgets]); alert('Presupuesto guardado');};
   const openSaved=(b)=>{ setItems(b.items||[]); setIvaRate(Number(b.ivaRate ?? DEFAULT_IVA_RATE)); window.scrollTo({top:0,behavior:'smooth'}); };
   const removeSaved=(id)=>{ if(!confirm('¿Eliminar este presupuesto guardado?')) return; setBudgets(budgets.filter(b=>b.id!==id)); };
   const downloadSaved=(b,kind)=>{
@@ -2211,6 +2409,10 @@ function Budgets({company,budgets,setBudgets,items,setItems}){
     kind==='pdf' ? exportBudgetPDF(bItems,bTotal,bIva,company,bIvaRate) : exportBudgetExcel(bItems,bTotal,bIva,bIvaRate);
   };
   return <section><PageHead kicker="Presupuestos" title="Presupuesto profesional" desc="Captura conceptos con su precio unitario (sin IVA), calcula totales con IVA y exporta con membrete. Las calculadoras del Centro Técnico pueden enviar conceptos directo aquí." action={<button onClick={save}>Guardar presupuesto</button>} />
+    {!activeProjectId && <div className="panel" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap',padding:'14px 18px'}}>
+      <p className="muted" style={{margin:0}}>Aún no tienes un proyecto activo: puedes armar tu presupuesto y exportarlo libremente, pero para guardarlo necesitas crear o seleccionar un proyecto.</p>
+      <button onClick={onNeedProject}>+ Crear proyecto</button>
+    </div>}
     <div className="panel"><div className="apu-table-scroll"><table className="budget-table"><thead><tr><th>Concepto</th><th>Unidad</th><th>Cantidad</th><th>P.U. (sin IVA)</th><th>Importe</th><th></th></tr></thead><tbody>{items.map((it,i)=><tr key={i}><td><input value={it.concept} onChange={e=>update(i,'concept',e.target.value)}/></td><td><input value={it.unit} onChange={e=>update(i,'unit',e.target.value)}/></td><td><input type="number" value={it.qty} onChange={e=>update(i,'qty',e.target.value)}/></td><td><input type="number" value={it.pu} onChange={e=>update(i,'pu',e.target.value)}/></td><td>{money(it.qty*it.pu)}</td><td><a className="row-del" title="Eliminar concepto" onClick={()=>removeRow(i)}>✕</a></td></tr>)}</tbody></table></div><button className="soft" onClick={()=>setItems([...items,{concept:'Nuevo concepto',unit:'m²',qty:1,pu:0}])}>+ Agregar concepto</button><div className="totals"><Cost label="Subtotal" v={total}/><div className="iva-rate-row"><label htmlFor="budget-iva-rate">Tasa de IVA (%)</label><input id="budget-iva-rate" type="number" min="0" step="0.5" value={ivaRate} onChange={e=>setIvaRate(e.target.value)}/></div><Cost label={`IVA ${num(safeIvaRate)}%`} v={iva}/><div className="grand"><span>Total</span><b>{money(total+iva)}</b></div></div><div className="export-row"><button onClick={()=>exportBudgetExcel(items,total,iva,safeIvaRate)}>Exportar Excel</button><button onClick={()=>exportBudgetPDF(items,total,iva,company,safeIvaRate)}>Exportar PDF</button></div></div>
     {budgets.length>0 && <div className="panel" style={{marginTop:16}}>
       <h2>Presupuestos guardados de este proyecto <small className="hint">({budgets.length})</small></h2>
@@ -2730,9 +2932,13 @@ function AcademyPanel(){
   </div>;
 }
 
-function TechnicalOffice({company,setCompany,catalog,setCatalog}){
+function TechnicalOffice({company,setCompany,catalog,setCatalog,needsProject,onCreateProject}){
   return <section><PageHead kicker="Oficina Técnica" title="Centro técnico y configuración" desc="Calculadoras de obra, membrete, logo, plantillas y catálogo de precios en un solo módulo." />
     <div className="combined-stack">
+      {needsProject && <div className="panel" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap',padding:'14px 18px'}}>
+        <p className="muted" style={{margin:0}}>Aún no tienes un proyecto activo: el catálogo que importes aquí no quedará vinculado a ninguna obra hasta que crees uno.</p>
+        <button onClick={onCreateProject}>+ Crear proyecto</button>
+      </div>}
       <Office company={company} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} embedded />
       <TechnicalCenter embedded />
     </div>

@@ -4,6 +4,7 @@
    copiar o enviar directo a Presupuestos via un CustomEvent
    ('zoemec-budget-add') que escucha src/main.jsx. No usa el motor calcAPU:
    son formulas de cuantificacion de obra civil independientes del APU. */
+import { useState } from 'react';
 import { Icon } from '../../components/ui/Icon.jsx';
 import { PageHead } from '../../components/ui/PageElements.jsx';
 import { NField, ORow } from '../../components/ui/FormFields.jsx';

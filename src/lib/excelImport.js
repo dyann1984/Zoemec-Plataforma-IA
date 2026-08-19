@@ -222,7 +222,7 @@ export async function parseRobustConceptCatalog(file){
   const normalized = normalizeSpreadsheetRows(rows);
   const clean = (v) => cleanText(v).trim();
   const norm = (v) => clean(v).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
-  const unitRe = /^(m2|m²|m3|m³|kg|ton|tonelada|pza|pieza|pzas|ml|m|l|lt|lote|jgo|hr|hora|dia|día|jor|jornal|serv|servicio|sal)$/i;
+  const unitRe = /^(m2|m²|m3|m³|kg|ton|tonelada|pza|pieza|pzas|ml|m|l|lt|lote|jgo|hr|hora|dia|día|jor|jornal|serv|servicio|sal|salida|salidas)$/i;
   const normalizeUnit = (v) => {
     const raw = clean(v);
     if(/^m2$/i.test(raw)) return 'm²';

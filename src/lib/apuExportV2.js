@@ -155,10 +155,30 @@ function apuEvidenceLabel(level){
   return level==='MERCADO'?'MERCADO (>=3 ALTO)':level==='REFERENCIAL'?'REFERENCIAL (1-2 ALTO)':level==='VALIDADO'?'VALIDADO':'ESTIMADO IA (sin ref. ALTO)';
 }
 
+/* El catalogo real puede repetir la misma clave para renglones distintos
+   (misma partida, cantidad/ubicacion diferente -- ej. EBDI 71 CD Victoria
+   trae la clave 387 dos veces, 24 pza y 11 pza). buildProfessionalAPUSheet
+   nombra la hoja solo con la clave, asi que dos renglones con la misma clave
+   generaban el MISMO nombre de hoja -- Excel no permite hojas duplicadas, y
+   la segunda se perdia en silencio. Aqui se desambigua con un sufijo (2),
+   (3)... SOLO cuando de verdad colisiona, respetando el limite de 31
+   caracteres de Excel. */
+function disambiguateSheetNames(sheets){
+  const seen=new Map();
+  return sheets.map(s=>{
+    const count=(seen.get(s.sheet)||0)+1;
+    seen.set(s.sheet,count);
+    if(count===1) return s;
+    const suffix=` (${count})`;
+    return {...s,sheet:safeSheet(s.sheet.slice(0,31-suffix.length)+suffix)};
+  });
+}
+
 export async function exportAPUExcelV2(apus,options={}){
   const list=Array.isArray(apus)?apus:[apus];
   const priceSheet=buildPriceIntelligenceSheet(list);
-  const sheets=[buildProfessionalSummarySheet(list),...list.map(buildProfessionalAPUSheet),...(priceSheet?[priceSheet]:[])];
+  const conceptSheets=disambiguateSheetNames(list.map(buildProfessionalAPUSheet));
+  const sheets=[buildProfessionalSummarySheet(list),...conceptSheets,...(priceSheet?[priceSheet]:[])];
   await exportWorkbookExcel(sheets,options.fileName||'APU-PROFESIONAL-ZOEMEC.xlsx',options.writeXlsxFileImpl||writeXlsxFileBrowser); return sheets;
 }
 

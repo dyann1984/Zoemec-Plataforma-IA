@@ -2118,7 +2118,7 @@ function isExportableConceptItem(item){
   const unit = normalizeUnitLabel(item?.unit);
   const qty = Number(item?.qty || 0);
   if(!concept || concept.length < 12 || qty <= 0) return false;
-  if(!/^(m2|m²|m3|m³|kg|pza|pieza|pzas|ml|m|l|lt|lote|jgo|hr|hora|dia|día|jor|jornal)$/i.test(unit)) return false;
+  if(!/^(m2|m²|m3|m³|kg|pza|pieza|pzas|ml|m|l|lt|lote|jgo|hr|hora|dia|día|jor|jornal|sal|salida|salidas)$/i.test(unit)) return false;
   if(/^(total|subtotal|gran total)\b/.test(concept)) return false;
   if(/\b(total partida|total zona|total area|total capitulo|subtotal partida|gran total)\b/.test(concept)) return false;
   return true;

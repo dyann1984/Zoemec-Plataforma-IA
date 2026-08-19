@@ -296,8 +296,22 @@ export function findApuNumericIssues(apu = {}, totals = calcAPU(apu)){
    / calcSeguridadRow arriba). Nunca corrige el renglon: solo reporta que
    falta, para que quede visible antes de aprobar/exportar el APU (punto de
    validacion "equipo fijo prorrateado correctamente" / "EPP amortizado"). */
+// EPP tipicamente reutilizable: si un renglon de seguridad con una de estas
+// palabras usa POR_UNIDAD_OBRA (cantidad x precio directo por cada unidad de
+// obra), es casi siempre un caso de inflacion silenciosa -- ver Regla 7 de la
+// sesion de validacion tecnica: "$174.08 y $220.79 de seguridad por unidad
+// siguen siendo relevantes", causa raiz confirmada: guantes con
+// POR_UNIDAD_OBRA en vez de AMORTIZABLE. Red de seguridad determinista,
+// independiente de que tan bien haya seguido el prompt el modelo.
+const REUSABLE_EPP_KEYWORDS = ['casco', 'guante', 'bota', 'lente', 'arnes', 'arnés', 'careta', 'auditiv', 'chaleco', 'faja'];
 function checkResourceIntegration(issues, kind, index, row){
   const integracion = row?.integracion;
+  if(kind === 'seguridad' && (integracion === 'POR_UNIDAD_OBRA' || !integracion)){
+    const desc = String(row?.descripcion || '').toLowerCase();
+    if(REUSABLE_EPP_KEYWORDS.some(k => desc.includes(k))){
+      issues.push({ code: 'epp_reusable_sin_amortizar', kind, index, message: `Renglon ${index + 1} de seguridad ("${row?.descripcion || ''}") parece EPP reutilizable pero usa integracion POR_UNIDAD_OBRA (o ninguna): revisar si deberia ser AMORTIZABLE para no cargar el precio completo a cada unidad de obra.` });
+    }
+  }
   if(!integracion){
     issues.push({ code: 'missing_integration', kind, index, message: `Renglon ${index + 1} de ${kind} no trae "integracion" explicita: se calculo como POR_UNIDAD_OBRA por defecto, revisar si corresponde.` });
     return;

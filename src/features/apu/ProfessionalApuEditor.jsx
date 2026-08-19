@@ -26,6 +26,80 @@ function Accordion({title,summary,defaultOpen=false,children}){
  </section>;
 }
 
+const PI_KINDS=['materials','labor','equipment','seguridad'];
+
+/* Aprobacion humana de precios de mercado (Price Intelligence, ver
+   src/domain/priceIntelligence.js y src/lib/technicalMatch.js). Un precio
+   que vino de busqueda web real NUNCA se marca VERIFICADO solo por tener
+   evidencia de mercado -- necesita que un humano lo confirme aqui. Esta es
+   esa confirmacion explicita: Aceptar / Cambiar referencia / Mantener precio
+   actual, nunca una promocion automatica en segundo plano. */
+function PriceReviewPanel({apu,onChange}){
+ const pending=[];
+ PI_KINDS.forEach(kind=>{
+  (apu[kind]||[]).forEach((row,index)=>{
+   const pr=row.priceRecord;
+   if(!pr||!pr.evidenceLevel||pr.evidenceLevel==='ESTIMADO_IA') return;
+   if(row.fuente?.estado!==APU_DATA_STATE.REQUIERE_VALIDACION) return; // ya se acepto/rechazo
+   pending.push({kind,index,row,pr});
+  });
+ });
+ if(!pending.length) return null;
+ const field=kind=>priceKey(kind);
+
+ const setRow=(kind,index,mutate)=>{
+  const n=structuredClone(apu);
+  const row=n[kind][index];
+  mutate(row);
+  onChange(n);
+ };
+ const aceptar=(kind,index)=>setRow(kind,index,row=>{
+  row.fuente={...(row.fuente||{}),estado:APU_DATA_STATE.VERIFICADO};
+ });
+ const mantenerActual=(kind,index)=>setRow(kind,index,row=>{
+  const f=field(kind);
+  const estimado=row[`${f}EstimadoIA`];
+  if(estimado!=null) row[f]=estimado;
+  row.fuente={...(row.fuente||{}),estado:APU_DATA_STATE.ESTIMADO_IA};
+ });
+ const cambiarReferencia=(kind,index,ref)=>setRow(kind,index,row=>{
+  const f=field(kind);
+  row[f]=ref.precioNormalizado;
+  row.fuente={...(row.fuente||{}),estado:APU_DATA_STATE.VERIFICADO,proveedor:ref.proveedor,sourceUrl:ref.url,fecha:ref.fecha};
+ });
+
+ return <section className="pro-price-review">
+  <h3 className="pro-section-title">Revisión de precios de mercado <span className="pro-price-review-count">{pending.length} pendiente(s)</span></h3>
+  {pending.map(({kind,index,row,pr})=>{
+   const aceptadas=(pr.references||[]).filter(r=>r.match?.verdict==='ALTO');
+   const auxiliares=(pr.references||[]).filter(r=>r.match?.verdict==='MEDIO');
+   const seleccionables=[...aceptadas,...auxiliares];
+   const avgScore=aceptadas.length?Math.round(aceptadas.reduce((s,r)=>s+r.match.score,0)/aceptadas.length):(auxiliares[0]?.match?.score||0);
+   return <div className="pro-price-review-card" key={`${kind}-${index}`}>
+    <div className="pro-price-review-head">
+     <b>{row.descripcion}</b>
+     <span className="pro-price-review-kind">{kind}</span>
+    </div>
+    <div className="pro-price-review-grid">
+     <div><small>Precio propuesto</small><b>{money(row[field(kind)])}</b></div>
+     <div><small>Referencias</small><b>{aceptadas.length} compatible(s){auxiliares.length?` · ${auxiliares.length} auxiliar(es)`:''}</b></div>
+     <div><small>Mediana</small><b>{pr.stats?.mediana!=null?money(pr.stats.mediana):'—'}</b></div>
+     <div><small>Rango</small><b>{pr.stats?.minimo!=null?`${money(pr.stats.minimo)}–${money(pr.stats.maximo)}`:'—'}</b></div>
+     <div><small>Coincidencia técnica</small><b>{avgScore}%</b></div>
+    </div>
+    <div className="pro-price-review-actions">
+     <button className="soft" onClick={()=>aceptar(kind,index)}>Aceptar</button>
+     {seleccionables.length>1 && <select onChange={e=>{const ref=seleccionables[Number(e.target.value)];if(ref) cambiarReferencia(kind,index,ref);}} defaultValue="">
+      <option value="" disabled>Cambiar referencia…</option>
+      {seleccionables.map((r,i)=><option key={i} value={i}>{r.proveedor} — {money(r.precioNormalizado)} ({r.match?.verdict} {r.match?.score}%)</option>)}
+     </select>}
+     <button className="soft" onClick={()=>mantenerActual(kind,index)}>Mantener precio actual</button>
+    </div>
+   </div>;
+  })}
+ </section>;
+}
+
 export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindPrices,user}){
  const final=useMemo(()=>finalizeProfessionalAPU(apu),[apu]);const [notice,setNotice]=useState(null),[modal,setModal]=useState(''),[quotes,setQuotes]=useState([]);
  const [moreOpen,setMoreOpen]=useState(false);
@@ -44,6 +118,7 @@ export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindP
  const table=(k,title)=><Accordion key={k} title={title} summary={sectionSummary(k)} defaultOpen={k==='labor'}><div className="apu-table-scroll"><table className="data-table"><thead><tr>{SPEC[k].map(([f,l])=><th key={f}>{l}</th>)}<th>Fuente</th><th>Fecha</th><th>Estado</th><th/></tr></thead><tbody>{rows(k).map((r,i)=><tr key={r.clave||i}>{SPEC[k].map(([f])=><td key={f}><input value={r[f]??''} onChange={e=>update(k,i,f,e.target.value)}/></td>)}<td><input value={r.fuente?.proveedor||''} onChange={e=>{const n=structuredClone(apu),x=k==='tools'?n.herramientaMenor.detalle[i]:n[k][i];x.fuente={...(x.fuente||{}),proveedor:e.target.value,estado:x.fuente?.estado||APU_DATA_STATE.REQUIERE_VALIDACION};onChange(n)}}/></td><td><input value={r.fuente?.fecha||''} onChange={e=>{const n=structuredClone(apu),x=k==='tools'?n.herramientaMenor.detalle[i]:n[k][i];x.fuente={...(x.fuente||{}),fecha:e.target.value};onChange(n)}}/></td><td>{apuDataStateLabel(r.fuente?.estado)}</td><td><button onClick={()=>remove(k,i)}>×</button></td></tr>)}</tbody></table></div><button onClick={()=>add(k)}>+ Agregar</button></Accordion>;
  const list=(f,title,object=false)=><Accordion key={f} title={title} summary={`${(apu[f]||[]).length} elemento(s)`}>{(apu[f]||[]).map((v,i)=><div className="pro-list-row" key={i}><textarea value={object?(v.especificacion||v.texto||''):v} onChange={e=>{const n=structuredClone(apu);n[f][i]=object?{...v,[f==='supuestos'?'texto':'especificacion']:e.target.value}:e.target.value;onChange(n)}}/><button onClick={()=>{const n=structuredClone(apu);n[f].splice(i,1);onChange(n)}}>×</button></div>)}<button onClick={()=>onChange({...apu,[f]:[...(apu[f]||[]),object?(f==='supuestos'?{texto:''}:{especificacion:'',criterio:'',norma:''}):'']})}>+ Agregar</button></Accordion>;
  return <div className="professional-apu-editor">
+  <PriceReviewPanel apu={apu} onChange={onChange}/>
   <h3 className="pro-section-title pro-section-title-first">G. Acciones</h3>
   <div className="pro-toolbar">
    <button onClick={()=>saveVersion()}>Guardar versión</button>

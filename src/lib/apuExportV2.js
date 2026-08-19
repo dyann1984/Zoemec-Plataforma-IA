@@ -107,8 +107,8 @@ export function buildProfessionalSummarySheet(apus){
 export function buildPriceIntelligenceSheet(apus){
   const list=Array.isArray(apus)?apus:[apus];
   const finalized=list.map(raw=>finalizeProfessionalAPU(raw));
-  const rows=[[asCell('FUENTES DE PRECIOS -- LOTE COMPLETO (Price Intelligence)',{...XLS.title,columnSpan:14}),...Array(13).fill(null)],
-    ['Concepto (clave)','Recurso','Descripcion','Proveedor','URL','Precio original','Presentacion original','Unidad original','Factor conversion','Precio normalizado','Fecha','Outlier','Nivel de evidencia','Precio recomendado (mediana)'].map(v=>asCell(v,XLS.head))];
+  const rows=[[asCell('FUENTES DE PRECIOS -- LOTE COMPLETO (Price Intelligence + validacion de equivalencia tecnica)',{...XLS.title,columnSpan:16}),...Array(15).fill(null)],
+    ['Concepto (clave)','Recurso','Descripcion','Proveedor','URL','Precio original','Presentacion original','Unidad original','Factor conversion','Precio normalizado','Fecha','Outlier','Coincidencia tecnica','Veredicto','Motivo de rechazo','Precio recomendado (mediana, solo ALTO)'].map(v=>asCell(v,XLS.head))];
   let any=false;
   finalized.forEach(apu=>{
     ['materials','labor','equipment','seguridad'].forEach(kind=>{
@@ -122,29 +122,37 @@ export function buildPriceIntelligenceSheet(apus){
         // pasaron por Price Intelligence.
         if(!pr || pr.evidenceLevel==null) return;
         const refs=Array.isArray(pr.references)?pr.references:[];
+        if(pr.technicalSpec){
+          const ft=pr.technicalSpec;
+          rows.push([apu.clave,kind,asCell(`Ficha tecnica: familia="${ft.familia||''}" material="${ft.material||''}" dimensiones="${ft.dimensiones||''}" obligatorias=[${(ft.keywordsObligatorias||[]).join(', ')}] excluyentes=[${(ft.keywordsExcluyentes||[]).join(', ')}]`,{columnSpan:14,color:'#5B6472',wrap:true}),...Array(13).fill(null)]);
+        }
         if(!refs.length){
-          rows.push([apu.clave,kind,row.descripcion,asCell('Sin evidencia externa',{color:'#8A6B2E'}),'','','','','','','','',apuEvidenceLabel(pr.evidenceLevel||'ESTIMADO_IA'),'']);
+          rows.push([apu.clave,kind,row.descripcion,asCell('Sin evidencia externa',{color:'#8A6B2E'}),'','','','','','','','','','',apuEvidenceLabel(pr.evidenceLevel||'ESTIMADO_IA'),'']);
           any=true;
           return;
         }
         refs.forEach(ref=>{
           any=true;
+          const verdict=ref.match?.verdict||'';
+          const verdictStyle=verdict==='ALTO'?{color:'#1E7D32',fontWeight:'bold'}:verdict==='MEDIO'?{color:'#8A6B2E'}:{color:'#B54A62'};
           rows.push([
             apu.clave,kind,row.descripcion,ref.proveedor,ref.url,
             Number(ref.precioOriginal||0),ref.presentacionOriginal,ref.unidadOriginal,
             Number(ref.factorConversion||1),Number(ref.precioNormalizado||0),ref.fecha,
             ref.outlier?asCell('SI',{color:'#B54A62',fontWeight:'bold'}):'NO',
-            apuEvidenceLabel(pr.evidenceLevel),
+            ref.match?`${ref.match.score}%`:'',
+            asCell(verdict,verdictStyle),
+            ref.match?.rejectReason||'',
             pr.stats?.mediana!=null?Number(pr.stats.mediana):''
           ]);
         });
       });
     });
   });
-  return any?{sheet:'FUENTES_PRECIOS',rows,widths:[16,10,42,20,30,12,16,12,10,14,12,8,16,16],stickyRowsCount:2}:null;
+  return any?{sheet:'FUENTES_PRECIOS',rows,widths:[16,10,38,20,28,12,16,12,10,14,12,8,10,10,36,16],stickyRowsCount:2}:null;
 }
 function apuEvidenceLabel(level){
-  return level==='MERCADO'?'MERCADO (varias fuentes)':level==='REFERENCIAL'?'REFERENCIAL (una fuente)':level==='VALIDADO'?'VALIDADO':'ESTIMADO IA (sin evidencia)';
+  return level==='MERCADO'?'MERCADO (>=3 ALTO)':level==='REFERENCIAL'?'REFERENCIAL (1-2 ALTO)':level==='VALIDADO'?'VALIDADO':'ESTIMADO IA (sin ref. ALTO)';
 }
 
 export async function exportAPUExcelV2(apus,options={}){
@@ -154,19 +162,111 @@ export async function exportAPUExcelV2(apus,options={}){
   await exportWorkbookExcel(sheets,options.fileName||'APU-PROFESIONAL-ZOEMEC.xlsx',options.writeXlsxFileImpl||writeXlsxFileBrowser); return sheets;
 }
 
+/* PDF individual A4 vertical profesional. Estructura fija en 3 grupos de
+   contenido (Pagina 1: identificacion + matriz de recursos + costo directo;
+   Pagina 2: integracion economica + procedimiento; Pagina 3: calidad +
+   medicion + fuentes + supuestos + firmas), pero el NUMERO de paginas se
+   adapta al contenido real: si un grupo no cabe en una pagina, sigue en la
+   siguiente (ensure() ya hacia esto); lo nuevo es que ademas se fuerza un
+   salto de pagina ENTRE grupos (nextGroup()) para que cada grupo arranque
+   limpio, en vez de quedar partido a la mitad solo porque sobraba espacio. */
 export function exportAPUPdfV2(rawApu,options={}){
-  const apu=finalizeProfessionalAPU(rawApu); const t=apu.calculated; const doc=new jsPDF('landscape','mm','a3'); const W=doc.internal.pageSize.getWidth(),H=doc.internal.pageSize.getHeight(),M=10;let y=10,page=1;
-  const pdfText=value=>String(value??'').replace(/²/g,'2').replace(/³/g,'3').replace(/±/g,'+/-').normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-  const footer=()=>{doc.setFontSize(7);doc.setTextColor(90);doc.text(pdfText(`${apu.clave} | ${apu.concept.slice(0,70)}`),M,H-6);doc.text(`Pagina ${page}`,W-M,H-6,{align:'right'});};
-  const ensure=h=>{if(y+h>H-13){footer();doc.addPage();page++;y=10;header();}};
-  const header=()=>{doc.setFillColor(18,63,120);doc.rect(M,y,W-2*M,12,'F');doc.setTextColor(255);doc.setFont('helvetica','bold');doc.setFontSize(12);doc.text('ANALISIS DE PRECIO UNITARIO (APU)',W/2,y+8,{align:'center'});y+=16;doc.setTextColor(25);doc.setFontSize(7.5);doc.text(pdfText(`Proyecto: ${apu.proyecto||'Por definir'} | Cliente: ${apu.cliente||'Por definir'} | Clave: ${apu.clave} | Unidad: ${apu.unit} | Cantidad: ${num(apu.cantidadObra)}`),M,y);y+=5;doc.text(doc.splitTextToSize(pdfText(apu.concept),W-2*M),M,y);y+=10;};
-  const section=(title,color,heads,rows)=>{ensure(15+rows.length*6);doc.setFillColor(...color);doc.rect(M,y,W-2*M,7,'F');doc.setTextColor(255);doc.setFont('helvetica','bold');doc.setFontSize(7.5);doc.text(pdfText(title),M+2,y+5);y+=7;doc.setTextColor(30);doc.setFontSize(6.5);const cw=(W-2*M)/heads.length;heads.forEach((h,i)=>doc.text(pdfText(h),M+i*cw+1,y+4));y+=6;rows.forEach(row=>{ensure(7);doc.setDrawColor(210);doc.line(M,y,W-M,y);row.forEach((v,i)=>doc.text(doc.splitTextToSize(pdfText(v),cw-2),M+i*cw+1,y+4));y+=6;});y+=3;};
+  const apu=finalizeProfessionalAPU(rawApu); const t=apu.calculated; const doc=new jsPDF('portrait','mm','a4'); const W=doc.internal.pageSize.getWidth(),H=doc.internal.pageSize.getHeight(),M=12;let y=12,page=1;
+  const pdfText=value=>String(value??'').replace(/\u00b2/g,'2').replace(/\u00b3/g,'3').replace(/\u00b1/g,'+/-').normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  const footer=()=>{doc.setFontSize(6.5);doc.setTextColor(120);doc.text(pdfText(`${apu.clave} | ${apu.concept.slice(0,55)}`),M,H-6);doc.text(`Pagina ${page}`,W-M,H-6,{align:'right'});};
+  const newPage=()=>{footer();doc.addPage();page++;y=12;header();};
+  const ensure=h=>{if(y+h>H-13) newPage();};
+  const nextGroup=()=>{ if(y>M+2) newPage(); };
+  const header=()=>{doc.setFillColor(18,63,120);doc.rect(M,y,W-2*M,11,'F');doc.setTextColor(255);doc.setFont('helvetica','bold');doc.setFontSize(10.5);doc.text('ANALISIS DE PRECIO UNITARIO (APU)',W/2,y+7.3,{align:'center'});y+=14;
+    doc.setTextColor(25);doc.setFontSize(7);doc.setFont('helvetica','normal');
+    doc.text(pdfText(`Clave: ${apu.clave}   Unidad: ${apu.unit}   Cantidad: ${num(apu.cantidadObra)}`),M,y);y+=4.2;
+    doc.text(pdfText(`Proyecto: ${apu.proyecto||'Por definir'}   Cliente: ${apu.cliente||'Por definir'}   Fecha base: ${apu.fechaBase||''}`),M,y);y+=4.2;
+    doc.setFont('helvetica','bold');const conceptLines=doc.splitTextToSize(pdfText(apu.concept),W-2*M);doc.text(conceptLines,M,y);doc.setFont('helvetica','normal');y+=conceptLines.length*3.6+3;
+  };
+  /* Tabla de ancho proporcional (widthsRatio), en vez de columnas iguales: en
+     A4 vertical (186mm utiles) una descripcion de insumo necesita mucho mas
+     espacio que su clave o su importe. */
+  const table=(title,color,heads,rows,widthsRatio)=>{
+    const ratios=widthsRatio||heads.map(()=>1); const totalRatio=ratios.reduce((a,b)=>a+b,0);
+    const colW=ratios.map(r=>(W-2*M)*r/totalRatio);
+    const colX=[M]; colW.forEach((w,i)=>{ if(i<colW.length-1) colX.push(colX[i]+w); });
+    ensure(13+rows.length*5.2);
+    doc.setFillColor(...color);doc.rect(M,y,W-2*M,6,'F');doc.setTextColor(255);doc.setFont('helvetica','bold');doc.setFontSize(7.2);doc.text(pdfText(title),M+2,y+4.3);y+=6;
+    doc.setTextColor(30);doc.setFontSize(6);doc.setFont('helvetica','bold');
+    heads.forEach((h,i)=>doc.text(pdfText(h),colX[i]+1,y+3.6));y+=5;
+    doc.setFont('helvetica','normal');
+    rows.forEach(row=>{
+      const wrapped=row.map((v,i)=>doc.splitTextToSize(pdfText(v),colW[i]-2));
+      const rh=Math.max(4.6,Math.max(...wrapped.map(w=>w.length))*3.1);
+      ensure(rh+1);
+      doc.setDrawColor(220);doc.line(M,y,W-M,y);
+      wrapped.forEach((w,i)=>doc.text(w,colX[i]+1,y+3.4));
+      y+=rh;
+    });
+    y+=2.5;
+  };
+  const kv=(label,value,color)=>{ensure(6);doc.setFontSize(7.2);doc.setFont('helvetica','bold');doc.setTextColor(...(color||[30,30,30]));doc.text(pdfText(label),M,y+3.6);doc.setFont('helvetica','normal');doc.setTextColor(30);doc.text(pdfText(value),W-M,y+3.6,{align:'right'});y+=5.5;};
+
   header();
-  section('1. MANO DE OBRA',[18,63,120],['Clave','Descripcion','Unidad','Cuadrilla','Rend.','Salario','FSR','Importe'],(apu.labor||[]).map(r=>[r.clave,r.descripcion,r.unidad,r.cuadrilla||r.cantidad,r.rendimiento||'',money(r.salarioBase),r.fsr,money((Number(r.rendimiento)>0?Number(r.cuadrilla)/Number(r.rendimiento):Number(r.cantidad))*Number(r.salarioBase)*Number(r.fsr||1))]));
-  section('2. MATERIALES',[213,106,0],['Clave','Descripcion','Unidad','Cantidad','Desp.','Neta','Precio','Importe'],(apu.materials||[]).map(r=>[r.clave,r.descripcion,r.unidad,num(r.consumo),`${num(r.desperdicioPct)}%`,num(Number(r.consumo)*(1+Number(r.desperdicioPct)/100)),money(r.precioUnitario),money(Number(r.consumo)*(1+Number(r.desperdicioPct)/100)*Number(r.precioUnitario))]));
-  section('3-5. HERRAMIENTA, EQUIPO Y SEGURIDAD',[47,125,58],['Rubro','Clave','Descripcion','Unidad','Cantidad','Tarifa/Precio','Fuente','Importe'],[...(apu.herramientaMenor?.detalle||[]).map(r=>['Herramienta',r.clave,r.descripcion,r.unidad,num(r.cantidad),money(r.valorAdquisicion),sourceText(r),money(Number(r.cantidad)*Number(r.valorAdquisicion)*Number(r.depreciacionPct)/100)]),...(apu.equipment||[]).map(r=>['Equipo',r.clave,r.descripcion,r.unidad,num(r.cantidad),money(r.tarifa),sourceText(r),money(Number(r.cantidad)*Number(r.tarifa))]),...(apu.seguridad||[]).map(r=>['Seguridad',r.clave,r.descripcion,r.unidad,num(r.cantidad),money(r.precioUnitario),r.observaciones||'',money(Number(r.cantidad)*Number(r.precioUnitario))])]);
-  section('6-8. PROCEDIMIENTO, CALIDAD Y MEDICION',[109,45,145],['Tipo','Detalle'],[...(apu.procedimientoConstructivo||[]).map((v,i)=>[`Paso ${i+1}`,v]),...(apu.controlCalidad||[]).map(v=>['Calidad',`${v.especificacion||''}: ${v.criterio||''}`]),['Medicion',`Unidad contractual: ${apu.criterioMedicion?.unidadMedicion||apu.unit}. Criterio: ${apu.criterioMedicion?.criterio||''}. Incluye: ${(apu.criterioMedicion?.incluye||[]).join(', ')}. Excluye: ${(apu.criterioMedicion?.excluye||[]).join(', ')}. Forma de pago: ${apu.criterioMedicion?.formaPago||''}. Observaciones: ${apu.criterioMedicion?.observaciones||''}`]]);
-  section('9-14. RESUMEN DEL COSTO',[18,63,120],['Mano de obra','Materiales','Herramienta','Equipo','Seguridad','Costo directo','Subtotal','IVA','PU','Total'],[[money(t.mo),money(t.mat),money(t.herramienta),money(t.equipo),money(t.seguridad),money(t.direct),money(t.subtotal??t.pu),money(t.iva),money(t.pu),money(t.importeTotal)]]);
-  section('15-17. FUENTES, SUPUESTOS Y CONFIANZA',[7,140,136],['Tipo','Recurso','Proveedor/Fuente','Fecha','Estado','Detalle'],[[ 'Confianza',apu.clave,'','','',`${apu.confidence.score}% ${apu.confidence.level} | Precios ${apu.confidence.dimensions.precios}% | Rendimientos ${apu.confidence.dimensions.rendimientos}% | Riesgos ${apu.confidence.risks}`],...['materials','labor','equipment'].flatMap(k=>(apu[k]||[]).map(r=>[k,r.descripcion,r.fuente?.proveedor||r.fuente?.sourceName||'Sin proveedor',r.fuente?.fecha||'',apuDataStateLabel(r.fuente?.estado),r.fuente?.sourceUrl||'']))]);
+  // ---- PAGINA 1: identificacion (ya en header) + matriz de recursos + costo directo ----
+  table('1. MANO DE OBRA',[18,63,120],['Clave','Descripcion','Cuad.','Rend.','Salario','FSR','Importe'],
+    (apu.labor||[]).map(r=>[r.clave,r.descripcion,r.cuadrilla||r.cantidad,r.rendimiento||'',money(r.salarioBase),r.fsr,money((Number(r.rendimiento)>0?Number(r.cuadrilla)/Number(r.rendimiento):Number(r.cantidad))*Number(r.salarioBase)*Number(r.fsr||1))]),
+    [0.7,2.6,0.6,0.6,0.9,0.5,0.9]);
+  table('2. MATERIALES',[213,106,0],['Clave','Descripcion','Cant.','Desp.%','Precio','Importe'],
+    (apu.materials||[]).map(r=>[r.clave,r.descripcion,num(r.consumo),`${num(r.desperdicioPct)}%`,money(r.precioUnitario),money(Number(r.consumo)*(1+Number(r.desperdicioPct)/100)*Number(r.precioUnitario))]),
+    [0.7,2.9,0.6,0.6,0.9,0.9]);
+  table('3-5. HERRAMIENTA, EQUIPO Y SEGURIDAD',[47,125,58],['Rubro','Descripcion','Cant.','Precio/Tarifa','Fuente','Importe'],
+    [...(apu.herramientaMenor?.detalle||[]).map(r=>['Herr.',r.descripcion,num(r.cantidad),money(r.valorAdquisicion),sourceText(r),money(Number(r.cantidad)*Number(r.valorAdquisicion)*Number(r.depreciacionPct)/100)]),
+     ...(apu.equipment||[]).map(r=>['Equipo',r.descripcion,num(r.cantidad),money(r.tarifa),sourceText(r),money(Number(r.cantidad)*Number(r.tarifa))]),
+     ...(apu.seguridad||[]).map(r=>['Seguridad',r.descripcion,num(r.cantidad),money(r.precioUnitario),r.observaciones||'',money(Number(r.cantidad)*Number(r.precioUnitario))])],
+    [0.6,2.6,0.6,0.9,0.9,0.9]);
+  ensure(20);doc.setFillColor(230,236,244);doc.rect(M,y,W-2*M,10,'F');doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(18,63,120);
+  doc.text(pdfText(`COSTO DIRECTO: ${money(t.direct)}`),M+3,y+6.8);doc.setFont('helvetica','normal');y+=13;
+
+  // ---- PAGINA 2: integracion economica + procedimiento ----
+  nextGroup();
+  ensure(10);doc.setFillColor(18,63,120);doc.rect(M,y,W-2*M,6,'F');doc.setTextColor(255);doc.setFont('helvetica','bold');doc.setFontSize(7.2);doc.text('9-14. INTEGRACION DEL PRECIO UNITARIO',M+2,y+4.3);y+=9;doc.setFont('helvetica','normal');
+  kv('Costo directo',money(t.direct));
+  kv(`Indirectos (${Number(apu.factores?.indCampo||0)+Number(apu.factores?.indOficina||0)}%)`,money(t.indirect));
+  kv(`Financiamiento (${num(apu.factores?.finance)}%)`,money(t.finance));
+  kv(`Utilidad (${num(apu.factores?.utility)}%)`,money(t.utility));
+  kv(`Cargos adicionales (${num(apu.factores?.cargos)}%)`,money(t.cargos));
+  ensure(8);doc.setDrawColor(18,63,120);doc.line(M,y,W-M,y);y+=1.5;
+  doc.setFillColor(47,125,58);doc.rect(M,y,W-2*M,9,'F');doc.setTextColor(255);doc.setFont('helvetica','bold');doc.setFontSize(9);
+  doc.text(pdfText('PRECIO UNITARIO'),M+3,y+6);doc.text(pdfText(money(t.pu)),W-M-3,y+6,{align:'right'});y+=12;doc.setFont('helvetica','normal');doc.setTextColor(30);
+  kv(`IVA (${num(apu.factores?.iva)}%)`,money(t.iva));
+  kv(`Importe total (${num(apu.cantidadObra)} ${apu.unit})`,money(t.importeTotal),[213,106,0]);
+  y+=3;
+  table('6. PROCEDIMIENTO DE EJECUCION',[109,45,145],['#','Paso'],
+    (apu.procedimientoConstructivo||[]).map((v,i)=>[i+1,v]),[0.3,3.4]);
+
+  // ---- PAGINA 3: calidad + medicion + fuentes + supuestos + confianza + firmas ----
+  nextGroup();
+  table('7. CONTROL DE CALIDAD Y TOLERANCIAS',[213,169,0],['Especificacion','Criterio'],
+    (apu.controlCalidad||[]).map(v=>[v.especificacion||'',v.criterio||'']),[1.8,1.8]);
+  ensure(9);doc.setFillColor(7,140,136);doc.rect(M,y,W-2*M,6,'F');doc.setTextColor(255);doc.setFont('helvetica','bold');doc.setFontSize(7.2);doc.text('8. CRITERIO DE MEDICION Y FORMA DE PAGO',M+2,y+4.3);y+=9;doc.setFont('helvetica','normal');doc.setTextColor(30);doc.setFontSize(7);
+  kv('Unidad contractual',apu.criterioMedicion?.unidadMedicion||apu.unit);
+  {const incLines=doc.splitTextToSize(pdfText(`Incluye: ${(apu.criterioMedicion?.incluye||[]).join('; ')}`),W-2*M);ensure(incLines.length*3.4+2);doc.text(incLines,M,y+3.4);y+=incLines.length*3.4+1;}
+  {const excLines=doc.splitTextToSize(pdfText(`Excluye: ${(apu.criterioMedicion?.excluye||[]).join('; ')}`),W-2*M);ensure(excLines.length*3.4+2);doc.text(excLines,M,y+3.4);y+=excLines.length*3.4+3;}
+  table('15. FUENTES DE PRECIOS',[7,140,136],['Recurso','Proveedor/Fuente','Fecha','Estado'],
+    ['materials','labor','equipment','seguridad'].flatMap(k=>(apu[k]||[]).map(r=>[r.descripcion,r.fuente?.proveedor||r.fuente?.sourceName||'Sin proveedor',r.fuente?.fecha||'',apuDataStateLabel(r.fuente?.estado)])),
+    [2.6,1.6,0.9,1]);
+  table('16. SUPUESTOS TECNICOS',[7,140,136],['#','Supuesto'],
+    (apu.supuestos||[]).map((v,i)=>[i+1,v.texto||v]),[0.3,3.4]);
+  ensure(9);doc.setFillColor(7,140,136);doc.rect(M,y,W-2*M,6,'F');doc.setTextColor(255);doc.setFont('helvetica','bold');doc.setFontSize(7.2);doc.text('17. CONFIANZA DEL ANALISIS',M+2,y+4.3);y+=9;doc.setFont('helvetica','normal');doc.setTextColor(30);doc.setFontSize(7);
+  kv('Confianza global',`${apu.confidence.score}% ${apu.confidence.level}`);
+  kv('Precios',`${apu.confidence.dimensions.precios}%`);
+  kv('Rendimientos',`${apu.confidence.dimensions.rendimientos}%`);
+  kv('Riesgos',apu.confidence.risks);
+  y+=6;
+  ensure(28);doc.setDrawColor(150);doc.setFontSize(7);doc.setTextColor(30);
+  const sigW=(W-2*M-10)/3;
+  ['Elaboro','Reviso','Aprobo'].forEach((label,i)=>{
+    const x=M+i*(sigW+5);
+    doc.line(x,y+16,x+sigW,y+16);
+    doc.text(pdfText(label),x,y+20);
+  });
+  y+=24;
+
   footer(); if(options.save!==false)doc.save(options.fileName||`${apu.clave}-APU-PROFESIONAL-ZOEMEC.pdf`); return {doc,apu};
 }

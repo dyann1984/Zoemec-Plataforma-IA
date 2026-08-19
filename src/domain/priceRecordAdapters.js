@@ -17,10 +17,12 @@ export const priceRecordFromLegacy=x=>base(x,x.sourceFile?PRICE_SOURCE_TYPE.CATA
    evidencia real) tampoco se auto-promueven a VERIFIED: ese estado sigue
    reservado para cuando un humano confirma la fuente (ver apuSchema.js). */
 export const priceRecordFromMarketIntelligence=x=>{
-  const record=base({...x,sourceName:x.references?.[0]?.proveedor||'',sourceUrl:x.references?.[0]?.url||'',priceDate:x.references?.[0]?.fecha||''},PRICE_SOURCE_TYPE.AI_ESTIMATED);
+  const aceptada=(Array.isArray(x.references)?x.references:[]).find(r=>r.match?.verdict==='ALTO');
+  const record=base({...x,sourceName:aceptada?.proveedor||x.references?.[0]?.proveedor||'',sourceUrl:aceptada?.url||x.references?.[0]?.url||'',priceDate:aceptada?.fecha||x.references?.[0]?.fecha||''},PRICE_SOURCE_TYPE.AI_ESTIMATED);
   record.references=Array.isArray(x.references)?x.references:[];
   record.stats=x.stats||null;
   record.evidenceLevel=x.evidenceLevel||'ESTIMADO_IA';
+  record.technicalSpec=x.fichaTecnica||null;
   record.confidence=x.evidenceLevel==='MERCADO'?70:x.evidenceLevel==='REFERENCIAL'?45:0;
   return record;
 };

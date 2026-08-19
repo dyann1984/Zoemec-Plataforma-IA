@@ -2179,6 +2179,17 @@ svg.ic{display:block;flex:none}
 .pro-toolbar-group-label{font-family:var(--mono);font-size:.68rem;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin-left:8px;padding-left:8px;border-left:1px solid var(--line-2)}
 .pro-section-title{font-family:var(--display);font-size:.92rem;font-weight:700;color:var(--petrol);margin:22px 0 10px;padding-top:14px;border-top:1px solid var(--line)}
 .pro-section-title-first{margin-top:0;padding-top:0;border-top:0}
+.pro-price-review{margin-bottom:22px;padding:14px;background:var(--gold-soft,#FFF8E6);border:1px solid var(--gold,#D9A441);border-radius:var(--r-sm)}
+.pro-price-review .pro-section-title{margin-top:0;padding-top:0;border-top:0}
+.pro-price-review-count{font-family:var(--mono);font-size:.7rem;font-weight:700;color:var(--gold-dark,#8A6B2E);margin-left:8px}
+.pro-price-review-card{background:var(--card);border:1px solid var(--line);border-radius:var(--r-sm);padding:12px 14px;margin-bottom:10px}
+.pro-price-review-card:last-child{margin-bottom:0}
+.pro-price-review-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px}
+.pro-price-review-kind{font-family:var(--mono);font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.pro-price-review-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:10px}
+.pro-price-review-grid small{display:block;font-family:var(--mono);font-size:.65rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.pro-price-review-grid b{font-size:.92rem;color:var(--ink)}
+.pro-price-review-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .pro-header-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;background:var(--card);border:1px solid var(--line);border-radius:var(--r-sm);padding:16px}
 .pro-header-grid label{display:grid;gap:5px;font-size:.78rem;color:var(--muted);font-weight:600}
 .pro-accordion-group{display:flex;flex-direction:column;gap:10px}

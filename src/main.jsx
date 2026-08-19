@@ -1529,13 +1529,24 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       }
       if(!data) throw lastAttemptError || new Error('No se pudo generar con IA.');
       if(requestId !== aiRequestSeqRef.current) return; // respuesta tardia de un intento anterior: se descarta
-      setAiStatus('Calculando rendimientos, seguridad, procedimiento y medicion...');
-      const v2 = finalizeProfessionalAPU({
+      const draft = {
         ...data.apu,
         proyecto: apuV2.proyecto || '', cliente: apuV2.cliente || '', ubicacion: apuV2.ubicacion || '', moneda: apuV2.moneda || 'MXN',
         cantidadObra: Number(parsed.qty || 1) || 1,
         referencePU: Number(parsed.referencePU || 0) || 0
-      });
+      };
+      // Price Intelligence real, mismo comportamiento que el flujo de lote:
+      // busca precio de mercado con validacion de equivalencia tecnica
+      // (ver src/lib/technicalMatch.js) antes de calcular con el Motor APU
+      // v2. Si falla, el borrador conserva los precios ESTIMADO_IA de la IA.
+      let enrichedDraft = draft;
+      try{
+        setAiStatus('Buscando precios de mercado reales y validando equivalencia tecnica...');
+        const result = await enrichAPUWithMarketPrices(draft, { location: activeProject?.ubicacion || '', dateBase: draft.fechaBase });
+        enrichedDraft = result.apu;
+      }catch{ /* Price Intelligence caida por completo: se sigue con el borrador de la IA */ }
+      setAiStatus('Calculando rendimientos, seguridad, procedimiento y medicion...');
+      const v2 = finalizeProfessionalAPU(enrichedDraft);
       const shim = legacyShimFromV2(v2, parsed.concept, 'OpenAI API');
       setAiStatus('Validando resultado...');
       skipMigrateIdRef.current = shim.id;

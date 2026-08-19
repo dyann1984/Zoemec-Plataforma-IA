@@ -1,4 +1,4 @@
-import { calcAPUv2, findApuNumericIssuesV2 } from '../lib/apuCalc.js';
+import { calcAPUv2, findApuNumericIssuesV2, calcMaterialRow, calcLaborRow, calcEquipmentRow, calcSeguridadRow } from '../lib/apuCalc.js';
 import { validateApuSchemaV2, APU_DATA_STATE } from './apuSchema.js';
 
 export const PRICE_SOURCE_TYPE = Object.freeze({
@@ -38,13 +38,24 @@ export function makePriceRecord(input = {}){
     references: Array.isArray(input.references) ? input.references : [],
     stats: input.stats || null,
     evidenceLevel: text(input.evidenceLevel) || null,
+    // Ficha tecnica del recurso (RECURSO -> FICHA TECNICA -> BUSQUEDA ->
+    // NORMALIZACION -> VALIDACION DE EQUIVALENCIA -> ESTADISTICA), ver
+    // src/lib/technicalMatch.js. null si el precio no vino de Price
+    // Intelligence (no rompe ningun llamador existente).
+    technicalSpec: input.fichaTecnica || null,
     createdAt: text(input.createdAt) || new Date().toISOString()
   };
 }
 
+const ROW_COST_FN = { materials: calcMaterialRow, labor: calcLaborRow, equipment: calcEquipmentRow, seguridad: calcSeguridadRow };
+
 function sourceRows(apu){
-  return ['materials','labor','equipment'].flatMap(kind =>
-    (Array.isArray(apu?.[kind]) ? apu[kind] : []).map(row => ({ kind, row, source: row.fuente || {} }))
+  const ctx = { cantidadContractual: num(apu.cantidadObra) };
+  return ['materials','labor','equipment','seguridad'].flatMap(kind =>
+    (Array.isArray(apu?.[kind]) ? apu[kind] : []).map(row => ({
+      kind, row, source: row.fuente || {},
+      costoRenglon: Math.max(0, num(ROW_COST_FN[kind]?.(row, ctx)))
+    }))
   );
 }
 
@@ -53,28 +64,83 @@ function ageMonths(dateValue, now){
   if(Number.isNaN(date.getTime())) return null;
   return Math.max(0, (now.getFullYear() - date.getFullYear()) * 12 + now.getMonth() - date.getMonth());
 }
+function freshnessScore(months){
+  if(months === null) return 0;
+  return months <= 6 ? 100 : months <= 12 ? 75 : months <= 24 ? 45 : 15;
+}
+
+/* Dimension "precios" de la confianza: pondera por COSTO (no por conteo de
+   renglones) que fraccion del APU esta respaldada por referencias de mercado
+   tecnicamente equivalentes (verdict ALTO, ver src/lib/technicalMatch.js),
+   que tan fuerte es esa evidencia en promedio (technicalMatchScore) y que
+   tan reciente es. Un renglon en REQUIERE_VALIDACION con 3 referencias ALTO
+   pesa mas que uno VERIFICADO sin fecha ni fuente identificable -- la
+   cercania al P.U. original del catalogo NUNCA participa aqui (ver Regla 10:
+   el catalogo es referencia, no objetivo a alcanzar). */
+/* Calidad de evidencia de UN renglon (0-100), independiente de su costo:
+   - Catalogo real confirmado (VERIFICADO/IMPORTADO): 100 -- es el precio
+     real, no necesita "match" tecnico.
+   - Price Intelligence con evidencia ALTO (ver technicalMatch.js): el
+     promedio de technicalMatchScore de esas referencias, con bonificacion
+     por tener >=3 fuentes (MERCADO) vs 1-2 (REFERENCIAL, se escala 85%).
+   - Solo referencias MEDIO/BAJO (ninguna ALTO): 20 -- se intento, no hay
+     nada tecnicamente utilizable.
+   - Sin evidencia de ningun tipo: 0.
+   Despues se ajusta por antiguedad de la fuente (freshness), nunca por
+   cercania al P.U. original del catalogo. */
+function rowEvidenceQuality(row, source, now){
+  if(source.estado === APU_DATA_STATE.VERIFICADO || source.estado === APU_DATA_STATE.IMPORTADO){
+    const m = ageMonths(source.fecha || source.priceDate, now);
+    return { quality: 100, freshness: m === null ? 60 : freshnessScore(m) };
+  }
+  const pr = row.priceRecord;
+  const referencias = Array.isArray(pr?.references) ? pr.references : [];
+  const aceptadas = referencias.filter(r => r.match?.verdict === 'ALTO');
+  if(aceptadas.length){
+    const avgScore = aceptadas.reduce((s, r) => s + r.match.score, 0) / aceptadas.length;
+    const quality = pr.evidenceLevel === 'MERCADO' ? avgScore : avgScore * 0.85;
+    const m = ageMonths(aceptadas[0]?.fecha, now);
+    return { quality, freshness: m === null ? 50 : freshnessScore(m) };
+  }
+  if(referencias.length) return { quality: 20, freshness: 30 }; // solo MEDIO/BAJO: se intento, sin evidencia utilizable
+  return { quality: 0, freshness: 0 };
+}
+
+function pricesDimension(rows, now){
+  const totalCost = rows.reduce((s, r) => s + r.costoRenglon, 0);
+  if(!(totalCost > 0)){
+    // Sin costo (renglon vacio/cero, ej. datos de captura incompletos): cae
+    // a un criterio simple basado en conteo, para no dividir entre cero.
+    const count = rows.length || 1;
+    const identified = rows.filter(({source}) => text(source.proveedor || source.sourceName)).length;
+    return clamp((identified / count) * 60);
+  }
+  let weightedQuality = 0;
+  rows.forEach(({row, source, costoRenglon}) => {
+    const { quality, freshness } = rowEvidenceQuality(row, source, now);
+    const rowScore = quality * 0.8 + freshness * 0.2; // la frescura modula, no domina, la calidad de la fuente
+    weightedQuality += (costoRenglon / totalCost) * rowScore;
+  });
+  return clamp(weightedQuality);
+}
 
 export function calculateAPUConfidence(apu = {}, options = {}){
   const now = options.now ? new Date(options.now) : new Date();
   const rows = sourceRows(apu);
   const count = rows.length || 1;
-  const verified = rows.filter(({source}) => source.estado === APU_DATA_STATE.VERIFICADO).length;
-  const identified = rows.filter(({source}) => text(source.proveedor || source.sourceName)).length;
-  const dated = rows.map(({source}) => ageMonths(source.fecha || source.priceDate, now)).filter(v => v !== null);
-  const freshness = dated.length ? dated.reduce((sum, months) => sum + (months <= 6 ? 100 : months <= 12 ? 75 : months <= 24 ? 45 : 15), 0) / dated.length : 0;
-  const prices = clamp((verified / count) * 55 + (identified / count) * 25 + freshness * .20);
   const labor = Array.isArray(apu.labor) ? apu.labor : [];
   const yieldCoverage = labor.length ? labor.filter(r => num(r.rendimiento) > 0 || num(r.cantidad) > 0).length / labor.length : 0;
   const compositionChecks = [apu.materials?.length, apu.labor?.length, apu.procedimientoConstructivo?.length, apu.controlCalidad?.length, apu.criterioMedicion?.unidadMedicion].filter(Boolean).length;
+  const pendingValidation = rows.filter(({source}) => source.estado === APU_DATA_STATE.REQUIERE_VALIDACION).length;
   const dimensions = {
-    precios: Math.round(prices),
+    precios: Math.round(pricesDimension(rows, now)),
     rendimientos: Math.round(clamp(yieldCoverage * 100)),
     cantidades: Math.round(clamp(rows.length ? rows.filter(({row}) => num(row.consumo ?? row.cantidad ?? row.cuadrilla) > 0).length / count * 100 : 0)),
     composicion: Math.round(compositionChecks / 5 * 100)
   };
   const score = Math.round(dimensions.precios * .40 + dimensions.rendimientos * .20 + dimensions.cantidades * .20 + dimensions.composicion * .20);
   return { score, level: score >= 85 ? 'ALTA' : score >= 65 ? 'MEDIA' : 'BAJA', dimensions,
-    risks: score >= 85 ? 'BAJOS' : score >= 65 ? 'MEDIOS' : 'ALTOS' };
+    risks: score >= 85 ? 'BAJOS' : score >= 65 ? 'MEDIOS' : 'ALTOS', pendingValidation };
 }
 
 export function validateAPU(apu = {}, options = {}){

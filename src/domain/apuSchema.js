@@ -357,6 +357,12 @@ export function normalizeAIApuToV2(raw = {}, fallbackConcept = ''){
     rendimientoDiario: detail.rendimientoDiario != null ? coerceNumber(detail.rendimientoDiario, 0) || null : null,
     vidaUtilDias: detail.vidaUtilDias != null ? coerceNumber(detail.vidaUtilDias, 0) || null : null,
     factorReposicion: detail.factorReposicion != null ? coerceNumber(detail.factorReposicion, 1) : null,
+    // A diferencia de materials/labor/equipment, seguridad no traia "fuente"
+    // por defecto: sin ella, apuDataStateLabel(undefined) cae al generico
+    // "REQUIERE VALIDACION" incluso cuando en realidad es un simple estimado
+    // de IA sin evidencia externa (etiqueta imprecisa, no un calculo erroneo,
+    // pero debe decir lo que es).
+    fuente: { proveedor: null, fecha: null, region: null, estado: APU_DATA_STATE.ESTIMADO_IA },
     observaciones: ''
     };
   });

@@ -56,7 +56,8 @@ export async function enrichAPUWithMarketPrices(apuV2, { location = '', dateBase
   await runWithConcurrency(targetList, async ([key, target]) => {
     try{
       const result = await apiPost('/api/price-intelligence', {
-        description: target.descripcion, unit: target.unit, kind: target.kind, location, dateBase
+        description: target.descripcion, unit: target.unit, kind: target.kind, location, dateBase,
+        categoriaLaboral: target.kind === 'labor' ? target.descripcion : ''
       });
       results.set(key, result);
     }catch(error){
@@ -76,11 +77,15 @@ export async function enrichAPUWithMarketPrices(apuV2, { location = '', dateBase
       if(!result) continue; // busqueda fallo para este recurso: se deja tal cual, error ya esta en errors[]
       const precioEstimadoIA = Number(row[priceField]) || 0;
       if(result.nivelEvidencia === 'ESTIMADO_IA' || !(result.precioRecomendado > 0)){
-        // Se intento la busqueda real y no hubo evidencia: se conserva el
-        // precio de la IA, pero se deja constancia auditable del intento.
+        // Se intento la busqueda real y no hubo referencia tecnicamente
+        // equivalente (ALTO): se conserva el precio de la IA, pero se deja
+        // constancia auditable del intento -- incluyendo las referencias
+        // MEDIO/BAJO encontradas, para que quede visible POR QUE se
+        // rechazaron (ver technicalMatch.js), nunca se ocultan en silencio.
         row.priceRecord = priceRecordFromMarketIntelligence({
           description: row.descripcion, unit: row.unidad, price: precioEstimadoIA,
-          references: [], stats: null, evidenceLevel: 'ESTIMADO_IA'
+          references: result.referencias || [], stats: result.estadisticas, evidenceLevel: 'ESTIMADO_IA',
+          fichaTecnica: result.fichaTecnica
         });
         continue;
       }
@@ -89,7 +94,8 @@ export async function enrichAPUWithMarketPrices(apuV2, { location = '', dateBase
       row[priceField] = result.precioRecomendado;
       row.priceRecord = priceRecordFromMarketIntelligence({
         description: row.descripcion, unit: row.unidad, price: result.precioRecomendado,
-        references: result.referencias, stats: result.estadisticas, evidenceLevel: result.nivelEvidencia
+        references: result.referencias, stats: result.estadisticas, evidenceLevel: result.nivelEvidencia,
+        fichaTecnica: result.fichaTecnica
       });
       row.fuente = { ...(row.fuente || {}), estado: APU_DATA_STATE.REQUIERE_VALIDACION };
     }

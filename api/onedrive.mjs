@@ -1,6 +1,6 @@
-import { FieldValue, getAdminDb, getAdminStorage } from './_firebaseAdmin.mjs';
-import { requireFeature } from './_authGuard.mjs';
-import { assertAllowedFile, sanitizeFileName } from './_libraryClassify.mjs';
+import { FieldValue, getAdminDb, getAdminStorage } from '../server/api-lib/_firebaseAdmin.mjs';
+import { requireFeature } from '../server/api-lib/_authGuard.mjs';
+import { assertAllowedFile, sanitizeFileName } from '../server/api-lib/_libraryClassify.mjs';
 
 /* Backend real de la conexion con OneDrive (Microsoft Graph). El client secret
    de la app registrada en Azure AD solo puede vivir aqui, nunca en el navegador.

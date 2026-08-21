@@ -5,8 +5,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { verifyMercadoPagoSignature } from '../api/payment-webhook.mjs';
-import { isValidDriveId } from '../api/_googleDrive.mjs';
-import { assertAllowedFile, sanitizeFileName } from '../api/_libraryClassify.mjs';
+import { isValidDriveId } from '../server/api-lib/_googleDrive.mjs';
+import { assertAllowedFile, sanitizeFileName } from '../server/api-lib/_libraryClassify.mjs';
 
 function sign(manifest, secret){
   return crypto.createHmac('sha256', secret).update(manifest).digest('hex');

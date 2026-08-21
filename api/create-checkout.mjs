@@ -1,4 +1,4 @@
-import { requireAuth } from './_authGuard.mjs';
+import { requireAuth } from '../server/api-lib/_authGuard.mjs';
 
 const PLAN_PRICES = {
   Inicial: 399,

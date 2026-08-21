@@ -17,7 +17,7 @@
    piso") y el motor rechaza cualquier referencia que las contenga, sin
    importar que tan buen precio tenga. */
 
-import { evaluateReferences, MATCH_VERDICT } from '../src/lib/technicalMatch.js';
+import { evaluateReferences, MATCH_VERDICT } from '../../src/lib/technicalMatch.js';
 
 const MODEL = process.env.OPENAI_PRICE_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 

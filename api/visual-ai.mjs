@@ -1,5 +1,5 @@
-import { FieldValue, getAdminDb } from './_firebaseAdmin.mjs';
-import { markFeatureUsed, requireFeature } from './_authGuard.mjs';
+import { FieldValue, getAdminDb } from '../server/api-lib/_firebaseAdmin.mjs';
+import { markFeatureUsed, requireFeature } from '../server/api-lib/_authGuard.mjs';
 
 const SYSTEM = `Eres ZOEMEC Visual IA, asistente tecnico para arquitectura, construccion y obra.
 Responde siempre en espanol, con criterio profesional, supuestos explicitos y alcance presupuestable.

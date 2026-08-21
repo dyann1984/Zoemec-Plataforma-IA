@@ -1,8 +1,8 @@
 import http from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { generateAPU, generateAPUv2, answerAssistant } from '../api/_openaiApuCore.mjs';
-import { searchMarketReferences } from '../api/_priceIntelligenceCore.mjs';
+import { generateAPU, generateAPUv2, answerAssistant } from './api-lib/_openaiApuCore.mjs';
+import { searchMarketReferences } from './api-lib/_priceIntelligenceCore.mjs';
 
 const PORT = Number(process.env.ZOEMEC_AI_PORT || 8787);
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';

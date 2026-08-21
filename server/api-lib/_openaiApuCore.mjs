@@ -1,5 +1,5 @@
-import { APU_DEFAULT_FACTORS } from '../src/lib/apuCalc.js';
-import { normalizeAIApuToV2 } from '../src/domain/apuSchema.js';
+import { APU_DEFAULT_FACTORS } from '../../src/lib/apuCalc.js';
+import { normalizeAIApuToV2 } from '../../src/domain/apuSchema.js';
 
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 

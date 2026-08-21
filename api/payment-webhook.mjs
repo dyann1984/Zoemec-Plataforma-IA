@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { FieldValue, getAdminAuth, getAdminDb } from './_firebaseAdmin.mjs';
+import { FieldValue, getAdminAuth, getAdminDb } from '../server/api-lib/_firebaseAdmin.mjs';
 
 async function getPayment(paymentId){
   const res = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {

@@ -1,5 +1,5 @@
-import { requireFeature } from './_authGuard.mjs';
-import { searchMarketReferences } from './_priceIntelligenceCore.mjs';
+import { requireFeature } from '../server/api-lib/_authGuard.mjs';
+import { searchMarketReferences } from '../server/api-lib/_priceIntelligenceCore.mjs';
 
 export default async function handler(req, res){
   if(req.method !== 'POST'){

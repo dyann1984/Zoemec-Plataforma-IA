@@ -1,5 +1,5 @@
-import { answerAssistant } from './_openaiApuCore.mjs';
-import { markFeatureUsed, requireFeature } from './_authGuard.mjs';
+import { answerAssistant } from '../server/api-lib/_openaiApuCore.mjs';
+import { markFeatureUsed, requireFeature } from '../server/api-lib/_authGuard.mjs';
 
 export default async function handler(req, res){
   if(req.method !== 'POST'){

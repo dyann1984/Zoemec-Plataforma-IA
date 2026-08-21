@@ -1,4 +1,4 @@
-import { requireFeature } from './_authGuard.mjs';
+import { requireFeature } from '../server/api-lib/_authGuard.mjs';
 
 const MODEL = process.env.OPENAI_PRICE_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 

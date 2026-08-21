@@ -1,5 +1,5 @@
-import { requireAdmin } from './_authGuard.mjs';
-import { getAdminDb } from './_firebaseAdmin.mjs';
+import { requireAdmin } from '../server/api-lib/_authGuard.mjs';
+import { getAdminDb } from '../server/api-lib/_firebaseAdmin.mjs';
 
 /* Diagnostico real de las dependencias de produccion, solo para administradores.
    Cada verificacion es una prueba real (no un valor inventado). Si algo no se

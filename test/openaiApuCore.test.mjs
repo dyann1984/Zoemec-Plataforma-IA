@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { extractJsonObject } from './_openaiApuCore.mjs';
+import { extractJsonObject } from '../server/api-lib/_openaiApuCore.mjs';
 
 test('extrae JSON de texto con bloque fenced code', () => {
   const raw = 'Aquí está la respuesta:\n```json\n{ "concept": "Muro de block 15 cm", "unit": "m²", "materials": [] }\n```';

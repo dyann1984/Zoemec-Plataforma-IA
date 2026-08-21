@@ -1,6 +1,6 @@
-import { FieldValue, getAdminDb, getAdminStorage } from './_firebaseAdmin.mjs';
-import { requireFeature } from './_authGuard.mjs';
-import { assertAllowedFile, classifyLibraryFile, sanitizeFileName, extOf } from './_libraryClassify.mjs';
+import { FieldValue, getAdminDb, getAdminStorage } from '../server/api-lib/_firebaseAdmin.mjs';
+import { requireFeature } from '../server/api-lib/_authGuard.mjs';
+import { assertAllowedFile, classifyLibraryFile, sanitizeFileName, extOf } from '../server/api-lib/_libraryClassify.mjs';
 
 /* Sube el archivo real de la Biblioteca desde el servidor (Firebase Admin
    Storage), no desde el navegador. Evita por completo el bloqueo de CORS que

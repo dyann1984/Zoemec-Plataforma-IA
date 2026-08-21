@@ -1,7 +1,7 @@
-import { FieldValue, getAdminDb, getAdminStorage } from './_firebaseAdmin.mjs';
-import { requireFeature } from './_authGuard.mjs';
-import { driveFetch, defaultFolderId, getGoogleDriveAccessToken, hasGoogleDriveCredentials, isGoogleNativeDoc, isValidDriveId, isWithinAuthorizedTree, GOOGLE_EXPORT_MIME } from './_googleDrive.mjs';
-import { assertAllowedFile, classifyLibraryFile, sanitizeFileName, extOf, MAX_UPLOAD_BYTES } from './_libraryClassify.mjs';
+import { FieldValue, getAdminDb, getAdminStorage } from '../server/api-lib/_firebaseAdmin.mjs';
+import { requireFeature } from '../server/api-lib/_authGuard.mjs';
+import { driveFetch, defaultFolderId, getGoogleDriveAccessToken, hasGoogleDriveCredentials, isGoogleNativeDoc, isValidDriveId, isWithinAuthorizedTree, GOOGLE_EXPORT_MIME } from '../server/api-lib/_googleDrive.mjs';
+import { assertAllowedFile, classifyLibraryFile, sanitizeFileName, extOf, MAX_UPLOAD_BYTES } from '../server/api-lib/_libraryClassify.mjs';
 
 /* list + import en un solo archivo (accion en el body, mismo patron que
    api/onedrive.mjs) para no sumar funciones serverless de mas: cada archivo en

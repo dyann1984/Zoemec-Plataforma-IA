@@ -253,12 +253,13 @@ export async function exportAPUExcelV2(apus,options={}){
    limpio, en vez de quedar partido a la mitad solo porque sobraba espacio. */
 export function exportAPUPdfV2(rawApu,options={}){
   const apu=finalizeProfessionalAPU(rawApu); const t=apu.calculated; const doc=new jsPDF('portrait','mm','a4'); const W=doc.internal.pageSize.getWidth(),H=doc.internal.pageSize.getHeight(),M=12;let y=12,page=1;
+  const layout={pageHeight:H,topMargin:M,bottomLimit:H-13,generalHeaders:[],sections:[],rows:[]};
   const pdfText=value=>String(value??'').replace(/\u00b2/g,'2').replace(/\u00b3/g,'3').replace(/\u00b1/g,'+/-').normalize('NFD').replace(/[\u0300-\u036f]/g,'');
   const footer=()=>{doc.setFontSize(6.5);doc.setTextColor(120);doc.text(pdfText(`${apu.clave} | ${apu.concept.slice(0,55)}`),M,H-6);doc.text(`Pagina ${page}`,W-M,H-6,{align:'right'});};
   const newPage=()=>{footer();doc.addPage();page++;y=12;header();};
   const ensure=h=>{if(y+h>H-13) newPage();};
   const nextGroup=()=>{ if(y>M+2) newPage(); };
-  const header=()=>{doc.setFillColor(18,63,120);doc.rect(M,y,W-2*M,11,'F');doc.setTextColor(255);doc.setFont('helvetica','bold');doc.setFontSize(10.5);doc.text('ANALISIS DE PRECIO UNITARIO (APU)',W/2,y+7.3,{align:'center'});y+=14;
+  const header=()=>{layout.generalHeaders.push({page,y});doc.setFillColor(18,63,120);doc.rect(M,y,W-2*M,11,'F');doc.setTextColor(255);doc.setFont('helvetica','bold');doc.setFontSize(10.5);doc.text('ANALISIS DE PRECIO UNITARIO (APU)',W/2,y+7.3,{align:'center'});y+=14;
     doc.setTextColor(25);doc.setFontSize(7);doc.setFont('helvetica','normal');
     doc.text(pdfText(`Clave: ${apu.clave}   Unidad: ${apu.unit}   Cantidad: ${num(apu.cantidadObra)}`),M,y);y+=4.2;
     doc.text(pdfText(`Proyecto: ${apu.proyecto||'Por definir'}   Cliente: ${apu.cliente||'Por definir'}   Fecha base: ${apu.fechaBase||''}`),M,y);y+=4.2;
@@ -271,15 +272,25 @@ export function exportAPUPdfV2(rawApu,options={}){
     const ratios=widthsRatio||heads.map(()=>1); const totalRatio=ratios.reduce((a,b)=>a+b,0);
     const colW=ratios.map(r=>(W-2*M)*r/totalRatio);
     const colX=[M]; colW.forEach((w,i)=>{ if(i<colW.length-1) colX.push(colX[i]+w); });
-    ensure(13+rows.length*5.2);
+    const wrapRow=row=>row.map((v,i)=>doc.splitTextToSize(pdfText(v),colW[i]-2));
+    const rowHeight=wrapped=>Math.max(4.6,Math.max(...wrapped.map(w=>w.length))*3.1);
+    const firstWrapped=rows.length?wrapRow(rows[0]):null;
+    const firstRowHeight=firstWrapped?rowHeight(firstWrapped):0;
+    // Regla anti-huerfanos: titulo de seccion (6), encabezado de columnas (5)
+    // y primera fila completa deben permanecer juntos. Las filas posteriores
+    // conservan su salto individual segun su altura real envuelta.
+    ensure(11+(firstWrapped?firstRowHeight+1:0));
+    const sectionPage=page,sectionY=y;
     doc.setFillColor(...color);doc.rect(M,y,W-2*M,6,'F');doc.setTextColor(255);doc.setFont('helvetica','bold');doc.setFontSize(7.2);doc.text(pdfText(title),M+2,y+4.3);y+=6;
     doc.setTextColor(30);doc.setFontSize(6);doc.setFont('helvetica','bold');
     heads.forEach((h,i)=>doc.text(pdfText(h),colX[i]+1,y+3.6));y+=5;
+    layout.sections.push({title,page:sectionPage,y:sectionY,columnsY:sectionY+6,firstRowPage:rows.length?page:null,firstRowY:rows.length?y:null,firstRowHeight});
     doc.setFont('helvetica','normal');
-    rows.forEach(row=>{
-      const wrapped=row.map((v,i)=>doc.splitTextToSize(pdfText(v),colW[i]-2));
-      const rh=Math.max(4.6,Math.max(...wrapped.map(w=>w.length))*3.1);
+    rows.forEach((row,rowIndex)=>{
+      const wrapped=rowIndex===0?firstWrapped:wrapRow(row);
+      const rh=rowHeight(wrapped);
       ensure(rh+1);
+      layout.rows.push({section:title,row:rowIndex,page,y,height:rh});
       doc.setDrawColor(220);doc.line(M,y,W-M,y);
       wrapped.forEach((w,i)=>doc.text(w,colX[i]+1,y+3.4));
       y+=rh;
@@ -352,5 +363,5 @@ export function exportAPUPdfV2(rawApu,options={}){
   });
   y+=24;
 
-  footer(); if(options.save!==false)doc.save(options.fileName||`${apu.clave}-APU-PROFESIONAL-ZOEMEC.pdf`); return {doc,apu};
+  footer(); if(options.save!==false)doc.save(options.fileName||`${apu.clave}-APU-PROFESIONAL-ZOEMEC.pdf`); return {doc,apu,layout};
 }

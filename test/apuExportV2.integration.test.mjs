@@ -39,3 +39,34 @@ test('regresion P0 RC1: snapshot, XLSX recalculado y PDF usan equipo/EPP efectiv
     assert.ok(!raw.includes(`(${pdfMoney(2440)})`),'PDF no debe presentar el costo de adquisicion EPP como subtotal integrado');
   }finally{process.chdir(before);fs.rmSync(dir,{recursive:true,force:true});}
 });
+
+test('PDF evita secciones huerfanas y mantiene encabezado general dentro del area imprimible',()=>{
+  const a=golden();
+  a.clave='APU-PAGINADO';
+  a.concept='Caso de regresion de paginado con descripciones extensas para forzar alturas variables y saltos de pagina entre secciones del APU profesional.';
+  const fuente={estado:APU_DATA_STATE.ESTIMADO_IA};
+  a.labor=Array.from({length:23},(_,i)=>({clave:`MO-${String(i+1).padStart(3,'0')}`,descripcion:`Cuadrilla especializada numero ${i+1} con una descripcion suficientemente extensa para ocupar varias lineas y ejercer presion real sobre el final del area imprimible`,unidad:'jor',cuadrilla:2,rendimiento:8,jornada:8,salarioBase:350,fsr:1.3,fuente}));
+  a.materials=Array.from({length:12},(_,i)=>({clave:`MAT-${String(i+1).padStart(3,'0')}`,descripcion:`Material de prueba numero ${i+1} con especificacion tecnica extensa y presentacion comercial verificable`,unidad:'pza',consumo:1,desperdicioPct:2,precioUnitario:25,fuente}));
+  a.equipment=Array.from({length:8},(_,i)=>({clave:`EQ-${String(i+1).padStart(3,'0')}`,descripcion:`Equipo de prueba numero ${i+1} con descripcion larga para validar continuidad visual`,unidad:'jornada',cantidad:1,tarifa:120,integracion:'POR_JORNADA',rendimientoDiario:8,fuente}));
+  a.seguridad=Array.from({length:8},(_,i)=>({clave:`SEG-${String(i+1).padStart(3,'0')}`,descripcion:`Equipo de proteccion personal numero ${i+1}`,unidad:'pza',cantidad:2,precioUnitario:80,integracion:'AMORTIZABLE',vidaUtilDias:180,rendimientoDiario:8,factorReposicion:1,fuente}));
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'zoemec-pdf-pagination-'));const before=process.cwd();process.chdir(dir);
+  try{
+    const {doc,layout}=exportAPUPdfV2(a,{fileName:'pagination.pdf'});
+    assert.ok(fs.statSync('pagination.pdf').size>1000);
+    assert.equal(layout.generalHeaders.length,doc.getNumberOfPages(),'cada pagina debe repetir el encabezado general');
+    for(const h of layout.generalHeaders){assert.equal(h.y,layout.topMargin);assert.ok(h.y>=layout.topMargin);}
+    for(const s of layout.sections){
+      if(s.firstRowPage!==null){
+        assert.equal(s.firstRowPage,s.page,`${s.title}: titulo y primera fila deben quedar en la misma pagina`);
+        assert.ok(s.firstRowY+s.firstRowHeight<=layout.bottomLimit,`${s.title}: primera fila fuera del area imprimible`);
+        assert.ok(s.y<s.columnsY&&s.columnsY<s.firstRowY,`${s.title}: orden vertical invalido o superpuesto`);
+      }
+    }
+    const laborSection=layout.sections.find(s=>s.title==='1. MANO DE OBRA');
+    const materialSection=layout.sections.find(s=>s.title==='2. MATERIALES');
+    assert.ok(materialSection.page>laborSection.page,'Materiales debe saltar antes del encabezado cuando no cabe titulo + columnas + primera fila');
+    assert.equal(materialSection.y,layout.generalHeaders.find(h=>h.page===materialSection.page).y+29,'la seccion debe iniciar bajo el encabezado general de la nueva pagina');
+    for(const row of layout.rows)assert.ok(row.y+row.height<=layout.bottomLimit,`${row.section}: fila ${row.row+1} fuera del area imprimible`);
+    assert.ok(doc.getNumberOfPages()>=4,'el caso de presion debe producir varias paginas de forma coherente');
+  }finally{process.chdir(before);fs.rmSync(dir,{recursive:true,force:true});}
+});

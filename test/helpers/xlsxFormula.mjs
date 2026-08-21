@@ -8,13 +8,13 @@
 
 function tokenize(formula){
   const tokens = [];
-  const re = /([0-9]+\.?[0-9]*)|([A-Z]+[0-9]+)|([A-Z]+)|([()+\-*/:])/g;
+  const re = /([0-9]+\.?[0-9]*)|([A-Z]+[0-9]+)|([A-Z]+)|([(),+\-*/:])/g;
   let m;
   while((m = re.exec(formula))){
     if(m[1] !== undefined) tokens.push({ type:'num', value: Number(m[1]) });
     else if(m[2] !== undefined) tokens.push({ type:'ref', value: m[2] });
     else if(m[3] !== undefined) tokens.push({ type:'ident', value: m[3] });
-    else if(m[4] !== undefined) tokens.push({ type: (m[4] === '(' || m[4] === ')') ? 'paren' : (m[4] === ':' ? 'colon' : 'op'), value: m[4] });
+    else if(m[4] !== undefined) tokens.push({ type: (m[4] === '(' || m[4] === ')') ? 'paren' : (m[4] === ':' ? 'colon' : (m[4] === ',' ? 'comma' : 'op')), value: m[4] });
   }
   return tokens;
 }
@@ -81,10 +81,19 @@ export function createSheetEvaluator(cells){
         advance();
         expect('(');
         const startTok = advance();
-        expect(':');
-        const endTok = advance();
+        if(peek()?.value === ':'){
+          advance();
+          const endTok = advance();
+          expect(')');
+          return sumRange(startTok.value, endTok.value);
+        }
+        let value = getCellValue(startTok.value);
+        while(peek()?.type === 'comma'){
+          advance();
+          value += getCellValue(advance().value);
+        }
         expect(')');
-        return sumRange(startTok.value, endTok.value);
+        return value;
       }
       if(tok.type === 'paren' && tok.value === '('){
         advance();

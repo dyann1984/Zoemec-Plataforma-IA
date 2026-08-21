@@ -457,12 +457,21 @@ export function parseConceptText(input){
   const text=(input||'').replace(/\s+/g,' ').trim();
   // (?!\s*\/\s*cm) evita capturar el "kg" de una resistencia de material tipo
   // f'c=250 kg/cm² o fy=4200 kg/cm², que no es la unidad de medida del concepto.
-  const unitMatch=text.match(/\b(m2|m²|m3|m³|kg|pza|pieza|ml|lote|jgo|hr)\b(?!\s*\/\s*cm)/i);
+  const unitMatch=text.match(/(?:\b(m2|m3|kg|pza|pieza|ml|lote|jgo|hr)\b|(?<!\w)(m²|m³)(?!\w))(?!\s*\/\s*cm)/i);
+  // Proporciones (1:4), dimensiones (15 x 20 x 40) y medidas tecnicas
+  // (15 cm, 3/4 in) describen el concepto: nunca son cantidad ni P.U.
+  const technicalRanges=[
+    /\b\d+(?:\.\d+)?\s*:\s*\d+(?:\.\d+)?\b/g,
+    /\b\d+(?:\.\d+)?(?:\s*[x×]\s*\d+(?:\.\d+)?){1,3}\b/gi,
+    /\b\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:mm|cm|in|pulg(?:adas?)?|dia(?:metro)?|ø)\b/gi
+  ].flatMap(re=>[...text.matchAll(re)].map(m=>[m.index??0,(m.index??0)+m[0].length]));
+  const insideTechnicalRange=index=>technicalRanges.some(([start,end])=>index>=start&&index<end);
   const moneyMatches=[...text.matchAll(/\$?\s*([0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?)/g)]
-    .map(m=>({raw:m[0], value:parseFloat(m[1].replace(/,/g,'')), index:m.index ?? 0}))
-    .filter(x=>!Number.isNaN(x.value));
+    .map(m=>({raw:m[0], value:parseFloat(m[1].replace(/,/g,'')), index:(m.index ?? 0)+m[0].indexOf(m[1])}))
+    .filter(x=>!Number.isNaN(x.value)&&!insideTechnicalRange(x.index));
   const unitIndex=unitMatch?.index ?? -1;
-  const afterUnit=unitIndex>=0 ? moneyMatches.filter(n=>n.index>unitIndex) : moneyMatches;
+  const unitEnd=unitIndex>=0?unitIndex+unitMatch[0].length:-1;
+  const afterUnit=unitIndex>=0 ? moneyMatches.filter(n=>n.index>=unitEnd) : moneyMatches;
   const qty=afterUnit[0]?.value || 1;
   const referencePU=afterUnit.length>1 ? afterUnit[afterUnit.length-1].value : 0;
   let concept=text;
@@ -476,7 +485,7 @@ export function parseConceptText(input){
     // Vacio (no 'm²') cuando el texto no trae una unidad explicita, para que la
     // clasificacion automatica del concepto (bomba->pza, tuberia->m, etc.) decida
     // la unidad en vez de que este valor por defecto la pise siempre.
-    unit: unitMatch ? unitMatch[1].replace(/m2/i,'m²').replace(/m3/i,'m³') : '',
+    unit: unitMatch ? (unitMatch[1]||unitMatch[2]).replace(/m2/i,'m²').replace(/m3/i,'m³') : '',
     qty,
     referencePU
   };

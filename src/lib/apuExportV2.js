@@ -1,6 +1,6 @@
 import writeXlsxFileBrowser from 'write-excel-file/browser';
 import { jsPDF } from 'jspdf';
-import { calcAPUv2 } from './apuCalc.js';
+import { calcAPUv2, calcEquipmentRow, calcSeguridadRow } from './apuCalc.js';
 import { finalizeProfessionalAPU } from '../domain/apuProfessional.js';
 import { apuDataStateLabel } from '../domain/apuSchema.js';
 import { buildReviewRow, REVISION_STATUS_LABEL } from '../domain/apuReview.js';
@@ -11,6 +11,33 @@ const safeSheet=value=>String(value||'APU').replace(/[\\/?*\[\]:]/g,'-').slice(0
 const sourceText=row=>row?.fuente?.sourceName||row?.fuente?.proveedor||apuDataStateLabel(row?.fuente?.estado);
 const asCell=(value,style={})=>xcell(value,style);
 const formula=(value,style={})=>fcell(value,{...XLS.calc,...style});
+const integrationText=row=>{
+  const kind=String(row?.integracion||'POR_UNIDAD_OBRA');
+  const factor=Number(row?.factorUso??row?.factorReposicion??1)||1;
+  return kind==='AMORTIZABLE'?`${kind} (factor ${factor})`:kind;
+};
+const equipmentFormula=(row,n,cantidadObra)=>{
+  const kind=String(row?.integracion||'POR_UNIDAD_OBRA');
+  if(kind==='POR_JORNADA') return `=E${n}*F${n}/I${n}`;
+  if(kind==='POR_LOTE') return `=E${n}*F${n}/H${n}`;
+  if(kind==='AMORTIZABLE') return `=E${n}*F${n}*${Number(row?.factorUso||1)}/H${n}/I${n}`;
+  return `=E${n}*F${n}`;
+};
+const safetyFormula=(row,n)=>{
+  const kind=String(row?.integracion||'POR_UNIDAD_OBRA');
+  if(kind==='AMORTIZABLE') return `=E${n}*F${n}*${Number(row?.factorReposicion||1)}/H${n}/I${n}`;
+  if(kind==='POR_LOTE') return `=E${n}*F${n}/H${n}`;
+  return `=E${n}*F${n}`;
+};
+const integrationBase=(row,cantidadObra)=>String(row?.integracion||'POR_UNIDAD_OBRA')==='POR_LOTE'?Number(cantidadObra||0):Number(row?.vidaUtilDias||0);
+const integrationYield=row=>Number(row?.rendimientoDiario??row?.rendimiento??0);
+const pdfIntegration=row=>{
+  const kind=String(row?.integracion||'POR_UNIDAD_OBRA');
+  if(kind==='POR_JORNADA') return `Por jornada / rend. ${integrationYield(row)}`;
+  if(kind==='POR_LOTE') return 'Por lote / cantidad contractual';
+  if(kind==='AMORTIZABLE') return `Amort. ${Number(row?.vidaUtilDias||0)} dias / rend. ${integrationYield(row)} / factor ${Number(row?.factorUso??row?.factorReposicion??1)||1}`;
+  return 'Por unidad de obra';
+};
 
 export function buildProfessionalAPUSheet(rawApu){
   const apu=finalizeProfessionalAPU(rawApu);
@@ -40,12 +67,12 @@ export function buildProfessionalAPUSheet(rawApu){
   if(apu.herramientaMenor?.modo==='detalle') (apu.herramientaMenor.detalle||[]).forEach((r,i)=>{const n=rows.length+1;add([i+1,r.clave,r.descripcion,r.unidad,Number(r.cantidad||0),Number(r.depreciacionPct||0),null,Number(r.valorAdquisicion||r.precioUnitario||0),null,formula(`=E${n}*H${n}*F${n}/100`),sourceText(r),null]);});
   const toolEnd=rows.length; const toolTotal=apu.herramientaMenor?.modo==='detalle'?subtotal('SUBTOTAL HERRAMIENTA',toolStart,toolEnd):add([null,asCell('SUBTOTAL HERRAMIENTA (% M.O.)',{columnSpan:8,fontWeight:'bold',align:'right'}),...Array(7).fill(null),formula(`=J${moTotal}*${Number(apu.herramientaMenor?.porcentaje||0)}/100`,{fontWeight:'bold'}),null,null]); add([]);
 
-  span('4. EQUIPO, MAQUINARIA Y ANDAMIOS',COLORS.equipment); head(['No.','Clave','Descripcion','Unidad','Cantidad','Tarifa','Rendimiento','','','Importe','Fuente','Estado']);
-  const eqStart=rows.length+1;(apu.equipment||[]).forEach((r,i)=>{const n=rows.length+1;add([i+1,r.clave,r.descripcion,r.unidad,Number(r.cantidad||0),Number(r.tarifa||0),Number(r.rendimiento||0),null,null,formula(`=E${n}*F${n}`),sourceText(r),apuDataStateLabel(r.fuente?.estado)]);});
+  span('4. EQUIPO, MAQUINARIA Y ANDAMIOS',COLORS.equipment); head(['No.','Clave','Descripcion','Unidad','Cantidad','Tarifa / adquisicion','Integracion','Vida util / base','Rendimiento','Importe efectivo','Fuente','Estado']);
+  const eqStart=rows.length+1;(apu.equipment||[]).forEach((r,i)=>{const n=rows.length+1;add([i+1,r.clave,r.descripcion,r.unidad,Number(r.cantidad||0),Number(r.tarifa||0),integrationText(r),integrationBase(r,apu.cantidadObra),integrationYield(r),formula(equipmentFormula(r,n,apu.cantidadObra)),sourceText(r),apuDataStateLabel(r.fuente?.estado)]);});
   const eqEnd=rows.length;const eqTotal=subtotal('SUBTOTAL EQUIPO',eqStart,eqEnd);add([]);
 
-  span('5. SEGURIDAD Y PROTECCION',COLORS.safety);head(['No.','Clave','Descripcion','Unidad','Cantidad','Precio','','','','Importe','Observaciones','']);
-  const spStart=rows.length+1;(apu.seguridad||[]).forEach((r,i)=>{const n=rows.length+1;add([i+1,r.clave,r.descripcion,r.unidad,Number(r.cantidad||0),Number(r.precioUnitario||0),null,null,null,formula(`=E${n}*F${n}`),r.observaciones,null]);});
+  span('5. SEGURIDAD Y PROTECCION',COLORS.safety);head(['No.','Clave','Descripcion','Unidad','Cantidad','Precio / adquisicion','Integracion','Vida util / base','Rendimiento','Importe efectivo','Observaciones','Estado']);
+  const spStart=rows.length+1;(apu.seguridad||[]).forEach((r,i)=>{const n=rows.length+1;add([i+1,r.clave,r.descripcion,r.unidad,Number(r.cantidad||0),Number(r.precioUnitario||0),integrationText(r),integrationBase(r,apu.cantidadObra),integrationYield(r),formula(safetyFormula(r,n)),r.observaciones,apuDataStateLabel(r.fuente?.estado)]);});
   const spEnd=rows.length;const spTotal=subtotal('SUBTOTAL SEGURIDAD',spStart,spEnd);add([]);
 
   span('6. PROCEDIMIENTO DE EJECUCION',COLORS.procedure);(apu.procedimientoConstructivo||[]).forEach((v,i)=>add([i+1,asCell(v,{columnSpan:11,wrap:true}),...Array(10).fill(null)]));add([]);
@@ -269,10 +296,13 @@ export function exportAPUPdfV2(rawApu,options={}){
   table('2. MATERIALES',[213,106,0],['Clave','Descripcion','Cant.','Desp.%','Precio','Importe'],
     (apu.materials||[]).map(r=>[r.clave,r.descripcion,num(r.consumo),`${num(r.desperdicioPct)}%`,money(r.precioUnitario),money(Number(r.consumo)*(1+Number(r.desperdicioPct)/100)*Number(r.precioUnitario))]),
     [0.7,2.9,0.6,0.6,0.9,0.9]);
-  table('3-5. HERRAMIENTA, EQUIPO Y SEGURIDAD',[47,125,58],['Rubro','Descripcion','Cant.','Precio/Tarifa','Fuente','Importe'],
+  const calcCtx={cantidadContractual:Number(apu.cantidadObra||0)};
+  table('3-5. HERRAMIENTA, EQUIPO Y SEGURIDAD',[47,125,58],['Rubro','Descripcion','Cant.','Adquisicion/Tarifa','Integracion / base','Importe efectivo'],
     [...(apu.herramientaMenor?.detalle||[]).map(r=>['Herr.',r.descripcion,num(r.cantidad),money(r.valorAdquisicion),sourceText(r),money(Number(r.cantidad)*Number(r.valorAdquisicion)*Number(r.depreciacionPct)/100)]),
-     ...(apu.equipment||[]).map(r=>['Equipo',r.descripcion,num(r.cantidad),money(r.tarifa),sourceText(r),money(Number(r.cantidad)*Number(r.tarifa))]),
-     ...(apu.seguridad||[]).map(r=>['Seguridad',r.descripcion,num(r.cantidad),money(r.precioUnitario),r.observaciones||'',money(Number(r.cantidad)*Number(r.precioUnitario))])],
+     ...(apu.equipment||[]).map(r=>['Equipo',r.descripcion,num(r.cantidad),money(r.tarifa),pdfIntegration(r),money(calcEquipmentRow(r,calcCtx))]),
+     ...(apu.seguridad||[]).map(r=>['Seguridad',r.descripcion,num(r.cantidad),money(r.precioUnitario),pdfIntegration(r),money(calcSeguridadRow(r,calcCtx))]),
+     ['','Subtotal equipo','','','',money(t.equipo)],
+     ['','Subtotal seguridad / EPP','','','',money(t.seguridad)]],
     [0.6,2.6,0.6,0.9,0.9,0.9]);
   ensure(20);doc.setFillColor(230,236,244);doc.rect(M,y,W-2*M,10,'F');doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(18,63,120);
   doc.text(pdfText(`COSTO DIRECTO: ${money(t.direct)}`),M+3,y+6.8);doc.setFont('helvetica','normal');y+=13;

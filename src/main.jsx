@@ -1945,7 +1945,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       </div>}
     </div>
 
-    <RevisionBandeja apus={apus} user={user} onUpdateApu={saved => { if(!requireProject()) return; setApus([saved, ...apus.filter(x => x.id !== saved.id)]); }} />
+    <RevisionBandeja apus={apus} user={user} onUpdateApu={saved => { if(!requireProject()) return; setApus([saved, ...apus.filter(x => x.id !== saved.id)]); if(saved.id===professionalApu.id) setApuV2(saved); }} />
 
     {hasApuContent && <>
       {/* A. Encabezado ejecutivo */}

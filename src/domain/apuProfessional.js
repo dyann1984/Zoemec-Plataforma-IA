@@ -132,15 +132,41 @@ export function calculateAPUConfidence(apu = {}, options = {}){
   const yieldCoverage = labor.length ? labor.filter(r => num(r.rendimiento) > 0 || num(r.cantidad) > 0).length / labor.length : 0;
   const compositionChecks = [apu.materials?.length, apu.labor?.length, apu.procedimientoConstructivo?.length, apu.controlCalidad?.length, apu.criterioMedicion?.unidadMedicion].filter(Boolean).length;
   const pendingValidation = rows.filter(({source}) => source.estado === APU_DATA_STATE.REQUIERE_VALIDACION).length;
+  // Bono por rendimiento validado por un humano (ver src/domain/apuReview.js
+  // #applyRendimientoDecision): NUNCA resta -- un renglon sin rendimientoFuente
+  // (todo el historial previo a esta fase) se comporta exactamente igual que
+  // antes. Solo sube la dimension "rendimientos" cuando TODOS los renglones de
+  // mano de obra ya fueron confirmados por un humano (RENDIMIENTO_FUENTE.VALIDADO).
+  const rendimientoValidadoBonus = labor.length && labor.every(r => r.rendimientoFuente === 'VALIDADO') ? 5 : 0;
+  // Cobertura de fuentes (Fase 8 requisito 8): que fraccion del COSTO tiene
+  // *algun* rastro de procedencia (proveedor/sourceName identificado, o al
+  // menos un intento de busqueda de precio de mercado registrado) -- mide
+  // trazabilidad, no calidad tecnica de esa evidencia (eso ya lo pesa
+  // "precios" arriba). Puramente presentacional, no entra en `score`.
+  const totalCostForCoverage = rows.reduce((s, r) => s + r.costoRenglon, 0);
+  const coberturaFuentesPct = totalCostForCoverage > 0
+    ? clamp(rows.reduce((s, r) => s + (r.costoRenglon / totalCostForCoverage) * (text(r.source.proveedor || r.source.sourceName) || (Array.isArray(r.row.priceRecord?.references) && r.row.priceRecord.references.length) ? 100 : 0), 0))
+    : clamp(rows.length ? rows.filter(r => text(r.source.proveedor || r.source.sourceName)).length / count * 100 : 0);
   const dimensions = {
     precios: Math.round(pricesDimension(rows, now)),
-    rendimientos: Math.round(clamp(yieldCoverage * 100)),
+    rendimientos: Math.round(clamp(yieldCoverage * 100 + rendimientoValidadoBonus)),
     cantidades: Math.round(clamp(rows.length ? rows.filter(({row}) => num(row.consumo ?? row.cantidad ?? row.cuadrilla) > 0).length / count * 100 : 0)),
     composicion: Math.round(compositionChecks / 5 * 100)
   };
   const score = Math.round(dimensions.precios * .40 + dimensions.rendimientos * .20 + dimensions.cantidades * .20 + dimensions.composicion * .20);
   return { score, level: score >= 85 ? 'ALTA' : score >= 65 ? 'MEDIA' : 'BAJA', dimensions,
-    risks: score >= 85 ? 'BAJOS' : score >= 65 ? 'MEDIOS' : 'ALTOS', pendingValidation };
+    risks: score >= 85 ? 'BAJOS' : score >= 65 ? 'MEDIOS' : 'ALTOS', pendingValidation,
+    // Presentacion re-etiquetada (Fase 8 requisito 8): el mismo puntaje se
+    // reencuadra como "confianza de DATOS" (trazabilidad/evidencia), nunca
+    // como "exactitud del precio final" -- ver Regla 10, la cercania al P.U.
+    // original del catalogo NUNCA participa en ningun puntaje de este modulo.
+    presentation: {
+      etiqueta: 'Confianza de datos (trazabilidad y evidencia) -- no es una medida de exactitud del precio final.',
+      confianzaTecnica: dimensions.composicion,
+      confianzaPrecios: dimensions.precios,
+      confianzaRendimientos: dimensions.rendimientos,
+      coberturaFuentes: Math.round(coberturaFuentesPct)
+    } };
 }
 
 export function validateAPU(apu = {}, options = {}){

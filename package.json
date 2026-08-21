@@ -8,7 +8,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/lib/apuCalc.test.js src/lib/technicalMatch.test.js src/domain/apuSchema.test.js src/domain/apuProfessional.test.js src/domain/priceRecordAdapters.test.js src/domain/apuVersioning.test.js src/lib/apuFlow.test.js api/openaiApuCore.test.mjs test/security.unit.test.mjs test/apuExport.pdf.integration.test.mjs test/apuExport.xlsx.integration.test.mjs test/apuExportV2.integration.test.mjs",
+    "test": "node --test src/lib/apuCalc.test.js src/lib/technicalMatch.test.js src/domain/apuSchema.test.js src/domain/apuProfessional.test.js src/domain/apuReview.test.js src/domain/priceRecordAdapters.test.js src/domain/apuVersioning.test.js src/lib/apuFlow.test.js api/openaiApuCore.test.mjs test/security.unit.test.mjs test/apuExport.pdf.integration.test.mjs test/apuExport.xlsx.integration.test.mjs test/apuExportV2.integration.test.mjs",
     "test:apu": "node --test src/lib/apuCalc.test.js",
     "test:apu-integration": "node --test test/apuExport.pdf.integration.test.mjs test/apuExport.xlsx.integration.test.mjs",
     "test:rules": "firebase emulators:exec --project zoemec-plataforma-ia --only firestore \"node --test test/firestore.rules.test.mjs\"",

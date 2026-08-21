@@ -44,6 +44,7 @@ import { libKey, enrichLibraryMeta, scoreLibraryFile } from './domain/library.js
 import { TechnicalCenter } from './features/technical-center/TechnicalCenter.jsx';
 import { AdminPanel } from './features/admin/AdminPanel.jsx';
 import { ProfessionalApuEditor } from './features/apu/ProfessionalApuEditor.jsx';
+import { RevisionBandeja } from './features/apu/RevisionBandeja.jsx';
 import { parseExcelToCatalog, cleanText, normalizeUnitLabel, parseExcelToAPU, parseRobustConceptCatalog, parseConceptText } from './lib/excelImport.js';
 import {
   defaultCompany, DEMO_MODE, demoCatalog,
@@ -1943,6 +1944,8 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         </div>
       </div>}
     </div>
+
+    <RevisionBandeja apus={apus} user={user} onUpdateApu={saved => { if(!requireProject()) return; setApus([saved, ...apus.filter(x => x.id !== saved.id)]); }} />
 
     {hasApuContent && <>
       {/* A. Encabezado ejecutivo */}

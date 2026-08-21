@@ -3,6 +3,7 @@ import { jsPDF } from 'jspdf';
 import { calcAPUv2 } from './apuCalc.js';
 import { finalizeProfessionalAPU } from '../domain/apuProfessional.js';
 import { apuDataStateLabel } from '../domain/apuSchema.js';
+import { buildReviewRow, REVISION_STATUS_LABEL } from '../domain/apuReview.js';
 import { xcell, fcell, XLS, exportWorkbookExcel, money, num } from './apuExport.js';
 
 const COLORS={labor:'#123F78',materials:'#D56A00',tools:'#2F7D3A',equipment:'#1578B7',safety:'#B5263D',procedure:'#6D2D91',quality:'#D5A900',measure:'#078C88'};
@@ -95,6 +96,39 @@ export function buildProfessionalSummarySheet(apus){
   return {sheet:'RESUMEN',rows,widths:[16,50,10,12,16,18,14,16,14,16,20,12],stickyRowsCount:2};
 }
 
+/* Bandeja de Revision Tecnica en Excel (Fase 8 requisito 9): una fila por
+   concepto con las mismas columnas que la bandeja en pantalla (ver
+   src/domain/apuReview.js#buildReviewRow), para poder revisar/filtrar sin
+   abrir la app. "Confianza tecnica"/"Confianza precios" reusan la
+   confianza re-etiquetada de calculateAPUConfidence (apu.confidence.presentation);
+   "Evidencia mercado" es la cobertura de fuentes cost-weighted (independiente
+   de la calidad tecnica de esa evidencia). Nunca decide "validado" por si
+   sola: el estado que se exporta es el mismo REVISION_STATUS ya derivado o
+   confirmado en la app (deriveRevisionStatus/applyRevisionDecision). */
+export function buildControlRevisionSheet(apus){
+  const list = Array.isArray(apus) ? apus : [apus];
+  const finalized = list.map(raw => finalizeProfessionalAPU(raw));
+  const rows = [[asCell('BANDEJA DE REVISION TECNICA', { ...XLS.title, columnSpan: 10 }), ...Array(9).fill(null)],
+    ['Clave', 'Concepto', 'PU original', 'PU ZOEMEC', 'Diferencia %', 'Confianza técnica', 'Confianza precios', 'Evidencia mercado', 'Rendimiento validado', 'Estado / Observaciones'].map(v => asCell(v, XLS.head))];
+  finalized.forEach(apu => {
+    const r = buildReviewRow(apu);
+    const diffStyle = r.diferenciaPct != null && Math.abs(r.diferenciaPct) > 25 ? { color: '#B54A62', fontWeight: 'bold' } : {};
+    const motivos = (r.motivos || []).join('; ');
+    rows.push([
+      r.clave, r.concept,
+      r.puOriginal != null ? r.puOriginal : asCell('Sin referencia', { color: '#8A6B2E' }),
+      r.puCalculado,
+      r.diferenciaPct != null ? asCell(Number(r.diferenciaPct.toFixed(1)), diffStyle) : asCell('—', { color: '#8A6B2E' }),
+      `${apu.confidence.presentation.confianzaTecnica}%`,
+      `${apu.confidence.presentation.confianzaPrecios}%`,
+      `${r.evidenciaMercado}%`,
+      r.rendimientoValidado ? 'SI' : 'NO',
+      asCell(`${REVISION_STATUS_LABEL[r.estado] || r.estado}${motivos ? ' -- ' + motivos : ''}`, { wrap: true })
+    ]);
+  });
+  return { sheet: 'CONTROL_REVISION', rows, widths: [16, 46, 14, 14, 12, 15, 15, 15, 16, 46], stickyRowsCount: 2 };
+}
+
 /* Hoja agregada del lote completo: una fila POR REFERENCIA REAL encontrada
    (Price Intelligence, ver src/domain/priceIntelligence.js) en cualquier
    concepto -- a diferencia de la seccion "15. FUENTES DE PRECIOS" de cada
@@ -178,7 +212,7 @@ export async function exportAPUExcelV2(apus,options={}){
   const list=Array.isArray(apus)?apus:[apus];
   const priceSheet=buildPriceIntelligenceSheet(list);
   const conceptSheets=disambiguateSheetNames(list.map(buildProfessionalAPUSheet));
-  const sheets=[buildProfessionalSummarySheet(list),...conceptSheets,...(priceSheet?[priceSheet]:[])];
+  const sheets=[buildProfessionalSummarySheet(list),buildControlRevisionSheet(list),...conceptSheets,...(priceSheet?[priceSheet]:[])];
   await exportWorkbookExcel(sheets,options.fileName||'APU-PROFESIONAL-ZOEMEC.xlsx',options.writeXlsxFileImpl||writeXlsxFileBrowser); return sheets;
 }
 

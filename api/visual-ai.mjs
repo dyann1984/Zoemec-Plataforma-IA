@@ -192,19 +192,42 @@ export async function runTakeoffAnalysis({ fileName, mimeType = '', dataBase64, 
   };
 }
 
+/* Mensajes reales observados cuando Firebase Storage no esta disponible en
+   este proyecto (plan Spark sin bucket habilitado -- decision explicita del
+   usuario de RC4: no activar Storage ni introducir facturacion para el
+   concurso) o cuando no hay credenciales de Admin SDK configuradas. Se
+   normalizan a un mensaje unico y claro; cualquier OTRO error de Storage
+   (uno inesperado, no de "no configurado") conserva su texto real, nunca se
+   oculta. */
+function isStorageNotConfiguredError(err){
+  const msg = String(err?.message || '');
+  return /specified bucket does not exist/i.test(msg)
+    || /FIREBASE_SERVICE_ACCOUNT_JSON/i.test(msg)
+    || /GOOGLE_APPLICATION_CREDENTIALS/i.test(msg);
+}
+
+const STORAGE_NOT_CONFIGURED_MESSAGE = 'Firebase Storage no esta habilitado en este entorno (plan Spark, sin bucket). El plano original no se almaceno; el analisis, la revision humana y el APU funcionan igual con la evidencia y el hash SHA-256 del archivo.';
+
 /* Almacenamiento minimo del plano original (RC4, punto aprobado despues del
    informe de Fase 2). Ruta "visual/{uid}/{visualRequestId}/{fileName}":
    coincide EXACTAMENTE con una regla ya vigente en storage.rules
    (match /visual/{uid}/{fileId}/{fileName}), asi que no se toca
    storage.rules ni firestore.rules. Mismo patron ya usado por Biblioteca
-   (getAdminStorage + signed URL de larga duracion). Si el archivo excede
-   MAX_UPLOAD_BYTES no se almacena (el analisis igual se conserva): se
-   documenta la razon en vez de fallar el analisis completo por esto. */
+   (getAdminStorage + signed URL de larga duracion).
+
+   Storage es OPCIONAL (decision explicita, RC4): el hash SHA-256 SIEMPRE se
+   calcula, exista o no un bucket -- es lo unico que permite demostrar despues
+   que archivo produjo un analisis cuando el archivo original no se guarda.
+   Si el archivo excede MAX_UPLOAD_BYTES, o si Storage no esta configurado, o
+   si falla por cualquier otra razon real: nunca se lanza, nunca se finge
+   almacenado, y el analisis (ya calculado y validado) se persiste igual. */
 export async function storeOriginalPlano({ uid, visualRequestId, fileName, mimeType, buffer }){
+  const fileHash = crypto.createHash('sha256').update(buffer).digest('hex');
+
   if(buffer.length > MAX_UPLOAD_BYTES){
     return {
       fileStored: false,
-      storagePath: null, downloadURL: null, fileHash: null,
+      storagePath: null, downloadURL: null, fileHash,
       storageError: `El archivo pesa ${(buffer.length / 1048576).toFixed(1)} MB; supera el maximo de ${(MAX_UPLOAD_BYTES / 1048576).toFixed(0)} MB para almacenar el original. El analisis se conserva; el archivo original no.`
     };
   }
@@ -214,12 +237,10 @@ export async function storeOriginalPlano({ uid, visualRequestId, fileName, mimeT
     const storagePath = `visual/${uid}/${visualRequestId}/${safeName}`;
     await bucket.file(storagePath).save(buffer, { metadata: { contentType: mimeType || 'application/octet-stream' } });
     const [downloadURL] = await bucket.file(storagePath).getSignedUrl({ action: 'read', expires: '01-01-2500' });
-    const fileHash = crypto.createHash('sha256').update(buffer).digest('hex');
     return { fileStored: true, storagePath, downloadURL, fileHash, storageError: '' };
   }catch(err){
-    // Nunca se finge almacenado: si Storage falla, el analisis (ya
-    // calculado y validado) se guarda igual, con el error explicito.
-    return { fileStored: false, storagePath: null, downloadURL: null, fileHash: null, storageError: err.message || 'No se pudo almacenar el archivo original.' };
+    const storageError = isStorageNotConfiguredError(err) ? STORAGE_NOT_CONFIGURED_MESSAGE : (err.message || 'No se pudo almacenar el archivo original.');
+    return { fileStored: false, storagePath: null, downloadURL: null, fileHash, storageError };
   }
 }
 

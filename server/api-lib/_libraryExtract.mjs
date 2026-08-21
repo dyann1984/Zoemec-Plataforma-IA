@@ -10,6 +10,7 @@
    coincidencias de precio. */
 
 import readXlsxFile from 'read-excel-file/node';
+import { ensurePdfEnvPolyfills } from './_pdfEnvPolyfill.mjs';
 
 export const MAX_CONTENT_TEXT_CHARS = 200000; // limite practico para no inflar el documento de Firestore (1 MiB por doc)
 export const MAX_INSUMOS_PER_DOC = 500;
@@ -149,6 +150,7 @@ export async function extractCsvInsumos(buffer){
    / Takeoff (api/visual-ai.mjs) para aplicar el tope de MAX_PAGES_PER_ANALYSIS
    antes de gastar una llamada a OpenAI. */
 export async function countPdfPages(buffer){
+  ensurePdfEnvPolyfills();
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const data = new Uint8Array(buffer);
   const task = getDocument({ data, useWorkerFetch: false, isEvalSupported: false, disableFontFace: true });
@@ -157,6 +159,7 @@ export async function countPdfPages(buffer){
 }
 
 export async function extractPdfText(buffer){
+  ensurePdfEnvPolyfills();
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const data = new Uint8Array(buffer);
   let pdf;

@@ -73,6 +73,18 @@ test('preMultiplySelf: aplica other ANTES que this (orden invertido respecto a m
   assert.ok(close(viaPre.a, viaManual.a) && close(viaPre.e, viaManual.e));
 });
 
+test('ensurePdfEnvPolyfills: expone globalThis.pdfjsWorker.WorkerMessageHandler (evita el import() dinamico del worker que Vercel no empaqueta)', () => {
+  const had = globalThis.pdfjsWorker;
+  delete globalThis.pdfjsWorker;
+  try{
+    ensurePdfEnvPolyfills();
+    assert.ok(globalThis.pdfjsWorker, 'debe quedar expuesto un pdfjsWorker global');
+    assert.equal(typeof globalThis.pdfjsWorker.WorkerMessageHandler, 'function', 'WorkerMessageHandler debe ser el export real de pdf.worker.mjs, importado de forma estatica');
+  }finally{
+    if(had) globalThis.pdfjsWorker = had; else delete globalThis.pdfjsWorker;
+  }
+});
+
 test('ensurePdfEnvPolyfills: instala globalThis.DOMMatrix solo si no existe', () => {
   const had = globalThis.DOMMatrix;
   delete globalThis.DOMMatrix;

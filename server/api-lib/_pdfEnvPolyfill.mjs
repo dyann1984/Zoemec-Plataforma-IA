@@ -96,9 +96,30 @@ class MinimalDOMMatrix {
   }
 }
 
+/* Segundo hallazgo real de la validacion productiva (post-fix de DOMMatrix):
+   pdfjs-dist en Node intenta cargar su worker con un import() DINAMICO
+   ("./pdf.worker.mjs", resuelto en tiempo de ejecucion) tanto para un Worker
+   real como para su propio fallback "fake worker" quesin worker real corre
+   el mismo codigo en el hilo principal. Un import() dinamico con ruta no
+   literal no es rastreable por el empaquetador de funciones de Vercel
+   (@vercel/nft), asi que el archivo del worker no queda incluido en el
+   deploy, y ambos caminos (worker real y fake worker) fallan con
+   'Setting up fake worker failed: Cannot find module .../pdf.worker.mjs'.
+
+   pdfjs-dist ya trae una salida oficial para este caso exacto (documentada
+   para bundlers): si `globalThis.pdfjsWorker.WorkerMessageHandler` existe,
+   se usa directo y NUNCA se intenta el import() dinamico. Aqui se importa
+   ese modulo de forma ESTATICA (literal, sin variables) -- eso si lo
+   detecta y empaqueta el tracer de Vercel -- y se expone en el global antes
+   de que getDocument() se invoque. */
+import { WorkerMessageHandler } from 'pdfjs-dist/legacy/build/pdf.worker.mjs';
+
 export function ensurePdfEnvPolyfills(){
   if(!globalThis.DOMMatrix){
     globalThis.DOMMatrix = MinimalDOMMatrix;
+  }
+  if(!globalThis.pdfjsWorker){
+    globalThis.pdfjsWorker = { WorkerMessageHandler };
   }
 }
 

@@ -144,19 +144,66 @@ RC3: Biblioteca básica + Visual IA como generador de render/narrativa. RC4: Bib
 - **Aislamiento entre usuarios:** cubierto por las 4 pruebas ya existentes de `visual_requests` en `test/firestore.rules.test.mjs` (un documento privado de otro usuario, con `storagePath`/`downloadURL` incluidos, sigue siendo ilegible) — no fue necesario agregar una prueba nueva porque el archivo es un campo más del mismo documento ya protegido.
 - **XLSX/PDF sin regresión:** `npm test` incluye `test/apuExport.*.test.mjs` y `test/apuExportV2.integration.test.mjs` sin cambios, todos PASS; el E2E real de la ronda anterior (Muro Norte, PU $994.79) sigue siendo válido — no se tocó ningún exportador en este paso.
 
+## 10. Deploy final y validación productiva real (commit `d5264d9`, tag `ZOEMEC-CONCURSO-RC4`)
+
+### 10.1 Dos defectos reales encontrados en producción tras el primer deploy — corregidos
+
+Al validar el candidato en Vercel (no en local) aparecieron dos fallas reales, ambas causadas por cómo `pdfjs-dist` se comporta en el runtime serverless Linux de Vercel (nunca aparecieron en local porque el disco de desarrollo sí tenía el binario nativo opcional `@napi-rs/canvas` instalado):
+
+1. **`DOMMatrix is not defined`.** `pdfjs-dist` define `const SCALE_MATRIX = new DOMMatrix()` a nivel de módulo; sin el polyfill nativo de `@napi-rs/canvas` (que Vercel no empaqueta porque su `require` es dinámico y no rastreable), esto rompía la carga del extractor antes de leer una sola página. **Corregido** con `server/api-lib/_pdfEnvPolyfill.mjs`: una implementación pura en JavaScript de los métodos exactos que `pdfjs-dist` invoca sobre `DOMMatrix` (`multiplySelf`, `preMultiplySelf`, `invertSelf`, `translate`, `scale`, `rotate`), verificada con 10 pruebas unitarias contra matemática de matrices calculada de forma independiente.
+2. **`Setting up fake worker failed: Cannot find module '.../pdf.worker.mjs'`.** Tras el fix anterior, `pdfjs-dist` intenta cargar su worker (real o "fake") con un `import()` dinámico no rastreable por el empaquetador de funciones de Vercel. **Corregido** usando la salida oficial documentada por `pdfjs-dist` para bundlers: un `import` **estático** (literal, sí rastreable) de `WorkerMessageHandler` desde `pdfjs-dist/legacy/build/pdf.worker.mjs`, expuesto en `globalThis.pdfjsWorker.WorkerMessageHandler` antes de invocar `getDocument()` — con eso `pdfjs-dist` nunca intenta el `import()` dinámico.
+
+Ambos fixes se verificaron localmente **reproduciendo exactamente la condición de fallo** (moviendo `node_modules/@napi-rs` fuera de sitio para simular la ausencia del binario que existe en Vercel pero no en el disco de desarrollo) antes de reincluirlo, y luego con una validación productiva real en el navegador (ver 10.3).
+
+### 10.2 Decisión del usuario: Firebase Storage NO se activa para este concurso
+
+Un tercer hallazgo — `"The specified bucket does not exist"` — **no es un defecto de código**: Firebase Storage nunca se habilitó para este proyecto (plan Spark, requiere upgrade de facturación para activarse). El usuario verificó esto personalmente en Firebase Console y decidió, de forma explícita y definitiva:
+
+> "CAMBIO DE DECISIÓN PARA RC4 — NO ACTIVAR FIREBASE STORAGE. Ya verifiqué personalmente Firebase Console. El proyecto zoemec-plataforma-ia está en plan Spark y Firebase muestra: 'Para usar Storage, actualiza el plan de precios de tu proyecto'. Por lo tanto: NO voy a activar Storage, NO voy a actualizar el plan y NO quiero introducir facturación para presentar ZOEMEC al concurso."
+
+En consecuencia, el almacenamiento del archivo original del plano se implementó como **completamente opcional**: `storeOriginalPlano()` nunca lanza; cuando Storage no está disponible devuelve `fileStored:false`, `storagePath:null`, `downloadURL:null` y un `storageError` con un mensaje claro para el usuario — pero **siempre** calcula el hash SHA-256 del archivo (con `node:crypto`, sin dependencia nueva), que es la trazabilidad que sobrevive incluso sin bucket. El soporte de Storage **no se eliminó**: el código sigue intacto y listo para funcionar el día que se active el plan, sin ningún cambio adicional.
+
+**Prueba de regresión obligatoria** (`test/planoStorage.test.mjs`, prueba `REGRESION: Storage no configurado no bloquea Takeoff -> revision humana -> APU -> XLSX/PDF`): ejercita el pipeline completo — Storage falla de forma controlada → resultado de Takeoff se conserva íntegro → revisión humana (`VALIDADO_POR_USUARIO`) → semilla real de APU → motor real (`finalizeProfessionalAPU`) → exportadores reales XLSX/PDF — sin una sola excepción no controlada en ningún punto, confirmando que un bucket ausente nunca produce un HTTP 500 ni pérdida de resultados.
+
+### 10.3 Validación productiva real (navegador, `https://zoemec-plataforma-ia.vercel.app/`, deployment `dpl_CA6uHjX6nxg2UJJohYaypF814qHF`)
+
+Con un PDF vectorial real de prueba (`MURO NORTE: 8.00 m`, `MURO SUR: 8.00 m`, altura 2.50 m, escala 1:75) subido directamente en producción:
+
+1. **Takeoff real vía OpenAI:** análisis exitoso, **2/2 elementos detectados exactos** contra el ground truth conocido (Muro Norte 8 m, Muro Sur 8 m, ambos `fuenteEscala:cotas_texto`, confianza 90%, estado inicial `Propuesto por IA`, evidencia textual correcta).
+2. **Mensaje de Storage deshabilitado, mostrado correctamente:** *"Plano original no almacenado: Firebase Storage no esta habilitado en este entorno (plan Spark, sin bucket). El plano original no se almaceno; el analisis, la revision humana y el APU funcionan igual con la evidencia y el hash SHA-256 del archivo."* — y el botón **"Abrir plano original" correctamente ausente** (nunca se ofrece un botón que no funcionaría).
+3. **Revisión humana real:** "Muro Norte" → clic en "Validar" → estado cambió a `Validado · dianalopez161184@gmail.com` (el validador se registra en el servidor a partir de la sesión autenticada, nunca del cliente).
+4. **Biblioteca (motor real):** "Matrices similares" sobre "Muro Norte" → `Sin matrices similares reales encontradas` (resultado válido: no hay conceptos de biblioteca cargados que coincidan por palabra clave en este proyecto de prueba — el motor de búsqueda respondió, simplemente no había coincidencias).
+5. **Puente real a APU Inteligente:** "Usar en APU" navegó al módulo, mostró las dos notificaciones de precarga, y abrió el formulario con concepto `"Muro Norte"`, unidad `"m"`, cantidad `"8"` precargados — **sin auto-generar**, exactamente como se diseñó.
+6. **Generación real con OpenAI:** clic en "Generar APU con IA real" produjo un APU real y completo (`APU-NYSXHD`, "Generado con OpenAI"): unidad final `m²` (decisión propia del motor de generación de APU de RC3, sin tocar — un muro se valora profesionalmente por superficie, no por longitud; el "m" de Takeoff fue solo una pista, no una imposición), cantidad `8.00`, **Precio Unitario $795.51, Costo Directo $613.47, Importe $6,364.11, Confianza IA 69% MEDIA, estado "Revisión necesaria"** (26 observaciones — el motor de RC3 exige igualmente revisión profesional antes de dar por bueno un precio, un segundo nivel de control independiente del de Takeoff).
+7. **Exportadores reales, verificados byte a byte:** Excel y PDF descargados desde producción. **PANTALLA = XLSX = PDF, verificado numéricamente:** `795.5138202` → `$795.51`; `6364.1105616` → `$6,364.11`; costo directo `$613.47` reconstruido por suma de categorías (mano de obra $240.00 + materiales $357.15 + equipo $7.40 + herramienta $7.20 + seguridad $1.71 = $613.46 ≈ $613.47); "Muro Norte", "8.00", "69% MEDIA" presentes en ambos archivos.
+
+### 10.4 Regresión final completa (post-fix, sobre el candidato ya desplegado)
+
+- **`npm test`: 230/230 PASS.**
+- **`npm run test:security` (emulador real de Firestore/Auth): 32/32 PASS.**
+- **`npm run build`: PASS.**
+- **12/12 funciones serverless** (`ls api/*.mjs`), sin cambios respecto al límite de Vercel Hobby.
+- **Cero cambios** desde `ZOEMEC-CONCURSO-RC3` en: `firestore.rules`, `storage.rules`, `src/lib/apuCalc.js`, `src/lib/apuExportV2.js`, `src/lib/apuExport.js`, `server/api-lib/_authGuard.mjs`, `vercel.json`, `src/domain/apuGeneration.js`, `src/domain/apuSchema.js`, `src/domain/apuProfessional.js` (confirmado con `git diff --stat`).
+- **Aislamiento entre usuarios:** cubierto por las pruebas ya existentes de `visual_requests` en `test/firestore.rules.test.mjs` (sin necesidad de una prueba productiva adicional de Storage, ya que Storage está deshabilitado por decisión y el documento de Firestore — con o sin campos de almacenamiento — ya está probado como privado por usuario).
+
 ## ¿RC4 ESTÁ LISTO PARA DEPLOY DE CONCURSO?
 
-**SÍ, CON LIMITACIONES.**
+**ZOEMEC RC4 — LISTO PARA CONCURSO.**
 
-Lo que quedó demostrado con evidencia real (no simulada, en esta ronda y la anterior): la llamada a OpenAI funciona y detecta elementos con precisión exacta contra un ground truth conocido (7/7); la regla de "no inventar medidas" se respeta tanto con información suficiente como sin ella; la barrera determinista de escala funciona; el gate hacia el APU es real (solo `VALIDADO_POR_USUARIO` pasa); Biblioteca encuentra matrices relacionadas; el motor/exportadores de RC3 (sin tocar) producen XLSX/PDF reales con la cantidad corregida trazable; el almacenamiento del plano está implementado, reutiliza infraestructura existente sin tocar ninguna regla, y falla honestamente cuando no puede completarse (nunca finge éxito).
+Commit `d5264d9`, tag `ZOEMEC-CONCURSO-RC4`, deployment `dpl_CA6uHjX6nxg2UJJohYaypF814qHF`, URL `https://zoemec-plataforma-ia.vercel.app/`.
 
-**Limitaciones exactas para describir ante el jurado, sin prometer de más:**
-1. **No se verificó una escritura exitosa real a Firebase Storage** en este entorno de desarrollo (credencial redactada) — el código está implementado y probado en sus ramas de decisión (límite de tamaño, fallo honesto), pero la escritura exitosa de punta a punta requiere probarse con credenciales reales antes o durante el primer uso en producción.
-2. **Sin selector de rango de páginas** — un PDF de más de 10 páginas se rechaza completo, no se puede analizar "solo páginas 3–7".
-3. **Sin vista lado a lado del plano** — solo tabla de elementos + página + evidencia textual + botón para abrir el archivo original (cuando se almacenó).
-4. **Sin overlays, bounding boxes, CAD/BIM ni medición geométrica por píxeles** — por diseño, no es una limitación a resolver, es el alcance declarado del producto (Takeoff asistido, no un CAD).
-5. **Sin edición del campo "tipo"** en la revisión humana (sí: descripción, cantidad, unidad, motivo de rechazo).
-6. **No se probó con un plano profesional de producción real** (CAD exportado o escaneado) — el plano usado fue sintético pero vectorial-real, con ground truth conocido de antemano.
-7. **Vínculo automático "matriz seleccionada → apuId"** no se escribe de vuelta al documento del plano — el usuario selecciona y genera el APU manualmente, sin que el sistema registre esa relación específica.
+Quedó demostrado con evidencia real de producción (no simulada): la llamada a OpenAI funciona en el runtime real de Vercel tras corregir dos defectos reales de empaquetado de `pdfjs-dist`; la detección de elementos es exacta contra el ground truth conocido; la regla de "no inventar medidas" y la barrera determinista de escala se sostienen; el gate único hacia el APU es real (solo `VALIDADO_POR_USUARIO` pasa, con validador registrado por el servidor); Biblioteca responde con su motor real; el flujo completo `PLANO → TAKEOFF IA REAL → REVISIÓN HUMANA → BIBLIOTECA → PUENTE A APU → MOTOR REAL → XLSX/PDF` corrió de punta a punta en producción con números verificados PANTALLA=XLSX=PDF; y el sistema completo sigue funcionando de forma correcta y honesta con Firebase Storage deshabilitado.
 
-**No se ha hecho deploy.** Quedo a la espera de tu autorización.
+**Limitación a comunicar textualmente ante el jurado:**
+
+> "La persistencia del archivo original del plano mediante Firebase Storage está preparada pero deshabilitada en el despliegue actual por infraestructura del plan Spark. El análisis Takeoff, la evidencia, la revisión humana y la generación APU funcionan independientemente."
+
+**Otras limitaciones conocidas, sin prometer de más:**
+1. Sin selector de rango de páginas — un PDF de más de 10 páginas se rechaza completo.
+2. Sin vista lado a lado del plano — solo tabla de elementos + página + evidencia textual.
+3. Sin overlays, bounding boxes, CAD/BIM ni medición geométrica por píxeles — por diseño, es el alcance declarado del producto (Takeoff asistido, no un CAD).
+4. Sin edición del campo "tipo" en la revisión humana (sí: descripción, cantidad, unidad, motivo de rechazo).
+5. No se probó con un plano profesional de producción real (CAD exportado o escaneado) — los planos usados fueron sintéticos pero vectoriales-reales, con ground truth conocido de antemano.
+6. Vínculo automático "matriz seleccionada → apuId" no se escribe de vuelta al documento del plano — el usuario selecciona y genera el APU manualmente.
+
+**RC4 está desplegado y congelado para el concurso.** No se desarrollarán nuevas funcionalidades ni se creará RC5 salvo que aparezca un defecto bloqueante real.

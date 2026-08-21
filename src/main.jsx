@@ -41,6 +41,8 @@ import {
 } from './domain/apuGeneration.js';
 import { enrichAPUWithMarketPrices } from './domain/priceIntelligence.js';
 import { libKey, enrichLibraryMeta, scoreLibraryFile } from './domain/library.js';
+import { INSUMO_STATES, applyInsumoReview, extractValidatedCatalogRows } from './domain/libraryReview.js';
+import { toApuSeed } from './domain/planoReview.js';
 import { TechnicalCenter } from './features/technical-center/TechnicalCenter.jsx';
 import { AdminPanel } from './features/admin/AdminPanel.jsx';
 import { ProfessionalApuEditor } from './features/apu/ProfessionalApuEditor.jsx';
@@ -573,9 +575,9 @@ function App(){
     {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} />}
     {module === 'presupuestos' && <Budgets company={companyView} budgets={budgets} setBudgets={setBudgets} items={budgetItems} setItems={setBudgetItems} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} />}
     {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={(pid)=>{ setRawApus(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgets(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawCatalog(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgetItems(l=>l.filter(x=>(x?.projectId??null)!==pid)); }} />}
-    {module === 'biblioteca' && <Library user={user} />}
+    {module === 'biblioteca' && <Library user={user} catalog={catalog} setCatalog={setCatalog} setModule={setModule} />}
     {module === 'tecnico' && <TechnicalOffice company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} needsProject={needsProject} onCreateProject={()=>setModule('cartera')} />}
-    {module === 'visual' && <VisualAI user={user} />}
+    {module === 'visual' && <VisualAI user={user} setModule={setModule} />}
     {module === 'comunidad' && <Community />}
     {module === 'planes' && <PlansAccess user={user} />}
     {module === 'reportes' && <Reports clients={clients} apus={apus} budgets={budgets} />}
@@ -1307,6 +1309,27 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   const [excelInfo,setExcelInfo]=useState(null);
   const [aiStatus,setAiStatus]=useState('');
   const [conceptBatch,setConceptBatch]=useState(null);
+  /* RC4 Fase 2 (Planos IA / Takeoff): recoge la semilla de concepto dejada por
+     PlanoTakeoff (toApuSeed de un elemento VALIDADO_POR_USUARIO) y precarga el
+     panel "Generar con IA". No dispara la generacion por su cuenta: el
+     usuario sigue teniendo que revisar y pulsar "Generar APU con IA real" el
+     mismo, igual que con cualquier otro concepto pegado a mano. */
+  useEffect(()=>{
+    let raw;
+    try{ raw = localStorage.getItem('zoemec-pending-plano-seed'); }catch{ raw = null; }
+    if(!raw) return;
+    try{ localStorage.removeItem('zoemec-pending-plano-seed'); }catch{}
+    try{
+      const seed = JSON.parse(raw);
+      if(seed?.concept){
+        setConcept(seed.concept);
+        setAiUnit(seed.unit || '');
+        setAiQty(seed.qty != null ? String(seed.qty) : '');
+        setAiOpen(true);
+        window.zoemecNotify?.('Concepto precargado desde Takeoff de planos (elemento validado). Revisa y pulsa "Generar con IA" cuando estes listo.', 'info');
+      }
+    }catch{}
+  },[]);
   const [batchAPUs,setBatchAPUs]=useState([]);
   const [batchBusy,setBatchBusy]=useState(false);
   // Revision de duplicados del catalogo Excel (seccion 3/12 del sprint): en vez
@@ -2626,8 +2649,11 @@ function GoogleDrivePanel({user, onImported}){
   const importOne=async(item)=>{
     setFileStatus(s=>({...s,[item.id]:'importando'}));
     try{
-      await apiPost('/api/google-drive', { action:'import', fileId:item.id });
-      setFileStatus(s=>({...s,[item.id]:'listo'}));
+      const data=await apiPost('/api/google-drive', { action:'import', fileId:item.id });
+      // ZIP y archivos >15MB regresan refOnly:true (RC4): se registran como
+      // REFERENCIA EXTERNA sin descargarse, nunca como "listo" (que implica
+      // contenido ya copiado/indexado).
+      setFileStatus(s=>({...s,[item.id]: data.refOnly ? 'referencia' : 'listo'}));
       onImported?.();
     }catch(err){
       setFileStatus(s=>({...s,[item.id]:'error'}));
@@ -2647,7 +2673,7 @@ function GoogleDrivePanel({user, onImported}){
   const folders=(items||[]).filter(it=>it.isFolder);
   const files=(items||[]).filter(it=>!it.isFolder);
   const doneCount=Object.values(fileStatus).filter(s=>s==='listo').length;
-  const statusLabel={ importando:'Importando', listo:'Listo', error:'Error' };
+  const statusLabel={ importando:'Importando', listo:'Listo', referencia:'Referencia externa', error:'Error' };
 
   return <div className="panel lib-gdrive">
     <div className="admin-panel-head"><h2>Google Drive</h2><button className="soft" onClick={()=>load(path.length?path[path.length-1].id:null)}>Actualizar</button></div>
@@ -2752,7 +2778,7 @@ const LIBRARY_DEMO_SEED = [
   { name:'Rendimientos de mano de obra (demo).xlsx', cat:'Mano de obra', family:'Referencia', size:'0.80 MB' }
 ];
 
-function Library({user}){
+function Library({user, catalog, setCatalog, setModule}){
   const fileInputRef=useRef(null);
   const [files,setFiles]=useLocalState('zoemec-biblioteca',[],user?.uid);
   const [uploading,setUploading]=useState(false);
@@ -2795,6 +2821,12 @@ function Library({user}){
             status:data.status || 'Subido e indexado', uses:Number(data.uses || 0),
             downloadURL:data.downloadURL || '', storagePath:data.storagePath || '',
             ownerUid:data.ownerUid, visibility:data.visibility, indexed:Boolean(data.indexed),
+            // RC4 (Biblioteca real): referencia externa, ruta de origen y
+            // resultado de extraccion/revision humana. Sin estos campos la
+            // ficha tecnica no puede mostrar insumos ni permitir validarlos.
+            refOnly:Boolean(data.refOnly), driveParentPath:data.driveParentPath || [],
+            driveWebViewLink:data.driveWebViewLink || '', contentInsumos:data.contentInsumos || [],
+            insumosReview:data.insumosReview || [], extraction:data.extraction || null,
             docId:d.id
           });
         });
@@ -2882,6 +2914,78 @@ function Library({user}){
       alert(`Se quito de tu lista, pero no se pudo borrar de la nube: ${err?.message || 'revisa permisos.'}`);
     }
   };
+  /* RC4 -- Biblioteca real: extraccion, busqueda por contenido, matrices
+     similares y revision humana. Todo pasa por /api/upload-library (mismo
+     endpoint, acciones nuevas) para no sumar funciones serverless. */
+  const [busyAction,setBusyAction]=useState('');
+  const [similarResults,setSimilarResults]=useState(null);
+  const [contentSearch,setContentSearch]=useState(null);
+  const patchFileByDocId=(docId,patch)=>{
+    setFiles(prev=>prev.map(f=>f.docId===docId?{...f,...patch}:f));
+    setSelected(prev=>prev && prev.docId===docId ? {...prev,...patch} : prev);
+  };
+  const handleExtractInsumos=async(f)=>{
+    if(!f?.docId){ window.zoemecNotify?.('Este archivo aun no esta sincronizado con la nube.','error'); return; }
+    if(f.refOnly){ window.zoemecNotify?.('Este documento es una referencia externa: no se descargo su contenido, no se puede extraer.','error'); return; }
+    setBusyAction('extract:'+f.docId);
+    try{
+      const data=await apiPost('/api/upload-library', { action:'extractInsumos', docId:f.docId });
+      patchFileByDocId(f.docId, { contentInsumos:data.contentInsumos||[], insumosReview:data.insumosReview||[], indexed:data.extraction?.status==='done' });
+      window.zoemecNotify?.(data.contentInsumos?.length ? `Se extrajeron ${data.contentInsumos.length} insumo(s) propuestos. Revisalos antes de usarlos en un APU.` : `No se detectaron insumos extraibles (${data.extraction?.error || 'formato no soportado'}).`, data.contentInsumos?.length ? 'info' : 'error');
+    }catch(err){
+      window.zoemecNotify?.(err.message || 'No se pudo extraer el contenido.', 'error');
+    }finally{ setBusyAction(''); }
+  };
+  /* Revision humana (Fase 3/5): SOLO cambia el estado de un insumo puntual.
+     Nunca decide precios ni toca el catalogo por si sola. */
+  const handleReviewInsumo=async(f,index,state)=>{
+    if(!f?.docId) return;
+    setBusyAction(`review:${f.docId}:${index}`);
+    try{
+      const data=await apiPost('/api/upload-library', { action:'confirmInsumos', docId:f.docId, decisions:[{index,state}] });
+      patchFileByDocId(f.docId, { insumosReview:data.insumosReview||[] });
+    }catch(err){
+      window.zoemecNotify?.(err.message || 'No se pudo actualizar la revision del insumo.', 'error');
+    }finally{ setBusyAction(''); }
+  };
+  /* Puente Biblioteca -> APU (regla critica): SOLO los insumos en estado
+     VALIDADO (extractValidatedCatalogRows los filtra) se fusionan con el
+     catalogo real que ya consume matchPrice()/domain/apuGeneration.js -- el
+     mismo mecanismo que hoy usa el Excel de precios importado en Oficina
+     Tecnica. Ningun motor nuevo, ningun insumo PROPUESTO/RECHAZADO llega
+     aqui jamas. */
+  const handleUseValidatedInApu=(f)=>{
+    const rows=extractValidatedCatalogRows(f);
+    if(!rows.length){
+      window.zoemecNotify?.('Aun no hay insumos VALIDADOS en este documento. Revisalos y valida al menos uno antes de usarlos en un APU.', 'error');
+      return;
+    }
+    const existingDesc=new Set((catalog||[]).map(c=>c.desc));
+    const additions=rows.filter(r=>!existingDesc.has(r.desc)).map(({traceability,...row})=>row);
+    setCatalog?.([...(catalog||[]), ...additions]);
+    window.zoemecNotify?.(`${additions.length} insumo(s) validado(s) de "${f.name}" se agregaron a tu catalogo de precios. Generando APU con esta referencia...`, 'info');
+    setModule?.('apu');
+  };
+  const handleSimilarMatrices=async(f)=>{
+    if(!f?.docId){ window.zoemecNotify?.('Este archivo aun no esta sincronizado con la nube.','error'); return; }
+    setBusyAction('similar:'+f.docId);
+    try{
+      const data=await apiPost('/api/upload-library', { action:'similarMatrices', docId:f.docId });
+      setSimilarResults({ forDoc:f.name, results:data.results||[] });
+    }catch(err){
+      window.zoemecNotify?.(err.message || 'No se pudo buscar matrices similares.', 'error');
+    }finally{ setBusyAction(''); }
+  };
+  const handleContentSearch=async()=>{
+    if(!q.trim()){ setContentSearch(null); return; }
+    setBusyAction('search');
+    try{
+      const data=await apiPost('/api/upload-library', { action:'search', query:q });
+      setContentSearch({ query:q, results:data.results||[], method:data.method });
+    }catch(err){
+      window.zoemecNotify?.(err.message || 'No se pudo completar la busqueda por contenido.', 'error');
+    }finally{ setBusyAction(''); }
+  };
   const types=['Todos','Costos','Matrices APU','Mano de obra','Normas','Formatos','Academia','Documentos'];
   const normalizedFiles=files.map((f,idx)=>({...enrichLibraryMeta(f, classify),__idx:idx}));
   const visible=normalizedFiles
@@ -2927,8 +3031,16 @@ function Library({user}){
     <OneDrivePanel user={user} onImported={()=>setSyncKey(k=>k+1)}/>
     <div className="library-dashboard"><div className="lib-stat"><small>Documentos</small><b>{files.length}</b><span>{totalMb.toFixed(2)} MB cargados</span></div><div className="lib-stat"><small>Categorias activas</small><b>{counts.filter(x=>x[1]>0).length}</b><span>{type === 'Todos' ? 'Vista global' : type}</span></div><div className="lib-stat"><small>Seleccionados</small><b>{batch.length}</b><span>Lote visible para acciones IA</span></div></div>
     <div className="lib-console panel">
-      <div className="lib-searchbar"><input className="search" placeholder="Buscar por concepto, insumo, familia, archivo o fuente..." value={q} onChange={e=>{setQ(e.target.value);setPage(1)}}/><button onClick={()=>alert('Busqueda IA: usa el indice documental para encontrar matrices, insumos y referencias compatibles con tu concepto.')}>Buscar con IA</button></div>
-      <div className="lib-suggestions">{suggestions.map(s=><button key={s} onClick={()=>{setQ(s);setPage(1)}}>{s}</button>)}</div>
+      <div className="lib-searchbar"><input className="search" placeholder="Buscar por concepto, insumo, familia, archivo o fuente..." value={q} onChange={e=>{setQ(e.target.value);setPage(1);setContentSearch(null)}}/><button disabled={busyAction==='search'} onClick={handleContentSearch}>{busyAction==='search'?'Buscando...':'Buscar por contenido'}</button></div>
+      <div className="lib-suggestions">{suggestions.map(s=><button key={s} onClick={()=>{setQ(s);setPage(1);setContentSearch(null)}}>{s}</button>)}</div>
+      {contentSearch && <div className="panel lib-content-search">
+        <div className="admin-panel-head"><h2>Busqueda por contenido: "{contentSearch.query}"</h2><small className="hint">Keyword/heuristica sobre nombre, categoria e insumos extraidos -- no es busqueda semantica ni IA.</small></div>
+        {contentSearch.results.length ? <div className="od-file-list">{contentSearch.results.map(r=><div className="od-file-row" key={r.id}>
+            <div><b>{r.name}</b><small>{r.cat} · {r.family || 'General'} · {r.status}{r.driveParentPath?.length?` · ${r.driveParentPath.join(' / ')}`:''}</small></div>
+            <small>score {r.score} · coincide: {r.matchedTerms.join(', ') || '—'}{r.matchedInsumos.length?` · ${r.matchedInsumos.length} insumo(s)`:''}</small>
+            <button className="soft" onClick={()=>setSelected(files.find(f=>f.docId===r.id))}>Ver ficha</button>
+          </div>)}</div> : <p className="muted">Sin coincidencias reales de contenido para esta busqueda.</p>}
+      </div>}
       <div className="lib-toolbar pro"><div className="lib-tabs">{types.map(t=><button key={t} className={type===t?'active':''} onClick={()=>setFilterType(t)}>{t}</button>)}</div><div className="seg"><button className={view==='tabla'?'active':''} onClick={()=>setView('tabla')}>Tabla</button><button className={view==='tablero'?'active':''} onClick={()=>setView('tablero')}>Tarjetas</button></div></div>
       <div className="lib-bulkbar"><b>{visible.length}</b><span>documentos encontrados</span><em>Pagina {safePage} de {pages}</em><label className="soft file-soft">Subida masiva<input type="file" multiple hidden onChange={e=>add(e.target.files)} disabled={uploading}/></label><button className="soft" onClick={indexVisible}>Indexar lote visible</button></div>
       <div className="lib-workbench">
@@ -2937,7 +3049,42 @@ function Library({user}){
           {pageItems.length ? pageItems.map((f)=>{ const i=f.__idx ?? files.indexOf(f); const cat=f.cat||classify(f.name); const isActive=active?.name===f.name && active?.when===f.when; return <div className={'lib-file '+(isActive?'active':'')} key={i} onClick={()=>setSelected(f)}><span className="lib-ext">{f.ext||'DOC'}</span><div className="lib-meta"><b>{f.name}</b><small>{cat} - {f.family || 'General'} - {f.size} - {f.when}</small><em>{(f.tags||[]).length ? (f.tags||[]).slice(0,5).join(' · ') : cat==='Matrices APU'?'Puede alimentar APUs':cat==='Mano de obra'?'Rendimientos y cuadrillas':cat==='Costos'?'Precios y catalogos':'Consulta tecnica'}</em></div><div className="lib-actions"><button className="soft" onClick={(e)=>{e.stopPropagation(); f.downloadURL ? window.open(f.downloadURL,'_blank') : setSelected(f)}}>{f.downloadURL?'Abrir':'Ver'}</button><button className="row-del" onClick={(e)=>{e.stopPropagation();del(i)}}>x</button></div></div>}) : (files.length===0 ? <EmptyState icon="biblioteca" title="Tu Workspace documental está vacío" text="Sube tu primera base técnica para que ZOE pueda consultarla al generar APUs." actionLabel="Subir lote" onAction={()=>fileInputRef.current?.click()}/> : <div className="lib-empty">No hay documentos con ese filtro. Sube archivos o cambia la busqueda.</div>)}
           {visible.length > pageSize && <div className="lib-pager"><button className="soft" disabled={safePage<=1} onClick={()=>setPage(safePage-1)}>Anterior</button><span>{(safePage-1)*pageSize+1}-{Math.min(safePage*pageSize,visible.length)} de {visible.length}</span><button className="soft" disabled={safePage>=pages} onClick={()=>setPage(safePage+1)}>Siguiente</button></div>}
         </div>
-        <aside className="lib-preview pro"><small>Ficha tecnica</small><h2>{active?.name || 'Sin archivo seleccionado'}</h2><p>{active ? (active.cat || classify(active.name))+' - '+(active.family || 'General')+' - '+(active.ext || 'DOC')+' - '+active.size : 'Sube documentos para crear una base consultable.'}</p>{active?.tags?.length ? <div className="lib-tags-mini">{active.tags.map(t=><span key={t}>{t}</span>)}</div> : null}<div className="lib-ai-card"><b>Acciones IA</b><button onClick={()=>alert('Usara este archivo como fuente para sugerir materiales, MO, equipo y rendimientos.')}>Usar para generar APU</button><button onClick={()=>alert('Comparara nombre, categoria y familia tecnica para sugerir matrices compatibles.')}>Buscar matrices similares</button><button onClick={()=>alert('Extraera descripciones, unidades, precios y rendimientos a una tabla auditable cuando el extractor de contenido este conectado.')}>Extraer insumos</button><button onClick={indexVisible}>Crear indice</button></div><div className="lib-trace"><span>Estado</span><b>{active?.status || 'Pendiente'}</b><span>Permiso</span><b>{user?.isAdmin?'Administrador':'Plan Profesional'}</b><span>Confianza</span><b>{active ? `${active.confidence || 50}%` : 'Sin fuente'}</b></div></aside>
+        <aside className="lib-preview pro">
+          <small>Ficha tecnica</small><h2>{active?.name || 'Sin archivo seleccionado'}</h2>
+          <p>{active ? (active.cat || classify(active.name))+' - '+(active.family || 'General')+' - '+(active.ext || 'DOC')+' - '+active.size : 'Sube documentos para crear una base consultable.'}</p>
+          {active?.refOnly && <p className="muted"><b>REFERENCIA EXTERNA:</b> archivo grande o ZIP registrado por metadata, sin descargar su contenido. No se puede extraer ni indexar; sigue disponible como fuente de referencia.{active.driveWebViewLink && <> <a href={active.driveWebViewLink} target="_blank" rel="noreferrer">Abrir en Drive</a></>}</p>}
+          {active?.driveParentPath?.length ? <p className="muted">Ruta de origen: {active.driveParentPath.join(' / ')}</p> : null}
+          {active?.tags?.length ? <div className="lib-tags-mini">{active.tags.map(t=><span key={t}>{t}</span>)}</div> : null}
+          <div className="lib-ai-card">
+            <b>Acciones reales</b>
+            <button disabled={!active || active.refOnly || busyAction==='extract:'+active?.docId} onClick={()=>handleExtractInsumos(active)}>{busyAction==='extract:'+active?.docId?'Extrayendo...':'Extraer insumos'}</button>
+            <button disabled={!active || busyAction==='similar:'+active?.docId} onClick={()=>handleSimilarMatrices(active)}>{busyAction==='similar:'+active?.docId?'Buscando...':'Buscar matrices similares'}</button>
+            <button disabled={!active || !(active.contentInsumos||[]).length} onClick={()=>handleUseValidatedInApu(active)}>Usar validados en este APU</button>
+            <button onClick={indexVisible}>Crear indice</button>
+          </div>
+          {active?.contentInsumos?.length ? <div className="lib-insumos-review">
+            <b>Insumos propuestos ({active.contentInsumos.length}) -- requieren revision humana</b>
+            <table className="mini-table"><thead><tr><th>Descripcion</th><th>Unidad</th><th>Precio</th><th>Fila</th><th>Confianza</th><th>Estado</th><th></th></tr></thead>
+              <tbody>{active.contentInsumos.map((ins,idx)=>{
+                const review=(active.insumosReview||[]).find(r=>r.index===idx) || {state:INSUMO_STATES.PROPUESTO};
+                const busy=busyAction===`review:${active.docId}:${idx}`;
+                return <tr key={idx} className={'insumo-'+review.state.toLowerCase()}>
+                  <td>{ins.desc}</td><td>{ins.unidad||'—'}</td><td>${Number(ins.precio).toFixed(2)}</td><td>{ins.rowRef ?? idx+1}</td><td>{ins.confidence}%</td>
+                  <td><b>{review.state}</b>{review.validatedBy ? <small> · {review.validatedBy}</small> : null}</td>
+                  <td>
+                    <button className="soft" disabled={busy} onClick={()=>handleReviewInsumo(active,idx,INSUMO_STATES.VALIDADO)}>Validar</button>
+                    <button className="row-del" disabled={busy} onClick={()=>handleReviewInsumo(active,idx,INSUMO_STATES.RECHAZADO)}>Rechazar</button>
+                  </td>
+                </tr>;
+              })}</tbody>
+            </table>
+          </div> : null}
+          {similarResults && <div className="lib-similar-results">
+            <b>Matrices similares a "{similarResults.forDoc}"</b>
+            {similarResults.results.length ? <ul>{similarResults.results.map(r=><li key={r.id}><b>{r.name}</b> — {r.cat} · score {r.score} · coincide: {r.matchedTerms.join(', ') || '—'}</li>)}</ul> : <p className="muted">Sin matrices similares reales encontradas (categoria Matrices APU/Costos).</p>}
+          </div>}
+          <div className="lib-trace"><span>Estado</span><b>{active?.status || 'Pendiente'}</b><span>Permiso</span><b>{user?.isAdmin?'Administrador':'Plan Profesional'}</b><span>Confianza</span><b>{active ? `${active.confidence || 50}%` : 'Sin fuente'}</b></div>
+        </aside>
       </div>
     </div>
     <AcademyPanel />
@@ -3025,7 +3172,8 @@ function parseVisualReport(text){
   return sections.length ? sections : null;
 }
 
-function VisualAI({user}){
+function VisualAI({user, setModule}){
+  const [subview,setSubview]=useState('propuesta');
   const [image,setImage]=useState('');
   const [fileName,setFileName]=useState('');
   const [mode,setMode]=useState('fachada');
@@ -3085,7 +3233,13 @@ function VisualAI({user}){
       setLoading(false);
     }
   };
+  const tabs=<div className="visual-modes" style={{marginBottom:14}}>
+    <button className={subview==='propuesta'?'active':''} onClick={()=>setSubview('propuesta')}>Propuesta visual</button>
+    <button className={subview==='takeoff'?'active':''} onClick={()=>setSubview('takeoff')}>Takeoff de plano</button>
+  </div>;
+  if(subview==='takeoff') return <section><PageHead kicker="Visual IA" title="Planos IA / Takeoff asistido" desc="Sube un plano (PDF, JPG o PNG). ZOEMEC propone elementos y cantidades con evidencia y fuente de escala -- tu revisas, corriges y validas antes de que algo llegue a un APU." />{tabs}<PlanoTakeoff user={user} setModule={setModule}/></section>;
   return <section><PageHead kicker="Visual IA" title="Imagen, fachada y plano a propuesta" desc="Sube una fachada, avance de obra, interior o plano. ZOEMEC prepara un brief visual para generar propuestas, renders y alcances tecnicos." action={<button onClick={generate}>Generar propuesta</button>} />
+    {tabs}
     <div className="visual-grid">
       <div className="panel visual-uploader">
         <label className="visual-drop">
@@ -3113,6 +3267,156 @@ function VisualAI({user}){
     </div>
     <div className="visual-flow">{['Subir imagen a Storage','Guardar solicitud en Firestore','IA analiza referencia','Genera render o brief','Usuario aprueba y manda a presupuesto'].map((x,i)=><div key={x}><b>{i+1}</b><span>{x}</span></div>)}</div>
   </section>
+}
+
+/* RC4 Fase 2 -- Planos IA / Takeoff asistido. Reutiliza /api/visual-ai
+   (action:'takeoff'/'reviewElement') y /api/upload-library
+   (action:'similarMatrices'), ambos ya existentes: sin funciones serverless
+   nuevas. No dibuja overlays ni bounding boxes (el modelo no da coordenadas
+   fiables): solo pagina + evidencia textual, tal como se aprobo. */
+function PlanoTakeoff({user, setModule}){
+  const [fileName,setFileName]=useState('');
+  const [mimeType,setMimeType]=useState('');
+  const [dataBase64,setDataBase64]=useState('');
+  const [analyzing,setAnalyzing]=useState(false);
+  const [result,setResult]=useState(null);
+  const [refDesc,setRefDesc]=useState('');
+  const [refMedida,setRefMedida]=useState('');
+  const [refUnidad,setRefUnidad]=useState('m');
+  const [edits,setEdits]=useState({});
+  const [busyIndex,setBusyIndex]=useState(-1);
+  const [similarByIndex,setSimilarByIndex]=useState({});
+
+  const loadFile=(file)=>{
+    if(!file) return;
+    const reader=new FileReader();
+    reader.onload=()=>{ setDataBase64(reader.result); setFileName(file.name); setMimeType(file.type); setResult(null); };
+    reader.readAsDataURL(file);
+  };
+
+  const analyze=async()=>{
+    if(!dataBase64){ window.zoemecNotify?.('Sube un plano (PDF, JPG o PNG) primero.','error'); return; }
+    setAnalyzing(true);
+    try{
+      const referenciaUsuario = (refDesc.trim() && refMedida) ? { descripcion:refDesc.trim(), medida:Number(refMedida), unidad:refUnidad } : undefined;
+      const data=await apiPost('/api/visual-ai', { action:'takeoff', fileName, mimeType, dataBase64, referenciaUsuario });
+      setResult(data);
+      setEdits({});
+      setSimilarByIndex({});
+    }catch(err){
+      window.zoemecNotify?.(friendlyServiceError(err,'No se pudo analizar el plano.'), 'error');
+    }finally{ setAnalyzing(false); }
+  };
+
+  const setEdit=(index,patch)=>setEdits(prev=>({...prev,[index]:{...prev[index],...patch}}));
+
+  const reviewElement=async(index,state)=>{
+    if(!result?.visualRequestId) return;
+    setBusyIndex(index);
+    try{
+      const e=edits[index]||{};
+      const decision={
+        state,
+        cantidadCorregida: e.cantidad!==undefined && e.cantidad!=='' ? Number(e.cantidad) : undefined,
+        unidadCorregida: e.unidad || undefined,
+        descripcionCorregida: e.descripcion || undefined,
+        motivo: e.motivo || undefined
+      };
+      const data=await apiPost('/api/visual-ai', { action:'reviewElement', visualRequestId:result.visualRequestId, elementIndex:index, decision });
+      setResult(prev=>{
+        const elementos=[...prev.elementos];
+        elementos[index]=data.elemento;
+        return {...prev, elementos};
+      });
+    }catch(err){
+      window.zoemecNotify?.(friendlyServiceError(err,'No se pudo actualizar la revision de este elemento.'), 'error');
+    }finally{ setBusyIndex(-1); }
+  };
+
+  const handleSimilar=async(index,elemento)=>{
+    setBusyIndex(index);
+    try{
+      const concept=edits[index]?.descripcion || elemento.descripcionCorregida || elemento.descripcion;
+      const data=await apiPost('/api/upload-library', { action:'similarMatrices', concept });
+      setSimilarByIndex(prev=>({...prev,[index]:{ forDoc:elemento.descripcion, results:data.results||[] }}));
+    }catch(err){
+      window.zoemecNotify?.(friendlyServiceError(err,'No se pudo buscar matrices similares.'), 'error');
+    }finally{ setBusyIndex(-1); }
+  };
+
+  const handleUseInApu=(elemento)=>{
+    const seed=toApuSeed(elemento);
+    if(!seed){
+      window.zoemecNotify?.('Este elemento aun no esta VALIDADO_POR_USUARIO o no tiene una cantidad utilizable. Valida primero.', 'error');
+      return;
+    }
+    try{ localStorage.setItem('zoemec-pending-plano-seed', JSON.stringify(seed)); }catch{}
+    window.zoemecNotify?.(`"${seed.concept}" (${seed.qty} ${seed.unit}) listo para generar APU. Revisalo en APU Inteligente.`, 'info');
+    setModule?.('apu');
+  };
+
+  const estadoLabel={ PROPUESTO_POR_IA:'Propuesto por IA', REQUIERE_REVISION:'Requiere revision', VALIDADO_POR_USUARIO:'Validado', RECHAZADO:'Rechazado' };
+
+  return <div className="plano-takeoff">
+    <div className="panel visual-uploader">
+      <label className="visual-drop">
+        <div><Icon name="doc" size={42}/><b>{fileName || 'Subir plano'}</b><span>PDF, JPG o PNG -- hasta 10 paginas por analisis</span></div>
+        <input type="file" accept="application/pdf,image/jpeg,image/png" hidden onChange={e=>loadFile(e.target.files[0])}/>
+      </label>
+      <div className="visual-actions"><button onClick={analyze} disabled={analyzing || !dataBase64}>{analyzing?'Analizando...':'Analizar plano'}</button></div>
+      <div className="grid-2" style={{marginTop:12}}>
+        <div><label>Medida de referencia conocida (opcional)</label><input value={refDesc} onChange={e=>setRefDesc(e.target.value)} placeholder="ej. Puerta principal"/></div>
+        <div style={{display:'flex',gap:8}}>
+          <input type="number" step="any" value={refMedida} onChange={e=>setRefMedida(e.target.value)} placeholder="0.90" style={{flex:1}}/>
+          <input value={refUnidad} onChange={e=>setRefUnidad(e.target.value)} placeholder="m" style={{width:70}}/>
+        </div>
+      </div>
+      <p className="muted" style={{fontSize:'.78rem',marginTop:8}}>Si el analisis anterior dejo elementos en "Requiere revision" por falta de escala, captura aqui una medida real conocida y vuelve a analizar: la IA la usara para calibrar el resto.</p>
+    </div>
+
+    {result && <div className="panel">
+      <div className="admin-panel-head"><h2>Resultado del analisis</h2><small className="hint">{result.numPages} pagina(s) · {result.elementos.length} elemento(s) propuesto(s){result.resultadoParcial ? ` · resultado parcial (${result.elementosDescartados} descartado(s) por limite)` : ''}{result.elementosInvalidos?.length ? ` · ${result.elementosInvalidos.length} elemento(s) invalido(s) descartado(s) por el validador` : ''}</small></div>
+      <div className="visual-meta" style={{marginBottom:10}}>
+        <b>{result.fileName || fileName}</b>
+        {result.fileStored && result.downloadURL
+          ? <button className="soft" onClick={()=>window.open(result.downloadURL,'_blank')}>Abrir plano original</button>
+          : <span className="muted" style={{fontSize:'.78rem'}}>{result.storageError ? `Plano original no almacenado: ${result.storageError}` : 'Plano original no almacenado.'}</span>}
+      </div>
+      {result.resumenAnalisis && <p className="muted">{result.resumenAnalisis}</p>}
+      <table className="mini-table"><thead><tr><th>Tipo</th><th>Descripcion</th><th>Cantidad</th><th>Unidad</th><th>Pag.</th><th>Confianza IA</th><th>Fuente escala</th><th>Estado</th><th>Evidencia</th><th></th></tr></thead>
+        <tbody>{result.elementos.map((el,index)=>{
+          const busy=busyIndex===index;
+          const e=edits[index]||{};
+          const canEditQty = el.estado!=='RECHAZADO';
+          return <React.Fragment key={index}>
+            <tr className={'plano-el-'+el.estado.toLowerCase()}>
+              <td>{el.tipo}</td>
+              <td><input value={e.descripcion ?? el.descripcionCorregida ?? el.descripcion} onChange={ev=>setEdit(index,{descripcion:ev.target.value})} disabled={!canEditQty}/></td>
+              <td><input type="number" step="any" style={{width:80}} value={e.cantidad ?? (el.cantidadCorregida ?? el.cantidadPropuesta ?? '')} onChange={ev=>setEdit(index,{cantidad:ev.target.value})} disabled={!canEditQty} placeholder={el.cantidadPropuesta==null?'pendiente':''}/></td>
+              <td><input style={{width:60}} value={e.unidad ?? (el.unidadCorregida || el.unidad)} onChange={ev=>setEdit(index,{unidad:ev.target.value})} disabled={!canEditQty}/></td>
+              <td>{el.pagina}</td>
+              <td>{el.confianzaIA}%</td>
+              <td>{el.fuenteEscala}</td>
+              <td><b>{estadoLabel[el.estado]}</b>{el.validatedBy ? <small> · {el.validatedBy}</small> : null}</td>
+              <td className="muted" style={{maxWidth:220,fontSize:'.75rem'}}>{el.evidencia}</td>
+              <td>
+                <button className="soft" disabled={busy} onClick={()=>reviewElement(index,'VALIDADO_POR_USUARIO')}>Validar</button>
+                <button className="row-del" disabled={busy} onClick={()=>reviewElement(index,'RECHAZADO')}>Rechazar</button>
+                <button className="soft" disabled={busy} onClick={()=>handleSimilar(index,el)}>Matrices similares</button>
+                <button disabled={el.estado!=='VALIDADO_POR_USUARIO'} onClick={()=>handleUseInApu(el)}>Usar en APU</button>
+              </td>
+            </tr>
+            {similarByIndex[index] && <tr><td colSpan={10}>
+              <div className="lib-similar-results">
+                <b>Matrices similares</b>
+                {similarByIndex[index].results.length ? <ul>{similarByIndex[index].results.map(r=><li key={r.id}><b>{r.name}</b> — {r.cat} · score {r.score} · coincide: {r.matchedTerms.join(', ')||'—'}</li>)}</ul> : <p className="muted">Sin matrices similares reales encontradas.</p>}
+              </div>
+            </td></tr>}
+          </React.Fragment>;
+        })}</tbody>
+      </table>
+    </div>}
+  </div>;
 }
 
 function PlansAccess({user}){

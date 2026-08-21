@@ -131,6 +131,63 @@ describe('firestore.rules — library (D2: aislamiento multiusuario)', () => {
     const admin = testEnv.authenticatedContext('admin1').firestore();
     await assertSucceeds(admin.doc('library/doc6').get());
   });
+
+  /* RC4 (Biblioteca): contentInsumos/contentText/insumosReview/driveParentPath
+     se agregaron como campos NUEVOS del mismo documento library/{docId}, sin
+     tocar las reglas. Esta prueba confirma que ese agregado no debilito el
+     aislamiento ya probado arriba: un documento privado con estos campos
+     reales (extraccion + revision humana pendiente) sigue siendo ilegible
+     para un usuario que no es su dueno ni admin. */
+  it('usuario A no puede leer contentInsumos/insumosReview de un documento privado de B (RC4)', async () => {
+    await seed((db) => db.doc('library/doc7').set({
+      ownerUid: 'bob',
+      visibility: 'private',
+      contentInsumos: [{ desc: 'Cemento portland tipo I', unidad: 'bulto', precio: 180 }],
+      insumosReview: [{ index: 0, state: 'PROPUESTO', validatedBy: null, validatedAt: null }],
+      driveParentPath: ['06 - FASAR OPUS']
+    }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('library/doc7').get());
+    await assertFails(alice.doc('library/doc7').update({ insumosReview: [{ index: 0, state: 'VALIDADO', validatedBy: 'alice', validatedAt: '2026-08-21' }] }));
+  });
+});
+
+describe('firestore.rules — visual_requests (RC4 Fase 2: Planos IA / Takeoff reutiliza esta coleccion)', () => {
+  /* Takeoff (api/visual-ai.mjs, action:'takeoff'/'reviewElement') persiste
+     elementos/evidencia/estados de revision como campos nuevos del mismo
+     documento visual_requests -- Opcion A aprobada, cero cambios a estas
+     reglas. Esta prueba confirma que, con esos campos nuevos, el aislamiento
+     ya existente sigue vigente: un plano ajeno (con su evidencia y
+     cantidades) no es legible ni editable por otro usuario. */
+  it('usuario A no puede leer los elementos de un analisis de plano de B', async () => {
+    await seed((db) => db.doc('visual_requests/req1').set({
+      uid: 'bob', mode: 'takeoff', takeoffSchemaVersion: 1,
+      elementos: [{ tipo: 'muro', descripcion: 'Muro de block', cantidadPropuesta: 126.4, unidad: 'm²', estado: 'PROPUESTO_POR_IA' }]
+    }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('visual_requests/req1').get());
+  });
+
+  it('usuario A SI puede leer su propio analisis de plano', async () => {
+    await seed((db) => db.doc('visual_requests/req2').set({ uid: 'alice', mode: 'takeoff', takeoffSchemaVersion: 1, elementos: [] }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(alice.doc('visual_requests/req2').get());
+  });
+
+  it('un usuario no-admin no puede editar directamente (via SDK cliente) ni su propio analisis: la revision humana solo pasa por el servidor autenticado', async () => {
+    await seed((db) => db.doc('visual_requests/req3').set({ uid: 'alice', mode: 'takeoff', elementos: [] }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('visual_requests/req3').update({ elementos: [{ estado: 'VALIDADO_POR_USUARIO' }] }));
+  });
+
+  it('un administrador real SI puede leer el analisis de plano de cualquier usuario', async () => {
+    await seed(async (db) => {
+      await db.doc('users/admin1').set({ role: 'admin', plan: 'Empresa', active: true });
+      await db.doc('visual_requests/req4').set({ uid: 'bob', mode: 'takeoff', elementos: [] });
+    });
+    const admin = testEnv.authenticatedContext('admin1').firestore();
+    await assertSucceeds(admin.doc('visual_requests/req4').get());
+  });
 });
 
 describe('firestore.rules — devices (fuga de PII)', () => {

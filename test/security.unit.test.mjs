@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { verifyMercadoPagoSignature } from '../api/payment-webhook.mjs';
 import { isValidDriveId } from '../server/api-lib/_googleDrive.mjs';
-import { assertAllowedFile, sanitizeFileName } from '../server/api-lib/_libraryClassify.mjs';
+import { assertAllowedFile, sanitizeFileName, decideImportMode, MAX_UPLOAD_BYTES } from '../server/api-lib/_libraryClassify.mjs';
 
 function sign(manifest, secret){
   return crypto.createHmac('sha256', secret).update(manifest).digest('hex');
@@ -86,5 +86,25 @@ describe('assertAllowedFile / sanitizeFileName (import de OneDrive/Drive/subida 
     const clean = sanitizeFileName('../../etc/passwd');
     assert.equal(clean.includes('/'), false);
     assert.equal(clean.includes('..'), true); // los puntos no son peligrosos por si solos, solo el separador de ruta
+  });
+});
+
+describe('decideImportMode (Biblioteca RC4: referencia externa vs descarga real)', () => {
+  it('ZIP por debajo de 15 MB queda como REFERENCIA EXTERNA (nunca se descarga, sin importar tamano)', () => {
+    assert.equal(decideImportMode('ECOSTOS_2022.zip', 8.1 * 1024 * 1024), 'reference');
+  });
+  it('ZIP por encima de 15 MB queda como REFERENCIA EXTERNA', () => {
+    assert.equal(decideImportMode('LIBROS_PDF_LOTE.zip', 1.96 * 1024 * 1024 * 1024), 'reference');
+  });
+  it('PDF por encima de 15 MB queda como REFERENCIA EXTERNA', () => {
+    assert.equal(decideImportMode('Manual_tecnico.pdf', 196.8 * 1024 * 1024), 'reference');
+  });
+  it('XLSX valido por debajo de 15 MB se descarga/extrae normalmente', () => {
+    assert.equal(decideImportMode('FASAR OPUS.xlsx', 2 * 1024 * 1024), 'download');
+  });
+  it('el umbral es exactamente MAX_UPLOAD_BYTES (15 MB), sin ampliarlo en RC4', () => {
+    assert.equal(MAX_UPLOAD_BYTES, 15 * 1024 * 1024);
+    assert.equal(decideImportMode('limite.pdf', MAX_UPLOAD_BYTES), 'download');
+    assert.equal(decideImportMode('limite.pdf', MAX_UPLOAD_BYTES + 1), 'reference');
   });
 });

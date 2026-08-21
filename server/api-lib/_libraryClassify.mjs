@@ -26,6 +26,21 @@ export function extOf(name){
   return (String(name || '').split('.').pop() || '').toLowerCase();
 }
 
+/* Decision de importacion para archivos que vienen de Drive/OneDrive (RC4).
+   ZIP nunca se descarga, sin importar tamano: son paquetes de bases OPUS/
+   NEODATA/catalogos completos que no se indexan como contenido individual en
+   este MVP (Fase 1 de biblioteca detecto ZIPs de cientos de MB a GB en las
+   carpetas reales). Cualquier otro archivo por encima de MAX_UPLOAD_BYTES
+   tampoco se descarga: ambos casos quedan como REFERENCIA EXTERNA (solo
+   metadata, sin copiar a Storage). Pura y sin red para poder probarla sin
+   mocks de Drive/OneDrive. */
+export function decideImportMode(name, size){
+  const ext = extOf(name);
+  if(ext === 'zip') return 'reference';
+  if(Number(size || 0) > MAX_UPLOAD_BYTES) return 'reference';
+  return 'download';
+}
+
 const UNSAFE_FILENAME_CHARS = new RegExp('[\\\\/<>:"|?*\\x00-\\x1f]', 'g');
 
 export function sanitizeFileName(name){

@@ -1,7 +1,8 @@
 import { FieldValue, getAdminDb, getAdminStorage } from '../server/api-lib/_firebaseAdmin.mjs';
 import { requireFeature } from '../server/api-lib/_authGuard.mjs';
-import { driveFetch, defaultFolderId, getGoogleDriveAccessToken, hasGoogleDriveCredentials, isGoogleNativeDoc, isValidDriveId, isWithinAuthorizedTree, GOOGLE_EXPORT_MIME } from '../server/api-lib/_googleDrive.mjs';
-import { assertAllowedFile, classifyLibraryFile, sanitizeFileName, extOf, MAX_UPLOAD_BYTES } from '../server/api-lib/_libraryClassify.mjs';
+import { driveFetch, defaultFolderId, getGoogleDriveAccessToken, hasGoogleDriveCredentials, isGoogleNativeDoc, isValidDriveId, isWithinAuthorizedTree, buildDriveBreadcrumb, GOOGLE_EXPORT_MIME } from '../server/api-lib/_googleDrive.mjs';
+import { assertAllowedFile, classifyLibraryFile, sanitizeFileName, extOf, decideImportMode, MAX_UPLOAD_BYTES } from '../server/api-lib/_libraryClassify.mjs';
+import { extractLibraryContent } from '../server/api-lib/_libraryExtract.mjs';
 
 /* list + import en un solo archivo (accion en el body, mismo patron que
    api/onedrive.mjs) para no sumar funciones serverless de mas: cada archivo en
@@ -96,12 +97,61 @@ async function importFile(req, res){
   }
 
   const accessToken = await getGoogleDriveAccessToken();
-  const metaRes = await driveFetch(`/${fileId}?fields=id,name,mimeType,size,md5Checksum`, { accessToken });
+  const metaRes = await driveFetch(`/${fileId}?fields=id,name,mimeType,size,md5Checksum,webViewLink`, { accessToken });
   const meta = await metaRes.json().catch(() => null);
   if(!metaRes.ok || !meta){
     const error = new Error(meta?.error?.message || 'No se pudo leer la metadata del archivo en Drive.');
     error.status = 404;
     throw error;
+  }
+
+  const rootFolder = defaultFolderId();
+  const driveParentPath = await buildDriveBreadcrumb(fileId, rootFolder).catch(() => []);
+
+  /* ZIP (sin importar tamano) y cualquier archivo >15MB quedan como
+     REFERENCIA EXTERNA: se registra su metadata real (nombre, ruta, id,
+     tamano, categoria, liga de Drive) sin descargar ni copiar el contenido a
+     Storage. Decision explicita autorizada para RC4: no intentar traer a
+     Firebase la biblioteca completa (habia ZIPs de hasta ~1.96 GB en las
+     carpetas reales inventariadas). Los documentos nativos de Google (Docs/
+     Sheets) no reportan "size" hasta exportarse, asi que solo se evalua el
+     nombre/tamano crudo aqui, no la extension ya convertida. */
+  if(!isGoogleNativeDoc(meta.mimeType) && decideImportMode(meta.name, meta.size) === 'reference'){
+    const libMeta = classifyLibraryFile(meta.name);
+    const docRef = await db.collection('library').add({
+      name: sanitizeFileName(meta.name),
+      size: meta.size ? (Number(meta.size) / 1048576).toFixed(2) + ' MB' : 'Desconocido',
+      ext: extOf(meta.name).toUpperCase(),
+      when: new Date().toLocaleDateString('es-MX'),
+      cat: libMeta.cat,
+      family: libMeta.family,
+      tags: ['google-drive', 'referencia-externa'],
+      status: 'REFERENCIA EXTERNA',
+      refOnly: true,
+      uses: 0,
+      ownerUid: authz.uid,
+      visibility: authz.role === 'admin' ? 'global' : 'private',
+      storagePath: null,
+      downloadURL: null,
+      indexed: false,
+      source: 'google-drive',
+      driveFileId: fileId,
+      driveWebViewLink: meta.webViewLink || '',
+      driveParentPath,
+      extraction: { status: 'unsupported', method: 'none', error: 'Archivo registrado como referencia externa: no se descargo su contenido.' },
+      createdAt: FieldValue.serverTimestamp()
+    });
+    res.status(200).json({
+      ok: true,
+      id: docRef.id,
+      name: sanitizeFileName(meta.name),
+      cat: libMeta.cat,
+      family: libMeta.family,
+      status: 'REFERENCIA EXTERNA',
+      refOnly: true,
+      source: 'google-drive'
+    });
+    return;
   }
 
   let downloadUrl;
@@ -143,6 +193,13 @@ async function importFile(req, res){
   const [downloadURL] = await file.getSignedUrl({ action: 'read', expires: '01-01-2500' });
 
   const libMeta = classifyLibraryFile(safeName);
+  /* Extraccion real de contenido (Excel/CSV/PDF de texto). Nunca decide
+     precios ni entra sola a un APU: cada insumo extraido queda en estado
+     PROPUESTO hasta que un humano lo valide (insumosReview, Fase 3/5). */
+  const extraction = await extractLibraryContent({ buffer, ext: extOf(safeName) });
+  const insumosReview = (extraction.contentInsumos || []).map((_, index) => ({
+    index, state: 'PROPUESTO', validatedBy: null, validatedAt: null
+  }));
   const docRef = await db.collection('library').add({
     name: safeName,
     size: (buffer.length / 1048576).toFixed(2) + ' MB',
@@ -152,15 +209,22 @@ async function importFile(req, res){
     family: libMeta.family,
     tags: ['google-drive'],
     status: 'Subido e indexado',
+    refOnly: false,
     uses: 0,
     ownerUid: authz.uid,
     visibility: authz.role === 'admin' ? 'global' : 'private',
     storagePath,
     downloadURL,
-    indexed: false,
+    indexed: extraction.status === 'done',
     source: 'google-drive',
     driveFileId: fileId,
     driveChecksum: meta.md5Checksum || '',
+    driveWebViewLink: meta.webViewLink || '',
+    driveParentPath,
+    contentText: extraction.contentText || '',
+    contentInsumos: extraction.contentInsumos || [],
+    insumosReview,
+    extraction: { status: extraction.status, method: extraction.method, error: extraction.error || '', extractedAt: FieldValue.serverTimestamp() },
     createdAt: FieldValue.serverTimestamp()
   });
 
@@ -172,7 +236,8 @@ async function importFile(req, res){
     family: libMeta.family,
     size: (buffer.length / 1048576).toFixed(2) + ' MB',
     url: downloadURL,
-    source: 'google-drive'
+    source: 'google-drive',
+    extraction: { status: extraction.status, method: extraction.method, insumosCount: (extraction.contentInsumos || []).length }
   });
 }
 

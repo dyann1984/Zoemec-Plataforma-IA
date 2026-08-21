@@ -113,6 +113,33 @@ export async function isWithinAuthorizedTree(folderId, rootId, { maxHops = 12 } 
   return false;
 }
 
+/* Ruta original (breadcrumb) para trazabilidad de Biblioteca (RC4): antes
+   solo se guardaba el nombre del archivo, nunca la carpeta de origen. Sube
+   por "parents" desde el archivo hasta la raiz autorizada, igual que
+   isWithinAuthorizedTree pero acumulando el NOMBRE de cada carpeta (no solo
+   el id). Limite de saltos para no encadenar llamadas indefinidamente si el
+   arbol esta mal formado. */
+export async function buildDriveBreadcrumb(fileId, rootId, { maxHops = 12 } = {}){
+  if(!rootId) return [];
+  const names = [];
+  let current = fileId;
+  for(let hop = 0; hop < maxHops; hop++){
+    const res = await driveFetch(`/${current}?fields=id,name,parents`);
+    const data = await res.json().catch(() => null);
+    if(!res.ok || !data) break;
+    const parents = Array.isArray(data.parents) ? data.parents : [];
+    if(!parents.length) break;
+    const parentId = parents[0];
+    const parentRes = await driveFetch(`/${parentId}?fields=id,name`);
+    const parentData = await parentRes.json().catch(() => null);
+    if(!parentRes.ok || !parentData) break;
+    names.unshift(parentData.name);
+    if(parentId === rootId) break;
+    current = parentId;
+  }
+  return names;
+}
+
 export function isGoogleNativeDoc(mimeType = ''){
   return String(mimeType).startsWith('application/vnd.google-apps.');
 }

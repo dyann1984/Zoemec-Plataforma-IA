@@ -44,6 +44,15 @@ import { libKey, enrichLibraryMeta, scoreLibraryFile } from './domain/library.js
 import { INSUMO_STATES, applyInsumoReview, extractValidatedCatalogRows } from './domain/libraryReview.js';
 import { toApuSeed } from './domain/planoReview.js';
 import { emptyApuWorkspaceState, removeBatchApus, describeAmbiguousSingleExport } from './domain/apuWorkspace.js';
+import {
+  ITEM_STATUS, createBatchJob, fingerprintCatalog, selectNextBatch,
+  markItemStatus, markItemError, markItemDone, retryFailedItems, cancelJob,
+  summarizeJob, isJobComplete
+} from './domain/apuBatchQueue.js';
+import {
+  saveJobMeta, saveItemState, loadJob, markJobCancelled,
+  setActiveBatchId, getActiveBatchId, clearActiveBatchId, deleteJob as deleteQueueJob
+} from './lib/apuBatchQueueCloud.js';
 import { TechnicalCenter } from './features/technical-center/TechnicalCenter.jsx';
 import { AdminPanel } from './features/admin/AdminPanel.jsx';
 import { ProfessionalApuEditor } from './features/apu/ProfessionalApuEditor.jsx';
@@ -1316,6 +1325,30 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   // guardados por otras vias (concepto suelto, sesiones previas), solo los
   // que produjo generateSelectedBatch la ultima vez.
   const [lastBatchApuIds,setLastBatchApuIds]=useState([]);
+  /* Cola robusta de generacion masiva (endurecimiento): activeJob es el
+     estado EN VIVO del lote que se esta procesando ahora mismo (o null si no
+     hay ninguno); resumableJob es un lote anterior sin terminar que se
+     detecto al montar el componente (recarga de pagina / nueva sesion) y que
+     el usuario aun no decidio reanudar o descartar. cancelRequestedRef es la
+     senal cooperativa de cancelacion: el lazo del lote la revisa ENTRE
+     lanzamientos de items, nunca interrumpe una llamada ya en vuelo (para no
+     corromper un resultado a medio calcular). */
+  const [activeJob,setActiveJob]=useState(null);
+  const [resumableJob,setResumableJob]=useState(null);
+  const cancelRequestedRef=useRef(false);
+  useEffect(()=>{
+    if(!firebaseReady || !user?.uid) return;
+    let alive = true;
+    (async () => {
+      try{
+        const activeBatchId = await getActiveBatchId(db, user.uid);
+        if(!activeBatchId || !alive) return;
+        const job = await loadJob(db, user.uid, activeBatchId);
+        if(job && alive && !isJobComplete(job)) setResumableJob(job);
+      }catch{ /* sin lote activo o sin permisos: no hay nada que reanudar */ }
+    })();
+    return () => { alive = false; };
+  }, [user?.uid]);
   /* RC4 Fase 2 (Planos IA / Takeoff): recoge la semilla de concepto dejada por
      PlanoTakeoff (toApuSeed de un elemento VALIDADO_POR_USUARIO) y precarga el
      panel "Generar con IA". No dispara la generacion por su cuenta: el
@@ -1382,6 +1415,13 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
      toca Biblioteca, proyectos, usuarios ni presupuestos ya guardados. */
   const clearWorkspace = () => {
     if(!window.confirm('¿Limpiar todo el trabajo actual de APU Inteligente?\n\nSe perdera: el catalogo cargado, el archivo Excel actual, los conceptos detectados y seleccionados, los duplicados, el progreso y los APUs generados en este lote.\n\nNo se borra Biblioteca, proyectos, usuarios ni presupuestos ya guardados.\n\nEsta accion no se puede deshacer.')) return;
+    // Si hay un lote de la cola corriendo, se cancela primero (cooperativo:
+    // deja terminar la llamada en vuelo, nunca la corta a medias) -- de lo
+    // contrario quedaria un lazo "zombie" escribiendo en Firestore/apus
+    // despues de que el usuario ya creyo haber limpiado todo.
+    if(activeJob && !isJobComplete(activeJob)) cancelRequestedRef.current = true;
+    setActiveJob(null);
+    if(firebaseReady && user?.uid) clearActiveBatchId(db, user.uid).catch(() => {});
     setApus(prev => removeBatchApus(prev, lastBatchApuIds));
     setLastBatchApuIds([]);
     setCatalog([]);
@@ -1430,20 +1470,27 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     if(!requireProject()) return;
     setBatchBusy(true);
     setBatchResult(null);
+    cancelRequestedRef.current = false;
     try{
-      const apuList = await buildBatchAPUs(selectedList);
-      const taggedApus = apuList.map(a => ({ ...a, projectId: activeProjectId }));
-      setApus(prev => [...taggedApus, ...prev.filter(x => !taggedApus.some(t => t.clave === x.clave))]);
-      setLastBatchApuIds(taggedApus.map(a => a.id));
+      const job = createBatchJob({
+        batchId: 'BATCH-' + uid(),
+        fileName: conceptBatch.fileName,
+        items: selectedList,
+        catalogFingerprint: fingerprintCatalog(conceptBatch.fileName, selectedList)
+      });
+      const finished = await runQueueJob(job);
+      const apuList = finished.items.filter(it => it.apu).map(it => it.apu);
       const items = apuList.map(a => ({ concept: a.concept, unit: a.unit, qty: Number(a.cantidadObra ?? a.sourceQty ?? 1) || 1, pu: a.calculated?.pu ?? calcAPU(a).pu }));
       const subtotal = items.reduce((s, it) => s + Number(it.qty) * Number(it.pu), 0);
       const iva = subtotal * DEFAULT_IVA_RATE / 100;
       const sourceName=String(conceptBatch.fileName||'catálogo Excel').replace(/\.(xlsx|xls|csv)$/i,'');
       const budget = { id:'PRE-'+uid(), name:`Presupuesto ${sourceName}`, client:'Cliente por definir', items, ivaRate:DEFAULT_IVA_RATE, total:subtotal+iva, date:new Date().toLocaleDateString('es-MX') };
-      setBudgets(prev => [budget, ...prev]);
-      const errors = apuList.filter(a => a.templateFallback).length;
-      setBatchResult({ conceptsTotal: conceptBatch.concepts.length, selected: selectedList.length, generated: apuList.length, review: errors, errors: 0, budget });
-      setAiStatus(`Presupuesto generado: ${apuList.length} APUs guardados en este proyecto.`);
+      if(items.length) setBudgets(prev => [budget, ...prev]);
+      const summary = summarizeJob(finished);
+      setBatchResult({ conceptsTotal: conceptBatch.concepts.length, selected: selectedList.length, generated: apuList.length, review: summary.requiere_revision, errors: summary.error, cancelled: finished.cancelled, budget });
+      setAiStatus(finished.cancelled
+        ? `Lote cancelado: ${summary.done} de ${summary.total} conceptos procesados antes de cancelar.`
+        : `Lote terminado: ${summary.terminado} listos, ${summary.requiere_revision} con observaciones, ${summary.error} con error.`);
     }catch(error){
       alert(`No se pudo generar el lote seleccionado: ${error?.message || 'error desconocido'}.`);
     }finally{
@@ -1829,6 +1876,105 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     return out;
   };
 
+  /* Cola robusta de generacion masiva (endurecimiento RC4): a diferencia de
+     buildBatchAPUs (arriba, que espera TODO el lote antes de devolver nada),
+     esta funcion persiste el resultado de CADA concepto apenas termina
+     (checkpoint real en Firestore, ver apuBatchQueueCloud.js) y nunca deja
+     que el fallo de un concepto tumbe a los demas: cada item se procesa de
+     forma independiente, con su propia identidad hoja+fila+clave, y un error
+     de uno solo lo marca ERROR sin tocar el resto. Concurrencia limitada a 4
+     a la vez (mismo limite que el motor ya usaba). Cancelacion cooperativa:
+     entre cada tanda de 4, revisa cancelRequestedRef -- nunca interrumpe una
+     llamada ya en curso, para no dejar un resultado a medio calcular. */
+  const CONCEPT_CONCURRENCY = 4;
+  const runQueueJob = async (initialJob) => {
+    let job = initialJob;
+    setActiveJob(job);
+    const persist = firebaseReady && Boolean(user?.uid);
+    if(persist){
+      await saveJobMeta(db, user.uid, job).catch(() => {});
+      await setActiveBatchId(db, user.uid, job.batchId).catch(() => {});
+    }
+    const sourceFile = job.fileName || 'Catalogo de conceptos';
+    while(!isJobComplete(job)){
+      if(cancelRequestedRef.current){
+        job = cancelJob(job);
+        setActiveJob(job);
+        if(persist) await markJobCancelled(db, user.uid, job.batchId).catch(() => {});
+        break;
+      }
+      const batch = selectNextBatch(job, CONCEPT_CONCURRENCY, new Set());
+      if(!batch.length) break;
+      batch.forEach(entry => { job = markItemStatus(job, entry.itemKey, ITEM_STATUS.ANALIZANDO); });
+      setActiveJob(job);
+      await Promise.all(batch.map(async (entry) => {
+        try{
+          job = markItemStatus(job, entry.itemKey, ITEM_STATUS.BUSCANDO_RECURSOS);
+          const v2 = await generateBatchAPU(entry.item, entry.index);
+          job = markItemStatus(job, entry.itemKey, ITEM_STATUS.VALIDANDO);
+          const requiresReview = Boolean(v2.templateFallback) || v2.validationStatus === 'REQUIERE REVISION';
+          job = markItemDone(job, entry.itemKey, v2, { requiresReview });
+          const finishedEntry = job.items.find(it => it.itemKey === entry.itemKey);
+          if(persist) await saveItemState(db, user.uid, job.batchId, finishedEntry).catch(() => {});
+          const tagged = { ...v2, projectId: activeProjectId };
+          setApus(prev => [tagged, ...prev.filter(x => x.clave !== tagged.clave)]);
+          setLastBatchApuIds(prev => [...prev, tagged.id]);
+        }catch(error){
+          job = markItemError(job, entry.itemKey, error);
+          const finishedEntry = job.items.find(it => it.itemKey === entry.itemKey);
+          if(persist) await saveItemState(db, user.uid, job.batchId, finishedEntry).catch(() => {});
+        }
+        setActiveJob(job);
+        const summary = summarizeJob(job);
+        setAiStatus(`Procesando lote "${sourceFile}": ${summary.done} de ${summary.total} conceptos (${summary.terminado} listos, ${summary.requiere_revision} con observaciones, ${summary.error} con error).`);
+      }));
+    }
+    if(persist && isJobComplete(job) && !job.cancelled){
+      await clearActiveBatchId(db, user.uid).catch(() => {});
+    }
+    return job;
+  };
+
+  const cancelActiveJob = () => { cancelRequestedRef.current = true; };
+
+  const retryFailedInActiveJob = async () => {
+    if(!activeJob || batchBusy) return;
+    setBatchBusy(true);
+    cancelRequestedRef.current = false;
+    try{
+      const retried = retryFailedItems(activeJob);
+      setActiveJob(retried);
+      const finished = await runQueueJob(retried);
+      const summary = summarizeJob(finished);
+      setBatchResult(prev => prev ? { ...prev, generated: finished.items.filter(it => it.apu).length, review: summary.requiere_revision, errors: summary.error, cancelled: finished.cancelled } : prev);
+      setAiStatus(finished.cancelled
+        ? `Reintento cancelado: ${summary.done} de ${summary.total} conceptos procesados.`
+        : `Reintento terminado: ${summary.terminado} listos, ${summary.requiere_revision} con observaciones, ${summary.error} con error.`);
+    }finally{
+      setBatchBusy(false);
+    }
+  };
+
+  const resumeActiveJob = async () => {
+    if(!resumableJob || batchBusy) return;
+    setBatchBusy(true);
+    cancelRequestedRef.current = false;
+    const job = resumableJob;
+    setResumableJob(null);
+    setConceptBatch({ fileName: job.fileName, concepts: job.items.map(it => it.item) });
+    try{
+      await runQueueJob(job);
+    }finally{
+      setBatchBusy(false);
+    }
+  };
+
+  const discardResumableJob = async () => {
+    if(!resumableJob) return;
+    if(firebaseReady && user?.uid) await deleteQueueJob(db, user.uid, resumableJob).catch(() => {});
+    setResumableJob(null);
+  };
+
   const exportConceptBatch=async()=>{
     if(!conceptBatch?.concepts?.length){
       alert('Primero sube el catálogo de conceptos.');
@@ -1941,6 +2087,13 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         : <span className="apu-project-pill muted">Trabajando sin proyecto · <a onClick={onNeedProject}>crea o selecciona uno para guardar</a></span>}
     </div>
     {isFree && <div className="trial-banner"><b>Plan gratis activo:</b> tienes {Math.max(0,1-(userUsage.apusCreated||0))} APU disponible. Para exportar y crear mas APUs activa un plan.</div>}
+    {resumableJob && (() => { const s = summarizeJob(resumableJob); return <div className="trial-banner resume-banner">
+      <div><b>Lote sin terminar detectado:</b> "{resumableJob.fileName || 'catálogo'}" — {s.done} de {s.total} conceptos procesados antes de recargar la página ({s.terminado} listos, {s.requiere_revision} con observaciones, {s.error} con error, {s.pendiente} pendientes).</div>
+      <div className="resume-banner-actions">
+        <button type="button" onClick={resumeActiveJob} disabled={batchBusy}>Reanudar</button>
+        <button type="button" className="soft" onClick={discardResumableJob} disabled={batchBusy}>Descartar</button>
+      </div>
+    </div>; })()}
     {/* H. Generacion: inicio natural del flujo, siempre visible arriba */}
     <div className="panel ai-panel" ref={conceptCardRef}>
       <div className="ai-panel-head"><HardHat size={36}/><div><b>Generar APU desde un concepto</b><small className="muted">Pega el concepto, alcance o especificación técnica de la partida. También puedes importar tu Excel de precios: usaré tus precios reales donde coincidan los insumos.</small></div></div>
@@ -2003,19 +2156,28 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         </div>
         <div className="batch-review-actions">
           <button onClick={generateSelectedBatch} disabled={batchBusy || !batchSelection?.size}>{batchBusy?'Generando APUs con IA...':`Generar ${batchSelection?.size||0} APU(s) con IA y crear presupuesto`}</button>
+          {batchBusy && activeJob && <button type="button" className="soft danger" onClick={cancelActiveJob}>Cancelar lote</button>}
         </div>
+        {activeJob && <div className="batch-progress">
+          {(() => { const s = summarizeJob(activeJob); return <>
+            <b>Progreso: {s.done} de {s.total}</b>
+            <span>{s.terminado} listos · {s.requiere_revision} con observaciones · {s.error} con error{s.enProceso ? ` · ${s.enProceso} procesando` : ''}{s.cancelado ? ` · ${s.cancelado} cancelados` : ''}</span>
+          </>; })()}
+        </div>}
       </div>}
       {batchResult && <div className="batch-result">
-        <b>PRESUPUESTO GENERADO</b>
+        <b>{batchResult.cancelled ? 'LOTE CANCELADO' : 'PRESUPUESTO GENERADO'}</b>
         <div className="batch-result-grid">
           <span>Conceptos: <b>{batchResult.conceptsTotal}</b></span>
           <span>Seleccionados: <b>{batchResult.selected}</b></span>
           <span>APUs generados: <b>{batchResult.generated}</b></span>
-          <span>Con plantilla de respaldo: <b>{batchResult.review}</b></span>
+          <span>Requieren revisión: <b>{batchResult.review}</b></span>
+          <span>Con error: <b>{batchResult.errors}</b></span>
           <span>Subtotal: <b>{money(batchResult.budget.items.reduce((s,it)=>s+Number(it.qty)*Number(it.pu),0))}</b></span>
           <span>Total con IVA: <b>{money(batchResult.budget.total)}</b></span>
         </div>
         <div className="batch-result-actions">
+          {batchResult.errors>0 && <button className="soft danger" onClick={retryFailedInActiveJob} disabled={batchBusy}>{batchBusy?'Reintentando...':`Reintentar ${batchResult.errors} fallido(s)`}</button>}
           <button onClick={()=>exportBudgetExcel(batchResult.budget.items, batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.total-batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.ivaRate)}>Descargar presupuesto Excel</button>
           <button onClick={()=>exportBudgetPDF(batchResult.budget.items, batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.total-batchResult.budget.total/(1+batchResult.budget.ivaRate/100), company, batchResult.budget.ivaRate)}>Descargar presupuesto PDF</button>
           {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatch} disabled={batchBusy}>{batchBusy?'IA generando hojas...':`Excel completo por concepto (${conceptBatch.concepts.length} hojas)`}</button>}

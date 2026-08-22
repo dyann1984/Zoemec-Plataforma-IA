@@ -2095,6 +2095,11 @@ svg.ic{display:block;flex:none}
 .batch-result-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;color:#fff}
 .batch-result-grid b{color:#C9A24A}
 .batch-result-actions{display:flex;flex-wrap:wrap;gap:10px}
+.batch-progress{display:flex;flex-direction:column;gap:2px;color:#fff;background:rgba(255,255,255,.08);border-radius:10px;padding:10px 14px}
+.batch-progress b{color:#C9A24A}
+.batch-progress span{font-size:.82rem;color:#e5d8f2}
+.resume-banner{justify-content:space-between;flex-wrap:wrap;gap:10px}
+.resume-banner-actions{display:flex;gap:8px;flex-shrink:0}
 .legacy-editor-compat{display:none!important}
 
 /* ==================================================================

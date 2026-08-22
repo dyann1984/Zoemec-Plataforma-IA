@@ -1623,6 +1623,17 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     }
     try{
       const data=await parseExcelToAPU(file,catalog);
+      // Nunca convertir la ACCION de importar en un concepto: si no se pudo
+      // identificar un catalogo de renglones NI un concepto tecnico real en
+      // este archivo, "Concepto importado desde Excel" es un marcador vacio,
+      // no una descripcion de obra -- generar un APU con IA a partir de eso
+      // termina inventando trabajo generico (p. ej. "Auxiliar administrativo
+      // para importacion de datos"). Mejor un error honesto que un concepto
+      // fabricado.
+      if(!data.concept || data.concept === 'Concepto importado desde Excel'){
+        alert('No pude identificar un catálogo de conceptos (columnas Clave/Descripción/Unidad/Cantidad) ni un concepto técnico único en este Excel. Revisa el archivo o pega el concepto manualmente.');
+        return;
+      }
       setCatalog(data.mergedCatalog);
       setConcept(data.concept);
       const next=standardAPUForConcept({concept:data.concept, unit:data.unit, qty:data.qty, referencePU:data.referencePU}, data.mergedCatalog, 0, data.fileName);

@@ -31,6 +31,78 @@ export function numericSheetSort(a,b){
   const bn = Number(b.match(/sheet(\d+)\.xml$/i)?.[1] || 0);
   return an - bn || a.localeCompare(b);
 }
+/* Mapea el orden REAL de declaracion de hojas (xl/workbook.xml, <sheet name="..."
+   r:id="rIdN"/>) contra sus archivos xl/worksheets/sheetM.xml a traves de las
+   relaciones (xl/_rels/workbook.xml.rels, rIdN -> Target). El nombre de archivo
+   sheetM.xml NO siempre coincide con el orden de declaracion (Excel/Google Sheets
+   pueden reordenar hojas sin renombrar sus archivos internos), asi que ordenar
+   solo por numero de archivo (numericSheetSort) puede asignarle el nombre de hoja
+   equivocado a un bloque de filas. Si no se puede resolver el mapa real (rels
+   ausentes o formato inesperado), se cae de vuelta al orden por nombre de archivo
+   con nombres vacios, igual que el comportamiento anterior. */
+function readWorkbookSheetOrder(zip, readZipText){
+  try{
+    const workbookXml = readZipText('xl/workbook.xml');
+    const relsXml = readZipText('xl/_rels/workbook.xml.rels');
+    if(!workbookXml || !relsXml) return null;
+    const relMap = new Map();
+    for(const m of relsXml.matchAll(/<Relationship[^>]*Id="([^"]+)"[^>]*Target="([^"]+)"[^>]*\/?>/g)){
+      relMap.set(m[1], m[2].replace(/^\/?xl\//,''));
+    }
+    const declared = [...workbookXml.matchAll(/<sheet\b[^>]*name="([^"]*)"[^>]*r:id="([^"]+)"[^>]*\/?>/g)]
+      .map(m => ({ name: m[1], rId: m[2] }));
+    if(!declared.length) return null;
+    const order = declared.map(({name, rId}) => {
+      const target = relMap.get(rId);
+      if(!target) return null;
+      const path = target.startsWith('worksheets/') ? `xl/${target}` : `xl/worksheets/${target.split('/').pop()}`;
+      return { name, path };
+    }).filter(Boolean);
+    return order.length ? order : null;
+  }catch{
+    return null;
+  }
+}
+export async function readXlsxXmlSheetBlocks(file){
+  const zip = unzipSync(new Uint8Array(await file.arrayBuffer()));
+  const readZipText = (path) => zip[path] ? strFromU8(zip[path]) : '';
+  const sharedDoc = readZipText('xl/sharedStrings.xml') ? parseXml(readZipText('xl/sharedStrings.xml')) : null;
+  const sharedStrings = sharedDoc
+    ? Array.from(sharedDoc.getElementsByTagName('si')).map(si => xmlText(si))
+    : [];
+  const declaredOrder = readWorkbookSheetOrder(zip, readZipText);
+  const sheetOrder = declaredOrder || Object.keys(zip)
+    .filter(path => /^xl\/worksheets\/sheet\d+\.xml$/i.test(path))
+    .sort(numericSheetSort)
+    .map(path => ({ name:'', path }));
+  return sheetOrder.map(({name, path}) => {
+    const doc = parseXml(readZipText(path));
+    const rowNodes = Array.from(doc.getElementsByTagName('row'));
+    const rows = [];
+    rowNodes.forEach(rowNode => {
+      const rowIndex = Number(rowNode.getAttribute('r') || 0) || (rows.length + 1);
+      const row = [];
+      Array.from(rowNode.getElementsByTagName('c')).forEach(cell => {
+        const ref = cell.getAttribute('r') || '';
+        const idx = colIndexFromRef(ref);
+        const type = cell.getAttribute('t') || '';
+        const vNode = cell.getElementsByTagName('v')[0];
+        const raw = vNode?.textContent ?? '';
+        let value = raw;
+        if(type === 's') value = sharedStrings[Number(raw)] ?? '';
+        else if(type === 'inlineStr') value = xmlText(cell);
+        else if(type === 'str') value = raw;
+        else if(raw !== ''){
+          const n = Number(raw);
+          value = Number.isFinite(n) ? n : raw;
+        }
+        row[idx] = cleanText(value);
+      });
+      rows[rowIndex - 1] = row.map(cell => cell == null ? '' : cell);
+    });
+    return { sheetName: name, rows: rows.map(r => r || []) };
+  });
+}
 export async function readXlsxXmlRows(file){
   const zip = unzipSync(new Uint8Array(await file.arrayBuffer()));
   const readZipText = (path) => zip[path] ? strFromU8(zip[path]) : '';
@@ -74,6 +146,35 @@ export async function readSpreadsheetRows(file){
   const meaningful = primary.filter(row => (row || []).some(cell => String(cell ?? '').trim())).length;
   if(meaningful > 5) return primary;
   return readXlsxXmlRows(file);
+}
+/* Igual que readSpreadsheetRows, pero SIN aplanar todas las hojas en un solo
+   arreglo: cada hoja se conserva como un bloque propio {sheetName, rows}, con
+   numeros de fila reales (1-indexados) dentro de esa hoja. Necesario para
+   catalogos reales con varias hojas candidatas del mismo catalogo (p. ej.
+   "... P.U. PROFORMA" y "... P.U. VENTA"): procesar cada hoja por separado
+   evita que el encabezado repetido de una segunda hoja se cuele como fila de
+   datos de la primera (ver extractConceptsFromSheetRows), y conserva la
+   identidad sourceSheet+rowNumber que pide la trazabilidad de un catalogo
+   masivo (claves repetidas en renglones distintos nunca deben fusionarse). */
+export async function readSpreadsheetSheetBlocks(file){
+  const name=(file?.name||'').toLowerCase();
+  if(name.endsWith('.csv')){
+    const rows = normalizeSpreadsheetRows(parseCSV(await file.text()));
+    return [{ sheetName:'', rows }];
+  }
+  const raw = await readXlsxFile(file).catch(()=>null);
+  if(Array.isArray(raw) && raw.length && raw.every(r => r && Array.isArray(r.data))){
+    return raw.map(s => ({
+      sheetName: s.sheet || '',
+      rows: (s.data || []).map(row => Array.isArray(row) ? row.map(cell => cell == null ? '' : cell) : [row])
+    }));
+  }
+  if(Array.isArray(raw)){
+    const normalized = normalizeSpreadsheetRows(raw);
+    const meaningful = normalized.filter(row => (row || []).some(cell => String(cell ?? '').trim())).length;
+    if(meaningful > 5) return [{ sheetName:'', rows: normalized }];
+  }
+  return readXlsxXmlSheetBlocks(file);
 }
 export function normalizeSpreadsheetRows(rows){
   const source = Array.isArray(rows) ? rows : [];
@@ -217,9 +318,44 @@ export async function parseExcelConcepts(file){
   if(!concepts.length) throw new Error('No encontre conceptos validos debajo del encabezado.');
   return { fileName:file?.name || 'Catalogo importado', rows:normalized, concepts };
 }
-export async function parseRobustConceptCatalog(file){
-  const rows = await readSpreadsheetRows(file);
-  const normalized = normalizeSpreadsheetRows(rows);
+/* Identidad de un concepto extraido de UN catalogo real: nunca el contenido
+   (clave/concepto/cantidad), sino la posicion fisica (hoja + numero de fila)
+   -- un catalogo real puede repetir la misma clave en renglones distintos con
+   cantidades iguales o distintas (el mismo trabajo en dos areas del
+   inmueble) y ninguno de esos renglones debe fusionarse jamas solo porque
+   coincida el contenido. La UNICA fusion valida es entre HOJAS que
+   representan el mismo catalogo con otro precio (p. ej. "... P.U. PROFORMA"
+   y "... P.U. VENTA"): ver dedupeAcrossSheets, que compara contenido pero
+   SOLO entre hojas distintas, nunca dentro de la misma hoja. */
+function dedupeAcrossSheets(perSheetResults){
+  const seenFromPriorSheets = new Set();
+  const merged = [];
+  (perSheetResults || []).forEach(({ concepts }) => {
+    const thisSheetKeys = new Set();
+    (concepts || []).forEach(item => {
+      const key = [
+        item.code,
+        item.concept.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''),
+        item.unit,
+        Number(item.qty).toFixed(4)
+      ].join('|');
+      if(!seenFromPriorSheets.has(key)){
+        merged.push(item);
+      }
+      thisSheetKeys.add(key);
+    });
+    thisSheetKeys.forEach(k => seenFromPriorSheets.add(k));
+  });
+  return merged;
+}
+/* Extrae los conceptos de UNA sola hoja ya normalizada (nunca de varias hojas
+   concatenadas): asi el encabezado repetido de una segunda hoja candidata
+   jamas se procesa como si fuera un renglon de datos de la primera (antes,
+   al concatenar todas las hojas en un solo arreglo, el encabezado de la
+   segunda hoja caia dentro del rango de datos de la primera y se
+   malinterpretaba como una "seccion" espuria, ensuciando la trazabilidad de
+   los renglones de esa segunda hoja). */
+export function extractConceptsFromSheetRows(normalized, sheetName=''){
   const clean = (v) => cleanText(v).trim();
   const norm = (v) => clean(v).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
   const unitRe = /^(m2|m²|m3|m³|kg|ton|tonelada|pza|pieza|pzas|ml|m|l|lt|lote|jgo|hr|hora|dia|día|jor|jornal|serv|servicio|sal|salida|salidas)$/i;
@@ -263,16 +399,12 @@ export async function parseRobustConceptCatalog(file){
     const importe = Number(item.importe) || 0;
     const derivedPU = importe && qty ? importe / qty : 0;
     if(derivedPU && (!referencePU || referencePU <= 1 || referencePU < derivedPU * 0.25)) referencePU = derivedPU;
-    const key = [
-      clean(item.code),
-      concept.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''),
-      unit,
-      qty.toFixed(4),
-      clean(item.section).toLowerCase()
-    ].join('|');
-    if(list.some(x => x.__key === key)) return;
+    // Sin deduplicacion por contenido aqui: dentro de UNA hoja, cada renglon
+    // fisico valido se conserva siempre (identidad = hoja + numero de fila),
+    // aunque otro renglon ya tenga la misma clave/concepto/cantidad (un
+    // catalogo real repite claves legitimamente). La unica fusion de
+    // duplicados ocurre entre hojas distintas (dedupeAcrossSheets).
     list.push({
-      __key:key,
       code: clean(item.code) || `CON-${String(list.length+1).padStart(3,'0')}`,
       concept,
       unit,
@@ -280,6 +412,7 @@ export async function parseRobustConceptCatalog(file){
       referencePU,
       importe,
       section: clean(item.section),
+      sourceSheet: sheetName || '',
       rowNumber: Number(item.rowNumber || 0) || list.length + 1
     });
   };
@@ -299,6 +432,14 @@ export async function parseRobustConceptCatalog(file){
     const importe = cImporte > -1 ? asNumber(row[cImporte]) : 0;
     return Boolean(!code && concept && concept.length > 4 && !unitRe.test(unit) && !qty && !pu && !importe && !isNoiseConcept(concept));
   };
+  // Encabezados reales casi siempre agregan un calificativo despues de "P.U."
+  // (p. ej. "P.U. PROFORMA", "P.U. VENTA", "PRECIO UNITARIO CON IVA"): una
+  // coincidencia exacta anclada nunca los reconoce. Se compara sin puntos y
+  // permitiendo texto adicional despues del prefijo esperado.
+  const startsWithHeaderPrefix = (text, prefixes) => {
+    const flat = text.replace(/\./g,'').replace(/\s+/g,' ').trim();
+    return prefixes.some(p => flat === p || flat.startsWith(p + ' '));
+  };
   let header = -1;
   let cCode = -1, cConcept = -1, cUnit = -1, cQty = -1, cPU = -1, cImporte = -1;
   for(let i=0;i<Math.min(normalized.length,120);i++){
@@ -306,7 +447,7 @@ export async function parseRobustConceptCatalog(file){
     const conceptIdx = row.findIndex(x=>/concepto|descripcion|descrip/.test(x));
     const unitIdx = row.findIndex(x=>/^(und\.?|unidad|u\.?m\.?|um)$/.test(x));
     const qtyIdx = row.findIndex(x=>/cantidad|cant\.?|volumen|cantid/.test(x));
-    const puIdx = row.findIndex(x=>/^(p\.?u\.?|pu|precio unitario|precio|p u|precio u\.?|costo unitario)$/.test(x));
+    const puIdx = row.findIndex(x=>startsWithHeaderPrefix(x, ['pu','p u','precio unitario','precio','costo unitario']));
     const importeIdx = row.findIndex(x=>/importe|total|monto/.test(x));
     if(conceptIdx > -1 && (unitIdx > -1 || qtyIdx > -1)){
       header = i;
@@ -383,35 +524,60 @@ export async function parseRobustConceptCatalog(file){
       }
     }
   }
-  const flattened = normalized.map((row, i) => ({
-    row,
-    rowNumber:i+1,
-    cells:(row || []).map(clean),
-    nonEmpty:(row || []).map(clean).filter(Boolean)
-  })).filter(r => r.nonEmpty.length);
-  const codeRe = /^[A-Z0-9][A-Z0-9._\-\/]{1,24}$/i;
-  flattened.forEach(({rowNumber, nonEmpty}) => {
-    for(let i=0;i<nonEmpty.length;i++){
-      const value = nonEmpty[i];
-      if(!unitRe.test(value)) continue;
-      const before = nonEmpty.slice(Math.max(0, i-6), i);
-      const after = nonEmpty.slice(i+1, i+8);
-      const qty = asNumber(after.find(v => asNumber(v) > 0));
-      if(!(qty > 0)) continue;
-      const conceptParts = before.filter(v => !unitRe.test(v) && !codeRe.test(v) && asNumber(v) === 0);
-      const concept = conceptParts.join(' ').replace(/\s+/g,' ').trim();
-      if(concept.length < 12 || isNoiseConcept(concept)) continue;
-      const code = before.find(v => codeRe.test(v)) || '';
-      const nums = after.map(asNumber).filter(n => n > 0);
-      const referencePU = nums[1] || 0;
-      const importe = nums[2] || (referencePU && qty ? referencePU * qty : 0);
-      addConcept(concepts, { code, concept, unit:value, qty, referencePU, importe, rowNumber });
-      break;
-    }
-  });
-  const unique = concepts.map(({__key, ...item}) => item);
-  if(!unique.length) throw new Error('No encontre conceptos validos con descripcion, unidad y cantidad.');
-  return { fileName:file?.name || 'Catalogo importado', rows:normalized, concepts:unique };
+  // Este tercer intento (busqueda posicional de "unidad" en cualquier celda)
+  // es SOLO un ultimo respaldo para catalogos sin encabezado claro -- debe
+  // correr unicamente cuando los intentos anteriores no encontraron NADA,
+  // nunca como pasada adicional sobre un catalogo ya extraido correctamente
+  // (si corriera siempre, re-detectaria los mismos renglones por posicion y
+  // los agregaria como si fueran conceptos nuevos, ya que la identidad aqui
+  // es hoja+fila, no el contenido -- no hay deduplicacion por contenido que
+  // los absorba dentro de esta misma hoja).
+  if(!concepts.length){
+    const flattened = normalized.map((row, i) => ({
+      row,
+      rowNumber:i+1,
+      cells:(row || []).map(clean),
+      nonEmpty:(row || []).map(clean).filter(Boolean)
+    })).filter(r => r.nonEmpty.length);
+    const codeRe = /^[A-Z0-9][A-Z0-9._\-\/]{1,24}$/i;
+    flattened.forEach(({rowNumber, nonEmpty}) => {
+      for(let i=0;i<nonEmpty.length;i++){
+        const value = nonEmpty[i];
+        if(!unitRe.test(value)) continue;
+        const before = nonEmpty.slice(Math.max(0, i-6), i);
+        const after = nonEmpty.slice(i+1, i+8);
+        const qty = asNumber(after.find(v => asNumber(v) > 0));
+        if(!(qty > 0)) continue;
+        const conceptParts = before.filter(v => !unitRe.test(v) && !codeRe.test(v) && asNumber(v) === 0);
+        const concept = conceptParts.join(' ').replace(/\s+/g,' ').trim();
+        if(concept.length < 12 || isNoiseConcept(concept)) continue;
+        const code = before.find(v => codeRe.test(v)) || '';
+        const nums = after.map(asNumber).filter(n => n > 0);
+        const referencePU = nums[1] || 0;
+        const importe = nums[2] || (referencePU && qty ? referencePU * qty : 0);
+        addConcept(concepts, { code, concept, unit:value, qty, referencePU, importe, rowNumber });
+        break;
+      }
+    });
+  }
+  return concepts;
+}
+/* Punto de entrada testeable sin navegador: recibe bloques ya leidos
+   {sheetName, rows} (p. ej. desde read-excel-file/node en pruebas, o desde
+   readSpreadsheetSheetBlocks en la app real) y aplica extraccion por hoja +
+   deduplicacion SOLO entre hojas distintas. */
+export function extractConceptsFromWorkbookRows(sheetBlocks){
+  const perSheet = (sheetBlocks || []).map(({ sheetName, rows }) => ({
+    sheetName: sheetName || '',
+    concepts: extractConceptsFromSheetRows(normalizeSpreadsheetRows(rows), sheetName || '')
+  }));
+  return dedupeAcrossSheets(perSheet);
+}
+export async function parseRobustConceptCatalog(file){
+  const blocks = await readSpreadsheetSheetBlocks(file);
+  const concepts = extractConceptsFromWorkbookRows(blocks);
+  if(!concepts.length) throw new Error('No encontre conceptos validos con descripcion, unidad y cantidad.');
+  return { fileName:file?.name || 'Catalogo importado', rows: blocks.flatMap(b => b.rows), concepts };
 }
 export function mergeCatalogs(base=[], incoming=[]){
   const map=new Map();

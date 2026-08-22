@@ -26,7 +26,19 @@
    613.76), y las claves repetidas 387 y 525 (cada una dos veces, en filas
    distintas, con cantidades distintas) -- ademas de una segunda hoja
    ("... P.U. VENTA") que repite EXACTAMENTE los mismos conceptos para probar
-   que no se dupliquen. */
+   que no se dupliquen.
+
+   ESCALA REAL (25 renglones, igual que el catalogo real): un SEGUNDO defecto
+   real, medido en produccion con este mismo catalogo de 25 conceptos, resulto
+   NO estar en esta extraccion ni en el motor de lote -- ambos ya probaban
+   correctamente 25->25->25->25 -- sino en que la pantalla de APU Inteligente
+   ofrece, sobre el mismo concepto previsualizado, un boton de exportacion de
+   UN SOLO APU indistinguible a simple vista del boton de exportacion del
+   LOTE COMPLETO. Ver src/domain/apuWorkspace.test.js
+   (describeAmbiguousSingleExport) para la prueba de esa causa raiz especifica.
+   Esta prueba, con las 25 filas reales, es la regresion permanente que exige
+   el reporte: 25 conceptos validos deben producir SIEMPRE 25 APUs y 25 hojas
+   -- nunca menos -- cuando se usa el exportador de lote real. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -45,18 +57,35 @@ import { unzipSync, strFromU8 } from 'fflate';
 const HEADER_ROW = ['CLAVE','DESCRIPCION','TIPO','UNIDAD','CANTIDAD','P.U. PROFORMA','IMPORTE PROFORMA'];
 const HEADER_ROW_VENTA = ['CLAVE','DESCRIPCION','TIPO','UNIDAD','CANTIDAD','P.U. VENTA','IMPORTE VENTA'];
 
-/* Filas de datos reales del catalogo (sanitizadas): clave, descripcion breve,
-   tipo, unidad, cantidad, P.U., importe. */
+/* Filas de datos reales del catalogo (sanitizadas, 25 renglones -- misma
+   escala exacta que el catalogo real de 25 conceptos): clave, descripcion
+   breve, tipo, unidad, cantidad, P.U., importe. */
 const DATA_ROWS = [
   [2, 'Desmantelamiento de tuberias de 3 a 6 pulgadas, fierro fundido, lineas sin uso.', 'DESMANTELAMIENTO', 'M', 80, 306.28, 24502.4],
   [45, 'Ranurado de muro y/o piso para alojar instalacion hidraulica o electrica.', 'ALBANILERIA', 'ML', 80, 237.43, 18994.4],
   [128, 'Retiro de impermeabilizante prefabricado existente hasta losa de concreto.', 'IMPERMEABILIZANTE', 'M2', 613.76, 130.93, 80359.6],
   [139, 'Suministro y colocacion de impermeabilizante por termofusion, membrana 4mm.', 'IMPERMEABILIZANTE', 'M2', 613.76, 1420.65, 871938.1],
-  [387, 'Sustitucion de cespol cromado tipo helvex, incluye desmontaje del existente.', 'PLOMERIA', 'PZA', 24, 0, 0],
-  [523, 'Suministro e instalacion de llave mezcladora con cuello de ganso.', 'PLOMERIA', 'PZA', 11, 0, 0],
-  [525, 'Suministro e instalacion de manguera de media pulgada para lavabo o tarja.', 'PLOMERIA', 'PZA', 24, 0, 0],
-  [387, 'Sustitucion de cespol cromado tipo helvex, incluye desmontaje del existente.', 'PLOMERIA', 'PZA', 11, 0, 0],
-  [525, 'Suministro e instalacion de manguera de media pulgada para lavabo o tarja.', 'PLOMERIA', 'PZA', 11, 0, 0]
+  [316, 'Mantenimiento correctivo de sustitucion de tubo PVC sanitario de 2 pulgadas.', 'PLOMERIA', 'M', 20, 181.59, 3631.8],
+  [318, 'Sustitucion de tubo PVC sanitario de 4 pulgadas tipo para cementar.', 'PLOMERIA', 'M', 60, 314.32, 18859.2],
+  [321, 'Sustitucion y pruebas de cople o codo de 90 o 45 grados de 2 pulgadas PVC.', 'PLOMERIA', 'PZA', 5, 187.57, 937.9],
+  [382, 'Sustitucion de coladera con cupula para azotea, con canastilla de sedimentos.', 'PLOMERIA', 'PZA', 4, 4015.85, 16063.4],
+  [383, 'Sustitucion de coladera de pretil para azotea con rejilla removible.', 'PLOMERIA', 'PZA', 1, 4894.33, 4894.33],
+  [294, 'Sustitucion de empaques y cinta teflon en lavabo, tarja, mingitorio, WC.', 'PLOMERIA', 'PZA', 24, 734.83, 17635.9],
+  [339, 'Sustitucion de llave angular de media pulgada de diametro.', 'PLOMERIA', 'PZA', 24, 261.70, 6280.8],
+  [384, 'Sustitucion de junta proel de WC, incluye retiro del mueble.', 'PLOMERIA', 'PZA', 1, 896.46, 896.46],
+  [387, 'Sustitucion de cespol cromado tipo helvex, incluye desmontaje del existente.', 'PLOMERIA', 'PZA', 24, 2704.47, 64907.3],
+  [388, 'Sustitucion de contra para lavabo con rejilla y rebosadero.', 'PLOMERIA', 'PZA', 24, 2488.59, 59726.2],
+  [416, 'Limpieza y desazolve de tuberia de 5 a 30 cm de diametro en forma manual.', 'PLOMERIA', 'M', 30, 203.48, 6104.4],
+  [524, 'Suministro e instalacion de llave mezcladora para lavabo, cualquier nivel.', 'PLOMERIA', 'PZA', 24, 16373.28, 392958.7],
+  [525, 'Suministro e instalacion de manguera de media pulgada para lavabo o tarja.', 'PLOMERIA', 'PZA', 24, 306.01, 7344.2],
+  [364, 'Reparacion de fuga en tarja y/o vertedero, incluye sustitucion de empaque.', 'PLOMERIA', 'SALIDA', 11, 376.81, 4144.9],
+  [387, 'Sustitucion de cespol cromado tipo helvex, incluye desmontaje del existente.', 'PLOMERIA', 'PZA', 11, 2704.47, 29749.2],
+  [389, 'Sustitucion de contra canasta para fregadero o tarja.', 'PLOMERIA', 'PZA', 11, 589.65, 6486.2],
+  [523, 'Suministro e instalacion de llave mezcladora con cuello de ganso.', 'PLOMERIA', 'PZA', 11, 13639.45, 150033.9],
+  [525, 'Suministro e instalacion de manguera de media pulgada para lavabo o tarja.', 'PLOMERIA', 'PZA', 11, 306.01, 3366.1],
+  [393, 'Suministro y colocacion de llave de nariz, incluye desmontaje de existente.', 'PLOMERIA', 'PZA', 5, 271.96, 1359.8],
+  [105, 'Suministro y aplicacion de pintura vinilica en muros y plafones interiores.', 'ACABADO', 'M2', 75.75, 212.81, 16120.3],
+  ['C.F.C', 'Demolicion de muros de block pesado de 15 cm de espesor por medios manuales.', 'DESMANTELAMIENTO', 'M2', 14.58, 0, 0]
 ];
 
 function buildSheetRows(headerRow){

@@ -43,7 +43,7 @@ import { enrichAPUWithMarketPrices } from './domain/priceIntelligence.js';
 import { libKey, enrichLibraryMeta, scoreLibraryFile } from './domain/library.js';
 import { INSUMO_STATES, applyInsumoReview, extractValidatedCatalogRows } from './domain/libraryReview.js';
 import { toApuSeed } from './domain/planoReview.js';
-import { emptyApuWorkspaceState, removeBatchApus } from './domain/apuWorkspace.js';
+import { emptyApuWorkspaceState, removeBatchApus, describeAmbiguousSingleExport } from './domain/apuWorkspace.js';
 import { TechnicalCenter } from './features/technical-center/TechnicalCenter.jsx';
 import { AdminPanel } from './features/admin/AdminPanel.jsx';
 import { ProfessionalApuEditor } from './features/apu/ProfessionalApuEditor.jsx';
@@ -1895,8 +1895,21 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   // lote, en vez de que "Descargar PDF/Excel" del APU activo cambie de
   // comportamiento en silencio solo porque alguna vez se subio un catalogo.
   const [exportBusy,setExportBusy]=useState(false);
+  // Defecto real (medido): con un catalogo de N conceptos cargado, este boton
+  // de UN SOLO APU (siempre el concepto previsualizado, nunca el lote) se
+  // confunde facilmente con "Excel completo por concepto (N hojas)" -- ambos
+  // se leen igual para el usuario. Nunca cambia lo que exporta (ver nota
+  // arriba: sigue siendo solo el APU activo, por diseno), pero si el
+  // catalogo tiene mas de 1 concepto, se confirma antes para que la
+  // reduccion N->1 nunca sea silenciosa.
+  const confirmSingleExportIfAmbiguous=()=>{
+    const warning = describeAmbiguousSingleExport(conceptBatch, professionalApu?.concept);
+    if(warning) return window.confirm(warning);
+    return true;
+  };
   const exportPDF=async()=>{
     if(isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; }
+    if(!confirmSingleExportIfAmbiguous()) return;
     setExportBusy(true);
     try{ exportAPUPdfV2(professionalApu); }
     finally{ setExportBusy(false); }
@@ -1904,6 +1917,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   };
   const exportExcel=async()=>{
     if(isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; }
+    if(!confirmSingleExportIfAmbiguous()) return;
     setExportBusy(true);
     try{ await exportAPUExcelV2(professionalApu); }
     finally{ setExportBusy(false); }

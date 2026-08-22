@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyApuWorkspaceState, removeBatchApus } from './apuWorkspace.js';
+import { emptyApuWorkspaceState, removeBatchApus, describeAmbiguousSingleExport } from './apuWorkspace.js';
 
 test('emptyApuWorkspaceState: forma exacta de "sin trabajo en curso"', () => {
   assert.deepEqual(emptyApuWorkspaceState(), {
@@ -110,4 +110,29 @@ test('ESCENARIO: catalogo A -> generar -> limpiar trabajo -> catalogo B: nada de
   assert.ok(apusProyecto.some(a => a.id === 'APU-B1'));
   assert.ok(apusProyecto.some(a => a.id === 'APU-PRE'), 'el APU previo (ajeno a cualquier lote) debe seguir presente');
   assert.deepEqual(lastBatchApuIdsB, ['APU-B1']);
+});
+
+/* DEFECTO REAL medido en produccion: catalogo de 25 conceptos -> boton de UN
+   SOLO APU ("Descargar Excel" en el editor, siempre el concepto
+   previsualizado) -> Excel exportado con RESUMEN + CONTROL_REVISION + 1 SOLA
+   hoja, sin error ni aviso. describeAmbiguousSingleExport es la logica pura
+   de la advertencia que main.jsx debe mostrar antes de permitir ese export
+   ambiguo. */
+test('describeAmbiguousSingleExport: sin catalogo cargado (concepto suelto) -> null, uso legitimo sin interrupcion', () => {
+  assert.equal(describeAmbiguousSingleExport(null, 'Muro de block hueco'), null);
+  assert.equal(describeAmbiguousSingleExport(undefined, 'Muro de block hueco'), null);
+});
+
+test('describeAmbiguousSingleExport: catalogo de UN solo concepto -> null, no hay ambiguedad real', () => {
+  const conceptBatch = { fileName: 'catalogo.xlsx', concepts: [{ code: '1', concept: 'Unico concepto del catalogo' }] };
+  assert.equal(describeAmbiguousSingleExport(conceptBatch, 'Unico concepto del catalogo'), null);
+});
+
+test('describeAmbiguousSingleExport: catalogo de 25 conceptos -> advierte con el total real y el concepto previsualizado, nunca en silencio', () => {
+  const conceptBatch = { fileName: 'CATALOGO_EBDI_71_CD_VICTORIA.xlsx', concepts: Array.from({ length: 25 }, (_, i) => ({ code: String(i + 1), concept: `Concepto ${i + 1}` })) };
+  const warning = describeAmbiguousSingleExport(conceptBatch, 'DESMANTELAMIENTO DE TUBERÍAS DE 3" HASTA 6"');
+  assert.ok(warning, 'debe advertir siempre que haya mas de un concepto cargado');
+  assert.match(warning, /25 conceptos/);
+  assert.match(warning, /DESMANTELAMIENTO DE TUBERÍAS DE 3" HASTA 6"/);
+  assert.match(warning, /Excel completo por concepto \(25 hojas\)/);
 });

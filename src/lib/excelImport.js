@@ -508,36 +508,62 @@ export function extractConceptsFromSheetRows(normalized, sheetName=''){
   // Sin respaldo posicional: si ninguna fila junta descripcion/concepto +
   // (unidad o cantidad), NO se adivinan columnas por posicion (requisito
   // explicito: la confianza estructural insuficiente debe reportarse, nunca
-  // completarse con una suposicion). El diagnostico describe exactamente lo
-  // que si se encontro en esta hoja para que la causa sea accionable.
+  // completarse con una suposicion). El diagnostico es estructurado (hoja,
+  // filas inspeccionadas, fila de encabezado candidata, y que columna
+  // minima si/no se reconocio) para que el motivo de rechazo sea accionable
+  // sin tener que adivinar -- ver formatCatalogDiagnostic.
   let diagnostic = null;
   if(header < 0){
     if(bestPartial){
-      const found = [];
-      if(bestPartial.unitIdx > -1) found.push('unidad');
-      if(bestPartial.qtyIdx > -1) found.push('cantidad');
       diagnostic = {
         sheetName,
-        headerRow: null,
-        message: found.length
-          ? `se reconocio una columna de descripcion/concepto en la fila ${bestPartial.row + 1}, pero falto reconocer ${found.length === 2 ? 'unidad y cantidad juntas' : (found[0] === 'unidad' ? 'la columna de cantidad' : 'la columna de unidad')} en esa misma fila.`
-          : `se reconocio una columna de descripcion/concepto en la fila ${bestPartial.row + 1}, pero no se encontro ninguna columna de unidad ni de cantidad en esa fila.`
+        rowsScanned,
+        headerRow: bestPartial.row + 1,
+        descriptionFound: true,
+        unitFound: bestPartial.unitIdx > -1,
+        qtyFound: bestPartial.qtyIdx > -1,
+        reason: 'se reconocio Descripcion/Concepto en esa fila, pero ninguna columna de Unidad ni de Cantidad en la misma fila.'
       };
     }else{
       diagnostic = {
         sheetName,
+        rowsScanned,
         headerRow: null,
-        message: `no se encontro ninguna columna de descripcion/concepto reconocible en las primeras ${rowsScanned} filas analizadas.`
+        descriptionFound: false,
+        unitFound: false,
+        qtyFound: false,
+        reason: `no se encontro ninguna columna de Descripcion/Concepto reconocible en las primeras ${rowsScanned} filas analizadas.`
       };
     }
   }else if(!concepts.length){
     diagnostic = {
       sheetName,
+      rowsScanned,
       headerRow: header + 1,
-      message: `se reconocio un encabezado en la fila ${header + 1} (descripcion/concepto${cUnit > -1 ? ' + unidad' : ''}${cQty > -1 ? ' + cantidad' : ''}), pero ninguna fila debajo tuvo a la vez descripcion, unidad valida y cantidad mayor a cero.`
+      descriptionFound: true,
+      unitFound: cUnit > -1,
+      qtyFound: cQty > -1,
+      reason: 'se reconocio un encabezado valido, pero ninguna fila debajo tuvo a la vez descripcion, unidad valida y cantidad mayor a cero.'
     };
   }
   return { concepts, diagnostic };
+}
+/* Formato legible del diagnostico de UNA hoja (ver extractConceptsFromSheetRows):
+   hoja, filas inspeccionadas, fila de encabezado candidata (si hubo alguna)
+   y que columna minima si/no se reconocio, para que el usuario pueda
+   corregir el catalogo sin que el sistema tenga que adivinar por el. */
+export function formatCatalogDiagnostic(diagnostic){
+  const found = (v) => v ? 'detectada' : 'no detectada';
+  const lines = [
+    `Hoja: ${diagnostic.sheetName || '(sin nombre)'}`,
+    `Filas inspeccionadas: ${diagnostic.rowsScanned}`,
+    `Encabezado candidato: ${diagnostic.headerRow ? `fila ${diagnostic.headerRow}` : 'ninguno detectado'}`,
+    `Descripcion: ${found(diagnostic.descriptionFound)}`,
+    `Unidad: ${found(diagnostic.unitFound)}`,
+    `Cantidad: ${found(diagnostic.qtyFound)}`,
+    `Motivo: ${diagnostic.reason}`
+  ];
+  return lines.join('\n');
 }
 /* Punto de entrada testeable sin navegador: recibe bloques ya leidos
    {sheetName, rows} (p. ej. desde read-excel-file/node en pruebas, o desde
@@ -556,9 +582,8 @@ export async function parseRobustConceptCatalog(file){
   const blocks = await readSpreadsheetSheetBlocks(file);
   const { concepts, diagnostics } = extractConceptsFromWorkbookRows(blocks);
   if(!concepts.length){
-    const sheetNames = blocks.map(b => b.sheetName || '(sin nombre)').join(', ');
-    const lines = diagnostics.map(d => `- Hoja "${d.sheetName || '(sin nombre)'}": ${d.message}`);
-    throw new Error(`No encontre un catalogo de conceptos reconocible. Hojas analizadas: ${sheetNames}.\n${lines.join('\n')}`);
+    const blocksText = diagnostics.map(d => formatCatalogDiagnostic(d)).join('\n\n');
+    throw new Error(`No pude identificar un catalogo de conceptos reconocible.\n\n${blocksText}`);
   }
   return { fileName:file?.name || 'Catalogo importado', rows: blocks.flatMap(b => b.rows), concepts, diagnostics };
 }

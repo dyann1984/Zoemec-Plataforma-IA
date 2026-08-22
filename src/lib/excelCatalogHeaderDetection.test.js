@@ -9,7 +9,7 @@
    equivalencias y los casos de diagnostico sin depender de un archivo real. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { extractConceptsFromSheetRows, extractConceptsFromWorkbookRows } from './excelImport.js';
+import { extractConceptsFromSheetRows, extractConceptsFromWorkbookRows, formatCatalogDiagnostic } from './excelImport.js';
 
 function rows(...arr){ return arr; }
 
@@ -80,7 +80,11 @@ test('DIAGNOSTICO: hoja sin ninguna columna de descripcion/concepto reconocible 
   ), 'Fotos');
   assert.equal(concepts.length, 0);
   assert.ok(diagnostic);
-  assert.match(diagnostic.message, /no se encontro ninguna columna de descripcion\/concepto/i);
+  assert.equal(diagnostic.headerRow, null);
+  assert.equal(diagnostic.descriptionFound, false);
+  assert.equal(diagnostic.unitFound, false);
+  assert.equal(diagnostic.qtyFound, false);
+  assert.match(diagnostic.reason, /no se encontro ninguna columna de Descripcion\/Concepto/i);
 });
 
 test('DIAGNOSTICO: se reconoce Descripcion pero falta Unidad y Cantidad en esa fila -> reporta la fila exacta, no adivina', () => {
@@ -92,9 +96,27 @@ test('DIAGNOSTICO: se reconoce Descripcion pero falta Unidad y Cantidad en esa f
   ), 'Memoria');
   assert.equal(concepts.length, 0);
   assert.ok(diagnostic);
-  assert.equal(diagnostic.headerRow, null);
-  assert.match(diagnostic.message, /fila 3/);
-  assert.match(diagnostic.message, /unidad ni de cantidad/i);
+  assert.equal(diagnostic.headerRow, 3);
+  assert.equal(diagnostic.descriptionFound, true);
+  assert.equal(diagnostic.unitFound, false);
+  assert.equal(diagnostic.qtyFound, false);
+  assert.match(diagnostic.reason, /unidad ni de cantidad/i);
+});
+
+test('formatCatalogDiagnostic: produce el formato exacto pedido (Hoja / Encabezado candidato / Descripcion / Unidad / Cantidad)', () => {
+  const { diagnostic } = extractConceptsFromSheetRows(rows(
+    ['Titulo'], [], [], [], [], [],
+    ['Descripcion', 'Otra columna'],
+    ['Texto de un renglon cualquiera sin unidad ni cantidad', 'x']
+  ), 'Catalogo');
+  const text = formatCatalogDiagnostic(diagnostic);
+  assert.match(text, /^Hoja: Catalogo$/m);
+  assert.match(text, /^Filas inspeccionadas: \d+$/m);
+  assert.match(text, /^Encabezado candidato: fila 7$/m);
+  assert.match(text, /^Descripcion: detectada$/m);
+  assert.match(text, /^Unidad: no detectada$/m);
+  assert.match(text, /^Cantidad: no detectada$/m);
+  assert.match(text, /^Motivo: .+$/m);
 });
 
 test('NUNCA adivina columnas por posicion: una celda que coincide por casualidad con un token de unidad no genera un concepto', () => {

@@ -1627,6 +1627,11 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       alert('Ese archivo parece .xls antiguo. Guárdalo como .xlsx desde Excel y vuelve a subirlo.');
       return;
     }
+    // El diagnostico real de por que no se reconocio un catalogo de
+    // conceptos (hoja, fila candidata, que columna si/no se detecto) nunca
+    // debe perderse aunque el segundo intento (un solo APU) tambien falle --
+    // por eso se guarda aqui en vez de descartarse en el catch.
+    let batchDiagnosticMessage = null;
     try{
       const batch = await parseRobustConceptCatalog(file);
       if(batch.concepts.length > 0){
@@ -1642,8 +1647,10 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         setAiOpen(true);
         return;
       }
-    }catch(_batchErr){
-      // Si no es presupuesto/catalogo de conceptos, intenta leerlo como un solo APU.
+    }catch(batchErr){
+      // Si no es presupuesto/catalogo de conceptos, intenta leerlo como un
+      // solo APU -- pero conserva el diagnostico por si tambien falla.
+      batchDiagnosticMessage = batchErr?.message || null;
     }
     try{
       const data=await parseExcelToAPU(file,catalog);
@@ -1652,10 +1659,10 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       // este archivo, "Concepto importado desde Excel" es un marcador vacio,
       // no una descripcion de obra -- generar un APU con IA a partir de eso
       // termina inventando trabajo generico (p. ej. "Auxiliar administrativo
-      // para importacion de datos"). Mejor un error honesto que un concepto
-      // fabricado.
+      // para importacion de datos"). Mejor un error honesto (con el
+      // diagnostico real, hoja por hoja) que un concepto fabricado.
       if(!data.concept || data.concept === 'Concepto importado desde Excel'){
-        alert('No pude identificar un catálogo de conceptos (columnas Clave/Descripción/Unidad/Cantidad) ni un concepto técnico único en este Excel. Revisa el archivo o pega el concepto manualmente.');
+        alert(batchDiagnosticMessage || 'No pude identificar un catálogo de conceptos ni un concepto técnico único en este Excel. Revisa el archivo o pega el concepto manualmente.');
         return;
       }
       setCatalog(data.mergedCatalog);
@@ -1665,7 +1672,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       setExcelInfo(data);
       setAiOpen(true);
     }catch(err){
-      alert(`No pude leer el Excel completo: ${err?.message || 'formato no compatible'}. Usa .xlsx o .csv, o pega el renglón del concepto y presiona Actualizar desarrollo.`);
+      alert(batchDiagnosticMessage || `No pude leer el Excel completo: ${err?.message || 'formato no compatible'}. Usa .xlsx o .csv, o pega el renglón del concepto y presiona Actualizar desarrollo.`);
     }
   };
   const importConceptCatalog=async(file)=>{
@@ -1687,7 +1694,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       setAiStatus(`Catálogo leído: ${data.concepts.length} conceptos. Excel por concepto usará IA real por cada hoja.`);
       setAiOpen(true);
     }catch(err){
-      alert(`No pude leer la lista de conceptos: ${err?.message || 'formato no compatible'}. Revisa que tenga columnas Codigo, Concepto, Unidad, Cantidad y P.U.`);
+      alert(err?.message || 'No pude leer la lista de conceptos. Usa .xlsx o .csv.');
     }
   };
   /* Desarrolla UN concepto del catalogo en su matriz APU v2 completa (mano de

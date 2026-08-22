@@ -428,7 +428,7 @@ function App(){
       return false;
     }
     if(!firebaseReady){
-      alert('Firebase no esta configurado. Revisa src/firebase.js.');
+      alert('El servicio de inicio de sesion no esta disponible en este momento. Intenta de nuevo mas tarde.');
       return false;
     }
     const deviceId = getDeviceId();
@@ -506,7 +506,7 @@ function App(){
   };
   const loginWithGoogle = async () => {
     if(!firebaseReady){
-      alert('Firebase no esta configurado. Revisa src/firebase.js.');
+      alert('El servicio de inicio de sesion no esta disponible en este momento. Intenta de nuevo mas tarde.');
       return false;
     }
     const provider = new GoogleAuthProvider();
@@ -2123,7 +2123,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         <div><small>Unidad / cantidad</small><b>{excelInfo.unit} - {num(excelInfo.qty)}</b></div>
         <div><small>P.U. referencia</small><b>{excelInfo.referencePU ? money(excelInfo.referencePU) : 'No detectado'}</b></div>
       </div>}
-      <div className="ai-note">El desarrollo se arma con tus precios importados, matrices base y metodologia ZOEMEC. La IA real se ejecuta por endpoints seguros en Vercel.</div>
+      <div className="ai-note">El desarrollo se arma con tus precios importados, matrices base y metodologia ZOEMEC. La IA real se ejecuta en un servidor seguro.</div>
       {conceptBatch?.concepts?.length>0 && !batchResult && <div className="batch-review">
         <div className="batch-review-head">
           <b>Catálogo: {conceptBatch.concepts.length} registros → {batchGroups.size} conceptos únicos{batchDuplicateRows>0 ? ` (${batchDuplicateRows} duplicados agrupados)` : ''}</b>
@@ -3228,14 +3228,14 @@ function Library({user, catalog, setCatalog, setModule}){
   const suggestions=['muro block 15','loseta porcelanato','rendimiento albanil','PTR lavabo','tablaroca durock','indirectos oficina'];
   if(!canUse(user,'library')){
     return <section><PageHead kicker="Biblioteca ZOEMEC" title="Centro inteligente de costos" desc="La biblioteca tecnica es una funcion premium porque permite consultar bases, matrices, documentos y fuentes para IA." />
-      <div className="locked-panel panel"><Icon name="biblioteca" size={42}/><div><h2>Biblioteca bloqueada para plan gratis</h2><p>Tu cuenta gratis incluye 1 APU. Para subir bases, indexar documentos, consultar matrices y usar la biblioteca como fuente de IA necesitas plan Inicial, Profesional o Empresa.</p><button onClick={()=>alert('Aqui se conectara Stripe o Mercado Pago para activar el plan automaticamente.')}>Activar plan</button></div></div>
+      <div className="locked-panel panel"><Icon name="biblioteca" size={42}/><div><h2>Biblioteca bloqueada para plan gratis</h2><p>Tu cuenta gratis incluye 1 APU. Para subir bases, indexar documentos, consultar matrices y usar la biblioteca como fuente de IA necesitas plan Inicial, Profesional o Empresa.</p><button onClick={()=>window.zoemecNotify ? window.zoemecNotify(`Para activar tu plan escribe a ${defaultCompany.email} o contacta a tu administrador ZOEMEC.`, 'info') : alert(`Para activar tu plan escribe a ${defaultCompany.email} o contacta a tu administrador ZOEMEC.`)}>Activar plan</button></div></div>
       <div className="library-grid">{[['Inicial','Biblioteca limitada, academia y 10 APUs/mes','Para probar'],['Profesional','Biblioteca completa, cursos, IA y exportaciones','Recomendado'],['Empresa','Usuarios, permisos y biblioteca privada','Equipos']].map(f=><div className="folder" key={f[0]}><b>{f[0]}</b><p>{f[1]}</p><span>{f[2]}</span></div>)}</div>
     </section>;
   }
   return <section><PageHead kicker="Biblioteca ZOEMEC" title="Biblioteca y academia técnica" desc="Organiza costos, matrices, mano de obra, normas, formatos y cursos en un solo centro de conocimiento." />
     <div className="lib-hero panel">
       <div><small>Base tecnica</small><h2>{files.length ? `${files.length} documentos listos` : 'Tu Workspace documental está vacío'}</h2><p>La biblioteca debe funcionar como buscador tecnico, no como bodega de archivos. Cada documento queda clasificado por uso y listo para IA.</p></div>
-      <div className="lib-hero-actions"><button className="secondary" onClick={()=>alert('Estado de nube: Firebase Storage guarda archivos y Firestore guarda metadata. Revisa reglas de Storage/Firestore y planes de usuario para produccion.')}>Estado de nube</button><label className="up-btn">{uploading?'Subiendo...':'Subir lote'}<input ref={fileInputRef} type="file" multiple onChange={e=>add(e.target.files)} hidden disabled={uploading}/></label></div>
+      <div className="lib-hero-actions"><button className="secondary" onClick={()=>{ if(user?.isAdmin) setModule('admin'); else window.zoemecNotify?.('El estado de los servicios en la nube esta disponible para administradores en Panel Admin.', 'info'); }}>Estado de nube</button><label className="up-btn">{uploading?'Subiendo...':'Subir lote'}<input ref={fileInputRef} type="file" multiple onChange={e=>add(e.target.files)} hidden disabled={uploading}/></label></div>
     </div>
     {syncError && <div className="od-config-warning"><Icon name="alerta" size={18}/><div><b>No se pudo sincronizar con la nube:</b> {syncError} Mientras tanto se muestran los documentos que ya tienes en este dispositivo.</div></div>}
     {!firebaseReady && <div className="panel lib-demo-mode">
@@ -3436,7 +3436,7 @@ function VisualAI({user, setModule}){
       interior:'Proponer distribucion, mobiliario, acabados, iluminacion, plafones, colores y puntos criticos de ejecucion.',
       obra:'Detectar riesgos visuales, pendientes, seguridad, limpieza, avance y recomendaciones para reporte fotografico.'
     };
-    return `## Analisis tecnico\n${modes[mode]}\n\n## Propuesta constructiva\nInstruccion capturada: ${prompt}\n\n## Materiales\nPendiente de definir con IA conectada.\n\n## Estructura\nPendiente de definir con IA conectada.\n\n## Acabados\nPendiente de definir con IA conectada.\n\n## Riesgos\nEsta es una vista previa local, sin IA. Conecta OPENAI_API_KEY para un analisis real de riesgos.\n\n## Presupuesto aproximado\nSin datos: genera con IA para obtener un rango estimado.\n\n## Recomendaciones\nSube una imagen y genera con IA para recomendaciones concretas.`;
+    return `## Analisis tecnico\n${modes[mode]}\n\n## Propuesta constructiva\nInstruccion capturada: ${prompt}\n\n## Materiales\nSin datos: vuelve a generar con IA para esta seccion.\n\n## Estructura\nSin datos: vuelve a generar con IA para esta seccion.\n\n## Acabados\nSin datos: vuelve a generar con IA para esta seccion.\n\n## Riesgos\nEsta es una vista previa sin conexion a IA en este momento. Intenta de nuevo en unos minutos.\n\n## Presupuesto aproximado\nSin datos: vuelve a generar con IA para obtener un rango estimado.\n\n## Recomendaciones\nSube una imagen y genera con IA para recomendaciones concretas.`;
   };
   const generate=async()=>{
     setLoading(true);
@@ -3484,7 +3484,7 @@ function VisualAI({user, setModule}){
         ? <div className="visual-report">{sections.map((s,i)=><div className="vr-card" key={i}><b><i><Icon name={s.icon} size={13}/></i>{s.label}</b><p>{s.text}</p></div>)}</div>
         : <div className="panel visual-result" style={{gridColumn:'1/3'}}><pre>{result}</pre></div>; })()}
     </div>
-    <div className="visual-flow">{['Subir imagen a Storage','Guardar solicitud en Firestore','IA analiza referencia','Genera render o brief','Usuario aprueba y manda a presupuesto'].map((x,i)=><div key={x}><b>{i+1}</b><span>{x}</span></div>)}</div>
+    <div className="visual-flow">{['Subir imagen de referencia','Guardar solicitud','IA analiza referencia','Genera render o brief','Usuario aprueba y manda a presupuesto'].map((x,i)=><div key={x}><b>{i+1}</b><span>{x}</span></div>)}</div>
   </section>
 }
 
@@ -3660,20 +3660,20 @@ function PlansAccess({user}){
     ['Usuarios', '1', '1', '5+']
   ];
   const production = [
-    ['Autenticacion', 'Firebase Auth con correo, Google y roles por usuario.'],
-    ['Base de datos', 'Firestore para APUs, presupuestos, biblioteca, foro, planes y permisos.'],
-    ['Archivos', 'Firebase Storage o Vercel Blob para Excel, PDF, cursos y documentos pesados.'],
-    ['Cobro', 'Mercado Pago o Stripe con webhooks para activar plan automaticamente.'],
-    ['IA segura', 'Endpoint serverless; la llave de IA nunca viaja al navegador del usuario.'],
+    ['Autenticacion', 'Inicio de sesion seguro con correo o Google, y permisos por rol de usuario.'],
+    ['Base de datos', 'Almacenamiento en la nube para APUs, presupuestos, biblioteca, foro, planes y permisos.'],
+    ['Archivos', 'Almacenamiento seguro en la nube para Excel, PDF, cursos y documentos pesados.'],
+    ['Cobro', 'Pasarela de pago con confirmacion automatica para activar el plan.'],
+    ['IA segura', 'La generacion con IA corre en un servidor seguro; la llave de IA nunca viaja al navegador del usuario.'],
     ['Control de uso', 'Contadores mensuales por plan: APUs, tokens IA, descargas y usuarios.']
   ];
   const payPlan=async(plan, method='Mercado Pago')=>{
     if(plan === 'Admin'){
-      alert('El plan Admin se asigna manualmente desde Firestore para cuentas internas.');
+      alert('El plan Admin se asigna manualmente por el equipo ZOEMEC para cuentas internas.');
       return;
     }
     if(method === 'Transferencia'){
-      alert('Para transferencia: el usuario envia comprobante y un administrador activa el plan en Firestore. Siguiente paso: crear modulo de comprobantes.');
+      alert(`Realiza el deposito y envia tu comprobante a ${defaultCompany.email}. Un administrador de ZOEMEC activara tu plan una vez validado el pago.`);
       return;
     }
     if(!user?.uid){
@@ -3686,7 +3686,7 @@ function PlansAccess({user}){
       // token verificado (ver api/create-checkout.mjs), nunca de este body.
       const data=await apiPost('/api/create-checkout', { plan, method });
       if(data.url) window.location.href=data.url;
-      else alert('El checkout respondio sin URL. Revisa el endpoint de Vercel.');
+      else alert('No pudimos iniciar el pago. Intenta de nuevo o contacta a soporte.');
     }catch(err){
       alert(`No pude crear el checkout: ${friendlyServiceError(err,'Este metodo de pago no esta disponible en este momento.')}`);
     }finally{
@@ -3700,15 +3700,15 @@ function PlansAccess({user}){
       <button onClick={()=>payPlan(p.name)} disabled={Boolean(paying)}>{paying.endsWith(p.name)?'Conectando...':(p.featured?'Plan recomendado':'Configurar')}</button>
     </div>)}</div>
     <div className="payment-panel panel">
-      <div className="payment-head"><div><small>Cobro real</small><h2>Metodos de pago para publicar</h2><p>El pago debe hacerse con un endpoint seguro. Las llaves secretas de Mercado Pago o Stripe nunca van dentro del React.</p></div><button onClick={()=>alert('Las credenciales de cobro se configuran de forma segura en el servidor, nunca en el navegador.')}>Ver configuracion</button></div>
+      <div className="payment-head"><div><small>Cobro real</small><h2>Metodos de pago</h2><p>El pago se procesa en un servidor seguro. Tus datos de pago nunca se exponen en el navegador.</p></div><button onClick={()=>alert('Tus datos de pago se procesan y protegen del lado del servidor, nunca en el navegador.')}>Como protegemos tu pago</button></div>
       <div className="payment-grid">{payments.map(m=><div className="payment-card" key={m.name}>
         <span>{m.tag}</span><h3>{m.name}</h3><p>{m.desc}</p>
         <button onClick={()=>payPlan('Profesional',m.name)} disabled={Boolean(paying)}>{paying.startsWith(m.name)?'Conectando...':m.action}</button>
       </div>)}</div>
-      <div className="pay-flow">{['Usuario elige plan','Checkout seguro','Webhook confirma pago','Firestore activa permisos','ZOEMEC libera funciones'].map((x,i)=><div key={x}><b>{i+1}</b><span>{x}</span></div>)}</div>
+      <div className="pay-flow">{['Usuario elige plan','Checkout seguro','Pago confirmado','Permisos activados','ZOEMEC libera funciones'].map((x,i)=><div key={x}><b>{i+1}</b><span>{x}</span></div>)}</div>
     </div>
     <div className="panel plan-matrix"><h2>Accesos por plan</h2><table><thead><tr><th>Funcion</th><th>Inicial</th><th>Profesional</th><th>Empresa</th></tr></thead><tbody>{features.map(r=><tr key={r[0]}>{r.map((c,i)=><td key={i}>{c}</td>)}</tr>)}</tbody></table></div>
-    <div className="prod-grid">{production.map(([t,d])=><div className="prod-step" key={t}><b>{t}</b><p>{d}</p><small>Configurado por variables seguras y reglas de Firebase</small></div>)}</div>
+    <div className="prod-grid">{production.map(([t,d])=><div className="prod-step" key={t}><b>{t}</b><p>{d}</p><small>Protegido con controles de seguridad y permisos por usuario</small></div>)}</div>
   </section>
 }
 function Reports({clients,apus,budgets}){
@@ -3717,7 +3717,7 @@ function Reports({clients,apus,budgets}){
   const segs=hasData ? [{label:'Presupuestos',value:budgets.length,color:'#9D6FD0'},{label:'APUs',value:apus.length,color:'#2A1740'},{label:'Clientes',value:clients.length,color:'#C7A35C'}].filter(s=>s.value>0) : [];
   const bars=[['Presupuestos enviados',Math.min(100,budgets.length*10),'#9D6FD0'],['APU creados',Math.min(100,apus.length*10),'#2A1740'],['Clientes nuevos',Math.min(100,clients.length*10),'#C7A35C']];
   const alerts=hasData ? [...apus.slice(0,2).map(a=>`APU ${a.clave || a.id} disponible para revisar`), ...budgets.slice(0,2).map(b=>`Presupuesto ${b.name} en cartera`)] : [];
-  return <section><PageHead kicker="Reportes" title="Tablero ejecutivo" desc="Ventas, presupuestos, clientes, APUs, avances, utilidad y rendimiento de la oficina." action={<button>Exportar reporte</button>} /><div className="report-hero"><div><small>Venta potencial</small><b>{money(total)}</b><span>acumulado</span></div><div><small>Pipeline</small><b>{budgets.length ? 'Activo' : '0%'}</b><span>tasa de cierre</span></div><div><small>Productividad</small><b>{apus.length}</b><span>APU generados</span></div><div><small>Clientes</small><b>{clients.length}</b><span>activos</span></div></div><div className="dash-charts report-grid"><div className="panel"><h2>Cotizacion mensual</h2><Spark points={budgets.length ? budgets.slice(-8).map(b=>Math.max(1,(Number(b.total)||0)/1000)) : [0,0,0,0,0,0,0,0]} h={110}/><div className="chart-foot"><span>{budgets.length ? 'Presupuestos reales' : 'Sin datos reales'}</span><b>{budgets.length ? 'Actualizado' : '0% acumulado'}</b></div></div><div className="panel chart-donut"><h2>Cartera por tipo de obra</h2><Donut segments={segs} center={hasData ? '100%' : '0%'} sub="cartera"/><div className="donut-legend">{segs.length ? segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>) : <EmptyState text="Sin datos para graficar."/>}</div></div></div><div className="report-bottom"><div className="panel"><h2>Resumen mensual</h2>{bars.map(([label,val,color])=><div className="bar-row" key={label}><span>{label}</span><i><b style={{width:val+'%',background:color}}></b></i><em className="bar-val">{val}%</em></div>)}</div><div className="panel"><h2>Alertas ejecutivas</h2>{alerts.length ? alerts.map(a=><div className="activity" key={a}><Icon name="bell" size={15}/> {a}</div>) : <EmptyState text="Sin alertas hasta que existan movimientos reales."/>}</div></div></section>
+  return <section><PageHead kicker="Reportes" title="Tablero ejecutivo" desc="Ventas, presupuestos, clientes, APUs, avances, utilidad y rendimiento de la oficina." action={<button onClick={()=>window.print()}>Exportar reporte</button>} /><div className="report-hero"><div><small>Venta potencial</small><b>{money(total)}</b><span>acumulado</span></div><div><small>Pipeline</small><b>{budgets.length ? 'Activo' : '0%'}</b><span>tasa de cierre</span></div><div><small>Productividad</small><b>{apus.length}</b><span>APU generados</span></div><div><small>Clientes</small><b>{clients.length}</b><span>activos</span></div></div><div className="dash-charts report-grid"><div className="panel"><h2>Cotizacion mensual</h2><Spark points={budgets.length ? budgets.slice(-8).map(b=>Math.max(1,(Number(b.total)||0)/1000)) : [0,0,0,0,0,0,0,0]} h={110}/><div className="chart-foot"><span>{budgets.length ? 'Presupuestos reales' : 'Sin datos reales'}</span><b>{budgets.length ? 'Actualizado' : '0% acumulado'}</b></div></div><div className="panel chart-donut"><h2>Cartera por tipo de obra</h2><Donut segments={segs} center={hasData ? '100%' : '0%'} sub="cartera"/><div className="donut-legend">{segs.length ? segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>) : <EmptyState text="Sin datos para graficar."/>}</div></div></div><div className="report-bottom"><div className="panel"><h2>Resumen mensual</h2>{bars.map(([label,val,color])=><div className="bar-row" key={label}><span>{label}</span><i><b style={{width:val+'%',background:color}}></b></i><em className="bar-val">{val}%</em></div>)}</div><div className="panel"><h2>Alertas ejecutivas</h2>{alerts.length ? alerts.map(a=><div className="activity" key={a}><Icon name="bell" size={15}/> {a}</div>) : <EmptyState text="Sin alertas hasta que existan movimientos reales."/>}</div></div></section>
 }
 
 createRoot(document.getElementById('root')).render(<App />);

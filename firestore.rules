@@ -10,9 +10,20 @@ service cloud.firestore {
       return signedIn() && request.auth.uid == uid;
     }
 
+    // Misma logica de administrador que el codigo (src/domain/permissions.js,
+    // server/api-lib/_authGuard.mjs): antes esta funcion solo aceptaba
+    // role == 'admin' exacto en Firestore, sin variantes ni respaldo. Si ese
+    // campo no traia exactamente ese valor, ni el custom claim de Firebase ni
+    // el correo del admin real servian de nada aqui (aunque el codigo si los
+    // aceptara), y funciones como listar Usuarios en Panel Admin fallaban con
+    // "Missing or insufficient permissions" para un administrador real.
     function isAdmin() {
-      return signedIn()
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      return signedIn() && (
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role.lower()
+          in ['admin', 'administrator', 'administrador', 'superadmin']
+        || request.auth.token.admin == true
+        || request.auth.token.email.lower() == 'dianalopez161184@gmail.com'
+      );
     }
 
     match /users/{uid}/state/{stateKey} {

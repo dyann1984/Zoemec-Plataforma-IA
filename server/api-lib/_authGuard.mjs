@@ -58,13 +58,22 @@ function normalizePlan(plan){
   return PLAN_RULES[plan] ? plan : 'Gratis';
 }
 
-/* Misma logica que isAdminUser en el frontend (src/main.jsx): no confiar en un
-   solo valor exacto de "role". Acepta variantes normalizadas, custom claim de
-   Firebase (decoded.admin === true) o correo en VITE_ADMIN_EMAILS (la misma
-   variable que usa el cliente; Vercel la expone igual en runtime de funciones). */
+/* Misma logica que isAdminUser en el frontend (src/domain/permissions.js): no
+   confiar en un solo valor exacto de "role". Acepta variantes normalizadas,
+   custom claim de Firebase (decoded.admin === true) o correo en la lista de
+   administradores. VITE_ADMIN_EMAILS/ADMIN_EMAILS nunca se configuraron en
+   Vercel; la variable que si esta configurada ahi es SUPERADMIN_EMAILS (se
+   lee tambien, ademas de las otras dos por compatibilidad). Se agrega el
+   mismo correo de respaldo fijo que ya usa el cliente (permissions.js) para
+   que el admin real de la plataforma no dependa de una variable de entorno
+   ausente: sin este respaldo, requireAdmin/requireFeature nunca reconocian a
+   ese usuario como admin en el servidor aunque el frontend si lo mostrara
+   como admin (rol tomado solo de Firestore, cuota y limite de ráfaga
+   aplicados como si fuera un usuario normal). */
 const ADMIN_ROLE_VALUES = new Set(['admin', 'administrator', 'administrador', 'superadmin']);
-const ADMIN_EMAILS = String(process.env.VITE_ADMIN_EMAILS || process.env.ADMIN_EMAILS || '')
-  .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+const ADMIN_EMAILS = String(
+  process.env.VITE_ADMIN_EMAILS || process.env.ADMIN_EMAILS || process.env.SUPERADMIN_EMAILS || 'dianalopez161184@gmail.com'
+).split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
 function normalizeRoleValue(v){ return String(v ?? '').trim().toLowerCase(); }
 function isAdminProfile(decoded, profile){
   const role = normalizeRoleValue(profile?.role);

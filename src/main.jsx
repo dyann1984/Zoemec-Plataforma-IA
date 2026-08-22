@@ -43,6 +43,7 @@ import { enrichAPUWithMarketPrices } from './domain/priceIntelligence.js';
 import { libKey, enrichLibraryMeta, scoreLibraryFile } from './domain/library.js';
 import { INSUMO_STATES, applyInsumoReview, extractValidatedCatalogRows } from './domain/libraryReview.js';
 import { toApuSeed } from './domain/planoReview.js';
+import { emptyApuWorkspaceState, removeBatchApus } from './domain/apuWorkspace.js';
 import { TechnicalCenter } from './features/technical-center/TechnicalCenter.jsx';
 import { AdminPanel } from './features/admin/AdminPanel.jsx';
 import { ProfessionalApuEditor } from './features/apu/ProfessionalApuEditor.jsx';
@@ -1309,6 +1310,12 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   const [excelInfo,setExcelInfo]=useState(null);
   const [aiStatus,setAiStatus]=useState('');
   const [conceptBatch,setConceptBatch]=useState(null);
+  // IDs de los APUs creados por el ULTIMO lote de catalogo generado (RC4):
+  // "Limpiar trabajo" los retira de la lista del proyecto para que un
+  // catalogo nuevo nunca herede resultados del anterior. Nunca incluye APUs
+  // guardados por otras vias (concepto suelto, sesiones previas), solo los
+  // que produjo generateSelectedBatch la ultima vez.
+  const [lastBatchApuIds,setLastBatchApuIds]=useState([]);
   /* RC4 Fase 2 (Planos IA / Takeoff): recoge la semilla de concepto dejada por
      PlanoTakeoff (toApuSeed de un elemento VALIDADO_POR_USUARIO) y precarga el
      panel "Generar con IA". No dispara la generacion por su cuenta: el
@@ -1349,20 +1356,36 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   const clearFileInputs = () => [priceCatalogInputRef, fullExcelInputRef, conceptCatalogInputRef, mainExcelInputRef].forEach(ref => { if(ref.current) ref.current.value = ''; });
   const resetAPUForm = () => {
     clearFileInputs();
-    setConcept('');
-    setAiUnit('');
-    setAiQty('');
+    const empty = emptyApuWorkspaceState();
+    setConcept(empty.concept);
+    setAiUnit(empty.aiUnit);
+    setAiQty(empty.aiQty);
     setApu(makeEmptyAPU());
-    setAiOpen(false);
-    setExcelInfo(null);
-    setConceptBatch(null);
-    setBatchAPUs([]);
-    setAiStatus('');
-    setBatchBusy(false);
-    setShowExecutive(false);
-    setBatchSelection(null);
-    setBatchSearch('');
-    setBatchResult(null);
+    setAiOpen(empty.aiOpen);
+    setExcelInfo(empty.excelInfo);
+    setConceptBatch(empty.conceptBatch);
+    setBatchAPUs(empty.batchAPUs);
+    setAiStatus(empty.aiStatus);
+    setBatchBusy(empty.batchBusy);
+    setShowExecutive(empty.showExecutive);
+    setBatchSelection(empty.batchSelection);
+    setBatchSearch(empty.batchSearch);
+    setBatchResult(empty.batchResult);
+  };
+  /* "Limpiar trabajo" (independiente de "Crear manualmente / Limpiar"):
+     restablece TODO el estado de trabajo de este modulo -- catalogo de
+     precios cargado, archivo Excel actual, conceptos detectados/
+     seleccionados, duplicados, progreso y resultado de la ultima
+     generacion, y los APUs que produjo el ULTIMO lote (nunca APUs
+     guardados por otra via ni de sesiones anteriores, ver removeBatchApus)
+     -- para que cargar un catalogo nuevo nunca herede nada del anterior. No
+     toca Biblioteca, proyectos, usuarios ni presupuestos ya guardados. */
+  const clearWorkspace = () => {
+    if(!window.confirm('¿Limpiar todo el trabajo actual de APU Inteligente?\n\nSe perdera: el catalogo cargado, el archivo Excel actual, los conceptos detectados y seleccionados, los duplicados, el progreso y los APUs generados en este lote.\n\nNo se borra Biblioteca, proyectos, usuarios ni presupuestos ya guardados.\n\nEsta accion no se puede deshacer.')) return;
+    setApus(prev => removeBatchApus(prev, lastBatchApuIds));
+    setLastBatchApuIds([]);
+    setCatalog([]);
+    resetAPUForm();
   };
   // Clave de agrupacion SOLO para la revision de duplicados en pantalla: a
   // diferencia de conceptApuKey (que ademas usa clave/codigo y P.U. de
@@ -1411,6 +1434,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       const apuList = await buildBatchAPUs(selectedList);
       const taggedApus = apuList.map(a => ({ ...a, projectId: activeProjectId }));
       setApus(prev => [...taggedApus, ...prev.filter(x => !taggedApus.some(t => t.clave === x.clave))]);
+      setLastBatchApuIds(taggedApus.map(a => a.id));
       const items = apuList.map(a => ({ concept: a.concept, unit: a.unit, qty: Number(a.cantidadObra ?? a.sourceQty ?? 1) || 1, pu: a.calculated?.pu ?? calcAPU(a).pu }));
       const subtotal = items.reduce((s, it) => s + Number(it.qty) * Number(it.pu), 0);
       const iva = subtotal * DEFAULT_IVA_RATE / 100;
@@ -1914,6 +1938,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         <label className="up-btn ghost-up">Subir catálogo de conceptos<input ref={conceptCatalogInputRef} type="file" accept=".xlsx,.csv" hidden onChange={e=>importConceptCatalog(e.target.files[0])}/></label>
         {catalog.length>0 && <span className="cat-badge"><Icon name="presupuestos" size={14}/> Catálogo: {catalog.length} insumos</span>}
         <button className="soft" type="button" onClick={resetAPUForm}>Crear manualmente / Limpiar</button>
+        <button className="soft danger" type="button" onClick={clearWorkspace} title="Restablece por completo el trabajo de este módulo: catálogo, conceptos, selección, duplicados y APUs generados en este lote.">Limpiar trabajo</button>
       </div>
       <button type="button" className="link-inline" onClick={generate}>¿Prefieres partir de una matriz base sin IA? Generar desarrollo</button>
       {aiBusy && <AIProgress active={aiBusy}/>}

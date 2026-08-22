@@ -106,7 +106,7 @@ test('E2E catalogo Excel real (sanitizado): deteccion de encabezado -> extraccio
     const raw = await readXlsxFileNode(fixturePath);
     assert.ok(Array.isArray(raw) && raw.length === 2 && raw.every(s => Array.isArray(s.data)), 'el fixture debe tener 2 hojas reales, forma {sheet,data}[]');
     const sheetBlocks = raw.map(s => ({ sheetName: s.sheet, rows: s.data }));
-    const concepts = extractConceptsFromWorkbookRows(sheetBlocks);
+    const { concepts } = extractConceptsFromWorkbookRows(sheetBlocks);
 
     // 2) Casos de regresion obligatorios exactos.
     const byCodeAndQty = (code, qty) => concepts.find(c => c.code === String(code) && Math.abs(c.qty - qty) < 1e-9);

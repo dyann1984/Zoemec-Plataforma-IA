@@ -433,22 +433,32 @@ export function extractConceptsFromSheetRows(normalized, sheetName=''){
     return Boolean(!code && concept && concept.length > 4 && !unitRe.test(unit) && !qty && !pu && !importe && !isNoiseConcept(concept));
   };
   // Encabezados reales casi siempre agregan un calificativo despues de "P.U."
-  // (p. ej. "P.U. PROFORMA", "P.U. VENTA", "PRECIO UNITARIO CON IVA"): una
-  // coincidencia exacta anclada nunca los reconoce. Se compara sin puntos y
-  // permitiendo texto adicional despues del prefijo esperado.
+  // o "Unidad" (p. ej. "P.U. PROFORMA", "P.U. VENTA", "PRECIO UNITARIO CON
+  // IVA", "Unidad de medida"): una coincidencia exacta anclada nunca los
+  // reconoce. Se compara sin puntos y permitiendo texto adicional despues
+  // del prefijo esperado.
   const startsWithHeaderPrefix = (text, prefixes) => {
     const flat = text.replace(/\./g,'').replace(/\s+/g,' ').trim();
     return prefixes.some(p => flat === p || flat.startsWith(p + ' '));
   };
   let header = -1;
   let cCode = -1, cConcept = -1, cUnit = -1, cQty = -1, cPU = -1, cImporte = -1;
-  for(let i=0;i<Math.min(normalized.length,120);i++){
+  // Mejor candidato PARCIAL visto mientras se busca un encabezado completo:
+  // permite un diagnostico util ("encontre Descripcion en la fila N pero
+  // ninguna Unidad ni Cantidad") en vez de un error generico cuando ninguna
+  // fila junta las tres columnas minimas.
+  let bestPartial = null;
+  const rowsScanned = Math.min(normalized.length, 120);
+  for(let i=0;i<rowsScanned;i++){
     const row = normalized[i].map(norm);
     const conceptIdx = row.findIndex(x=>/concepto|descripcion|descrip/.test(x));
-    const unitIdx = row.findIndex(x=>/^(und\.?|unidad|u\.?m\.?|um)$/.test(x));
+    const unitIdx = row.findIndex(x=>startsWithHeaderPrefix(x, ['unidad','und','u m','um']));
     const qtyIdx = row.findIndex(x=>/cantidad|cant\.?|volumen|cantid/.test(x));
     const puIdx = row.findIndex(x=>startsWithHeaderPrefix(x, ['pu','p u','precio unitario','precio','costo unitario']));
     const importeIdx = row.findIndex(x=>/importe|total|monto/.test(x));
+    if(conceptIdx > -1 && !bestPartial){
+      bestPartial = { row: i, unitIdx, qtyIdx };
+    }
     if(conceptIdx > -1 && (unitIdx > -1 || qtyIdx > -1)){
       header = i;
       cConcept = conceptIdx;
@@ -456,7 +466,7 @@ export function extractConceptsFromSheetRows(normalized, sheetName=''){
       cQty = qtyIdx;
       cPU = puIdx;
       cImporte = importeIdx;
-      cCode = row.findIndex(x=>/codigo|clave/.test(x));
+      cCode = row.findIndex(x=>/codigo|clave|^no\.?$|^numero$|^num\.?$|partida/.test(x));
       break;
     }
   }
@@ -495,89 +505,62 @@ export function extractConceptsFromSheetRows(normalized, sheetName=''){
     }
     flush();
   }
-  if(!concepts.length){
-    for(let i=0;i<normalized.length;i++){
-      const row = normalized[i] || [];
-      for(let j=0;j<row.length;j++){
-        const concept = clean(row[j]);
-        if(isNoiseConcept(concept) || concept.length < 18) continue;
-        const lookAhead = row.slice(j+1, Math.min(row.length, j+12));
-        const relUnit = lookAhead.findIndex(v=>unitRe.test(clean(v)));
-        if(relUnit < 0) continue;
-        const unitIndex = j + 1 + relUnit;
-        let qtyIndex = -1;
-        for(let k=unitIndex+1;k<Math.min(row.length, unitIndex+6);k++){
-          if(asNumber(row[k]) > 0){ qtyIndex = k; break; }
-        }
-        if(qtyIndex < 0) continue;
-        let pu = 0;
-        let importe = 0;
-        for(let k=qtyIndex+1;k<Math.min(row.length, qtyIndex+7);k++){
-          const n = asNumber(row[k]);
-          if(n > 0 && !pu) pu = n;
-          else if(n > 0 && !importe) importe = n;
-        }
-        const previous = row.slice(Math.max(0,j-4), j).map(clean).filter(Boolean);
-        const code = previous.find(v=>/^[A-Z0-9][A-Z0-9._\-\/]{1,20}$/i.test(v)) || '';
-        addConcept(concepts, { code, concept, unit:row[unitIndex], qty:asNumber(row[qtyIndex]), referencePU:pu, importe, rowNumber:i+1 });
-        break;
-      }
+  // Sin respaldo posicional: si ninguna fila junta descripcion/concepto +
+  // (unidad o cantidad), NO se adivinan columnas por posicion (requisito
+  // explicito: la confianza estructural insuficiente debe reportarse, nunca
+  // completarse con una suposicion). El diagnostico describe exactamente lo
+  // que si se encontro en esta hoja para que la causa sea accionable.
+  let diagnostic = null;
+  if(header < 0){
+    if(bestPartial){
+      const found = [];
+      if(bestPartial.unitIdx > -1) found.push('unidad');
+      if(bestPartial.qtyIdx > -1) found.push('cantidad');
+      diagnostic = {
+        sheetName,
+        headerRow: null,
+        message: found.length
+          ? `se reconocio una columna de descripcion/concepto en la fila ${bestPartial.row + 1}, pero falto reconocer ${found.length === 2 ? 'unidad y cantidad juntas' : (found[0] === 'unidad' ? 'la columna de cantidad' : 'la columna de unidad')} en esa misma fila.`
+          : `se reconocio una columna de descripcion/concepto en la fila ${bestPartial.row + 1}, pero no se encontro ninguna columna de unidad ni de cantidad en esa fila.`
+      };
+    }else{
+      diagnostic = {
+        sheetName,
+        headerRow: null,
+        message: `no se encontro ninguna columna de descripcion/concepto reconocible en las primeras ${rowsScanned} filas analizadas.`
+      };
     }
+  }else if(!concepts.length){
+    diagnostic = {
+      sheetName,
+      headerRow: header + 1,
+      message: `se reconocio un encabezado en la fila ${header + 1} (descripcion/concepto${cUnit > -1 ? ' + unidad' : ''}${cQty > -1 ? ' + cantidad' : ''}), pero ninguna fila debajo tuvo a la vez descripcion, unidad valida y cantidad mayor a cero.`
+    };
   }
-  // Este tercer intento (busqueda posicional de "unidad" en cualquier celda)
-  // es SOLO un ultimo respaldo para catalogos sin encabezado claro -- debe
-  // correr unicamente cuando los intentos anteriores no encontraron NADA,
-  // nunca como pasada adicional sobre un catalogo ya extraido correctamente
-  // (si corriera siempre, re-detectaria los mismos renglones por posicion y
-  // los agregaria como si fueran conceptos nuevos, ya que la identidad aqui
-  // es hoja+fila, no el contenido -- no hay deduplicacion por contenido que
-  // los absorba dentro de esta misma hoja).
-  if(!concepts.length){
-    const flattened = normalized.map((row, i) => ({
-      row,
-      rowNumber:i+1,
-      cells:(row || []).map(clean),
-      nonEmpty:(row || []).map(clean).filter(Boolean)
-    })).filter(r => r.nonEmpty.length);
-    const codeRe = /^[A-Z0-9][A-Z0-9._\-\/]{1,24}$/i;
-    flattened.forEach(({rowNumber, nonEmpty}) => {
-      for(let i=0;i<nonEmpty.length;i++){
-        const value = nonEmpty[i];
-        if(!unitRe.test(value)) continue;
-        const before = nonEmpty.slice(Math.max(0, i-6), i);
-        const after = nonEmpty.slice(i+1, i+8);
-        const qty = asNumber(after.find(v => asNumber(v) > 0));
-        if(!(qty > 0)) continue;
-        const conceptParts = before.filter(v => !unitRe.test(v) && !codeRe.test(v) && asNumber(v) === 0);
-        const concept = conceptParts.join(' ').replace(/\s+/g,' ').trim();
-        if(concept.length < 12 || isNoiseConcept(concept)) continue;
-        const code = before.find(v => codeRe.test(v)) || '';
-        const nums = after.map(asNumber).filter(n => n > 0);
-        const referencePU = nums[1] || 0;
-        const importe = nums[2] || (referencePU && qty ? referencePU * qty : 0);
-        addConcept(concepts, { code, concept, unit:value, qty, referencePU, importe, rowNumber });
-        break;
-      }
-    });
-  }
-  return concepts;
+  return { concepts, diagnostic };
 }
 /* Punto de entrada testeable sin navegador: recibe bloques ya leidos
    {sheetName, rows} (p. ej. desde read-excel-file/node en pruebas, o desde
    readSpreadsheetSheetBlocks en la app real) y aplica extraccion por hoja +
    deduplicacion SOLO entre hojas distintas. */
 export function extractConceptsFromWorkbookRows(sheetBlocks){
-  const perSheet = (sheetBlocks || []).map(({ sheetName, rows }) => ({
-    sheetName: sheetName || '',
-    concepts: extractConceptsFromSheetRows(normalizeSpreadsheetRows(rows), sheetName || '')
-  }));
-  return dedupeAcrossSheets(perSheet);
+  const perSheet = (sheetBlocks || []).map(({ sheetName, rows }) => {
+    const { concepts, diagnostic } = extractConceptsFromSheetRows(normalizeSpreadsheetRows(rows), sheetName || '');
+    return { sheetName: sheetName || '', concepts, diagnostic };
+  });
+  const concepts = dedupeAcrossSheets(perSheet);
+  const diagnostics = perSheet.filter(s => s.diagnostic).map(s => s.diagnostic);
+  return { concepts, diagnostics };
 }
 export async function parseRobustConceptCatalog(file){
   const blocks = await readSpreadsheetSheetBlocks(file);
-  const concepts = extractConceptsFromWorkbookRows(blocks);
-  if(!concepts.length) throw new Error('No encontre conceptos validos con descripcion, unidad y cantidad.');
-  return { fileName:file?.name || 'Catalogo importado', rows: blocks.flatMap(b => b.rows), concepts };
+  const { concepts, diagnostics } = extractConceptsFromWorkbookRows(blocks);
+  if(!concepts.length){
+    const sheetNames = blocks.map(b => b.sheetName || '(sin nombre)').join(', ');
+    const lines = diagnostics.map(d => `- Hoja "${d.sheetName || '(sin nombre)'}": ${d.message}`);
+    throw new Error(`No encontre un catalogo de conceptos reconocible. Hojas analizadas: ${sheetNames}.\n${lines.join('\n')}`);
+  }
+  return { fileName:file?.name || 'Catalogo importado', rows: blocks.flatMap(b => b.rows), concepts, diagnostics };
 }
 export function mergeCatalogs(base=[], incoming=[]){
   const map=new Map();

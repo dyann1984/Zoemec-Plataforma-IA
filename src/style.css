@@ -59,6 +59,8 @@ button.ghost:disabled:hover,button.secondary:disabled:hover{background:transpare
 button.soft{background:var(--mint);color:var(--petrol);box-shadow:none;border:1px dashed var(--line-2);font-weight:600;padding:8px 14px}
 button.soft:hover{background:#dff0ec;border-color:var(--teal)}
 button.soft:disabled:hover{background:var(--mint);border-color:var(--line-2)}
+button.soft.danger{background:#f6e3df;color:var(--danger);border:1px dashed var(--danger)}
+button.soft.danger:hover{background:#f3d3cc;border-color:var(--danger)}
 button.google{background:#fff;color:var(--ink);border:1px solid var(--line-2);box-shadow:none}
 a:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
 input,textarea,select{

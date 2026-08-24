@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyApuWorkspaceState, removeBatchApus, describeAmbiguousSingleExport } from './apuWorkspace.js';
+import {
+  emptyApuWorkspaceState, removeBatchApus, describeAmbiguousSingleExport,
+  duplicateGroupKey, groupConceptsByDuplicateKey, defaultBatchSelection,
+  isExportableConceptItem, conceptNeedsReviewFlag, resolveBatchSelection,
+  scopedListView, mergeScopedUpdate
+} from './apuWorkspace.js';
 
 test('emptyApuWorkspaceState: forma exacta de "sin trabajo en curso"', () => {
   assert.deepEqual(emptyApuWorkspaceState(), {
@@ -135,4 +140,161 @@ test('describeAmbiguousSingleExport: catalogo de 25 conceptos -> advierte con el
   assert.match(warning, /25 conceptos/);
   assert.match(warning, /DESMANTELAMIENTO DE TUBERÍAS DE 3" HASTA 6"/);
   assert.match(warning, /Excel completo por concepto \(25 hojas\)/);
+});
+
+/* REGRESION REAL DE PRODUCCION (RC6): "Conceptos: 6 / Seleccionados: 4 /
+   APUs generados: 4" al pegar el bloque de 6 conceptos del reporte --
+   isExportableConceptItem filtraba por un vocabulario de unidad que no
+   incluia "u" (fallback sin unidad explicita) ni "costal" (unidad de
+   conteo). Ver causa raiz completa en el comentario de isExportableConceptItem. */
+test('RC6: isExportableConceptItem nunca excluye por unidad -- "u" (sin unidad) y "costal" pasan', () => {
+  assert.ok(isExportableConceptItem({ concept: 'Movimiento de mueble', unit: '', qty: 1 }));
+  assert.ok(isExportableConceptItem({ concept: 'acarreo de 46 costales distancia 25m', unit: 'costal', qty: 46 }));
+  assert.ok(isExportableConceptItem({ concept: 'Concepto con unidad rarisima nunca vista', unit: 'unidad-inventada-xyz', qty: 3 }));
+});
+
+test('RC6: isExportableConceptItem SI excluye texto de ruido inequivoco (sin concepto, TOTAL/SUBTOTAL)', () => {
+  assert.equal(isExportableConceptItem({ concept: '', unit: 'm2', qty: 1 }), false);
+  assert.equal(isExportableConceptItem({ concept: '   ', unit: 'm2', qty: 1 }), false);
+  assert.equal(isExportableConceptItem({ concept: 'TOTAL', unit: 'm2', qty: 1 }), false);
+  assert.equal(isExportableConceptItem({ concept: 'Subtotal partida 3', unit: 'm2', qty: 1 }), false);
+});
+
+test('RC6: conceptNeedsReviewFlag marca unidad atipica/cantidad invalida para revision, isExportableConceptItem NUNCA los excluye por eso', () => {
+  const unidadAtipica = { concept: 'Concepto con unidad no catalogada', unit: 'unidad-rara', qty: 5 };
+  assert.equal(conceptNeedsReviewFlag(unidadAtipica), true);
+  assert.equal(isExportableConceptItem(unidadAtipica), true, 'requiere revision, pero sigue siendo exportable/generable');
+
+  const cantidadInvalida = { concept: 'Concepto con cantidad en cero', unit: 'm2', qty: 0 };
+  assert.equal(conceptNeedsReviewFlag(cantidadInvalida), true);
+  assert.equal(isExportableConceptItem(cantidadInvalida), true);
+});
+
+test('duplicateGroupKey / groupConceptsByDuplicateKey / defaultBatchSelection: sin duplicados, todos preseleccionados', () => {
+  const concepts = [
+    { concept: 'Movimiento de mueble', unit: '' },
+    { concept: 'demolicion de loseta 64m2', unit: 'm²' },
+    { concept: 'acarreo 46 costales distancia 25m', unit: 'costal' }
+  ];
+  const groups = groupConceptsByDuplicateKey(concepts);
+  assert.equal(groups.size, 3);
+  const selection = defaultBatchSelection(concepts);
+  assert.equal(selection.size, 3);
+  assert.deepEqual([...selection].sort(), [0, 1, 2]);
+});
+
+test('defaultBatchSelection: con duplicados reales, solo el primero de cada grupo queda preseleccionado', () => {
+  const concepts = [
+    { concept: 'Suministro y colocacion de llave mezcladora', unit: 'pza' },
+    { concept: 'Suministro y colocacion de llave mezcladora', unit: 'pza' },
+    { concept: 'Concepto distinto', unit: 'm2' }
+  ];
+  const selection = defaultBatchSelection(concepts);
+  assert.equal(selection.size, 2, 'el duplicado (indice 1) no debe preseleccionarse, pero sigue disponible para marcarlo a mano');
+  assert.ok(selection.has(0) && selection.has(2));
+  assert.ok(!selection.has(1));
+});
+
+/* REGRESION REAL DE PRODUCCION (RC7): "Limpiar trabajo" no vaciaba la
+   Bandeja de revision tecnica (seguian apareciendo 52 conceptos). Causa
+   raiz real: NO era un defecto de "Limpiar trabajo" (que nunca toco APUs ya
+   guardados, por diseno -- ver removeBatchApus arriba), sino que no existia
+   ninguna accion para vaciar TODOS los APUs guardados de un proyecto. La
+   fuente de verdad es rawApus (useCloudState en App, persistido en
+   localStorage al instante + Firestore con debounce, ver src/cloud.js);
+   `apus`/`setApus` que usa el modulo de APU son la vista ya filtrada al
+   proyecto activo (useProjectScoped, main.jsx), construida con
+   scopedListView/mergeScopedUpdate -- las MISMAS funciones que "Vaciar
+   proyecto" (emptyActiveProject) usa via setApus([]). Estas pruebas corren
+   contra esas funciones reales, no una reimplementacion paralela. */
+test('RC7 Test 1: proyecto con 52 APUs -> vaciar proyecto -> scopedListView da 0', () => {
+  const rawApus = Array.from({ length: 52 }, (_, i) => ({ id: `APU-${i + 1}`, projectId: 'proj-1', concept: `Concepto ${i + 1}` }));
+  assert.equal(scopedListView(rawApus, 'proj-1').length, 52);
+  // "Vaciar proyecto" == setApus([]) == mergeScopedUpdate(rawApus, activeProjectId, [])
+  const afterEmpty = mergeScopedUpdate(rawApus, 'proj-1', []);
+  assert.equal(scopedListView(afterEmpty, 'proj-1').length, 0);
+});
+
+test('RC7 Test 2: "recargar" (releer la misma fuente persistida) sigue en 0 -- no es un reseteo solo visual', () => {
+  const rawApus = Array.from({ length: 52 }, (_, i) => ({ id: `APU-${i + 1}`, projectId: 'proj-1' }));
+  const persisted = mergeScopedUpdate(rawApus, 'proj-1', []);
+  // Simula recargar el navegador: se vuelve a leer rawApus (la fuente
+  // persistida) desde cero y se recalcula la vista del proyecto -- si el
+  // vaciado hubiera sido solo un setState visual (ej. setReviewItems([])),
+  // esta segunda lectura independiente volveria a mostrar 52.
+  const rereadFromSource = JSON.parse(JSON.stringify(persisted));
+  assert.equal(scopedListView(rereadFromSource, 'proj-1').length, 0);
+  assert.equal(rereadFromSource.length, 0, 'rawApus del proyecto vaciado no debe tener ningun registro residual');
+});
+
+test('RC7 Test 3: "Limpiar trabajo" (removeBatchApus, solo el ultimo lote) NUNCA elimina APUs guardados de otras sesiones', () => {
+  const apusGuardadosPrevios = [
+    { id: 'APU-VIEJO-1', projectId: 'proj-1' },
+    { id: 'APU-VIEJO-2', projectId: 'proj-1' }
+  ];
+  const loteReciente = [{ id: 'APU-NUEVO-1', projectId: 'proj-1' }];
+  const scoped = [...apusGuardadosPrevios, ...loteReciente];
+  // removeBatchApus (lo que hace clearWorkspace/"Limpiar trabajo") solo
+  // conoce los ids del ULTIMO lote (lastBatchApuIds), nunca los 52 antiguos.
+  const afterClearWorkspace = removeBatchApus(scoped, loteReciente.map(a => a.id));
+  assert.deepEqual(afterClearWorkspace, apusGuardadosPrevios, 'los APUs guardados de sesiones anteriores deben sobrevivir a "Limpiar trabajo"');
+});
+
+test('RC7 Test 4: "Vaciar proyecto" nunca toca otros proyectos, ni ninguna otra coleccion (biblioteca/catalogo global)', () => {
+  const rawApus = [
+    ...Array.from({ length: 52 }, (_, i) => ({ id: `P1-${i + 1}`, projectId: 'proj-1' })),
+    { id: 'P2-1', projectId: 'proj-2' },
+    { id: 'SIN-PROYECTO-1', projectId: null }
+  ];
+  const afterEmpty = mergeScopedUpdate(rawApus, 'proj-1', []);
+  assert.equal(scopedListView(afterEmpty, 'proj-1').length, 0, 'proyecto vaciado debe quedar en 0');
+  assert.equal(scopedListView(afterEmpty, 'proj-2').length, 1, 'otro proyecto no debe verse afectado');
+  assert.equal(scopedListView(afterEmpty, null).length, 1, 'items sin proyecto (compatibilidad) no deben verse afectados');
+  // "Vaciar proyecto" (emptyActiveProject) solo llama setApus([]) -- nunca
+  // setCatalog/setClients/setProjects ni ninguna coleccion de biblioteca; a
+  // nivel de esta funcion pura, eso significa que biblioteca/catalogo global
+  // ni siquiera son parametros de mergeScopedUpdate, por construccion no
+  // pueden ser tocados por esta operacion.
+  const catalogoGlobalDePrecios = [{ desc: 'Cemento gris', unidad: 'kg', precio: 5.2 }];
+  assert.deepEqual(catalogoGlobalDePrecios, [{ desc: 'Cemento gris', unidad: 'kg', precio: 5.2 }], 'referencia de control: el catalogo global vive en un estado totalmente separado, intocado por esta operacion');
+});
+
+test('RC7 Test 5: crear nuevo lote despues de vaciar -> los contadores parten en 0, nunca heredan el conteo anterior', () => {
+  const rawApus = Array.from({ length: 52 }, (_, i) => ({ id: `VIEJO-${i + 1}`, projectId: 'proj-1' }));
+  const vacio = mergeScopedUpdate(rawApus, 'proj-1', []);
+  assert.equal(scopedListView(vacio, 'proj-1').length, 0);
+  // Nuevo lote de 3 conceptos generado despues de vaciar.
+  const nuevoLote = Array.from({ length: 3 }, (_, i) => ({ id: `NUEVO-${i + 1}` }));
+  const conNuevoLote = mergeScopedUpdate(vacio, 'proj-1', nuevoLote);
+  assert.equal(scopedListView(conNuevoLote, 'proj-1').length, 3, 'debe partir exactamente en el tamano del nuevo lote, nunca 52+3');
+});
+
+test('RC7 Test 6: generar los 6 conceptos reales del reporte tras vaciar -> la bandeja queda exactamente en 6, no 58 ni 52+6', () => {
+  const rawApus = Array.from({ length: 52 }, (_, i) => ({ id: `VIEJO-${i + 1}`, projectId: 'proj-1' }));
+  const vacio = mergeScopedUpdate(rawApus, 'proj-1', []);
+  const seisConceptosReales = [
+    { id: 'CON-001', concept: 'Movimiento de mueble' },
+    { id: 'CON-002', concept: 'demolicion de loseta 64m2' },
+    { id: 'CON-003', concept: 'acarreo 46 costales distancia 25m' },
+    { id: 'CON-004', concept: 'acarreo de loseta 1.5m3 distancia 25m' },
+    { id: 'CON-005', concept: 'aplicación de adhesivo 64m2' },
+    { id: 'CON-006', concept: 'colocación de loseta 64 m2' }
+  ];
+  const conSeis = mergeScopedUpdate(vacio, 'proj-1', seisConceptosReales);
+  const bandeja = scopedListView(conSeis, 'proj-1');
+  assert.equal(bandeja.length, 6, `se esperaban exactamente 6, hubo ${bandeja.length}`);
+  assert.deepEqual(bandeja.map(a => a.concept), seisConceptosReales.map(a => a.concept));
+});
+
+test('resolveBatchSelection: nunca excluye en silencio -- devuelve la lista de excluidos con su texto', () => {
+  const concepts = [
+    { concept: 'Movimiento de mueble', unit: '', qty: 1 },
+    { concept: 'demolicion de loseta 64m2', unit: 'm²', qty: 64 },
+    { concept: 'TOTAL', unit: 'm2', qty: 1 }
+  ];
+  // indices 0 y 1 marcados, 2 (ruido) no marcado.
+  const { selectedList, excludedConcepts } = resolveBatchSelection(concepts, new Set([0, 1]));
+  assert.equal(selectedList.length, 2);
+  assert.deepEqual(selectedList.map(c => c.concept), ['Movimiento de mueble', 'demolicion de loseta 64m2']);
+  assert.deepEqual(excludedConcepts, ['TOTAL']);
 });

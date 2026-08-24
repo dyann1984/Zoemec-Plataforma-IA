@@ -43,7 +43,11 @@ import { enrichAPUWithMarketPrices } from './domain/priceIntelligence.js';
 import { libKey, enrichLibraryMeta, scoreLibraryFile } from './domain/library.js';
 import { INSUMO_STATES, applyInsumoReview, extractValidatedCatalogRows } from './domain/libraryReview.js';
 import { toApuSeed } from './domain/planoReview.js';
-import { emptyApuWorkspaceState, removeBatchApus, describeAmbiguousSingleExport } from './domain/apuWorkspace.js';
+import {
+  emptyApuWorkspaceState, removeBatchApus, describeAmbiguousSingleExport,
+  duplicateGroupKey, groupConceptsByDuplicateKey, defaultBatchSelection, isExportableConceptItem,
+  conceptNeedsReviewFlag, resolveBatchSelection, scopedListView, mergeScopedUpdate
+} from './domain/apuWorkspace.js';
 import {
   ITEM_STATUS, createBatchJob, fingerprintCatalog, selectNextBatch,
   markItemStatus, markItemError, markItemDone, retryFailedItems, cancelJob,
@@ -232,15 +236,12 @@ function NoticeHost(){
    la vuelve a fusionar con los items de los demás proyectos sin tocarlos. */
 function useProjectScoped(list, setList, activeProjectId){
   const scopeKey = activeProjectId ?? null;
-  const scoped = useMemo(() => (list || []).filter(x => (x?.projectId ?? null) === scopeKey), [list, scopeKey]);
+  const scoped = useMemo(() => scopedListView(list, scopeKey), [list, scopeKey]);
   const setScoped = (next) => {
     setList(prevList => {
-      const prev = prevList || [];
-      const others = prev.filter(x => (x?.projectId ?? null) !== scopeKey);
-      const prevScoped = prev.filter(x => (x?.projectId ?? null) === scopeKey);
+      const prevScoped = scopedListView(prevList, scopeKey);
       const nextScoped = typeof next === 'function' ? next(prevScoped) : next;
-      const tagged = (nextScoped || []).map(x => (x && (x.projectId ?? null) === null) ? { ...x, projectId: scopeKey } : x);
-      return [...others, ...tagged];
+      return mergeScopedUpdate(prevList, scopeKey, nextScoped);
     });
   };
   return [scoped, setScoped];
@@ -1412,9 +1413,19 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
      generacion, y los APUs que produjo el ULTIMO lote (nunca APUs
      guardados por otra via ni de sesiones anteriores, ver removeBatchApus)
      -- para que cargar un catalogo nuevo nunca herede nada del anterior. No
-     toca Biblioteca, proyectos, usuarios ni presupuestos ya guardados. */
+     toca Biblioteca, proyectos, usuarios ni presupuestos ya guardados.
+
+     RC7 -- aclaracion explicita (reporte real: usuario esperaba que esto
+     tambien vaciara la Bandeja de revision tecnica del proyecto y no
+     entendio por que seguian ahi 52 conceptos): esto es COMPORTAMIENTO
+     INTENCIONAL, no un defecto -- "Limpiar trabajo" nunca toco APUs ya
+     guardados del proyecto (de sesiones anteriores, importaciones previas,
+     etc.), solo el lote que se acaba de generar en ESTA sesion. Para vaciar
+     el proyecto completo (todos sus APUs guardados) existe ahora la accion
+     separada "Vaciar proyecto" (ver emptyActiveProject), con su propia
+     confirmacion explicita -- nunca se combinan en un mismo boton. */
   const clearWorkspace = () => {
-    if(!window.confirm('¿Limpiar todo el trabajo actual de APU Inteligente?\n\nSe perdera: el catalogo cargado, el archivo Excel actual, los conceptos detectados y seleccionados, los duplicados, el progreso y los APUs generados en este lote.\n\nNo se borra Biblioteca, proyectos, usuarios ni presupuestos ya guardados.\n\nEsta accion no se puede deshacer.')) return;
+    if(!window.confirm('¿Limpiar todo el trabajo actual de APU Inteligente?\n\nSe perdera: el catalogo cargado, el archivo Excel actual, los conceptos detectados y seleccionados, los duplicados, el progreso y los APUs generados en este lote.\n\nNo se borra Biblioteca, proyectos, usuarios, presupuestos ni APUs YA GUARDADOS en este proyecto (para eso usa "Vaciar proyecto").\n\nEsta accion no se puede deshacer.')) return;
     // Si hay un lote de la cola corriendo, se cancela primero (cooperativo:
     // deja terminar la llamada en vuelo, nunca la corta a medias) -- de lo
     // contrario quedaria un lazo "zombie" escribiendo en Firestore/apus
@@ -1427,28 +1438,47 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     setCatalog([]);
     resetAPUForm();
   };
-  // Clave de agrupacion SOLO para la revision de duplicados en pantalla: a
-  // diferencia de conceptApuKey (que ademas usa clave/codigo y P.U. de
-  // referencia, pensada para el cache de generacion con IA de buildBatchAPUs),
-  // aqui interesa detectar "es el mismo concepto tecnico" sin importar que cada
-  // renglon duplicado en un Excel real casi siempre trae un codigo/fila
-  // distinto -- si se usara conceptApuKey aqui, ningun duplicado real se
-  // agruparia nunca porque el codigo ya los distingue.
-  const duplicateGroupKey = (item) => `${String(item?.concept||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim()}|${normalizeUnitLabel(item?.unit||'')}`;
-  const batchGroups = useMemo(() => {
-    const groups = new Map();
-    (conceptBatch?.concepts || []).forEach((item, index) => {
-      const key = duplicateGroupKey(item);
-      if(!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(index);
-    });
-    return groups;
-  }, [conceptBatch]);
+  /* "Vaciar proyecto" (RC7, causa raiz del reporte "Limpiar trabajo no
+     limpia el proyecto activo"): accion EXPLICITA y separada de "Limpiar
+     trabajo" para borrar TODOS los APUs guardados del proyecto activo (la
+     Bandeja de revision tecnica completa), no solo el ultimo lote.
+
+     Fuente de verdad real de los APUs mostrados en la Bandeja: rawApus
+     (useCloudState(user,'zoemec-apus',[]) en App) -- persistido en
+     localStorage al instante y en Firestore (users/{uid}/state/zoemec-apus)
+     con debounce de 1.2s, ver src/cloud.js. `apus`/`setApus` (los que usa
+     este componente y RevisionBandeja) ya son la VISTA filtrada al proyecto
+     activo via useProjectScoped -- setApus([]) escribe sobre esa misma
+     fuente de verdad (nunca un setState solo visual): useProjectScoped funde
+     el arreglo vacio con mergeScopedUpdate, que reemplaza en rawApus SOLO
+     los items con projectId===activeProjectId y preserva intactos los de
+     cualquier otro proyecto (ver src/domain/apuWorkspace.js). Por eso
+     "despues de F5 siguen los 52" NUNCA puede pasar con esta funcion: al
+     recargar, useCloudState relee localStorage (ya vacio, escrito de forma
+     sincrona) y luego reconcilia con Firestore por updatedAt.
+
+     Nunca toca: catalogo de precios, presupuestos, biblioteca, clientes,
+     proyectos ni usuarios -- solo la coleccion de APUs del proyecto activo. */
+  const emptyActiveProject = () => {
+    if(!activeProjectId){ alert('No hay un proyecto activo que vaciar.'); return; }
+    const nombreProyecto = activeProject?.name || 'este proyecto';
+    if(!window.confirm(`¿Seguro que deseas eliminar los APUs y conceptos de este proyecto? Esta acción no se puede deshacer.\n\nSe eliminarán TODOS los APUs y conceptos guardados del proyecto "${nombreProyecto}" (la Bandeja de revisión técnica completa).\n\nNO se elimina: el proyecto en sí, la Biblioteca técnica, el catálogo de precios, los clientes ni ningún otro proyecto.`)) return;
+    if(activeJob && !isJobComplete(activeJob)) cancelRequestedRef.current = true;
+    setActiveJob(null);
+    if(firebaseReady && user?.uid) clearActiveBatchId(db, user.uid).catch(() => {});
+    setApus([]);
+    setLastBatchApuIds([]);
+    resetAPUForm();
+    setAiStatus('Proyecto vaciado: se eliminaron todos los APUs y conceptos guardados de este proyecto.');
+  };
+  // Agrupacion de duplicados y preseleccion: logica pura en
+  // src/domain/apuWorkspace.js (duplicateGroupKey/groupConceptsByDuplicateKey/
+  // defaultBatchSelection), para que la UI y las pruebas de integracion usen
+  // exactamente la misma regla -- ver Test RC6 de seleccion/generacion.
+  const batchGroups = useMemo(() => groupConceptsByDuplicateKey(conceptBatch?.concepts), [conceptBatch]);
   useEffect(() => {
     if(!conceptBatch?.concepts?.length){ setBatchSelection(null); return; }
-    const sel = new Set();
-    batchGroups.forEach(indices => sel.add(indices[0]));
-    setBatchSelection(sel);
+    setBatchSelection(defaultBatchSelection(conceptBatch.concepts));
     setBatchResult(null);
   }, [conceptBatch]);
   const batchDuplicateRows = conceptBatch?.concepts ? conceptBatch.concepts.length - batchGroups.size : 0;
@@ -1461,11 +1491,17 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   }, [conceptBatch, batchSearch]);
   const toggleBatchRow = (index) => setBatchSelection(prev => { const n = new Set(prev); n.has(index) ? n.delete(index) : n.add(index); return n; });
   const selectAllBatchRows = () => setBatchSelection(new Set((conceptBatch?.concepts||[]).map((_,i)=>i)));
-  const selectUniqueBatchRows = () => { const sel=new Set(); batchGroups.forEach(indices=>sel.add(indices[0])); setBatchSelection(sel); };
+  const selectUniqueBatchRows = () => setBatchSelection(defaultBatchSelection(conceptBatch?.concepts));
   const selectNoBatchRows = () => setBatchSelection(new Set());
   const generateSelectedBatch = async () => {
     if(!conceptBatch?.concepts?.length || batchBusy) return;
-    const selectedList = conceptBatch.concepts.filter((_, i) => batchSelection?.has(i)).filter(isExportableConceptItem);
+    // resolveBatchSelection (src/domain/apuWorkspace.js) es la UNICA fuente
+    // de verdad de "que se genera vs que se excluye" -- generateSelectedBatch,
+    // exportConceptBatch y exportConceptBatchPDF la comparten, para que los 3
+    // caminos nunca puedan dar resultados distintos entre si (Fase "consistencia
+    // de contadores" del reporte RC6). excludedConcepts nunca se descarta en
+    // silencio: se muestra siempre que exista, ver batchResult.excludedConcepts.
+    const { selectedList, excludedConcepts } = resolveBatchSelection(conceptBatch.concepts, batchSelection);
     if(!selectedList.length){ alert('Selecciona al menos un concepto valido (con descripcion) para generar.'); return; }
     if(!requireProject()) return;
     setBatchBusy(true);
@@ -1487,7 +1523,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       const budget = { id:'PRE-'+uid(), name:`Presupuesto ${sourceName}`, client:'Cliente por definir', items, ivaRate:DEFAULT_IVA_RATE, total:subtotal+iva, date:new Date().toLocaleDateString('es-MX') };
       if(items.length) setBudgets(prev => [budget, ...prev]);
       const summary = summarizeJob(finished);
-      setBatchResult({ conceptsTotal: conceptBatch.concepts.length, selected: selectedList.length, generated: apuList.length, review: summary.requiere_revision, errors: summary.error, cancelled: finished.cancelled, budget });
+      setBatchResult({ conceptsTotal: conceptBatch.concepts.length, selected: selectedList.length, generated: apuList.length, review: summary.requiere_revision, errors: summary.error, cancelled: finished.cancelled, budget, excludedConcepts });
       setAiStatus(finished.cancelled
         ? `Lote cancelado: ${summary.done} de ${summary.total} conceptos procesados antes de cancelar.`
         : `Lote terminado: ${summary.terminado} listos, ${summary.requiere_revision} con observaciones, ${summary.error} con error.`);
@@ -1932,7 +1968,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
           job = markItemStatus(job, entry.itemKey, ITEM_STATUS.BUSCANDO_RECURSOS);
           const v2 = await generateBatchAPU(entry.item, entry.index);
           job = markItemStatus(job, entry.itemKey, ITEM_STATUS.VALIDANDO);
-          const requiresReview = Boolean(v2.templateFallback) || v2.validationStatus === 'REQUIERE REVISION';
+          const requiresReview = Boolean(v2.templateFallback) || v2.validationStatus === 'REQUIERE REVISION' || conceptNeedsReviewFlag(entry.item);
           job = markItemDone(job, entry.itemKey, v2, { requiresReview });
           const finishedEntry = job.items.find(it => it.itemKey === entry.itemKey);
           if(persist) await saveItemState(db, user.uid, job.batchId, finishedEntry).catch(() => {});
@@ -2132,7 +2168,8 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         <label className="up-btn ghost-up">Subir catálogo de conceptos<input ref={conceptCatalogInputRef} type="file" accept=".xlsx,.csv" hidden onChange={e=>importConceptCatalog(e.target.files[0])}/></label>
         {catalog.length>0 && <span className="cat-badge"><Icon name="presupuestos" size={14}/> Catálogo: {catalog.length} insumos</span>}
         <button className="soft" type="button" onClick={resetAPUForm}>Crear manualmente / Limpiar</button>
-        <button className="soft danger" type="button" onClick={clearWorkspace} title="Restablece por completo el trabajo de este módulo: catálogo, conceptos, selección, duplicados y APUs generados en este lote.">Limpiar trabajo</button>
+        <button className="soft danger" type="button" onClick={clearWorkspace} title="Restablece por completo el trabajo de este módulo: catálogo, conceptos, selección, duplicados y APUs generados en este lote. NO borra APUs ya guardados del proyecto.">Limpiar trabajo</button>
+        {activeProjectId && <button className="danger-solid" type="button" onClick={emptyActiveProject} title="Elimina PERMANENTEMENTE todos los APUs y conceptos guardados de este proyecto (la Bandeja de revisión técnica completa). No elimina el proyecto, la Biblioteca, el catálogo de precios, los clientes ni otros proyectos.">Vaciar proyecto</button>}
       </div>
       <button type="button" className="link-inline" onClick={generate}>¿Prefieres partir de una matriz base sin IA? Generar desarrollo</button>
       {aiBusy && <AIProgress active={aiBusy}/>}
@@ -2196,12 +2233,23 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
           <span>Subtotal: <b>{money(batchResult.budget.items.reduce((s,it)=>s+Number(it.qty)*Number(it.pu),0))}</b></span>
           <span>Total con IVA: <b>{money(batchResult.budget.total)}</b></span>
         </div>
+        {batchResult.excludedConcepts?.length>0 && <div className="batch-review-head" style={{borderColor:'#B54A62'}}>
+          <b>{batchResult.excludedConcepts.length} concepto(s) requieren confirmación -- no se incluyeron en este presupuesto:</b>
+          <ul>{batchResult.excludedConcepts.map((c,i)=><li key={i}>{c}</li>)}</ul>
+          <p className="muted">Vuelve a la tabla de arriba, marca su casilla y genera de nuevo para incluirlos.</p>
+        </div>}
         <div className="batch-result-actions">
           {batchResult.errors>0 && <button className="soft danger" onClick={retryFailedInActiveJob} disabled={batchBusy}>{batchBusy?'Reintentando...':`Reintentar ${batchResult.errors} fallido(s)`}</button>}
-          <button onClick={()=>exportBudgetExcel(batchResult.budget.items, batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.total-batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.ivaRate)}>Descargar presupuesto Excel</button>
-          <button onClick={()=>exportBudgetPDF(batchResult.budget.items, batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.total-batchResult.budget.total/(1+batchResult.budget.ivaRate/100), company, batchResult.budget.ivaRate)}>Descargar presupuesto PDF</button>
-          {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatch} disabled={batchBusy}>{batchBusy?'IA generando hojas...':`Excel completo por concepto (${conceptBatch.concepts.length} hojas)`}</button>}
-          {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatchPDF}>PDF individual por concepto ({conceptBatch.concepts.length})</button>}
+          {/* Entregable profesional (RESUMEN + CONTROL_REVISION + 1 hoja APU
+              completa por concepto -- exportConceptBatch -> exportAPUExcelV2,
+              sin tocar): boton principal, primero y sin la clase "soft" que
+              lo hacia ver secundario frente al presupuesto de 1 sola hoja. */}
+          {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatch} disabled={batchBusy} title="Workbook profesional completo: RESUMEN + CONTROL_REVISION + una hoja de APU por concepto.">{batchBusy?'IA generando hojas...':'Descargar Excel profesional'}</button>}
+          {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatchPDF} title="Un PDF profesional completo por cada concepto del lote.">PDF profesional por concepto</button>}
+          {/* Cotizacion rapida de 1 hoja (Concepto/Unidad/Cantidad/P.U./Importe):
+              opcion secundaria, nunca el entregable principal de ZOEMEC. */}
+          <button className="soft" onClick={()=>exportBudgetExcel(batchResult.budget.items, batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.total-batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.ivaRate)}>Excel resumen</button>
+          <button className="soft" onClick={()=>exportBudgetPDF(batchResult.budget.items, batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.total-batchResult.budget.total/(1+batchResult.budget.ivaRate/100), company, batchResult.budget.ivaRate)}>PDF resumen</button>
           <button className="soft" onClick={resetAPUForm}>Cerrar</button>
         </div>
       </div>}
@@ -2267,8 +2315,8 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
           <button className="soft" onClick={generate}>Actualizar desarrollo</button>
           <button className="soft" onClick={generateAI} disabled={aiBusy}>{aiBusy?'Generando...':'IA real'}</button><button className="soft" type="button" onClick={resetAPUForm}>Limpiar</button>
           {apu.referencePU>0 && <span className="cat-badge">P.U. Excel: {money(apu.referencePU)}</span>}
-          {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatch} disabled={batchBusy}>{batchBusy?'IA generando hojas...':`Excel por concepto (${conceptBatch.concepts.length})`}</button>}
-          {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatchPDF}>PDF por concepto ({conceptBatch.concepts.length})</button>}
+          {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatch} disabled={batchBusy} title="Workbook profesional completo: RESUMEN + CONTROL_REVISION + una hoja de APU por concepto.">{batchBusy?'IA generando hojas...':'Descargar Excel profesional'}</button>}
+          {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatchPDF} title="Un PDF profesional completo por cada concepto del lote.">PDF profesional por concepto</button>}
         </div>
         <div className="apu-detect">
           <div><small>Familia detectada</small><b>{apu.family || 'APU general'}</b></div>
@@ -2378,16 +2426,11 @@ function MatrixTable({kind,rows,updateRow,removeRow,onMarketPrice,priceBusy}){
 }
 
 
-function isExportableConceptItem(item){
-  const concept = String(item?.concept || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim();
-  const unit = normalizeUnitLabel(item?.unit);
-  const qty = Number(item?.qty || 0);
-  if(!concept || concept.length < 12 || qty <= 0) return false;
-  if(!/^(m2|m²|m3|m³|kg|pza|pieza|pzas|ml|m|l|lt|lote|jgo|hr|hora|dia|día|jor|jornal|sal|salida|salidas)$/i.test(unit)) return false;
-  if(/^(total|subtotal|gran total)\b/.test(concept)) return false;
-  if(/\b(total partida|total zona|total area|total capitulo|subtotal partida|gran total)\b/.test(concept)) return false;
-  return true;
-}
+// isExportableConceptItem / conceptNeedsReviewFlag / resolveBatchSelection:
+// logica pura, movida a src/domain/apuWorkspace.js (RC6) para que sea
+// testeable sin arnes de React y compartida sin duplicarse entre
+// generateSelectedBatch/exportConceptBatch/exportConceptBatchPDF -- ver el
+// comentario de causa raiz alli.
 
 function exportConceptsAPUPDF(concepts, catalog, company, preparedAPUs=[]){
   const list = (Array.isArray(concepts) ? concepts : []).filter(isExportableConceptItem);

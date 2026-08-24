@@ -61,6 +61,13 @@ button.soft:hover{background:#dff0ec;border-color:var(--teal)}
 button.soft:disabled:hover{background:var(--mint);border-color:var(--line-2)}
 button.soft.danger{background:#f6e3df;color:var(--danger);border:1px dashed var(--danger)}
 button.soft.danger:hover{background:#f3d3cc;border-color:var(--danger)}
+/* Destructivo "fuerte": reservado a acciones que borran datos guardados de
+   forma permanente (ej. "Vaciar proyecto") -- solido, sin el borde punteado
+   de .soft.danger, para que se distinga a simple vista de una accion
+   destructiva pero reversible/local como "Limpiar trabajo". */
+button.danger-solid{background:var(--danger);color:#fff;box-shadow:0 8px 18px rgba(181,74,98,.35);border:0}
+button.danger-solid:hover{background:#9c3d52;box-shadow:0 12px 26px rgba(181,74,98,.45)}
+button.danger-solid:disabled{background:var(--danger);opacity:.5}
 button.google{background:#fff;color:var(--ink);border:1px solid var(--line-2);box-shadow:none}
 a:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
 input,textarea,select{

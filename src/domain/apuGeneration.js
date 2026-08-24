@@ -9,12 +9,43 @@
    utilidad, cargos, IVA) SIEMPRE vienen de APU_DEFAULT_FACTORS
    (src/lib/apuCalc.js) — la unica fuente de verdad ya unificada en Fase 2.
    No se reintroduce aqui ningun conjunto de porcentajes alterno. */
-import { cleanText, matchPrice, normalizeUnitLabel } from '../lib/excelImport.js';
+import { cleanText, matchPrice, normalizeUnitLabel, parseConceptText, conceptVariablesFromParsed } from '../lib/excelImport.js';
 import { APU_DEFAULT_FACTORS } from '../lib/apuCalc.js';
 import { uid } from '../utils/id.js';
 import { scopedKey } from '../utils/scopedStorage.js';
 
 const APU_STANDARD_FACTORS = APU_DEFAULT_FACTORS;
+
+/* Modelo de rendimiento de acarreo en funcion de la distancia (RC5): un
+   ciclo de acarreo = tiempo fijo de carga/descarga + tiempo de caminar la
+   distancia ida y vuelta. A mas distancia, mas minutos por viaje, mas
+   jornales por unidad transportada -- nunca un rendimiento fijo disfrazado
+   de "editable segun distancia" en un comentario que nadie recalcula.
+   Constantes declaradas explicitamente (editables, no una tabla verificada
+   de ningun fabricante/cotizacion real): valores tipicos de una cuadrilla de
+   acarreo manual con carretilla en obra. Quedan documentadas para que un
+   estimador las ajuste con su propio dato de campo si difiere. */
+const HAUL_MODEL = {
+  jornadaMin: 480,          // 8 h por jornada
+  velocidadMPorMin: 45,     // desplazamiento cargado + regreso, con carretilla
+  tiempoFijoMin: 3,         // carga + descarga por viaje
+  capacidadPorViajePieza: 4,   // piezas/costales/sacos por viaje de carretilla
+  capacidadPorViajeM3: 0.08,   // m³ por viaje de carretilla (~90-100 L)
+  distanciaPorDefectoM: 30     // cuando el concepto no menciona distancia explicita
+};
+/* jornales necesarios para acarrear UNA unidad (1 pieza/costal o 1 m³) a la
+   distancia dada -- NO depende de la cantidad total del concepto (esa se
+   aplica despues, multiplicando por cantidadObra en el motor APU), solo de
+   cuanto tarda cada viaje. Monotonico en distancia: nunca dos distancias
+   distintas producen el mismo rendimiento salvo que caigan en el mismo
+   redondeo. */
+function haulLaborCoefficientPerUnit(distanceM, capacidadPorViaje){
+  const d = Number.isFinite(distanceM) && distanceM > 0 ? distanceM : HAUL_MODEL.distanciaPorDefectoM;
+  const tiempoPorViajeMin = HAUL_MODEL.tiempoFijoMin + (2*d/HAUL_MODEL.velocidadMPorMin);
+  const viajesPorUnidad = 1/capacidadPorViaje;
+  const tiempoPorUnidadMin = viajesPorUnidad*tiempoPorViajeMin;
+  return tiempoPorUnidadMin/HAUL_MODEL.jornadaMin;
+}
 
 /* Mapa tipo interno del motor APU -> familia compartida con la Biblioteca.
    No cambia la clasificacion tecnica (tipo), solo la etiqueta que se muestra.
@@ -24,9 +55,11 @@ const APU_STANDARD_FACTORS = APU_DEFAULT_FACTORS;
 const APU_FAMILY_LABELS = {
   concreto:'Cimentacion', acero:'Estructura metalica', estructura_metalica:'Estructura metalica',
   block:'Albanileria', tablaroca:'Tablaroca y Durock', lavabo_ptr:'Tablaroca y Durock', plafon_suspendido:'Tablaroca y Durock',
-  pintura:'Acabados', aplanado:'Acabados', piso:'Acabados', marmol_granito:'Acabados', sello:'Acabados', registro:'Acabados', imper:'Acabados',
-  excavacion:'Terracerias', excavacion_mecanica:'Terracerias', desmonte_mecanico:'Terracerias', acarreo_camion:'Terracerias',
-  limpieza_trazo:'Limpieza y preliminares', tuberia:'Hidrosanitaria', bomba:'Hidrosanitaria', generico:'General'
+  pintura:'Acabados', aplanado:'Acabados', piso:'Acabados', marmol_granito:'Acabados', sello:'Acabados', registro:'Acabados', imper:'Acabados', adhesivo:'Acabados',
+  excavacion:'Terracerias', excavacion_mecanica:'Terracerias', desmonte_mecanico:'Terracerias', acarreo_camion:'Terracerias', acarreo_manual:'Terracerias',
+  limpieza_trazo:'Limpieza y preliminares', demolicion:'Limpieza y preliminares',
+  movimiento_mobiliario:'Equipamiento',
+  tuberia:'Hidrosanitaria', bomba:'Hidrosanitaria', generico:'General'
 };
 
 export function canonicalAPUText(value){
@@ -78,6 +111,11 @@ export function applyConceptMetadata(apu, item={}, index=0, sourceFile='Catalogo
   next.sourceSection = item.section || item.sourceSection || '';
   next.rowNumber = item.rowNumber || index + 1;
   next.cacheKey = conceptApuKey({...item, concept:next.concept, unit:next.unit});
+  // Variables estructuradas (RC5): si el renglon de origen (parseConceptListText)
+  // ya las trae, son la version autoritativa (reflejan cualquier ajuste manual
+  // de unidad/cantidad); si no, se conserva lo que makeAPUFromConcept ya
+  // derivo del propio texto del concepto.
+  next.variables = item.variables || next.variables || null;
   return next;
 }
 /* Equivalente de applyConceptMetadata para el esquema v2 (renglones-objeto):
@@ -102,6 +140,7 @@ export function applyConceptMetadataV2(apuV2, item={}, index=0, sourceFile='Cata
   next.sourceSection = item.section || item.sourceSection || '';
   next.rowNumber = item.rowNumber || index + 1;
   next.cacheKey = conceptApuKey({...item, concept:next.concept, unit:next.unit});
+  next.variables = item.variables || next.variables || null;
   return next;
 }
 export function standardizeAPU(base, item={}, index=0, sourceFile='Catalogo de conceptos'){
@@ -203,6 +242,14 @@ export function standardAPUForConcept(item, catalog, index=0, sourceFile='Catalo
 export function makeAPUFromConcept(concept, catalog){
   const c = concept || 'Muro de block hueco de concreto de 15 cm asentado con mortero cemento-arena';
   const t = c.toLowerCase();
+  // Variables estructuradas del concepto (RC5): se derivan UNA vez del mismo
+  // texto que ya se esta clasificando, para (a) exponerlas en el APU
+  // (apu.variables, ver el return al final) y (b) que el rendimiento de
+  // acarreo consuma la distancia real detectada en el texto, en vez de un
+  // coeficiente fijo. parseConceptText nunca recorta texto (RC5), asi que
+  // esto es seguro incluso cuando el concepto ya trae distancia/volumen.
+  const parsedVars = parseConceptText(c);
+  const variables = conceptVariablesFromParsed(parsedVars);
   // Plafon / tablaroca manda: menciones como "pintura anticorrosiva" dentro de las
   // inclusiones de un falso plafon NO deben clasificar el concepto como pintura.
   const isSuspendedCeiling = /falso\s*plaf|plaf[oó]n(d)?\s+de\s+(tablaroca|yeso|tablacemento)|suspensi[oó]n\s*oculta|colganter[ií]a|canal\s*list[oó]n|perfacinta|redimix/.test(t);
@@ -211,8 +258,26 @@ export function makeAPUFromConcept(concept, catalog){
     /pua\s*501|pua501|mapla|suministro y aplicaci[oó]n de pintura|pintar|repint|esmalte|vin[ií]lic|acr[ií]l|ep[oó]x|sellador vin/.test(t)
     || (/(muro|muros|plaf[oó]n|plafones)/.test(t) && /(pintura|recubrimiento|preparaci[oó]n de la superficie|lija|lavado)/.test(t))
   );
+  // Estos 4 verbos de actividad mandan sobre cualquier sustantivo de material
+  // que aparezca despues (loseta, azulejo, tablaroca...): "Demolicion de
+  // loseta" es una demolicion, nunca una colocacion, aunque contenga la
+  // palabra "loseta" -- sin este chequeo primero, esos 4 casos caian en la
+  // plantilla del material (ej. "piso") y arrastraban insumos que no
+  // corresponden al alcance real (loseta nueva en una demolicion, boquilla
+  // en un acarreo, etc.). isAdhesiveOnlyConcept exige que el concepto NO
+  // mencione el material ceramico: si lo menciona, es la partida de
+  // colocacion completa (que ya incluye su propio adhesivo en la plantilla
+  // "piso"), no una aplicacion de adhesivo aislada.
+  const isDemolitionConcept = /demolic|demoler|desmontar|retiro\s+de\s+(loseta|piso|azulejo|cer[aá]mic|porcelanato)/.test(t);
+  const isFurnitureMoveConcept = /movimiento\s+de\s+(mueble|mobiliario)|reacomodo\s+de\s+mobiliario|protecci[oó]n\s+y\s+movimiento\s+de\s+mobiliario/.test(t);
+  const isAdhesiveOnlyConcept = /(aplicaci[oó]n|colocaci[oó]n|instalaci[oó]n)\s+de\s+adhesivo|pegazulejo|cemento\s+cola/.test(t) && !/loseta|azulejo|porcelanato|cer[aá]mic|\bpiso\b/.test(t);
+  const isManualHaulingConcept = /acarreo|acarrear/.test(t) && !/cami[oó]n|volteo|for[aá]neo/.test(t);
   let tipo;
-  if(isSuspendedCeiling) tipo='plafon_suspendido';
+  if(isDemolitionConcept) tipo='demolicion';
+  else if(isFurnitureMoveConcept) tipo='movimiento_mobiliario';
+  else if(isAdhesiveOnlyConcept) tipo='adhesivo';
+  else if(isManualHaulingConcept) tipo='acarreo_manual';
+  else if(isSuspendedCeiling) tipo='plafon_suspendido';
   else if(isDrywallConcept) tipo='tablaroca';
   else if(isPaintingConcept) tipo='pintura';
   else if(/escalera|barandal|herrer|ptr|perfil tubular|estructura metal|soldadur|acero.*calibre|bastidor.*acero/.test(t)) tipo='estructura_metalica';
@@ -321,6 +386,33 @@ export function makeAPUFromConcept(concept, catalog){
       materials:[['Loseta cerámica 30x30',1.05,'m²',135,8],['Adhesivo / pegazulejo',0.18,'bulto',135,5],['Boquilla / junteador',0.3,'kg',28,5]],
       labor:[['Colocador (oficial)',0.12,'jor',400,1.85],['Ayudante',0.12,'jor',258,1.82]],
       equipment:[['Cortadora de loseta',0.03,'día',150]] },
+    // Nunca incluye loseta/piso nuevo: el alcance de una demolicion es retirar
+    // lo existente, no suministrar material de acabado.
+    demolicion:{ unit:'m²',
+      materials:[['Costales para retiro de escombro',0.4,'pza',12,0]],
+      labor:[['Oficial de demolición',0.1,'jor',380,1.85],['Ayudante',0.1,'jor',258,1.82]],
+      equipment:[['Rotomartillo / equipo de demolición',0.04,'día',180],['Herramienta menor (marro, cincel, pala)',0.04,'día',80],['Equipo de seguridad personal (EPP: careta, guantes, botas)',0.03,'día',90]] },
+    // Manejo interno de material (costales, piezas, sacos) sin camion de
+    // volteo -- ver acarreo_camion para el caso con transporte foraneo.
+    // Nunca incluye el material acarreado como insumo, solo la mano de obra
+    // y el equipo de manejo.
+    acarreo_manual:{ unit:'viaje',
+      materials:[],
+      labor:[['Peón de acarreo',0.05,'jor',258,1.82]],
+      equipment:[['Carretilla / diablito de carga',0.03,'día',70],['Herramienta menor',0.02,'día',50],['Equipo de seguridad personal (EPP: guantes, faja, botas)',0.02,'día',90]] },
+    // Aplicacion de adhesivo/cemento cola como partida independiente: nunca
+    // incluye loseta ni boquilla (ver isAdhesiveOnlyConcept -- si el concepto
+    // menciona el material ceramico, clasifica como "piso" en vez de esto).
+    adhesivo:{ unit:'m²',
+      materials:[['Adhesivo / cemento cola según especificación',0.2,'bulto',135,8],['Agua para mezcla',0.02,'m³',65,0],['Material de limpieza y protección',0.03,'jgo',60,0]],
+      labor:[['Aplicador oficial (llana dentada)',0.06,'jor',400,1.85],['Ayudante',0.06,'jor',258,1.82]],
+      equipment:[['Llana dentada y herramienta de aplicación',0.02,'día',80],['Mezclador / taladro con batidor',0.02,'día',100],['Cubetas graduadas',0.02,'día',40],['Equipo de seguridad personal (EPP: guantes, lentes)',0.02,'día',70]] },
+    // Reacomodo/proteccion de mobiliario existente: nunca incluye materiales
+    // de piso/adhesivo, solo cuadrilla, proteccion y herramienta de maniobra.
+    movimiento_mobiliario:{ unit:'lote',
+      materials:[['Material de protección (cartón, plástico, cinta)',1,'lote',180,0]],
+      labor:[['Cuadrilla de maniobras (oficial + ayudante)',0.15,'jor',700,1.85]],
+      equipment:[['Herramienta menor de maniobra',0.05,'día',60],['Equipo de seguridad personal (EPP: guantes, faja)',0.03,'día',70]] },
     excavacion:{ unit:'m³',
       materials:[],
       labor:[['Peón (excavación manual)',0.6,'jor',258,1.82],['Cabo de obra',0.03,'jor',380,1.85]],
@@ -359,6 +451,20 @@ export function makeAPUFromConcept(concept, catalog){
       equipment:[['Herramienta menor y equipo de apoyo (revisar segun concepto)',0.05,'día',100]] }
   };
   const tpl = TPL[tipo];
+  // El rendimiento de acarreo manual consume la distancia real detectada en
+  // el concepto (Fase 3/RC5: "el motor APU debe consumir distancia", no solo
+  // almacenarla) -- 10 m, 25 m y 50 m producen coeficientes de mano de obra
+  // y equipo distintos, nunca el mismo rendimiento "por defecto". Capacidad
+  // por viaje segun si la unidad detectada es volumetrica (m³) o de conteo
+  // de piezas/costales (ver HAUL_MODEL arriba).
+  let haulDistanceUsed = null;
+  if(tipo === 'acarreo_manual'){
+    const capacidadPorViaje = variables.volumeUnit === 'm³' ? HAUL_MODEL.capacidadPorViajeM3 : HAUL_MODEL.capacidadPorViajePieza;
+    haulDistanceUsed = Number.isFinite(variables.distance) && variables.distance > 0 ? variables.distance : HAUL_MODEL.distanciaPorDefectoM;
+    const coef = haulLaborCoefficientPerUnit(variables.distance, capacidadPorViaje);
+    tpl.labor = tpl.labor.map((r,i) => i===0 ? [r[0], coef, r[2], r[3], r[4]] : r);
+    tpl.equipment = tpl.equipment.map((r,i) => i===0 ? [r[0], coef, r[2], r[3]] : r);
+  }
   const normalizeApuRow = (r) => {
     const nr = [...r];
     nr[0] = cleanText(nr[0]);
@@ -393,9 +499,25 @@ export function makeAPUFromConcept(concept, catalog){
     desmonte_mecanico:{ confidence:83, sat:'72101503' },
     excavacion_mecanica:{ confidence:85, sat:'72101503' },
     acarreo_camion:{ confidence:82, sat:'78101800' },
+    demolicion:{ confidence:82, sat:'72101504' },
+    acarreo_manual:{ confidence:80, sat:'78101800' },
+    adhesivo:{ confidence:85, sat:'72151600' },
+    movimiento_mobiliario:{ confidence:78, sat:'78102200' },
     generico:{ confidence:45, sat:'72100000' }
   };
   const meta = { family: APU_FAMILY_LABELS[tipo] || tipo, confidence: TPL_META[tipo]?.confidence ?? 88, sat: TPL_META[tipo]?.sat ?? '72100000' };
+  const aiNotes = [];
+  if(unmatched) aiNotes.push('APU INCOMPLETO: no se identifico con precision la familia tecnica del concepto. Los materiales marcados "Pendiente de cotización" tienen precio $0.00 y no deben tomarse como precio final; captura precios reales antes de exportar.');
+  // Alcance ambiguo entre "colocacion" y "suministro y colocacion" (Fase 4,
+  // caso 6): en vez de asumir en silencio que el material lo pone el
+  // contratista, se deja explicita la hipotesis usada para que quede
+  // marcada para revision.
+  if(tipo==='piso' && !/suministro/.test(t)) aiNotes.push('Alcance asumido: el concepto no menciona "suministro" de forma explicita -- se incluyó loseta como hipótesis de colocación con material provisto por el contratista. Verifica si el alcance real es solo mano de obra (material del cliente) antes de aprobar.');
+  if(haulDistanceUsed != null){
+    aiNotes.push(variables.distance != null
+      ? `Rendimiento de acarreo estimado para ${haulDistanceUsed} m (distancia detectada en el concepto). Modelo editable segun capacidad real de la cuadrilla -- ver HAUL_MODEL en src/domain/apuGeneration.js.`
+      : `El concepto no especifica distancia de acarreo: se uso ${haulDistanceUsed} m por defecto. Precisa la distancia real en el concepto para un rendimiento mas exacto.`);
+  }
   return {
     id:standardClave, clave:standardClave, concept:cleanText(c), unit:normalizeUnitLabel(tpl.unit), templateGenerated:true,
     materials, labor, equipment,
@@ -404,7 +526,11 @@ export function makeAPUFromConcept(concept, catalog){
     confidence: meta.confidence,
     sat: meta.sat,
     incomplete: unmatched,
-    aiNotes: unmatched ? ['APU INCOMPLETO: no se identifico con precision la familia tecnica del concepto. Los materiales marcados "Pendiente de cotización" tienen precio $0.00 y no deben tomarse como precio final; captura precios reales antes de exportar.'] : [],
+    aiNotes,
+    // Variables estructuradas del concepto (RC5, ver conceptVariablesFromParsed
+    // en excelImport.js): nunca obligatorias, se preservan tal cual hasta v2
+    // (migrateLegacyApuToV2) y hasta la exportacion (apuExportV2.js).
+    variables,
     date:new Date().toLocaleDateString('es-MX')
   };
 }

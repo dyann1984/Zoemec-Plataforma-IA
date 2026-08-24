@@ -39,6 +39,24 @@ test('calculateAPUConfidence pondera por costo: referencia ALTO en el renglon ca
   assert.ok(confidence.dimensions.precios >= 80, `esperaba >=80 (el renglon caro domina), obtuvo ${confidence.dimensions.precios}`);
 });
 
+test('Test L: un renglon sin verificar, sin proveedor/URL y sin evidencia de mercado NUNCA produce confianza de precios alta', () => {
+  // Reporte del usuario: un archivo mostraba "Confianza general 89% /
+  // Precios 92%" mientras las fuentes decian "Verificado: NO, Proveedor:
+  // vacio, URL: vacia, Confianza fuente: 0, Evidencia mercado: 0%". Esto fija
+  // como regresion que ese estado (sin verificar, sin evidencia) nunca puede
+  // producir un puntaje de "precios" alto -- ni en calculateAPUConfidence ni
+  // en la etiqueta re-presentada que exporta CONTROL_REVISION (apuExportV2.js).
+  const apu = makeEmptyAPUv2(); apu.concept='Concepto sin evidencia'; apu.unit='m2';
+  apu.materials=[{
+    clave:'MAT-001', consumo:1, precioUnitario:500,
+    fuente:{ estado:APU_DATA_STATE.ESTIMADO_IA, proveedor:'', sourceName:'', sourceUrl:'', fecha:'' }
+    // priceRecord ausente a proposito: nunca se busco evidencia de mercado.
+  }];
+  const confidence = calculateAPUConfidence(apu,{now:'2026-08-14'});
+  assert.ok(confidence.dimensions.precios < 50, `esperaba confianza de precios baja sin evidencia/verificacion, obtuvo ${confidence.dimensions.precios}`);
+  assert.ok(confidence.presentation.confianzaPrecios < 50, `la presentacion re-etiquetada tampoco debe ocultar la falta de evidencia, obtuvo ${confidence.presentation.confianzaPrecios}`);
+});
+
 test('validateAPU detecta fuentes faltantes y no declara validado', () => {
   const apu=makeEmptyAPUv2(); apu.concept='Concepto'; apu.unit='m2';
   apu.labor=[{ clave:'MO-001', cantidad:1, salarioBase:100, fsr:1, fuente:{} }];

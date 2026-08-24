@@ -216,7 +216,11 @@ export function migrateLegacyApuToV2(apuV1 = {}){
       iva: Number(apuV1.iva ?? APU_DEFAULT_FACTORS.iva)
     },
     supuestos: (Array.isArray(apuV1.aiNotes) ? apuV1.aiNotes : []).map(texto => ({ texto: String(texto), categoria: 'migrado_v1' })),
-    confidence: { precios: confidenceValue, rendimientos: confidenceValue, cantidades: confidenceValue, composicion: confidenceValue }
+    confidence: { precios: confidenceValue, rendimientos: confidenceValue, cantidades: confidenceValue, composicion: confidenceValue },
+    // Variables estructuradas del concepto (RC5, ver conceptVariablesFromParsed
+    // en src/lib/excelImport.js): opcional, se conserva tal cual si el v1 ya
+    // la traia (makeAPUFromConcept / applyConceptMetadata la agregan).
+    variables: apuV1.variables || null
   };
 }
 

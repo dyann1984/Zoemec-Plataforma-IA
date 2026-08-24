@@ -50,6 +50,18 @@ export function buildProfessionalAPUSheet(rawApu){
   add([asCell('Proyecto',XLS.label),apu.proyecto,null,asCell('Cliente',XLS.label),apu.cliente,null,asCell('Fecha base',XLS.label),apu.fechaBase,null,asCell('Moneda',XLS.label),apu.moneda,null]);
   add([asCell('Ubicacion',XLS.label),apu.ubicacion,null,asCell('Partida',XLS.label),apu.partida,null,asCell('Clave',XLS.label),apu.clave,null,asCell('Version',XLS.label),apu.version||'V1',null]);
   add([asCell('Concepto',XLS.label),asCell(apu.concept,{columnSpan:8,wrap:true}),...Array(7).fill(null),asCell('Unidad',XLS.label),apu.unit,asCell('Cantidad',XLS.label),Number(apu.cantidadObra||0)]);
+  // Variables detectadas (RC5): descripcion completa ya se ve arriba sin
+  // recortar (apu.concept); aqui se muestran ademas los parametros tipados
+  // que se hayan podido extraer del texto (distancia, volumen, piezas,
+  // dimensiones), cuando existan -- nunca obligatorio, fila omitida si el
+  // concepto no trae ninguno.
+  const vars = apu.variables || {};
+  const varParts = [];
+  if(vars.distance != null) varParts.push(`Distancia: ${vars.distance} ${vars.distanceUnit || 'm'}`);
+  if(vars.volume != null) varParts.push(`Volumen: ${vars.volume} ${vars.volumeUnit || ''}`.trim());
+  if(vars.pieceCount != null) varParts.push(`Piezas: ${vars.pieceCount} ${vars.pieceUnit || ''}`.trim());
+  if(Array.isArray(vars.dimensions) && vars.dimensions.length) varParts.push(`Dimensiones: ${vars.dimensions.join(', ')}`);
+  if(varParts.length) add([asCell('Variables detectadas',XLS.label),asCell(varParts.join('  |  '),{columnSpan:11,wrap:true}),...Array(10).fill(null)]);
   add([]);
 
   span('1. MANO DE OBRA',COLORS.labor); head(['No.','Clave','Descripcion','Unidad','Cuadrilla','Rendimiento','Jornada','Salario base','FSR','Importe','Fuente','Estado']);

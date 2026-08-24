@@ -57,7 +57,7 @@ import { TechnicalCenter } from './features/technical-center/TechnicalCenter.jsx
 import { AdminPanel } from './features/admin/AdminPanel.jsx';
 import { ProfessionalApuEditor } from './features/apu/ProfessionalApuEditor.jsx';
 import { RevisionBandeja } from './features/apu/RevisionBandeja.jsx';
-import { parseExcelToCatalog, cleanText, normalizeUnitLabel, parseExcelToAPU, parseRobustConceptCatalog, parseConceptText } from './lib/excelImport.js';
+import { parseExcelToCatalog, cleanText, normalizeUnitLabel, parseExcelToAPU, parseRobustConceptCatalog, parseConceptText, parseConceptListText, conceptVariablesFromParsed } from './lib/excelImport.js';
 import {
   defaultCompany, DEMO_MODE, demoCatalog,
   legacySeedClientNames, legacySeedProjectNames, libraryFolders, courses
@@ -1550,13 +1550,31 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   };
   const removeRow=(kind,i)=>setApu({...apu,[kind]:apu[kind].filter((_,idx)=>idx!==i)});
   const setParam=(k,v)=>setApu({...apu,[k]:v});
+  /* 1 concepto de entrada = 1 concepto normalizado = 1 APU independiente,
+     tambien cuando el catalogo llega pegado a mano en el textarea (no solo
+     por Excel): si el texto trae mas de un renglon reconocible como
+     concepto (numerado "1-"/"1."/"01 " o uno por salto de linea), se
+     redirige al MISMO panel de revision de lote y motor de cola
+     (runQueueJob/apuBatchQueue.js) que ya usa el catalogo de Excel -- nunca
+     se concatena todo en un solo concepto ni se inventa un pipeline
+     paralelo. Con 0 o 1 concepto detectado no hace nada: el llamador sigue
+     el camino de concepto suelto exactamente como antes. */
+  const routeIfMultipleConcepts=()=>{
+    const segmented=parseConceptListText(concept);
+    if(segmented.concepts.length<=1) return false;
+    setConceptBatch(segmented);
+    setAiStatus(`Se detectaron ${segmented.concepts.length} conceptos en el texto pegado (uno por renglón). Revisa la lista y genera el lote: cada uno se procesa como un APU independiente.`);
+    setAiOpen(true);
+    return true;
+  };
   const generate=()=>{
     if(!requireApuAccess()) return;
     if(!concept.trim()){ alert('Pega o sube un concepto real para generar el APU.'); return; }
+    if(routeIfMultipleConcepts()) return;
     const parsed=parseConceptText(concept);
     if(aiUnit.trim()) parsed.unit=aiUnit.trim();
     if(Number(aiQty)>0) parsed.qty=Number(aiQty);
-    const next=standardAPUForConcept({concept:parsed.concept, unit:parsed.unit, qty:parsed.qty, referencePU:parsed.referencePU}, catalog, 0, 'Texto pegado');
+    const next=standardAPUForConcept({concept:parsed.concept, unit:parsed.unit, qty:parsed.qty, referencePU:parsed.referencePU, variables:conceptVariablesFromParsed(parsed)}, catalog, 0, 'Texto pegado');
     setConcept(parsed.concept);
     setApu(next);
     setExcelInfo(parsed.referencePU ? {fileName:'Texto pegado',concept:parsed.concept,unit:next.unit,qty:parsed.qty,referencePU:parsed.referencePU,catalog:[]} : null);
@@ -1585,6 +1603,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     if(!requireApuAccess()) return;
     if(!concept.trim()){ alert('Pega o sube un concepto real para generar con IA.'); return; }
     if(aiBusy) return;
+    if(routeIfMultipleConcepts()) return;
     const requestId = ++aiRequestSeqRef.current;
     setAiBusy(true);
     setAiStatus('Analizando el alcance del concepto...');
@@ -1628,7 +1647,8 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         ...data.apu,
         proyecto: apuV2.proyecto || '', cliente: apuV2.cliente || '', ubicacion: apuV2.ubicacion || '', moneda: apuV2.moneda || 'MXN',
         cantidadObra: Number(parsed.qty || 1) || 1,
-        referencePU: Number(parsed.referencePU || 0) || 0
+        referencePU: Number(parsed.referencePU || 0) || 0,
+        variables: conceptVariablesFromParsed(parsed)
       };
       // Price Intelligence real, mismo comportamiento que el flujo de lote:
       // busca precio de mercado con validacion de equivalencia tecnica
@@ -1656,7 +1676,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     }catch(err){
       if(requestId !== aiRequestSeqRef.current) return;
       const reason = err?.name==='AbortError' ? 'la IA tardo demasiado en responder' : friendlyServiceError(err,'servidor no disponible');
-      const next = templateFallbackAPU({concept:parsed.concept, unit:parsed.unit, qty:parsed.qty, referencePU:parsed.referencePU}, catalog, 0, 'Plantilla tecnica ZOEMEC', reason);
+      const next = templateFallbackAPU({concept:parsed.concept, unit:parsed.unit, qty:parsed.qty, referencePU:parsed.referencePU, variables:conceptVariablesFromParsed(parsed)}, catalog, 0, 'Plantilla tecnica ZOEMEC', reason);
       setConcept(next.concept);
       setApu(next);
       setExcelInfo({fileName:'Plantilla tecnica ZOEMEC',concept:next.concept,unit:next.unit,qty:parsed.qty,referencePU:parsed.referencePU,catalog});

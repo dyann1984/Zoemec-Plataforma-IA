@@ -627,40 +627,236 @@ export function parseCSV(text){
   row.push(cell); if(row.some(x=>String(x).trim())) rows.push(row);
   return rows;
 }
+// Distancia de acarreo ("distancia 25m", "distancia de 25 m"): describe el
+// concepto, nunca es la cantidad principal ni un P.U. de referencia -- se
+// excluye de ambos aunque el texto no traiga ninguna otra unidad/numero.
+// Con grupo de captura (numero, unidad) para poder exponerla como variable
+// estructurada (distance/distanceUnit), ademas de excluirla de qty/PU.
+const DISTANCE_CAPTURE_RE = /distancia\s*(?:de)?\s*(\d+(?:[.,]\d+)?)\s*(m|mts?|metros?)\b/i;
+const DISTANCE_RE = /distancia\s*(?:de)?\s*\d+(?:[.,]\d+)?\s*(?:m|mts?|metros?)\b/gi;
+// Sustantivos de conteo (costales, sacos, viajes...) que funcionan como
+// "unidad operativa" del concepto cuando no hay ninguna unidad tecnica
+// (m2/m3/kg/pza...) explicita -- ej. "acarreo de 46 costales".
+const COUNTING_UNIT_RE = /\b(costales?|sacos?|bultos?|viajes?|piezas?|pzas?)\b/i;
+const COUNTING_UNIT_SINGULAR = { costales:'costal', costal:'costal', sacos:'saco', saco:'saco', bultos:'bulto', bulto:'bulto', viajes:'viaje', viaje:'viaje', piezas:'pieza', pieza:'pieza', pzas:'pza', pza:'pza' };
+/* Extractor determinista de variables de UN concepto de texto libre.
+
+   Regla explicita (RC5, corrige perdida de informacion detectada en RC4):
+   `originalDescription`/`concept` es SIEMPRE el texto de entrada completo,
+   con normalizacion superficial de espacios unicamente -- jamas se recorta
+   distancia, volumen, dimensiones, numero de piezas, espesores,
+   resistencias, diametros, alturas, longitudes ni ninguna especificacion.
+   Antes (RC4) `concept` se cortaba en el indice de la unidad detectada
+   (`text.slice(0, unitIndex)`), lo que perdia texto que viniera DESPUES de
+   la unidad (ej. "distancia 25m" en "acarreo de loseta 1.5m3 distancia
+   25m"). `normalizedDescription` es una version aparte, en minusculas y sin
+   acentos, pensada para matching/deduplicacion -- nunca reemplaza a
+   `concept`.
+
+   Ademas de unit/qty/referencePU (ya existentes, sin cambios de
+   comportamiento), expone variables tipadas cuando son detectables --
+   ninguna es obligatoria: distance/distanceUnit, volume/volumeUnit,
+   pieceCount/pieceUnit, dimensions (medidas/proporciones tecnicas
+   detectadas en el texto, ej. "15 x 20 x 40 cm", "1:4", "3/4 in"). */
 export function parseConceptText(input){
   const text=(input||'').replace(/\s+/g,' ').trim();
+  const distanceRanges=[...text.matchAll(DISTANCE_RE)].map(m=>[m.index??0,(m.index??0)+m[0].length]);
+  const insideDistanceRange=index=>distanceRanges.some(([start,end])=>index>=start&&index<end);
   // (?!\s*\/\s*cm) evita capturar el "kg" de una resistencia de material tipo
   // f'c=250 kg/cm² o fy=4200 kg/cm², que no es la unidad de medida del concepto.
-  const unitMatch=text.match(/(?:\b(m2|m3|kg|pza|pieza|ml|lote|jgo|hr)\b|(?<!\w)(m²|m³)(?!\w))(?!\s*\/\s*cm)/i);
+  // (?<![a-z]) / (?![a-z]) en vez de \b: \b NUNCA marca frontera entre un
+  // digito y la letra siguiente, asi que una unidad pegada al numero sin
+  // espacio (64m2, 1.5m3 -- catalogos reales pegados como texto) jamas
+  // matcheaba con \b(m2)\b. Con estos lookarounds si se reconoce, y sigue
+  // rechazando "cm2"/"promedio" (precedidos por otra letra).
+  const unitMatch=text.match(/(?:(?<![a-z])(m2|m3|kg|pza|pieza|ml|lote|jgo|hr)(?![a-z])|(?<!\w)(m²|m³)(?!\w))(?!\s*\/\s*cm)/i);
   // Proporciones (1:4), dimensiones (15 x 20 x 40) y medidas tecnicas
-  // (15 cm, 3/4 in) describen el concepto: nunca son cantidad ni P.U.
-  const technicalRanges=[
+  // (15 cm, 3/4 in) describen el concepto: nunca son cantidad ni P.U. Se
+  // conserva tambien el texto original de cada coincidencia (dimensions).
+  const technicalMatches=[
     /\b\d+(?:\.\d+)?\s*:\s*\d+(?:\.\d+)?\b/g,
     /\b\d+(?:\.\d+)?(?:\s*[x×]\s*\d+(?:\.\d+)?){1,3}\b/gi,
     /\b\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:mm|cm|in|pulg(?:adas?)?|dia(?:metro)?|ø)\b/gi
-  ].flatMap(re=>[...text.matchAll(re)].map(m=>[m.index??0,(m.index??0)+m[0].length]));
+  ].flatMap(re=>[...text.matchAll(re)].map(m=>({start:m.index??0, end:(m.index??0)+m[0].length, text:m[0]})));
+  const technicalRanges=technicalMatches.map(m=>[m.start,m.end]);
   const insideTechnicalRange=index=>technicalRanges.some(([start,end])=>index>=start&&index<end);
   const moneyMatches=[...text.matchAll(/\$?\s*([0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?)/g)]
     .map(m=>({raw:m[0], value:parseFloat(m[1].replace(/,/g,'')), index:(m.index ?? 0)+m[0].indexOf(m[1])}))
-    .filter(x=>!Number.isNaN(x.value)&&!insideTechnicalRange(x.index));
+    .filter(x=>!Number.isNaN(x.value)&&!insideTechnicalRange(x.index)&&!insideDistanceRange(x.index));
   const unitIndex=unitMatch?.index ?? -1;
   const unitEnd=unitIndex>=0?unitIndex+unitMatch[0].length:-1;
   const afterUnit=unitIndex>=0 ? moneyMatches.filter(n=>n.index>=unitEnd) : moneyMatches;
-  const qty=afterUnit[0]?.value || 1;
-  const referencePU=afterUnit.length>1 ? afterUnit[afterUnit.length-1].value : 0;
-  let concept=text;
-  if(unitIndex>=0) concept=text.slice(0,unitIndex).trim();
-  concept=concept
+  // Cantidad "pegada" al frente de la unidad sin espacio (64m2, 1.5m3): ese
+  // numero es la cantidad del concepto y nunca se busca "despues" de la
+  // unidad como en el caso con espacio -- salvo que forme parte de una
+  // dimension/proporcion tecnica (15x20x40, 1:4), en cuyo caso se ignora.
+  const gluedQtyMatch = unitIndex>=0 ? text.slice(0,unitIndex).match(/(\d+(?:[.,]\d+)?)\s*$/) : null;
+  const gluedQtyIndex = gluedQtyMatch ? unitIndex-gluedQtyMatch[0].length : -1;
+  const gluedQty = gluedQtyMatch && !insideTechnicalRange(gluedQtyIndex) ? parseFloat(gluedQtyMatch[1].replace(',','.')) : null;
+  let qty, referencePU;
+  if(gluedQty != null){
+    qty = gluedQty;
+    referencePU = afterUnit.length ? afterUnit[afterUnit.length-1].value : 0;
+  }else{
+    qty=afterUnit[0]?.value || 1;
+    referencePU=afterUnit.length>1 ? afterUnit[afterUnit.length-1].value : 0;
+  }
+  let unit = unitMatch ? (unitMatch[1]||unitMatch[2]).replace(/m2/i,'m²').replace(/m3/i,'m³') : '';
+  let unitFromCounting = false;
+  if(!unit){
+    const countingMatch = text.match(COUNTING_UNIT_RE);
+    if(countingMatch && !insideDistanceRange(countingMatch.index)){
+      unit = COUNTING_UNIT_SINGULAR[countingMatch[1].toLowerCase()] || countingMatch[1].toLowerCase();
+      unitFromCounting = true;
+    }
+  }
+  const distanceMatch = text.match(DISTANCE_CAPTURE_RE);
+  const distance = distanceMatch ? parseFloat(distanceMatch[1].replace(',','.')) : null;
+  const distanceUnit = distanceMatch ? 'm' : null;
+  const isVolumeUnit = unit === 'm³';
+  const volume = isVolumeUnit ? qty : null;
+  const volumeUnit = isVolumeUnit ? unit : null;
+  const pieceCount = unitFromCounting ? qty : null;
+  const pieceUnit = unitFromCounting ? unit : null;
+  const dimensions = technicalMatches.map(m=>m.text.trim());
+  // originalDescription/concept: SIEMPRE el texto completo (ver comentario de
+  // funcion). normalizedDescription: version aparte para matching, minuscula
+  // y sin acentos, con el prefijo de etiqueta ("Concepto:", "Descripcion:")
+  // removido -- ese prefijo es una etiqueta de captura, no una especificacion
+  // tecnica, asi que quitarlo no viola la regla de "nunca recortar".
+  const originalDescription = text || 'Concepto nuevo';
+  const normalizedDescription = originalDescription
     .replace(/^(concepto|descripci[oó]n|partida)\s*[:\-]?\s*/i,'')
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g,'')
     .replace(/\s+/g,' ')
     .trim();
   return {
-    concept: concept || text || 'Concepto nuevo',
+    concept: originalDescription,
+    originalDescription,
+    normalizedDescription,
     // Vacio (no 'm²') cuando el texto no trae una unidad explicita, para que la
     // clasificacion automatica del concepto (bomba->pza, tuberia->m, etc.) decida
     // la unidad en vez de que este valor por defecto la pise siempre.
-    unit: unitMatch ? (unitMatch[1]||unitMatch[2]).replace(/m2/i,'m²').replace(/m3/i,'m³') : '',
+    unit,
     qty,
-    referencePU
+    quantity: qty,
+    referencePU,
+    distance,
+    distanceUnit,
+    volume,
+    volumeUnit,
+    pieceCount,
+    pieceUnit,
+    dimensions
   };
+}
+/* Subconjunto de parseConceptText pensado para adjuntarse tal cual como
+   `variables` en un item de catalogo o en un APU (item.variables /
+   apu.variables): mismo contenido, forma estable y explicita para no exponer
+   los campos internos de compatibilidad (concept/unit/qty/referencePU) que
+   ya tienen su propio lugar en el resto del objeto. */
+export function conceptVariablesFromParsed(parsed={}){
+  return {
+    originalDescription: parsed.originalDescription ?? parsed.concept ?? '',
+    normalizedDescription: parsed.normalizedDescription ?? '',
+    quantity: parsed.quantity ?? parsed.qty ?? null,
+    unit: parsed.unit || null,
+    distance: parsed.distance ?? null,
+    distanceUnit: parsed.distanceUnit ?? null,
+    volume: parsed.volume ?? null,
+    volumeUnit: parsed.volumeUnit ?? null,
+    pieceCount: parsed.pieceCount ?? null,
+    pieceUnit: parsed.pieceUnit ?? null,
+    dimensions: Array.isArray(parsed.dimensions) ? parsed.dimensions : []
+  };
+}
+/* Prefijo de numeracion de lista al inicio de un renglon pegado a mano
+   ("1-", "1.", "1)", "01 Movimiento..."). El renglon completo se conserva
+   sin tocar cuando lo que sigue al numero es en realidad una unidad tecnica
+   (ej. "25 m2 de piso"): ahi el numero es la cantidad real del concepto, no
+   un indice de lista. */
+// Renglon con "forma" de indice de lista al inicio (secuencia numerica corta
+// + separador de puntuacion o espacio + contenido): usado SOLO para decidir
+// el contexto del bloque completo (ver isNumberedListContext en
+// parseConceptListText), nunca para decidir por si solo si un renglon en
+// particular debe recortarse -- esa decision especifica siempre pasa por el
+// guard de unidad tecnica de stripLineNumbering.
+const LIST_INDEX_SHAPE_RE = /^\d{1,4}\s*(?:[.\-)]\s*|\s+)\S/;
+function looksLikeListIndexLine(line){
+  return LIST_INDEX_SHAPE_RE.test(line.trim());
+}
+/* listContext=true: el bloque completo (ver parseConceptListText) ya se
+   reconocio como una lista numerada por su forma (mayoria de renglones con
+   "numero + separador + contenido"), asi que un renglon "02 demolicion de
+   loseta" se reconoce como indice aunque la palabra siguiente empiece en
+   minuscula -- "no dependas solo de mayusculas/minusculas" (RC5). Sin
+   contexto de lista, se mantiene el criterio conservador anterior (requiere
+   mayuscula) para no recortar un renglon suelto por accidente.
+
+   El guard de unidad tecnica es la UNICA verdad final en ambos casos: si lo
+   que sigue al numero es una unidad reconocida (ej. "25 m² de piso"), el
+   numero es la cantidad real del concepto, nunca un indice -- el renglon se
+   devuelve intacto sin importar el contexto. */
+function stripLineNumbering(line, listContext=false){
+  const trimmed = line.trim();
+  let m = trimmed.match(/^(\d{1,4})\s*[.\-)]\s*(.*)$/s);
+  if(!m && listContext) m = trimmed.match(/^(\d{1,4})\s+(.*)$/s);
+  if(!m) m = trimmed.match(/^(\d{1,4})\s+(?=[A-ZÁÉÍÓÚÑ])(.*)$/s);
+  if(!m) return trimmed;
+  const rest = m[2].trim();
+  // \b nunca marca frontera despues de "²"/"³" (no son caracteres \w para el
+  // motor de regex de JS), asi que "m²"/"m³" necesitan su propio chequeo con
+  // (?!\w) en vez de \b -- mismo defecto ya corregido en parseConceptText.
+  if(/^(m2|m3|kg|pza|pieza|piezas|ml|lote|jgo|hr|costales?|sacos?|bultos?|viajes?)(?![a-z])/i.test(rest) || /^(m²|m³)(?!\w)/.test(rest)) return trimmed;
+  return rest || trimmed;
+}
+function isNoiseConceptLine(text){
+  const v = (text||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim();
+  if(!v || v.length < 4) return true;
+  if(/^(concepto|descripci[oó]n|partida|clave|c[oó]digo|unidad|cantidad|precio unitario|pu|p u|cat[aá]logo|cat[aá]logo de conceptos|presupuesto)$/.test(v)) return true;
+  return false;
+}
+/* Segmentador determinista de texto pegado a mano con VARIOS conceptos
+   (numerados "1-"/"1."/"01 ", o simplemente un concepto por renglon): corre
+   ANTES de mandar cualquier cosa a la IA o al motor APU, para que "1
+   concepto de entrada = 1 concepto normalizado" tambien se cumpla cuando el
+   catalogo no viene de un Excel sino de texto pegado directo en el panel de
+   generacion (ver src/main.jsx#generate / generateAI). Devuelve el mismo
+   shape que parseRobustConceptCatalog ({fileName, rows, concepts}) para
+   alimentar el mismo panel de revision de lote y el mismo motor de cola
+   (apuBatchQueue.js) que ya usa el catalogo de Excel -- ningun pipeline
+   paralelo nuevo. Si el texto trae un solo renglon con contenido, devuelve
+   un solo concepto (el llamador sigue el camino de concepto suelto sin
+   ningun cambio de comportamiento). */
+export function parseConceptListText(text){
+  const lines = String(text||'').split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+  // Contexto de catalogo: si la mayoria (>=60%) de los renglones del bloque
+  // completo tienen forma de indice numerico, se trata TODO el bloque como
+  // lista numerada -- asi "02 demolicion de loseta" (minuscula, sin
+  // puntuacion) se reconoce igual que "1-Movimiento..." o "2. Demolición...".
+  // Nunca decide un renglon aislado por si solo (requiere >1 renglon) y
+  // nunca sustituye al guard de unidad tecnica de stripLineNumbering.
+  const numberedCount = lines.filter(looksLikeListIndexLine).length;
+  const isNumberedListContext = lines.length > 1 && (numberedCount / lines.length) >= 0.6;
+  const concepts = [];
+  lines.forEach((rawLine, i) => {
+    const stripped = stripLineNumbering(rawLine, isNumberedListContext);
+    if(isNoiseConceptLine(stripped)) return;
+    const parsed = parseConceptText(stripped);
+    if(!parsed.concept || isNoiseConceptLine(parsed.concept)) return;
+    concepts.push({
+      code: `CON-${String(concepts.length+1).padStart(3,'0')}`,
+      concept: parsed.concept,
+      unit: parsed.unit || '',
+      qty: parsed.qty || 1,
+      referencePU: parsed.referencePU || 0,
+      rowNumber: i+1,
+      // Variables estructuradas (RC5): nunca sustituyen concept/unit/qty
+      // (que siguen siendo la fuente de verdad para el resto del pipeline
+      // ya existente), solo agregan tipado adicional cuando es detectable.
+      variables: conceptVariablesFromParsed(parsed)
+    });
+  });
+  return { fileName:'Texto pegado', rows: lines.map(l=>[l]), concepts };
 }

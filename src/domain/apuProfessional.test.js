@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeEmptyAPUv2, APU_DATA_STATE } from './apuSchema.js';
-import { PRICE_SOURCE_TYPE, makePriceRecord, calculateAPUConfidence, validateAPU } from './apuProfessional.js';
+import { PRICE_SOURCE_TYPE, makePriceRecord, calculateAPUConfidence, validateAPU, isStructurallyEmptyApu } from './apuProfessional.js';
 
 test('makePriceRecord normaliza precio y conserva precio/unidad original', () => {
   const row = makePriceRecord({ description:'Cemento CPC 30R 50 kg', originalUnit:'saco 50 kg', unit:'kg', originalPrice:235, conversionFactor:50, sourceType:PRICE_SOURCE_TYPE.VERIFIED, verified:true });
@@ -55,6 +55,13 @@ test('Test L: un renglon sin verificar, sin proveedor/URL y sin evidencia de mer
   const confidence = calculateAPUConfidence(apu,{now:'2026-08-14'});
   assert.ok(confidence.dimensions.precios < 50, `esperaba confianza de precios baja sin evidencia/verificacion, obtuvo ${confidence.dimensions.precios}`);
   assert.ok(confidence.presentation.confianzaPrecios < 50, `la presentacion re-etiquetada tampoco debe ocultar la falta de evidencia, obtuvo ${confidence.presentation.confianzaPrecios}`);
+});
+
+test('RC9: isStructurallyEmptyApu (usada tambien para deshabilitar el boton de exportacion en ProfessionalApuEditor)', () => {
+  assert.equal(isStructurallyEmptyApu(makeEmptyAPUv2()), true, 'el APU en blanco por defecto debe considerarse vacio -- caso exacto reportado en produccion');
+  assert.equal(isStructurallyEmptyApu({ concept: '', materials: [{ clave: 'M' }] }), true, 'sin concepto sigue vacio aunque haya un renglon suelto');
+  assert.equal(isStructurallyEmptyApu({ concept: 'Concepto real', materials: [], labor: [], equipment: [], seguridad: [] }), true, 'con concepto pero sin ningun renglon tecnico sigue vacio');
+  assert.equal(isStructurallyEmptyApu({ concept: 'Concepto real', materials: [{ clave: 'M' }], labor: [], equipment: [], seguridad: [] }), false, 'con concepto y al menos un renglon ya no es vacio');
 });
 
 test('validateAPU detecta fuentes faltantes y no declara validado', () => {

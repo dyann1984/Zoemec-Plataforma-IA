@@ -1,7 +1,7 @@
 import writeXlsxFileBrowser from 'write-excel-file/browser';
 import { jsPDF } from 'jspdf';
 import { calcAPUv2, calcEquipmentRow, calcSeguridadRow } from './apuCalc.js';
-import { finalizeProfessionalAPU } from '../domain/apuProfessional.js';
+import { finalizeProfessionalAPU, isStructurallyEmptyApu } from '../domain/apuProfessional.js';
 import { apuDataStateLabel } from '../domain/apuSchema.js';
 import { buildReviewRow, REVISION_STATUS_LABEL } from '../domain/apuReview.js';
 import { xcell, fcell, XLS, exportWorkbookExcel, money, num } from './apuExport.js';
@@ -247,8 +247,27 @@ function disambiguateSheetNames(sheets){
   });
 }
 
+/* Guard de exportacion compartido por Excel y PDF (RC8): un APU
+   estructuralmente vacio (sin concepto o sin ningun renglon tecnico) nunca
+   se convierte en archivo -- ni con datos fabricados ni en silencio. Nunca
+   bloquea un APU con datos reales que solo "requiere revision" (precio sin
+   fuente, fecha vieja...), ver isStructurallyEmptyApu. */
+function assertExportableApus(list){
+  const arr = Array.isArray(list) ? list : [list];
+  if(!arr.length) throw new Error('No se puede generar el Excel profesional porque no hay ningún APU para exportar.');
+  const empty = arr.filter(isStructurallyEmptyApu);
+  if(empty.length === arr.length && arr.length === 1){
+    throw new Error('No se puede generar el Excel profesional porque el APU no contiene información técnica.');
+  }
+  if(empty.length){
+    const ids = empty.map(a => a?.clave || a?.concept || '(sin identificar)').join(', ');
+    throw new Error(`No se puede generar el Excel profesional: ${empty.length} de ${arr.length} APU(s) no contienen información técnica (${ids}). Corrige o quita esos conceptos antes de exportar.`);
+  }
+}
+
 export async function exportAPUExcelV2(apus,options={}){
   const list=Array.isArray(apus)?apus:[apus];
+  assertExportableApus(list);
   const priceSheet=buildPriceIntelligenceSheet(list);
   const conceptSheets=disambiguateSheetNames(list.map(buildProfessionalAPUSheet));
   const sheets=[buildProfessionalSummarySheet(list),buildControlRevisionSheet(list),...conceptSheets,...(priceSheet?[priceSheet]:[])];
@@ -264,6 +283,7 @@ export async function exportAPUExcelV2(apus,options={}){
    salto de pagina ENTRE grupos (nextGroup()) para que cada grupo arranque
    limpio, en vez de quedar partido a la mitad solo porque sobraba espacio. */
 export function exportAPUPdfV2(rawApu,options={}){
+  assertExportableApus(rawApu);
   const apu=finalizeProfessionalAPU(rawApu); const t=apu.calculated; const doc=new jsPDF('portrait','mm','a4'); const W=doc.internal.pageSize.getWidth(),H=doc.internal.pageSize.getHeight(),M=12;let y=12,page=1;
   const layout={pageHeight:H,topMargin:M,bottomLimit:H-13,generalHeaders:[],sections:[],rows:[]};
   const pdfText=value=>String(value??'').replace(/\u00b2/g,'2').replace(/\u00b3/g,'3').replace(/\u00b1/g,'+/-').normalize('NFD').replace(/[\u0300-\u036f]/g,'');

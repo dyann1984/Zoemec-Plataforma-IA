@@ -193,6 +193,28 @@ export function validateAPU(apu = {}, options = {}){
   return { status: hasErrors ? 'REQUIERE REVISION' : issues.length ? 'CON OBSERVACIONES' : 'VALIDADO', issues, totals, confidence: calculateAPUConfidence(apu, { now }) };
 }
 
+/* Guard de exportacion (RC8 -- causa raiz real: "Descargar Excel" del editor
+   de UN SOLO APU exporta professionalApu tal cual esta en pantalla; si el
+   usuario nunca genero/cargo un concepto en ESE panel durante la sesion
+   (ej. volvio al proyecto solo a revisar la Bandeja, que lee directo de
+   `apus` sin tocar apuV2), professionalApu sigue siendo el APU vacio por
+   defecto -- concept="", 0 materiales/mano de obra/equipo, PU=$0. Eso nunca
+   fue una corrupcion del pipeline de generacion/persistencia: es el mismo
+   patron ya conocido de "boton de un solo APU" (ver
+   describeAmbiguousSingleExport, src/domain/apuWorkspace.js), pero aqui NO
+   hay ninguna ambiguedad de catalogo que advertir -- el APU sencillamente
+   nunca se lleno. Diferencia explicita con "REQUIERE REVISION" (ver
+   validateAPU arriba): un APU con datos reales pero precios sin fuente,
+   fechas viejas o renglones duplicados SIGUE siendo exportable (requiere
+   revision humana, no esta vacio). Solo bloquea lo que es literalmente
+   imposible de convertir en un documento util. */
+export function isStructurallyEmptyApu(apu = {}){
+  const concept = text(apu?.concept);
+  if(!concept) return true;
+  const rowCount = (apu?.materials?.length || 0) + (apu?.labor?.length || 0) + (apu?.equipment?.length || 0) + (apu?.seguridad?.length || 0);
+  return rowCount === 0;
+}
+
 export function finalizeProfessionalAPU(apu = {}, options = {}){
   const normalized=structuredClone(apu);
   const stateType={VERIFICADO:PRICE_SOURCE_TYPE.VERIFIED,IMPORTADO:PRICE_SOURCE_TYPE.CATALOG,ESTIMADO_IA:PRICE_SOURCE_TYPE.AI_ESTIMATED,ASUMIDO:PRICE_SOURCE_TYPE.ESTIMATED,'USER PROVIDED':PRICE_SOURCE_TYPE.USER_PROVIDED};

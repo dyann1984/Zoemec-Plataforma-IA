@@ -1,5 +1,5 @@
 import React,{useMemo,useState} from 'react';
-import {finalizeProfessionalAPU,validateAPU,makePriceRecord,PRICE_SOURCE_TYPE} from '../../domain/apuProfessional.js';
+import {finalizeProfessionalAPU,validateAPU,makePriceRecord,PRICE_SOURCE_TYPE,isStructurallyEmptyApu} from '../../domain/apuProfessional.js';
 import {auditChange,createApuVersion,restoreApuVersion,comparePrice,applyConfirmedPriceChanges} from '../../domain/apuVersioning.js';
 import {apuDataStateLabel,APU_DATA_STATE} from '../../domain/apuSchema.js';
 import {money,num} from '../../lib/apuExport.js';
@@ -115,6 +115,13 @@ export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindP
  const openPrices=async()=>{const alternatives=await onFindPrices?.(apu)||[];setQuotes(alternatives.map(q=>({...q,apply:false,...comparePrice(q.current,q.priceRecord.price)})));setModal('prices')};
  const applyPrices=()=>{if(!quotes.some(q=>q.apply))return;const next=applyConfirmedPriceChanges(apu,quotes,{user:user?.email||'Usuario'});saveVersion(next,'Actualización confirmada de precios');setNotice(validateAPU(next));setModal('')};
  const sectionSummary=k=>{const n=rows(k).length;const unit=SECTION_UNIT[k];return `${n} ${unit}${n===1?'':n===0?'s':'s'} · ${money(final.calculated[SECTION_TOTAL_KEY[k]]||0)}`;};
+ // Espejo visual del guard real de exportacion (isStructurallyEmptyApu,
+ // src/domain/apuProfessional.js -- el mismo que exportAPUExcelV2/
+ // exportAPUPdfV2 aplican como segunda barrera antes de escribir el
+ // archivo). Deshabilitar aqui es solo UX (evita el clic inutil y explica
+ // por que); el guard interno sigue siendo la barrera real, nunca se retira.
+ const isEmptyApu=isStructurallyEmptyApu(final);
+ const emptyApuTitle='Este APU no tiene concepto ni contenido técnico (materiales/mano de obra/equipo/EPP) todavía -- no hay nada que exportar.';
  const table=(k,title)=><Accordion key={k} title={title} summary={sectionSummary(k)} defaultOpen={k==='labor'}><div className="apu-table-scroll"><table className="data-table"><thead><tr>{SPEC[k].map(([f,l])=><th key={f}>{l}</th>)}<th>Fuente</th><th>Fecha</th><th>Estado</th><th/></tr></thead><tbody>{rows(k).map((r,i)=><tr key={r.clave||i}>{SPEC[k].map(([f])=><td key={f}><input value={r[f]??''} onChange={e=>update(k,i,f,e.target.value)}/></td>)}<td><input value={r.fuente?.proveedor||''} onChange={e=>{const n=structuredClone(apu),x=k==='tools'?n.herramientaMenor.detalle[i]:n[k][i];x.fuente={...(x.fuente||{}),proveedor:e.target.value,estado:x.fuente?.estado||APU_DATA_STATE.REQUIERE_VALIDACION};onChange(n)}}/></td><td><input value={r.fuente?.fecha||''} onChange={e=>{const n=structuredClone(apu),x=k==='tools'?n.herramientaMenor.detalle[i]:n[k][i];x.fuente={...(x.fuente||{}),fecha:e.target.value};onChange(n)}}/></td><td>{apuDataStateLabel(r.fuente?.estado)}</td><td><button onClick={()=>remove(k,i)}>×</button></td></tr>)}</tbody></table></div><button onClick={()=>add(k)}>+ Agregar</button></Accordion>;
  const list=(f,title,object=false)=><Accordion key={f} title={title} summary={`${(apu[f]||[]).length} elemento(s)`}>{(apu[f]||[]).map((v,i)=><div className="pro-list-row" key={i}><textarea value={object?(v.especificacion||v.texto||''):v} onChange={e=>{const n=structuredClone(apu);n[f][i]=object?{...v,[f==='supuestos'?'texto':'especificacion']:e.target.value}:e.target.value;onChange(n)}}/><button onClick={()=>{const n=structuredClone(apu);n[f].splice(i,1);onChange(n)}}>×</button></div>)}<button onClick={()=>onChange({...apu,[f]:[...(apu[f]||[]),object?(f==='supuestos'?{texto:''}:{especificacion:'',criterio:'',norma:''}):'']})}>+ Agregar</button></Accordion>;
  return <div className="professional-apu-editor">
@@ -125,8 +132,8 @@ export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindP
    <button onClick={()=>setNotice(validateAPU(apu))}>Validar</button>
    <button onClick={()=>setNotice({status:'RECALCULADO',issues:[]})}>Recalcular</button>
    <span className="pro-toolbar-group-label">Entregables</span>
-   <button onClick={onExcel}>Descargar Excel</button>
-   <button onClick={onPdf}>Descargar PDF</button>
+   <button onClick={onExcel} disabled={isEmptyApu} title={isEmptyApu?emptyApuTitle:'Exporta únicamente el APU que estás editando actualmente.'}>Descargar Excel de este APU</button>
+   <button onClick={onPdf} disabled={isEmptyApu} title={isEmptyApu?emptyApuTitle:'Exporta únicamente el APU que estás editando actualmente.'}>Descargar PDF de este APU</button>
    <div className="pro-toolbar-more">
     <button type="button" className="soft" onClick={()=>setMoreOpen(o=>!o)} aria-expanded={moreOpen}>Más opciones {moreOpen?'▴':'▾'}</button>
     {moreOpen && <div className="pro-toolbar-more-menu">

@@ -1516,6 +1516,15 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       });
       const finished = await runQueueJob(job);
       const apuList = finished.items.filter(it => it.apu).map(it => it.apu);
+      // RC8: runQueueJob (cola robusta) nunca poblaba batchAPUs (solo lo
+      // hacia buildBatchAPUs, la generacion no robusta) -- sin esto,
+      // "Descargar Excel profesional"/"PDF profesional por concepto"
+      // NUNCA reusaban lo que se acababa de generar aqui: volvian a llamar
+      // a la IA desde cero (batchAPUs.length=0 != list.length), duplicando
+      // el costo y arriesgando que WEB/Excel/PDF mostraran resultados
+      // distintos entre si. Con esto, si el usuario exporta justo despues
+      // de generar el mismo lote completo, se reusan estos APUs reales.
+      setBatchAPUs(apuList);
       const items = apuList.map(a => ({ concept: a.concept, unit: a.unit, qty: Number(a.cantidadObra ?? a.sourceQty ?? 1) || 1, pu: a.calculated?.pu ?? calcAPU(a).pu }));
       const subtotal = items.reduce((s, it) => s + Number(it.qty) * Number(it.pu), 0);
       const iva = subtotal * DEFAULT_IVA_RATE / 100;
@@ -2114,6 +2123,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     if(!confirmSingleExportIfAmbiguous()) return;
     setExportBusy(true);
     try{ exportAPUPdfV2(professionalApu); }
+    catch(error){ alert(error?.message || 'No se pudo generar el PDF.'); return; }
     finally{ setExportBusy(false); }
     if(isFree) markApuUsed();
   };
@@ -2122,6 +2132,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     if(!confirmSingleExportIfAmbiguous()) return;
     setExportBusy(true);
     try{ await exportAPUExcelV2(professionalApu); }
+    catch(error){ alert(error?.message || 'No se pudo generar el Excel.'); return; }
     finally{ setExportBusy(false); }
     if(isFree) markApuUsed();
   };
@@ -2244,7 +2255,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
               completa por concepto -- exportConceptBatch -> exportAPUExcelV2,
               sin tocar): boton principal, primero y sin la clase "soft" que
               lo hacia ver secundario frente al presupuesto de 1 sola hoja. */}
-          {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatch} disabled={batchBusy} title="Workbook profesional completo: RESUMEN + CONTROL_REVISION + una hoja de APU por concepto.">{batchBusy?'IA generando hojas...':'Descargar Excel profesional'}</button>}
+          {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatch} disabled={batchBusy} title="Exporta el presupuesto completo: resumen, control de revisión y una hoja por cada APU.">{batchBusy?'IA generando hojas...':'Descargar Excel profesional'}</button>}
           {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatchPDF} title="Un PDF profesional completo por cada concepto del lote.">PDF profesional por concepto</button>}
           {/* Cotizacion rapida de 1 hoja (Concepto/Unidad/Cantidad/P.U./Importe):
               opcion secundaria, nunca el entregable principal de ZOEMEC. */}
@@ -2315,7 +2326,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
           <button className="soft" onClick={generate}>Actualizar desarrollo</button>
           <button className="soft" onClick={generateAI} disabled={aiBusy}>{aiBusy?'Generando...':'IA real'}</button><button className="soft" type="button" onClick={resetAPUForm}>Limpiar</button>
           {apu.referencePU>0 && <span className="cat-badge">P.U. Excel: {money(apu.referencePU)}</span>}
-          {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatch} disabled={batchBusy} title="Workbook profesional completo: RESUMEN + CONTROL_REVISION + una hoja de APU por concepto.">{batchBusy?'IA generando hojas...':'Descargar Excel profesional'}</button>}
+          {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatch} disabled={batchBusy} title="Exporta el presupuesto completo: resumen, control de revisión y una hoja por cada APU.">{batchBusy?'IA generando hojas...':'Descargar Excel profesional'}</button>}
           {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatchPDF} title="Un PDF profesional completo por cada concepto del lote.">PDF profesional por concepto</button>}
         </div>
         <div className="apu-detect">

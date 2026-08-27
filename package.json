@@ -8,7 +8,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/lib/apuCalc.test.js src/lib/excelImport.test.js src/lib/technicalMatch.test.js src/domain/apuSchema.test.js src/domain/apuProfessional.test.js src/domain/apuReview.test.js src/domain/priceRecordAdapters.test.js src/domain/apuVersioning.test.js src/domain/libraryReview.test.js src/domain/planoReview.test.js src/domain/apuWorkspace.test.js src/domain/apuBatchQueue.test.js src/domain/apuGeneration.test.js src/lib/excelCatalogHeaderDetection.test.js src/lib/apuFlow.test.js server/api-lib/_libraryExtract.test.mjs server/api-lib/_librarySearch.test.mjs server/api-lib/_planoValidate.test.mjs server/api-lib/_pdfEnvPolyfill.test.mjs test/openaiApuCore.test.mjs test/security.unit.test.mjs test/apuExport.pdf.integration.test.mjs test/apuExport.xlsx.integration.test.mjs test/apuExportV2.integration.test.mjs test/library.e2e.test.mjs test/plano-takeoff.e2e.test.mjs test/planoStorage.test.mjs test/excelCatalogImport.e2e.test.mjs test/textConceptBatch.e2e.test.mjs test/textConceptBatchScale.e2e.test.mjs test/textConceptBatchSelection.e2e.test.mjs test/textConceptBatchReactState.e2e.test.mjs",
+    "test": "node --test src/lib/apuCalc.test.js src/lib/excelImport.test.js src/lib/excelImportXmlFallback.test.js src/lib/technicalMatch.test.js src/domain/apuSchema.test.js src/domain/apuProfessional.test.js src/domain/apuReview.test.js src/domain/priceRecordAdapters.test.js src/domain/apuVersioning.test.js src/domain/libraryReview.test.js src/domain/catalogLookup.test.js src/domain/apuCompletionStatus.test.js src/domain/planoReview.test.js src/domain/planoMeasurement.test.js src/domain/geometry3d.test.js src/domain/eppResolver.test.js src/domain/planoTakeoffStore.test.js src/domain/apuWorkspace.test.js src/domain/apuBatchQueue.test.js src/domain/apuGeneration.test.js src/domain/constructionSystems.test.js src/lib/excelCatalogHeaderDetection.test.js src/lib/apuFlow.test.js server/api-lib/_libraryExtract.test.mjs server/api-lib/_librarySearch.test.mjs server/api-lib/_planoValidate.test.mjs server/api-lib/_pdfEnvPolyfill.test.mjs test/openaiApuCore.test.mjs test/security.unit.test.mjs test/apuExport.pdf.integration.test.mjs test/apuExport.xlsx.integration.test.mjs test/apuExportV2.integration.test.mjs test/library.e2e.test.mjs test/plano-takeoff.e2e.test.mjs test/planoStorage.test.mjs test/excelCatalogImport.e2e.test.mjs test/textConceptBatch.e2e.test.mjs test/textConceptBatchScale.e2e.test.mjs test/textConceptBatchSelection.e2e.test.mjs test/textConceptBatchReactState.e2e.test.mjs test/textConceptBatchExportScale.e2e.test.mjs test/apuExportParity.test.mjs test/aiContractFixture.test.mjs test/apuReconciliation.test.mjs test/visualizationProviders.test.mjs test/cloudCatalogSync.test.mjs test/semanticProvider.test.mjs",
     "test:apu": "node --test src/lib/apuCalc.test.js",
     "test:apu-integration": "node --test test/apuExport.pdf.integration.test.mjs test/apuExport.xlsx.integration.test.mjs",
     "test:rules": "firebase emulators:exec --project zoemec-plataforma-ia --only firestore \"node --test test/firestore.rules.test.mjs\"",
@@ -26,11 +26,13 @@
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "read-excel-file": "^9.2.0",
+    "three": "^0.180.0",
     "vite": "^8.1.0",
     "write-excel-file": "^4.1.1"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^5.0.1",
+    "@xmldom/xmldom": "^0.9.10",
     "firebase-tools": "^15.26.0"
   }
 }

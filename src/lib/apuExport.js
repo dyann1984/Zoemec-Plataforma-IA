@@ -98,7 +98,11 @@ export async function exportWorkbookExcel(sheets, fileName, writeXlsxFileImpl = 
     stickyRowsCount: sheet.stickyRowsCount || 0,
     orientation: sheet.orientation || 'landscape',
     showGridLines: false,
-    zoomScale: sheet.zoomScale || 0.85
+    zoomScale: sheet.zoomScale || 0.85,
+    // Portada (ver buildPortadaSheet en apuExportV2.js): logo opcional por
+    // hoja, ver docs/IMAGES.md de write-excel-file. Ausente en el resto de
+    // las hojas -- undefined se omite tal cual lo espera la libreria.
+    ...(sheet.images ? { images: sheet.images } : {})
   }));
   try{
     const result = writeXlsxFileImpl(workbook, { fontFamily:'Arial', fontSize:10 });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { INSUMO_STATES, isValidInsumoState, applyInsumoReview, toCatalogRow, extractValidatedCatalogRows } from './libraryReview.js';
+import { INSUMO_STATES, isValidInsumoState, applyInsumoReview, toCatalogRow, extractValidatedCatalogRows, extractAllValidatedCatalogRows, mergeCatalogRows } from './libraryReview.js';
 
 test('isValidInsumoState solo acepta PROPUESTO/VALIDADO/RECHAZADO', () => {
   assert.equal(isValidInsumoState('VALIDADO'), true);
@@ -39,7 +39,22 @@ test('toCatalogRow: VALIDADO si puede alimentar el catalogo/APU con el shape cor
   const insumo = { desc: 'Block hueco 15x20x40', unidad: 'pza', precio: 15.5 };
   const review = { index: 0, state: 'VALIDADO', validatedBy: 'diana@zoemec.com', validatedAt: '2026-08-21T10:00:00Z' };
   const row = toCatalogRow(insumo, review);
-  assert.deepEqual(row, { desc: 'Block hueco 15x20x40', unidad: 'pza', precio: 15.5 });
+  assert.deepEqual(row, { desc: 'Block hueco 15x20x40', unidad: 'pza', precio: 15.5, estado: 'BIBLIOTECA' });
+});
+
+test('toCatalogRow: preserva clave/categoria/sinonimos SOLO cuando el insumo ya los trae (nunca los inventa)', () => {
+  const review = { index: 0, state: 'VALIDADO', validatedBy: 'diana@zoemec.com', validatedAt: '2026-08-21T10:00:00Z' };
+  const sinPlus = toCatalogRow({ desc: 'Block hueco 15x20x40', unidad: 'pza', precio: 15.5 }, review);
+  assert.equal('clave' in sinPlus, false);
+  assert.equal('categoria' in sinPlus, false);
+  assert.equal('sinonimos' in sinPlus, false);
+  const conPlus = toCatalogRow({
+    desc: 'Block hueco 15x20x40', unidad: 'pza', precio: 15.5,
+    clave: 'MAT-BLOCK-15', categoria: 'Mamposteria', sinonimos: ['Tabique hueco 15cm']
+  }, review);
+  assert.equal(conPlus.clave, 'MAT-BLOCK-15');
+  assert.equal(conPlus.categoria, 'Mamposteria');
+  assert.deepEqual(conPlus.sinonimos, ['Tabique hueco 15cm']);
 });
 
 test('toCatalogRow: sin review (nunca revisado) no entra al catalogo', () => {
@@ -89,4 +104,51 @@ test('extractValidatedCatalogRows: documento sin ningun VALIDADO regresa arreglo
 
 test('INSUMO_STATES expone exactamente los 3 estados esperados', () => {
   assert.deepEqual(Object.values(INSUMO_STATES).sort(), ['PROPUESTO', 'RECHAZADO', 'VALIDADO']);
+});
+
+test('extractAllValidatedCatalogRows: agrega VALIDADOS de varios documentos, no solo el abierto', () => {
+  const docs = [
+    {
+      id: 'LIB-001', name: 'A.xlsx',
+      contentInsumos: [{ desc: 'Cemento portland 50kg', unidad: 'bulto', precio: 180 }],
+      insumosReview: [{ index: 0, state: 'VALIDADO', validatedBy: 'diana@zoemec.com', validatedAt: '2026-08-21T10:00:00Z' }]
+    },
+    {
+      id: 'LIB-002', name: 'B.xlsx',
+      contentInsumos: [{ desc: 'Arena lavada m3', unidad: 'm3', precio: 450 }],
+      insumosReview: [{ index: 0, state: 'VALIDADO', validatedBy: 'diana@zoemec.com', validatedAt: '2026-08-21T10:01:00Z' }]
+    },
+    { id: 'LIB-003', name: 'C.xlsx', contentInsumos: [], insumosReview: [] }
+  ];
+  const rows = extractAllValidatedCatalogRows(docs);
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows.map(r => r.desc).sort(), ['Arena lavada m3', 'Cemento portland 50kg']);
+});
+
+test('mergeCatalogRows: dedup por clave, conserva trazabilidad (no la tira como la fusion anterior)', () => {
+  const existing = [{ desc: 'Cemento gris', unidad: 'saco', precio: 170, clave: 'MAT-001' }];
+  const incoming = [
+    { desc: 'Cemento gris', unidad: 'saco', precio: 182, clave: 'MAT-001', traceability: { sourceDocId: 'LIB-1' } },
+    { desc: 'Arena lavada', unidad: 'm3', precio: 450, traceability: { sourceDocId: 'LIB-1' } }
+  ];
+  const merged = mergeCatalogRows(existing, incoming);
+  assert.equal(merged.length, 2);
+  const cemento = merged.find(r => r.clave === 'MAT-001');
+  assert.equal(cemento.precio, 182);
+  assert.equal(cemento.traceability.sourceDocId, 'LIB-1');
+  const arena = merged.find(r => r.desc === 'Arena lavada');
+  assert.ok(arena.traceability);
+});
+
+test('mergeCatalogRows: dedup por desc+unidad normalizada cuando no hay clave', () => {
+  const existing = [{ desc: 'Arena lavada', unidad: 'M3', precio: 400 }];
+  const incoming = [{ desc: ' arena lavada ', unidad: 'm3', precio: 450 }];
+  const merged = mergeCatalogRows(existing, incoming);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].precio, 450);
+});
+
+test('mergeCatalogRows: sin catalogo previo, simplemente adopta las filas nuevas', () => {
+  const merged = mergeCatalogRows(null, [{ desc: 'x', unidad: 'pza', precio: 1 }]);
+  assert.equal(merged.length, 1);
 });

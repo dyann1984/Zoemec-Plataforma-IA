@@ -37,7 +37,7 @@ const REAL_CASE_TEXT = [
   '6-colocación de loseta 64m2'
 ].join('\n');
 
-test('E2E caso real de 6 conceptos pegados como texto: segmentacion -> 6 APUs independientes -> 8 hojas XLSX, sin fusion ni contaminacion', async () => {
+test('E2E caso real de 6 conceptos pegados como texto: segmentacion -> 6 APUs independientes -> 9 hojas XLSX, sin fusion ni contaminacion', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zoemec-textbatch-e2e-'));
   const outputName = 'salida-lote-texto.xlsx';
   const outputPath = path.join(dir, outputName);
@@ -108,7 +108,7 @@ test('E2E caso real de 6 conceptos pegados como texto: segmentacion -> 6 APUs in
     const sheetNames = [...workbookXml.matchAll(/<sheet\b[^>]*name="([^"]*)"/g)].map(m => m[1]);
     assert.ok(sheetNames.includes('RESUMEN'));
     assert.ok(sheetNames.includes('CONTROL_REVISION'));
-    assert.equal(sheetNames.length, 2 + 6, `se esperaban 8 hojas (RESUMEN + CONTROL_REVISION + 6 conceptos), hubo ${sheetNames.length}: ${sheetNames.join(', ')}`);
+    assert.equal(sheetNames.length, 4 + 6, `se esperaban 10 hojas (PORTADA + RESUMEN + CONTROL_REVISION + PARAMETROS + 6 conceptos), hubo ${sheetNames.length}: ${sheetNames.join(', ')}`);
     assert.equal(new Set(sheetNames).size, sheetNames.length, 'los nombres de hoja deben ser unicos');
 
     // 6) Test R: el XLSX exportado conserva la descripcion COMPLETA (incluida

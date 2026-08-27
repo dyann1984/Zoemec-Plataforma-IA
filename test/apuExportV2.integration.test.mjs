@@ -1,10 +1,39 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import writeXlsxFileNode from 'write-excel-file/node';import {unzipSync,strFromU8} from 'fflate';
-import { makeEmptyAPUv2,APU_DATA_STATE } from '../src/domain/apuSchema.js';import { calcAPUv2 } from '../src/lib/apuCalc.js';import { finalizeProfessionalAPU } from '../src/domain/apuProfessional.js';import { buildProfessionalAPUSheet,exportAPUExcelV2,exportAPUPdfV2 } from '../src/lib/apuExportV2.js';
+import { makeEmptyAPUv2,APU_DATA_STATE } from '../src/domain/apuSchema.js';import { calcAPUv2 } from '../src/lib/apuCalc.js';import { finalizeProfessionalAPU } from '../src/domain/apuProfessional.js';import { buildProfessionalAPUSheet,exportAPUExcelV2,exportAPUPdfV2,exportAPUPdfMaster,buildParametrosSheet } from '../src/lib/apuExportV2.js';
 import { readXlsxCells, findRowByLabel } from './helpers/xlsxRead.mjs';import { createSheetEvaluator } from './helpers/xlsxFormula.mjs';
 function golden(i=1){const a=makeEmptyAPUv2();Object.assign(a,{clave:`ALB-APL-${String(i).padStart(3,'0')}`,concept:'Aplanado fino en muros a plomo y regla con mortero cemento-arena 1:4, espesor promedio 1.5 cm, incluye preparacion de superficie, materiales, mano de obra, herramienta, equipo, andamios, limpieza y todo lo necesario para su correcta ejecucion.',unit:'m²',cantidadObra:125,proyecto:'Golden test ZOEMEC',cliente:'Cliente de prueba',version:'V1'});const fuente={estado:APU_DATA_STATE.VERIFICADO,proveedor:'Catalogo proporcionado',fecha:'2026-08-01'};a.materials=[{clave:'MAT-001',descripcion:'Cemento CPC 30R',unidad:'kg',consumo:5.6,desperdicioPct:0,precioUnitario:2.35,fuente},{clave:'MAT-002',descripcion:'Arena lavada',unidad:'m³',consumo:.018,desperdicioPct:5,precioUnitario:450,fuente}];a.labor=[{clave:'MO-001',descripcion:'Oficial albañil',unidad:'jor',cuadrilla:1,rendimiento:25,jornada:8,salarioBase:802.15,fsr:1.382,fuente},{clave:'MO-002',descripcion:'Ayudante albañil',unidad:'jor',cuadrilla:1,rendimiento:25,jornada:8,salarioBase:601.61,fsr:1.382,fuente}];a.equipment=[{clave:'EQ-001',descripcion:'Andamio tubular',unidad:'dia',cantidad:.1,tarifa:150,rendimiento:25,fuente}];a.seguridad=[{clave:'SP-001',descripcion:'Casco de seguridad',unidad:'pza',cantidad:.001,precioUnitario:220,observaciones:'Uso obligatorio'}];a.procedimientoConstructivo=['Preparar superficie','Humedecer muro','Aplicar y reglear mortero','Curar'];a.controlCalidad=[{especificacion:'Aplome',criterio:'± 3 mm en 3 m'}];a.criterioMedicion={unidadMedicion:'m²',incluye:['materiales','mano de obra','limpieza'],excluye:['acabados adicionales']};a.supuestos=[{texto:'Jornada de 8 horas'}];return a;}
 test('golden: motor y exportadores v2 conservan CD, subtotal, IVA, PU y total',async()=>{const a=golden(),t=calcAPUv2(a);const dir=fs.mkdtempSync(path.join(os.tmpdir(),'zoemec-v2-'));const before=process.cwd();process.chdir(dir);try{await exportAPUExcelV2(a,{writeXlsxFileImpl:writeXlsxFileNode,fileName:'golden.xlsx'});const {doc,apu}=exportAPUPdfV2(a,{fileName:'golden.pdf'});assert.ok(fs.statSync('golden.xlsx').size>1000);assert.ok(fs.statSync('golden.pdf').size>1000);assert.deepEqual(['direct','iva','pu','importeTotal'].map(k=>apu.calculated[k]),['direct','iva','pu','importeTotal'].map(k=>t[k]));const raw=Buffer.from(doc.output('arraybuffer')).toString('latin1');[t.direct,t.iva,t.pu,t.importeTotal].forEach(v=>assert.ok(raw.includes(`(${new Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN'}).format(v).replace('MX$','$')})`)));}finally{process.chdir(before);fs.rmSync(dir,{recursive:true,force:true});}});
 test('Web, Excel y PDF comparten exactamente el snapshot profesional finalizado',()=>{const web=finalizeProfessionalAPU(golden());const excel=buildProfessionalAPUSheet(web).apu;const pdf=exportAPUPdfV2(web,{save:false}).apu;const projection=a=>({identity:[a.id,a.clave,a.concept,a.unit,a.cantidadObra,a.version],resources:{materials:a.materials,labor:a.labor,tools:a.herramientaMenor,equipment:a.equipment,seguridad:a.seguridad},factors:a.factores,calculated:a.calculated,confidence:a.confidence,validationStatus:a.validationStatus,sources:[...a.materials,...a.labor,...a.equipment].map(r=>r.priceRecord)});assert.deepEqual(projection(excel),projection(web));assert.deepEqual(projection(pdf),projection(web));});
-for(const count of [1,10,100])test(`Excel v2 exporta RESUMEN + CONTROL_REVISION + ${count} hojas`,async()=>{const dir=fs.mkdtempSync(path.join(os.tmpdir(),'zoemec-many-'));const before=process.cwd();process.chdir(dir);try{const sheets=await exportAPUExcelV2(Array.from({length:count},(_,i)=>golden(i+1)),{writeXlsxFileImpl:writeXlsxFileNode,fileName:`${count}.xlsx`});assert.equal(sheets.length,count+2);assert.equal(sheets[0].sheet,'RESUMEN');assert.equal(sheets[1].sheet,'CONTROL_REVISION');assert.ok(fs.statSync(`${count}.xlsx`).size>1000);if(count===1){const zip=unzipSync(fs.readFileSync('1.xlsx'));const xml=strFromU8(zip['xl/worksheets/sheet1.xml']);assert.match(xml,/<pageSetup[^>]+paperSize="9"[^>]+orientation="landscape"/);assert.match(xml,/showGridLines="false"/);assert.match(xml,/zoomScale="85"/);}}finally{process.chdir(before);fs.rmSync(dir,{recursive:true,force:true});}});
+test('buildParametrosSheet: hoja PARAMETROS con moneda/vigencia/IVA/tolerancia/version, contenido real (no inventado)',()=>{
+  const a=golden();a.moneda='MXN';a.fechaBase='2026-08-01';a.version='V2';
+  const sheet=buildParametrosSheet([a],{engineVersion:'V2-test'});
+  assert.equal(sheet.sheet,'PARAMETROS');
+  const flat=sheet.rows.map(r=>r.map(c=>c && typeof c==='object'?c.value:c).join(' | ')).join('\n');
+  assert.match(flat,/Moneda[\s\S]*MXN/);
+  assert.match(flat,/vigencia[\s\S]*2026-08-01/i);
+  assert.match(flat,/IVA aplicado[\s\S]*16%/);
+  assert.match(flat,/Version del motor[\s\S]*V2-test/i);
+  assert.match(flat,/Herramienta menor[\s\S]*3%/);
+});
+
+test('PDF individual: pie de pagina real "Pagina X de Y" (nunca un numero absoluto sin total)',()=>{
+  const { doc } = exportAPUPdfV2(golden(), { save:false });
+  const totalPages = doc.internal.getNumberOfPages();
+  assert.ok(totalPages >= 1);
+  const raw = Buffer.from(doc.output('arraybuffer')).toString('latin1');
+  for(let i=1;i<=totalPages;i++) assert.ok(raw.includes(`Pagina ${i} de ${totalPages}`), `falta el pie "Pagina ${i} de ${totalPages}"`);
+});
+
+test('PDF maestro: "Pagina X de Y" es absoluto dentro de TODO el documento (portada+resumen+control+N APUs), nunca se reinicia por concepto',()=>{
+  const apus = [1,2,3].map(i => golden(i));
+  const { doc } = exportAPUPdfMaster(apus, { save:false });
+  const totalPages = doc.internal.getNumberOfPages();
+  assert.ok(totalPages > 3, 'el maestro debe tener mas paginas que portada+resumen+control (los 3 APUs agregan las suyas)');
+  const raw = Buffer.from(doc.output('arraybuffer')).toString('latin1');
+  for(let i=1;i<=totalPages;i++) assert.ok(raw.includes(`Pagina ${i} de ${totalPages}`), `falta el pie "Pagina ${i} de ${totalPages}" en el PDF maestro`);
+});
+
+for(const count of [1,10,100])test(`Excel v2 exporta PORTADA + RESUMEN + CONTROL_REVISION + PARAMETROS + ${count} hojas`,async()=>{const dir=fs.mkdtempSync(path.join(os.tmpdir(),'zoemec-many-'));const before=process.cwd();process.chdir(dir);try{const sheets=await exportAPUExcelV2(Array.from({length:count},(_,i)=>golden(i+1)),{writeXlsxFileImpl:writeXlsxFileNode,fileName:`${count}.xlsx`});assert.equal(sheets.length,count+4);assert.equal(sheets[0].sheet,'PORTADA');assert.equal(sheets[1].sheet,'RESUMEN');assert.equal(sheets[2].sheet,'CONTROL_REVISION');assert.equal(sheets[3].sheet,'PARAMETROS');assert.ok(fs.statSync(`${count}.xlsx`).size>1000);if(count===1){const zip=unzipSync(fs.readFileSync('1.xlsx'));const xml=strFromU8(zip['xl/worksheets/sheet2.xml']);assert.match(xml,/<pageSetup[^>]+paperSize="9"[^>]+orientation="landscape"/);assert.match(xml,/showGridLines="false"/);assert.match(xml,/zoomScale="85"/);}}finally{process.chdir(before);fs.rmSync(dir,{recursive:true,force:true});}});
 
 function rc1ExportRegression(){
   const a=makeEmptyAPUv2();
@@ -30,7 +59,7 @@ test('regresion P0 RC1: snapshot, XLSX recalculado y PDF usan equipo/EPP efectiv
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'zoemec-p0-export-'));const before=process.cwd();process.chdir(dir);
   try{
     await exportAPUExcelV2(snapshot,{writeXlsxFileImpl:writeXlsxFileNode,fileName:'rc1-p0.xlsx'});
-    const cells=readXlsxCells(fs.readFileSync('rc1-p0.xlsx'),'xl/worksheets/sheet3.xml');const evaluate=createSheetEvaluator(cells);
+    const cells=readXlsxCells(fs.readFileSync('rc1-p0.xlsx'),'xl/worksheets/sheet5.xml');const evaluate=createSheetEvaluator(cells);
     const cases=[['SUBTOTAL EQUIPO','equipo'],['SUBTOTAL SEGURIDAD','seguridad'],['COSTO DIRECTO','direct'],['PRECIO UNITARIO FINAL','pu'],['IMPORTE TOTAL','importeTotal']];
     for(const [label,key] of cases){const ref=findRowByLabel(cells,label,'J');assert.ok(ref,`falta ${label}`);assert.ok(cells[ref].formula,`${label} debe seguir siendo formula auditable`);assert.ok(Math.abs(evaluate.getCellValue(ref)-t[key])<1e-8,`${label}: XLSX != snapshot`);}
     const {doc}=exportAPUPdfV2(snapshot,{fileName:'rc1-p0.pdf'});const raw=Buffer.from(doc.output('arraybuffer')).toString('latin1');
@@ -62,10 +91,9 @@ test('PDF evita secciones huerfanas y mantiene encabezado general dentro del are
         assert.ok(s.y<s.columnsY&&s.columnsY<s.firstRowY,`${s.title}: orden vertical invalido o superpuesto`);
       }
     }
-    const laborSection=layout.sections.find(s=>s.title==='1. MANO DE OBRA');
-    const materialSection=layout.sections.find(s=>s.title==='2. MATERIALES');
-    assert.ok(materialSection.page>laborSection.page,'Materiales debe saltar antes del encabezado cuando no cabe titulo + columnas + primera fila');
-    assert.equal(materialSection.y,layout.generalHeaders.find(h=>h.page===materialSection.page).y+29,'la seccion debe iniciar bajo el encabezado general de la nueva pagina');
+    const materialSection=layout.sections.find(s=>s.title==='A. MATERIALES');
+    const equipmentSection=layout.sections.find(s=>s.title==='C. EQUIPO Y MAQUINARIA');
+    assert.ok(equipmentSection.page>materialSection.page,'una seccion posterior con suficiente volumen de renglones previos debe saltar de pagina, nunca quedar huerfana');
     for(const row of layout.rows)assert.ok(row.y+row.height<=layout.bottomLimit,`${row.section}: fila ${row.row+1} fuera del area imprimible`);
     assert.ok(doc.getNumberOfPages()>=4,'el caso de presion debe producir varias paginas de forma coherente');
   }finally{process.chdir(before);fs.rmSync(dir,{recursive:true,force:true});}

@@ -114,7 +114,7 @@ async function exportConceptsAPUWorkbookMirror(concepts, preparedAPUs = []) {
   return await exportAPUExcelV2(professional, { writeXlsxFileImpl: writeXlsxFileNode, fileName: 'APU-POR-CONCEPTO-ZOEMEC.xlsx' });
 }
 
-test('RC8 END-TO-END: generar -> setApus/useProjectScoped (React real) -> reconstruir tras "F5" -> exportar -> 6 APUs reales, 8 hojas, sin vacios', async () => {
+test('RC8 END-TO-END: generar -> setApus/useProjectScoped (React real) -> reconstruir tras "F5" -> exportar -> 6 APUs reales, 10 hojas, sin vacios', async () => {
   // 1) TEXTAREA -> parseConceptListText -> conceptBatch
   const { concepts } = parseConceptListText(REAL_CASE_TEXT);
   assert.equal(concepts.length, 6);
@@ -183,7 +183,7 @@ test('RC8 END-TO-END: generar -> setApus/useProjectScoped (React real) -> recons
     const sheetTags = [...workbookXml.matchAll(/<sheet\b[^>]*\/>/g)].map(m => m[0]);
     const attr = (tag, name) => tag.match(new RegExp(`${name}="([^"]*)"`))?.[1];
     const sheetEntries = sheetTags.map(tag => ({ name: attr(tag, 'name'), rid: attr(tag, 'r:id') }));
-    assert.equal(sheetEntries.length, 8, `se esperaban 8 hojas (RESUMEN + CONTROL_REVISION + 6), hubo ${sheetEntries.length}: ${sheetEntries.map(s => s.name).join(', ')}`);
+    assert.equal(sheetEntries.length, 10, `se esperaban 10 hojas (PORTADA + RESUMEN + CONTROL_REVISION + PARAMETROS + 6), hubo ${sheetEntries.length}: ${sheetEntries.map(s => s.name).join(', ')}`);
     assert.ok(sheetEntries.some(s => s.name === 'RESUMEN'));
     assert.ok(sheetEntries.some(s => s.name === 'CONTROL_REVISION'));
 
@@ -195,7 +195,7 @@ test('RC8 END-TO-END: generar -> setApus/useProjectScoped (React real) -> recons
     const sharedStrings = [...sharedXml.matchAll(/<si>([\s\S]*?)<\/si>/g)].map(m => [...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join(''));
     const fullText = sharedStrings.join(' | ');
 
-    const conceptSheets = sheetEntries.filter(s => s.name !== 'RESUMEN' && s.name !== 'CONTROL_REVISION');
+    const conceptSheets = sheetEntries.filter(s => s.name !== 'PORTADA' && s.name !== 'RESUMEN' && s.name !== 'CONTROL_REVISION' && s.name !== 'PARAMETROS');
     assert.equal(conceptSheets.length, 6);
     conceptSheets.forEach(({ name, rid }) => {
       const target = relMap.get(rid);

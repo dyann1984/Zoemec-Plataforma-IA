@@ -12,6 +12,7 @@
    prompts de IA lo usa todavia; se conecta en fases posteriores. */
 import { APU_DEFAULT_FACTORS } from '../lib/apuCalc.js';
 import { uid } from '../utils/id.js';
+import { RENDIMIENTO_FUENTE } from './apuReview.js';
 
 /* Estado de verificacion de un dato (precio, rendimiento, renglon completo).
    Ningun dato generado por plantilla o IA puede etiquetarse VERIFICADO por
@@ -95,16 +96,40 @@ export function makeEmptyAPUv2(){
     concept: '',
     unit: 'm²',
     cantidadObra: 0,
+    // Modelo semantico del concepto (motor universal, ver
+    // src/domain/constructionSystems.js): familia/disciplina, sistema
+    // constructivo detectado como actividad principal, actividades
+    // incluidas declaradas en el propio texto, y como se llego a la
+    // clasificacion (exact/score/generico). Vacios por defecto -- solo el
+    // generador (plantilla o IA) los llena, nunca se inventan en un APU
+    // vacio ni se recalculan en exportacion.
+    family: '',
+    primaryActivity: null,
+    secondaryActivities: [],
+    classificationMatch: null,
     // Recursos
     materials: [],
     labor: [],
     equipment: [],
     herramientaMenor: { modo: 'porcentaje', porcentaje: APU_DEFAULT_FACTORS.herramienta, detalle: [] },
+    // Consumibles y auxiliares (categoria E): insumos que se consumen durante
+    // el procedimiento pero no son "materiales" que quedan integrados en la
+    // obra (discos de corte, brocas, lijas, electrodos, cinta, combustible,
+    // lubricantes...). Misma forma de renglon que materials (ver
+    // migrateMaterialRow/normalizeAIApuToV2 mas abajo), nunca se sintetiza
+    // con un % generico: si el concepto no requiere ninguno, queda [] y
+    // technicalJustifications.consumables explica por que (ver mas abajo).
+    consumables: [],
     seguridad: [],
     // Ingenieria del APU
     procedimientoConstructivo: [],
     controlCalidad: [],
     criterioMedicion: { incluye: [], excluye: [], unidadMedicion: '' },
+    // Justificacion tecnica por categoria (A-F): por que esos recursos,
+    // cantidades, cuadrilla, rendimiento, equipo o EPP son apropiados para
+    // ESTE concepto especifico. Nace vacia -- SOLO la genera el motor de
+    // desarrollo tecnico (IA o plantilla), nunca se fabrica en exportacion.
+    technicalJustifications: { materials: '', labor: '', equipment: '', smallTools: '', consumables: '', safety: '' },
     // Factores configurables (misma fuente de verdad que v1: APU_DEFAULT_FACTORS)
     factores: {
       indCampo: APU_DEFAULT_FACTORS.indCampo,
@@ -128,42 +153,79 @@ function migrateRowsToObjects(rows, mapRow){
    el objeto v2 correspondiente. No inventa clave/fuente/proveedor: genera una
    clave legible por indice y deja la fuente como "requiere validacion" salvo
    que se pueda inferir el estado del APU completo (ver migrateLegacyApuToV2). */
-function migrateMaterialRow(row, index, estado){
+/* `source` (opcional): entrada de materialSources/equipmentSources producida
+   por apuGeneration.js#makeAPUFromConcept cuando el renglon vino de un match
+   de catalogo real (Biblioteca Inteligente) -- {estado, proveedor, fecha,
+   clave, categoria, confidence, matchType}. Cuando existe, sustituye el
+   `estado` uniforme del APU completo SOLO para este renglon (un APU puede
+   tener unos renglones de catalogo real y otros de plantilla al mismo
+   tiempo). Sin `source`, comportamiento identico a antes. */
+function migrateMaterialRow(row, index, estado, source){
   return {
-    clave: `MAT-${String(index + 1).padStart(3, '0')}`,
+    clave: source?.clave || `MAT-${String(index + 1).padStart(3, '0')}`,
     descripcion: String(row?.[0] || ''),
     unidad: String(row?.[2] || ''),
     consumo: Number(row?.[1]) || 0,
     desperdicioPct: Number(row?.[4]) || 0,
     precioUnitario: Number(row?.[3]) || 0,
-    fuente: makeEmptyFuente(estado),
+    fuente: source
+      ? { proveedor: source.proveedor || null, fecha: source.fecha || null, region: null, estado: source.estado }
+      : makeEmptyFuente(estado),
     origen: null
   };
 }
-function migrateLaborRow(row, index, estado){
+/* `detail` (opcional): {cuadrilla,rendimiento,jornada,rendimientoFuente,
+   yieldConfidence} -- mismo contrato que normalizeAIApuToV2 ya usa para
+   raw.laborDetails (ver mas abajo), ahora tambien producido por la ruta
+   determinista (ver src/domain/crewModel.js#deriveCrewFromLaborRows /
+   apuGeneration.js#makeAPUFromConcept). Sin `detail`, se comporta
+   exactamente igual que antes (cuadrilla/rendimiento/jornada en null).
+   `source` (opcional): entrada de laborSources (ver makeAPUFromConcept) --
+   mismo contrato que materialSources/equipmentSources, acotado al SALARIO
+   (nunca cuadrilla/rendimiento, ver la nota en apuGeneration.js#useCat). */
+function migrateLaborRow(row, index, estado, detail, source){
   return {
-    clave: `MO-${String(index + 1).padStart(3, '0')}`,
+    clave: source?.clave || `MO-${String(index + 1).padStart(3, '0')}`,
     descripcion: String(row?.[0] || ''),
     unidad: String(row?.[2] || ''),
-    cuadrilla: null,
-    rendimiento: null,
-    jornada: null,
+    cuadrilla: detail?.cuadrilla ?? null,
+    rendimiento: detail?.rendimiento ?? null,
+    jornada: detail?.jornada ?? null,
     cantidad: Number(row?.[1]) || 0,
     salarioBase: Number(row?.[3]) || 0,
     fsr: Number(row?.[4]) || 1,
-    fuente: makeEmptyFuente(estado),
-    estado
+    fuente: source
+      ? { proveedor: source.proveedor || null, fecha: source.fecha || null, region: null, estado: source.estado }
+      : makeEmptyFuente(estado),
+    estado: source?.estado || estado,
+    rendimientoFuente: detail?.rendimientoFuente ?? null,
+    yieldConfidence: detail?.yieldConfidence ?? null,
+    // Trazabilidad del rendimiento (fase de correccion "Rendimientos
+    // reales", punto explicito del spec del usuario): fuente/fecha/valor
+    // original/valor adoptado/confianza/metodo -- solo presente cuando el
+    // renglon SI adopto un rendimiento real de Biblioteca (source.rendimiento).
+    // null para el resto (plantilla/IA/sin catalogo), nunca se fabrica.
+    rendimientoTrazabilidad: source?.rendimiento ? {
+      fuente: source.proveedor || null,
+      fecha: source.fecha || null,
+      valorOriginal: source.rendimientoOriginal ?? null,
+      valorAdoptado: source.rendimientoAdoptado ?? null,
+      confianza: source.rendimientoConfidence ?? null,
+      metodo: source.rendimientoMetodo || null
+    } : null
   };
 }
-function migrateEquipmentRow(row, index, estado){
+function migrateEquipmentRow(row, index, estado, source){
   return {
-    clave: `EQ-${String(index + 1).padStart(3, '0')}`,
+    clave: source?.clave || `EQ-${String(index + 1).padStart(3, '0')}`,
     descripcion: String(row?.[0] || ''),
     unidad: String(row?.[2] || ''),
     cantidad: Number(row?.[1]) || 0,
     tarifa: Number(row?.[3]) || 0,
     rendimiento: null,
-    fuente: makeEmptyFuente(estado)
+    fuente: source
+      ? { proveedor: source.proveedor || null, fecha: source.fecha || null, region: null, estado: source.estado }
+      : makeEmptyFuente(estado)
   };
 }
 
@@ -195,18 +257,42 @@ export function migrateLegacyApuToV2(apuV1 = {}){
     concept: apuV1.concept || '',
     unit: apuV1.unit || 'm²',
     cantidadObra: 0,
-    materials: migrateRowsToObjects(apuV1.materials, (r, i) => migrateMaterialRow(r, i, estado)),
-    labor: migrateRowsToObjects(apuV1.labor, (r, i) => migrateLaborRow(r, i, estado)),
-    equipment: migrateRowsToObjects(apuV1.equipment, (r, i) => migrateEquipmentRow(r, i, estado)),
+    // Modelo semantico (ver makeEmptyAPUv2): se preserva tal cual si el v1
+    // ya lo trae (makeAPUFromConcept en apuGeneration.js lo genera); nunca
+    // se infiere de nuevo aqui.
+    family: apuV1.family || '',
+    primaryActivity: apuV1.primaryActivity || null,
+    secondaryActivities: Array.isArray(apuV1.secondaryActivities) ? apuV1.secondaryActivities : [],
+    classificationMatch: apuV1.classificationMatch || null,
+    materials: migrateRowsToObjects(apuV1.materials, (r, i) => migrateMaterialRow(r, i, estado, apuV1.materialSources?.[i])),
+    labor: migrateRowsToObjects(apuV1.labor, (r, i) => migrateLaborRow(r, i, estado, apuV1.laborDetails?.[i], apuV1.laborSources?.[i])),
+    equipment: migrateRowsToObjects(apuV1.equipment, (r, i) => migrateEquipmentRow(r, i, estado, apuV1.equipmentSources?.[i])),
     herramientaMenor: {
       modo: 'porcentaje',
       porcentaje: Number(apuV1.herramienta ?? APU_DEFAULT_FACTORS.herramienta),
       detalle: []
     },
-    seguridad: [],
+    // Un APU v1 nunca tuvo consumibles como categoria propia: nace vacio,
+    // nunca se reparte una porcion de materials hacia aqui en la migracion.
+    consumables: Array.isArray(apuV1.consumables) ? migrateRowsToObjects(apuV1.consumables, (r, i) => migrateMaterialRow(r, i, estado)) : [],
+    // EPP dinamico (Prioridad 2, fase de correccion): a diferencia de
+    // materials/labor/equipment, seguridad NUNCA tuvo un formato v1 de
+    // arreglo posicional -- src/domain/eppResolver.js ya construye los
+    // renglones directamente en forma de objeto v2, asi que se preservan
+    // TAL CUAL (nunca se reconstruyen retroactivamente para un v1 historico
+    // que no los traiga -- por eso el fallback es [], igual que consumables).
+    seguridad: Array.isArray(apuV1.seguridad) ? apuV1.seguridad : [],
     procedimientoConstructivo: [],
     controlCalidad: [],
     criterioMedicion: { incluye: [], excluye: [], unidadMedicion: apuV1.unit || '' },
+    // technicalJustifications: un APU v1/historico NUNCA tuvo esta
+    // informacion -- nace vacia, nunca se inventa retroactivamente como si
+    // hubiera formado parte del analisis original. Si el v1 ya trae el campo
+    // (ej. templateFallbackAPU en apuGeneration.js compuso un texto mecanico
+    // real a partir de la plantilla usada), se preserva tal cual.
+    technicalJustifications: apuV1.technicalJustifications && typeof apuV1.technicalJustifications === 'object'
+      ? { materials: '', labor: '', equipment: '', smallTools: '', consumables: '', safety: '', ...apuV1.technicalJustifications }
+      : { materials: '', labor: '', equipment: '', smallTools: '', consumables: '', safety: '' },
     factores: {
       indCampo: Number(apuV1.indCampo ?? APU_DEFAULT_FACTORS.indCampo),
       indOficina: Number(apuV1.indOficina ?? APU_DEFAULT_FACTORS.indOficina),
@@ -236,7 +322,8 @@ export function validateApuSchemaV2(apu = {}){
   const rowsWithFuente = [
     ...(Array.isArray(apu.materials) ? apu.materials.map(r => ['materials', r]) : []),
     ...(Array.isArray(apu.labor) ? apu.labor.map(r => ['labor', r]) : []),
-    ...(Array.isArray(apu.equipment) ? apu.equipment.map(r => ['equipment', r]) : [])
+    ...(Array.isArray(apu.equipment) ? apu.equipment.map(r => ['equipment', r]) : []),
+    ...(Array.isArray(apu.consumables) ? apu.consumables.map(r => ['consumables', r]) : [])
   ];
   rowsWithFuente.forEach(([kind, row], index) => {
     if(row?.fuente?.estado === APU_DATA_STATE.VERIFICADO && !row?.fuente?.proveedor){
@@ -300,6 +387,35 @@ export function normalizeAIApuToV2(raw = {}, fallbackConcept = ''){
     origen: null
   }));
 
+  // Consumibles y auxiliares (categoria E, ver makeEmptyAPUv2): misma forma
+  // de renglon que materials, con especificacion y motivo tecnico propios.
+  // Nunca se sintetiza uno para "llenar" la seccion: si la IA no propone
+  // ninguno, consumables queda [] (el llamador debe explicar por que en
+  // technicalJustifications.consumables, tipicamente "NO APLICA...").
+  const consumablesRaw = Array.isArray(raw.consumables) ? raw.consumables : [];
+  const consumableSourcesRaw = Array.isArray(raw.consumableSources) ? raw.consumableSources : [];
+  const consumables = consumablesRaw.map((row, index) => {
+    const source = consumableSourcesRaw[index] || {};
+    return {
+      clave: `CON-${String(index + 1).padStart(3, '0')}`,
+      descripcion: coerceText(row?.[0], 'Consumible'),
+      especificacion: coerceText(source.especificacion, ''),
+      unidad: coerceText(row?.[2], 'pza'),
+      consumo: coerceNumber(row?.[1], 0),
+      desperdicioPct: coerceNumber(row?.[4], 0),
+      precioUnitario: coerceNumber(row?.[3], 0),
+      integracion: coerceText(source.integracion, '') || null,
+      fuente: {
+        proveedor: coerceText(source.proveedor, '') || null,
+        fecha: null,
+        region: coerceText(source.region, '') || null,
+        estado: APU_DATA_STATE.ESTIMADO_IA
+      },
+      technicalReason: coerceText(source.technicalReason, ''),
+      origen: null
+    };
+  });
+
   const laborRaw = Array.isArray(raw.labor) ? raw.labor : [];
   const detailsRaw = Array.isArray(raw.laborDetails) ? raw.laborDetails : [];
   const labor = laborRaw.map((row, index) => {
@@ -318,7 +434,13 @@ export function normalizeAIApuToV2(raw = {}, fallbackConcept = ''){
       salarioBase: coerceNumber(row?.[3], 0),
       fsr: coerceNumber(row?.[4], 1),
       fuente: { proveedor: null, fecha: null, region: null, estado: APU_DATA_STATE.ESTIMADO_IA },
-      estado: APU_DATA_STATE.ESTIMADO_IA
+      estado: APU_DATA_STATE.ESTIMADO_IA,
+      // rendimientoFuente/yieldConfidence (mismo contrato que la ruta
+      // determinista, ver crewModel.js): la IA propuso cuadrilla+rendimiento
+      // explicitos, asi que su procedencia queda declarada como IA -- nunca
+      // VALIDADO (eso solo lo pone un humano, ver applyRendimientoDecision).
+      rendimientoFuente: detail.cuadrilla != null && detail.rendimiento != null ? RENDIMIENTO_FUENTE.IA : null,
+      yieldConfidence: detail.cuadrilla != null && detail.rendimiento != null ? 50 : null
     };
   });
 
@@ -410,10 +532,23 @@ export function normalizeAIApuToV2(raw = {}, fallbackConcept = ''){
       porcentaje: coerceNumber(raw.herramienta, APU_DEFAULT_FACTORS.herramienta),
       detalle: []
     },
+    consumables,
     seguridad,
     procedimientoConstructivo,
     controlCalidad,
     criterioMedicion,
+    // technicalJustifications: la IA la propone explicitamente por
+    // categoria (ver prompt en _openaiApuCore.mjs); si el JSON no trae el
+    // campo (respuesta vieja/incompleta), queda vacio -- nunca se rellena
+    // con un texto generico que aparente ser justificacion real.
+    technicalJustifications: {
+      materials: coerceText(raw.technicalJustifications?.materials, ''),
+      labor: coerceText(raw.technicalJustifications?.labor, ''),
+      equipment: coerceText(raw.technicalJustifications?.equipment, ''),
+      smallTools: coerceText(raw.technicalJustifications?.smallTools, ''),
+      consumables: coerceText(raw.technicalJustifications?.consumables, ''),
+      safety: coerceText(raw.technicalJustifications?.safety, '')
+    },
     factores: {
       indCampo: coerceNumber(raw.indCampo, APU_DEFAULT_FACTORS.indCampo),
       indOficina: coerceNumber(raw.indOficina, APU_DEFAULT_FACTORS.indOficina),

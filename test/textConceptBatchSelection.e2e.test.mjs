@@ -76,7 +76,7 @@ test('RC6: unidades atipicas ("u", "costal") generan APU y quedan marcadas REQUI
   assert.equal(conceptNeedsReviewFlag({ concept: 'Trazo', unit: 'm', qty: 1 }), true);
 });
 
-test('RC6 end-to-end: TEXTAREA -> parseConceptListText -> conceptBatch -> seleccion/revision -> generacion -> exportacion = 6 -> 6 -> 6 -> 8 hojas', async () => {
+test('RC6 end-to-end: TEXTAREA -> parseConceptListText -> conceptBatch -> seleccion/revision -> generacion -> exportacion = 6 -> 6 -> 6 -> 10 hojas', async () => {
   const { concepts } = parseConceptListText(REAL_CASE_TEXT);
   const selection = defaultBatchSelection(concepts);
   const { selectedList, excludedConcepts } = resolveBatchSelection(concepts, selection);
@@ -104,7 +104,7 @@ test('RC6 end-to-end: TEXTAREA -> parseConceptListText -> conceptBatch -> selecc
     const zip = unzipSync(new Uint8Array(fs.readFileSync(path.join(dir, outputName))));
     const workbookXml = strFromU8(zip['xl/workbook.xml']);
     const sheetNames = [...workbookXml.matchAll(/<sheet\b[^>]*name="([^"]*)"/g)].map(m => m[1]);
-    assert.equal(sheetNames.length, 8, `se esperaban 8 hojas (RESUMEN + CONTROL_REVISION + 6), hubo ${sheetNames.length}: ${sheetNames.join(', ')}`);
+    assert.equal(sheetNames.length, 10, `se esperaban 10 hojas (PORTADA + RESUMEN + CONTROL_REVISION + PARAMETROS + 6), hubo ${sheetNames.length}: ${sheetNames.join(', ')}`);
     assert.ok(sheetNames.includes('RESUMEN') && sheetNames.includes('CONTROL_REVISION'));
   }finally{
     process.chdir(previousCwd);

@@ -140,6 +140,11 @@ export function calcMaterialRow(row = {}, ctx = {}){
   return importeBase;
 }
 
+/* Consumibles y auxiliares (categoria E): misma formula que un material --
+   consumo x (1+%desperdicio) x precio unitario, con el mismo soporte
+   POR_LOTE -- no se duplica la logica, es un alias directo. */
+export const calcConsumableRow = calcMaterialRow;
+
 /* Cantidad de jornadas por unidad de concepto: si hay cuadrilla+rendimiento
    (formato "hoja de analisis profesional": N trabajadores / rendimiento de la
    cuadrilla por jornada) se deriva cuadrilla/rendimiento; si no, se usa
@@ -197,12 +202,22 @@ export function calcEquipmentRow(row = {}, ctx = {}){
 }
 
 /* Herramienta menor por renglon de detalle (modo 'detalle'): importe =
-   cantidad x costo (valor/reposicion) x %depreciacion. */
+   cantidad x valor de adquisicion x %depreciacion. Nombres de campo
+   (valorAdquisicion/depreciacionPct) alineados con el editor
+   (ProfessionalApuEditor.jsx#BLANK.tools) y los renderizadores XLSX/PDF
+   (apuExportV2.js): antes este motor leia row.costo/row.pctDepreciacion,
+   campos que NINGUN otro punto del sistema escribe -- un renglon de
+   herramienta-detalle capturado desde la UI siempre calculaba importe 0 en
+   pantalla (calcAPUv2/finalizeProfessionalAPU), aunque XLSX/PDF si
+   mostraban el importe correcto via su propia formula inline. Paridad
+   pantalla<->XLSX<->PDF restaurada usando el mismo nombre de campo en los
+   tres lados. precioUnitario como respaldo por si el renglon nunca definio
+   valorAdquisicion (mismo fallback que ya usan los renderizadores). */
 export function calcHerramientaDetalleRow(row = {}){
   const cantidad = toSafeNonNegativeNumber(row?.cantidad);
-  const costo = toSafeNonNegativeNumber(row?.costo);
-  const pctDepreciacion = toSafeNonNegativeNumber(row?.pctDepreciacion);
-  return cantidad * costo * pctDepreciacion / 100;
+  const valorAdquisicion = toSafeNonNegativeNumber(row?.valorAdquisicion ?? row?.precioUnitario);
+  const depreciacionPct = toSafeNonNegativeNumber(row?.depreciacionPct);
+  return cantidad * valorAdquisicion * depreciacionPct / 100;
 }
 
 /* Seguridad y EPP: por defecto (POR_UNIDAD_OBRA) importe = cantidad x precio
@@ -251,16 +266,17 @@ export function calcAPUv2(apu = {}){
   const mat = sum(apu.materials, calcMaterialRow);
   const mo = sum(apu.labor, calcLaborRow);
   const equipo = sum(apu.equipment, calcEquipmentRow);
+  const consumibles = sum(apu.consumables, calcConsumableRow);
   const seguridad = sum(apu.seguridad, calcSeguridadRow);
   const hm = apu.herramientaMenor || {};
   const herramienta = hm.modo === 'detalle'
     ? sum(hm.detalle, calcHerramientaDetalleRow)
     : mo * toSafeNonNegativeNumber(hm.porcentaje) / 100;
-  const direct = mat + mo + equipo + herramienta + seguridad;
+  const direct = mat + mo + equipo + herramienta + consumibles + seguridad;
   const cascade = applyCascade(direct, apu.factores || {});
   const cantidadObra = toSafeNonNegativeNumber(apu.cantidadObra);
   const importeTotal = cantidadObra > 0 ? cascade.pu * cantidadObra : 0;
-  return { mat, mo, equipo, herramienta, seguridad, direct, ...cascade, importeTotal };
+  return { mat, mo, equipo, herramienta, consumibles, seguridad, direct, ...cascade, importeTotal };
 }
 
 /* Validaciones deterministas de "casos limite" sobre un APU ya calculado:
@@ -347,6 +363,11 @@ export function findApuNumericIssuesV2(apu = {}, totals = calcAPUv2(apu)){
     checkV2Field(issues, 'materials', index, 'desperdicioPct', row?.desperdicioPct);
     checkV2Field(issues, 'materials', index, 'precioUnitario', row?.precioUnitario);
   });
+  (Array.isArray(apu.consumables) ? apu.consumables : []).forEach((row, index) => {
+    checkV2Field(issues, 'consumables', index, 'consumo', row?.consumo);
+    checkV2Field(issues, 'consumables', index, 'desperdicioPct', row?.desperdicioPct);
+    checkV2Field(issues, 'consumables', index, 'precioUnitario', row?.precioUnitario);
+  });
   (Array.isArray(apu.labor) ? apu.labor : []).forEach((row, index) => {
     checkV2Field(issues, 'labor', index, 'cuadrilla', row?.cuadrilla);
     checkV2Field(issues, 'labor', index, 'rendimiento', row?.rendimiento);
@@ -378,13 +399,22 @@ export function findApuNumericIssuesV2(apu = {}, totals = calcAPUv2(apu)){
     if(row?.cuadrilla != null && Number(row.cuadrilla) > 0 && (row?.rendimiento == null || Number(row.rendimiento) <= 0)){
       issues.push({ code: 'zero_rendimiento', kind: 'labor', index, message: `Renglon ${index + 1} de mano de obra tiene cuadrilla pero rendimiento ausente o 0: no se puede prorratear el costo por unidad de obra.` });
     }
+    // Simetrico al caso anterior (motor universal, coherencia cuadrilla<->
+    // rendimiento): un rendimiento declarado SIN cuadrilla hace que
+    // laborUnitQty (apuCalc.js) calcule cuadrilla/rendimiento = 0/rendimiento
+    // = 0 -- el renglon pasaria costo $0 en silencio. Nunca aceptable: si
+    // hay rendimiento, debe haber cuadrilla; si no, usar "cantidad" en vez
+    // de un rendimiento suelto.
+    if(row?.rendimiento != null && Number(row.rendimiento) > 0 && !(Number(row?.cuadrilla) > 0)){
+      issues.push({ code: 'rendimiento_sin_cuadrilla', kind: 'labor', index, message: `Renglon ${index + 1} de mano de obra tiene rendimiento pero cuadrilla ausente o 0: el costo se calcularia como $0. Declara la cuadrilla (integrantes) o quita el rendimiento y usa "cantidad".` });
+    }
   });
   const hm = apu.herramientaMenor || {};
   if(hm.modo === 'detalle'){
     (Array.isArray(hm.detalle) ? hm.detalle : []).forEach((row, index) => {
       checkV2Field(issues, 'herramientaMenor', index, 'cantidad', row?.cantidad);
-      checkV2Field(issues, 'herramientaMenor', index, 'costo', row?.costo);
-      checkV2Field(issues, 'herramientaMenor', index, 'pctDepreciacion', row?.pctDepreciacion);
+      checkV2Field(issues, 'herramientaMenor', index, 'valorAdquisicion', row?.valorAdquisicion);
+      checkV2Field(issues, 'herramientaMenor', index, 'depreciacionPct', row?.depreciacionPct);
     });
   } else {
     checkV2Field(issues, 'herramientaMenor', 0, 'porcentaje', hm.porcentaje);

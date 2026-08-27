@@ -11,7 +11,7 @@ import { createDemoContext } from './lib/apuFlow.js';
 import { APU_DEFAULT_FACTORS, DEFAULT_IVA_RATE, calcAPU, rowImporte, toSafeNonNegativeNumber } from './lib/apuCalc.js';
 import { migrateLegacyApuToV2 } from './domain/apuSchema.js';
 import { finalizeProfessionalAPU, makePriceRecord } from './domain/apuProfessional.js';
-import { exportAPUExcelV2, exportAPUPdfV2 } from './lib/apuExportV2.js';
+import { exportAPUExcelV2, exportAPUPdfV2, exportAPUPdfMaster } from './lib/apuExportV2.js';
 import {
   money, num, excelCell, XLS, xcell, fcell, styleHeader, styleSection,
   exportRowsCSV, exportRowsExcel, exportWorkbookExcel,
@@ -41,12 +41,15 @@ import {
 } from './domain/apuGeneration.js';
 import { enrichAPUWithMarketPrices } from './domain/priceIntelligence.js';
 import { libKey, enrichLibraryMeta, scoreLibraryFile } from './domain/library.js';
-import { INSUMO_STATES, applyInsumoReview, extractValidatedCatalogRows } from './domain/libraryReview.js';
-import { toApuSeed } from './domain/planoReview.js';
+import { INSUMO_STATES, applyInsumoReview, extractValidatedCatalogRows, extractAllValidatedCatalogRows, mergeCatalogRows } from './domain/libraryReview.js';
+import { toApuSeed, applyPlanoElementReview } from './domain/planoReview.js';
+import { calibrateScale, measureElement } from './domain/planoMeasurement.js';
+import { createTakeoffRecord, applyManualCorrection, upsertTakeoffRecord, findLatestTakeoffForFile } from './domain/planoTakeoffStore.js';
 import {
   emptyApuWorkspaceState, removeBatchApus, describeAmbiguousSingleExport,
   duplicateGroupKey, groupConceptsByDuplicateKey, defaultBatchSelection, isExportableConceptItem,
-  conceptNeedsReviewFlag, resolveBatchSelection, scopedListView, mergeScopedUpdate
+  conceptNeedsReviewFlag, resolveBatchSelection, scopedListView, mergeScopedUpdate,
+  resolveBatchExportApus, assertExpectedExportCount
 } from './domain/apuWorkspace.js';
 import {
   ITEM_STATUS, createBatchJob, fingerprintCatalog, selectNextBatch,
@@ -2053,10 +2056,14 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     }
     setBatchBusy(true);
     try{
-      // Reusa el lote ya generado (batchAPUs) si coincide con la lista actual, en
-      // vez de volver a llamar a la IA: evita que Excel muestre un APU distinto
-      // al que ya se genero y se ve en pantalla (WEB debe coincidir con Excel/PDF).
-      const apuList = batchAPUs.length === list.length ? batchAPUs : await buildBatchAPUs(list);
+      // RC10: la fuente PERSISTENTE (apus del proyecto, buscados por clave)
+      // manda sobre el cache de sesion batchAPUs -- ver resolveBatchExportApus
+      // en src/domain/apuWorkspace.js. Si ninguna fuente cubre el lote
+      // completo, se regenera; y si aun asi no alcanza, assertExpectedExportCount
+      // aborta con un error explicito en vez de exportar un archivo parcial.
+      let apuList = resolveBatchExportApus({ concepts: list, persistedApus: apus, cachedApus: batchAPUs });
+      if(!apuList) apuList = await buildBatchAPUs(list);
+      assertExpectedExportCount(list.length, apuList.length);
       await exportConceptsAPUWorkbook(list, catalog, company, apuList);
       setAiStatus(`Excel generado: ${list.length} conceptos, una hoja APU por concepto.`);
     }catch(error){
@@ -2078,13 +2085,45 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     }
     setBatchBusy(true);
     try{
-      // Mismo criterio que exportConceptBatch: reusa el lote ya generado para que
-      // el PDF coincida con lo mostrado en pantalla y con el Excel exportado.
-      const apuList = batchAPUs.length === list.length ? batchAPUs : await buildBatchAPUs(list);
+      // Mismo criterio que exportConceptBatch (RC10): fuente persistente
+      // primero, guard de cantidad esperada antes de escribir cualquier archivo.
+      let apuList = resolveBatchExportApus({ concepts: list, persistedApus: apus, cachedApus: batchAPUs });
+      if(!apuList) apuList = await buildBatchAPUs(list);
+      assertExpectedExportCount(list.length, apuList.length);
       await exportConceptsAPUPdfIndividual(list, catalog, apuList);
       setAiStatus(`PDF generado: ${list.length} conceptos, un PDF individual por concepto.`);
     }catch(error){
       alert(`No pude descargar el PDF por concepto: ${error?.message || 'error desconocido'}.`);
+    }finally{
+      setBatchBusy(false);
+    }
+  };
+  // PDF maestro (spec 19-26): UN SOLO PDF con portada + resumen general +
+  // control de revision + el desarrollo completo (A-F) de cada uno de los N
+  // APUs, cada uno arrancando en pagina nueva -- ver exportAPUPdfMaster en
+  // src/lib/apuExportV2.js. No reemplaza el boton de PDF individual de
+  // arriba (exportConceptBatchPDF): son dos entregables distintos, mismo
+  // criterio RC10 de resolucion/guard que los otros dos botones de lote.
+  const exportConceptBatchPdfMaster=async()=>{
+    if(!conceptBatch?.concepts?.length){
+      alert('Primero sube el catalogo de conceptos.');
+      return;
+    }
+    if(batchBusy) return;
+    const list = conceptBatch.concepts.filter(isExportableConceptItem);
+    if(!list.length){
+      alert('No hay conceptos válidos para exportar.');
+      return;
+    }
+    setBatchBusy(true);
+    try{
+      let apuList = resolveBatchExportApus({ concepts: list, persistedApus: apus, cachedApus: batchAPUs });
+      if(!apuList) apuList = await buildBatchAPUs(list);
+      assertExpectedExportCount(list.length, apuList.length);
+      await exportConceptsAPUPdfMasterFile(list, catalog, company, apuList);
+      setAiStatus(`PDF maestro generado: ${list.length} conceptos en un solo documento.`);
+    }catch(error){
+      alert(`No pude descargar el PDF maestro: ${error?.message || 'error desconocido'}.`);
     }finally{
       setBatchBusy(false);
     }
@@ -2256,7 +2295,8 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
               sin tocar): boton principal, primero y sin la clase "soft" que
               lo hacia ver secundario frente al presupuesto de 1 sola hoja. */}
           {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatch} disabled={batchBusy} title="Exporta el presupuesto completo: resumen, control de revisión y una hoja por cada APU.">{batchBusy?'IA generando hojas...':'Descargar Excel profesional'}</button>}
-          {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatchPDF} title="Un PDF profesional completo por cada concepto del lote.">PDF profesional por concepto</button>}
+          {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatchPDF} disabled={batchBusy} title="Un PDF profesional completo por cada concepto del lote.">PDF profesional por concepto</button>}
+          {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatchPdfMaster} disabled={batchBusy} title="Un solo PDF con portada, resumen general, control de revisión y el desarrollo completo de todos los conceptos.">Descargar PDF maestro</button>}
           {/* Cotizacion rapida de 1 hoja (Concepto/Unidad/Cantidad/P.U./Importe):
               opcion secundaria, nunca el entregable principal de ZOEMEC. */}
           <button className="soft" onClick={()=>exportBudgetExcel(batchResult.budget.items, batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.total-batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.ivaRate)}>Excel resumen</button>
@@ -2327,7 +2367,8 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
           <button className="soft" onClick={generateAI} disabled={aiBusy}>{aiBusy?'Generando...':'IA real'}</button><button className="soft" type="button" onClick={resetAPUForm}>Limpiar</button>
           {apu.referencePU>0 && <span className="cat-badge">P.U. Excel: {money(apu.referencePU)}</span>}
           {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatch} disabled={batchBusy} title="Exporta el presupuesto completo: resumen, control de revisión y una hoja por cada APU.">{batchBusy?'IA generando hojas...':'Descargar Excel profesional'}</button>}
-          {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatchPDF} title="Un PDF profesional completo por cada concepto del lote.">PDF profesional por concepto</button>}
+          {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatchPDF} disabled={batchBusy} title="Un PDF profesional completo por cada concepto del lote.">PDF profesional por concepto</button>}
+          {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatchPdfMaster} disabled={batchBusy} title="Un solo PDF con portada, resumen general, control de revisión y el desarrollo completo de todos los conceptos.">Descargar PDF maestro</button>}
         </div>
         <div className="apu-detect">
           <div><small>Familia detectada</small><b>{apu.family || 'APU general'}</b></div>
@@ -2710,7 +2751,7 @@ async function exportConceptsAPUWorkbook(concepts, catalog, company, preparedAPU
     alert('No hay conceptos para exportar.');
     return;
   }
-  return await exportAPUExcelV2(professional,{fileName:'APU-POR-CONCEPTO-ZOEMEC.xlsx'});
+  return await exportAPUExcelV2(professional,{fileName:'APU-POR-CONCEPTO-ZOEMEC.xlsx',company});
 }
 
 /* PDF por concepto: un PDF individual completo (misma plantilla que "Descargar
@@ -2727,6 +2768,27 @@ async function exportConceptsAPUPdfIndividual(concepts, catalog, preparedAPUs=[]
     const professional = finalizeProfessionalAPU(withMeta);
     exportAPUPdfV2(professional, {fileName:`${professional.clave || 'APU-'+(idx+1)}-APU-PROFESIONAL-ZOEMEC.pdf`});
   });
+}
+
+/* PDF MAESTRO por catalogo completo (spec 19-26): UN SOLO PDF con portada +
+   resumen general + control de revision + los N APUs completos -- ver
+   exportAPUPdfMaster en src/lib/apuExportV2.js. Misma preparacion de datos
+   que exportConceptsAPUWorkbook (XLSX) y exportConceptsAPUPdfIndividual
+   (PDF individual): una sola fuente de verdad, tres renderizadores. */
+async function exportConceptsAPUPdfMasterFile(concepts, catalog, company, preparedAPUs=[]){
+  const limited = concepts.filter(isExportableConceptItem);
+  const professional = limited.map((item, idx) => {
+    const base = preparedAPUs[idx] || makeAPUFromConcept(item.concept, catalog);
+    const v2Base = base?.schemaVersion === 2 ? base : migrateLegacyApuToV2(base);
+    const sourceFile = base?.sourceFile || 'Catalogo de conceptos';
+    const withMeta = applyConceptMetadataV2(v2Base, item, idx, sourceFile);
+    return finalizeProfessionalAPU({...withMeta, proyecto:company?.name||withMeta.proyecto||'', cliente:company?.client||withMeta.cliente||''});
+  });
+  if(!professional.length){
+    alert('No hay conceptos para exportar.');
+    return;
+  }
+  return exportAPUPdfMaster(professional,{fileName:'APU-MAESTRO-ZOEMEC.pdf',company});
 }
 
 function Budgets({company,budgets,setBudgets,items,setItems,activeProjectId,onNeedProject}){
@@ -3010,30 +3072,53 @@ function GoogleDrivePanel({user, onImported}){
 function OneDrivePanel({user, onImported}){
   const [status,setStatus]=useState(null);
   const [items,setItems]=useState(null);
+  const [folderPath,setFolderPath]=useState(null); // null = todavia no se conoce (viene de status)
+  const [folderNotFound,setFolderNotFound]=useState(false);
   const [loadingList,setLoadingList]=useState(false);
   const [importingId,setImportingId]=useState(null);
   const refreshStatus=async()=>{
-    try{ const data=await apiPost('/api/onedrive',{action:'status'}); setStatus(data); }
+    try{ const data=await apiPost('/api/onedrive',{action:'status'}); setStatus(data); if(folderPath==null) setFolderPath(data.folderPath); }
     catch(err){ setStatus({error:friendlyServiceError(err,'No se pudo consultar OneDrive.')}); }
   };
   useEffect(()=>{ refreshStatus(); },[]);
-  const listFiles=async()=>{
-    setLoadingList(true); setItems(null);
-    try{ const data=await apiPost('/api/onedrive',{action:'listRoot'}); setItems((data.items||[]).filter(it=>!it.folder)); }
-    catch(err){ window.zoemecNotify?.(err.message || 'No se pudo listar OneDrive.', 'error'); setItems([]); }
+  // Navegacion de subcarpetas (Prioridad 5, fase de correccion): por
+  // defecto la carpeta configurable de Biblioteca ZOEMEC (folderPath, ver
+  // api/onedrive.mjs#DEFAULT_FOLDER_PATH), no solo la raiz -- listFolder
+  // acepta cualquier ruta, asi que "descender" a una subcarpeta es solo
+  // volver a llamarlo con folderPath + '/' + nombre.
+  const listFiles=async(path)=>{
+    const target=path||folderPath;
+    setLoadingList(true); setItems(null); setFolderNotFound(false);
+    try{
+      const data=await apiPost('/api/onedrive',{action:'listFolder', folderPath:target});
+      if(data.notFound){ setFolderNotFound(true); setFolderPath(data.folderPath); setItems([]); return; }
+      setFolderPath(data.folderPath);
+      setItems(data.items||[]);
+    }catch(err){ window.zoemecNotify?.(err.message || 'No se pudo listar OneDrive.', 'error'); setItems([]); }
+    finally{ setLoadingList(false); }
+  };
+  const createFolder=async()=>{
+    setLoadingList(true);
+    try{
+      const data=await apiPost('/api/onedrive',{action:'ensureFolder', folderPath});
+      window.zoemecNotify?.(`Carpeta "${data.folderPath}" lista en OneDrive.`,'info');
+      await listFiles(data.folderPath);
+    }catch(err){ window.zoemecNotify?.(err.message || 'No se pudo crear la carpeta.', 'error'); }
     finally{ setLoadingList(false); }
   };
   const importFile=async(item)=>{
     setImportingId(item.id);
     try{
-      await apiPost('/api/onedrive',{action:'importFile', id:item.id, name:item.name});
-      window.zoemecNotify?.(`"${item.name}" importado a la Biblioteca.`,'info');
+      const data=await apiPost('/api/onedrive',{action:'importFile', id:item.id, name:item.name});
+      window.zoemecNotify?.(data.sinCambios ? `"${item.name}" ya estaba sincronizado (sin cambios en OneDrive).` : `"${item.name}" ${data.actualizado?'actualizado en':'importado a'} la Biblioteca.`,'info');
       onImported?.();
     }catch(err){ window.zoemecNotify?.(err.message || 'No se pudo importar el archivo.', 'error'); }
     finally{ setImportingId(null); }
   };
   const connected = Boolean(status?.connected);
   const configured = isOneDriveConfigured();
+  const folders=(items||[]).filter(it=>it.folder);
+  const files=(items||[]).filter(it=>!it.folder);
   /* El detalle tecnico (que variable exacta falta) vive solo en Panel Admin ->
      OneDrive. Aqui, para cualquier usuario, el mensaje es honesto pero nunca
      alarmista: la biblioteca local sigue funcionando aunque OneDrive no este
@@ -3048,17 +3133,29 @@ function OneDrivePanel({user, onImported}){
     {configured && status?.error && <EmptyState icon="admin" title="No se pudo consultar OneDrive" text={status.error}/>}
     {configured && status && !status.error && <>
       <p className="muted">{connected ? `Conectado como ${status.account || 'tu cuenta de Microsoft'}.` : 'Conecta tu cuenta de OneDrive para listar e importar documentos reales a la Biblioteca.'}</p>
-      <div className="visual-actions">
+      {connected && <p className="muted" style={{fontSize:'.78rem'}}>Carpeta: <b>{folderPath||status.folderPath}</b>{status.lastSyncedAt ? ` · Última sincronización: ${new Date(status.lastSyncedAt._seconds?status.lastSyncedAt._seconds*1000:status.lastSyncedAt).toLocaleString('es-MX')}` : ' · Sin sincronizar todavía'}</p>}
+      <div className="visual-actions" style={{flexWrap:'wrap',gap:8}}>
         {!connected
           ? <button onClick={()=>connectOneDrive()}>Conectar OneDrive</button>
-          : <button className="soft" onClick={listFiles} disabled={loadingList}>{loadingList?'Listando...':'Listar archivos de OneDrive'}</button>}
+          : <>
+            <button className="soft" onClick={()=>listFiles(folderPath)} disabled={loadingList}>{loadingList?'Listando...':'Listar carpeta ZOEMEC'}</button>
+            <button className="soft" onClick={()=>listFiles('/')} disabled={loadingList}>Ver raíz de OneDrive</button>
+            {folderNotFound && <button onClick={createFolder} disabled={loadingList}>Crear carpeta {folderPath}</button>}
+          </>}
       </div>
     </>}
-    {configured && items && (items.length ? <div className="od-file-list">{items.map(it=><div className="od-file-row" key={it.id}>
-        <div><b>{it.name}</b><small>{((it.size||0)/1048576).toFixed(2)} MB</small></div>
-        <small>OneDrive</small>
-        <button className="soft" disabled={importingId===it.id} onClick={()=>importFile(it)}>{importingId===it.id?'Importando...':'Importar a Biblioteca'}</button>
-      </div>)}</div> : <p className="muted">No se encontraron archivos en la raíz de tu OneDrive.</p>)}
+    {configured && folderNotFound && <p className="muted">La carpeta {folderPath} todavía no existe en tu OneDrive -- créala para empezar a sincronizar.</p>}
+    {configured && items && <>
+      {folders.length>0 && <div className="od-file-list">{folders.map(f=><div className="od-file-row" key={f.id}>
+          <div><b>📁 {f.name}</b></div>
+          <button className="soft" onClick={()=>listFiles(`${folderPath}/${f.name}`)}>Abrir</button>
+        </div>)}</div>}
+      {files.length ? <div className="od-file-list">{files.map(it=><div className="od-file-row" key={it.id}>
+          <div><b>{it.name}</b><small>{((it.size||0)/1048576).toFixed(2)} MB</small></div>
+          <small>OneDrive</small>
+          <button className="soft" disabled={importingId===it.id} onClick={()=>importFile(it)}>{importingId===it.id?'Importando...':'Importar a Biblioteca'}</button>
+        </div>)}</div> : !folderNotFound && <p className="muted">No se encontraron archivos en esta carpeta de OneDrive.</p>}
+    </>}
   </div>;
 }
 
@@ -3243,21 +3340,41 @@ function Library({user, catalog, setCatalog, setModule}){
   };
   /* Puente Biblioteca -> APU (regla critica): SOLO los insumos en estado
      VALIDADO (extractValidatedCatalogRows los filtra) se fusionan con el
-     catalogo real que ya consume matchPrice()/domain/apuGeneration.js -- el
-     mismo mecanismo que hoy usa el Excel de precios importado en Oficina
-     Tecnica. Ningun motor nuevo, ningun insumo PROPUESTO/RECHAZADO llega
-     aqui jamas. */
+     catalogo real que ya consume findCatalogMatches()/matchPrice()/
+     domain/apuGeneration.js -- el mismo mecanismo que hoy usa el Excel de
+     precios importado en Oficina Tecnica. Ningun motor nuevo, ningun insumo
+     PROPUESTO/RECHAZADO llega aqui jamas.
+
+     mergeCatalogRows (antes: un Set por texto exacto de `desc` que hacia
+     `.map(({traceability,...row})=>row)`) corrige un bug real: la fusion
+     anterior TIRABA la trazabilidad (fuente/fecha/quien valido) del insumo
+     antes de guardarlo en el catalogo de trabajo. Ahora se conserva. */
   const handleUseValidatedInApu=(f)=>{
     const rows=extractValidatedCatalogRows(f);
     if(!rows.length){
       window.zoemecNotify?.('Aun no hay insumos VALIDADOS en este documento. Revisalos y valida al menos uno antes de usarlos en un APU.', 'error');
       return;
     }
-    const existingDesc=new Set((catalog||[]).map(c=>c.desc));
-    const additions=rows.filter(r=>!existingDesc.has(r.desc)).map(({traceability,...row})=>row);
-    setCatalog?.([...(catalog||[]), ...additions]);
-    window.zoemecNotify?.(`${additions.length} insumo(s) validado(s) de "${f.name}" se agregaron a tu catalogo de precios. Generando APU con esta referencia...`, 'info');
+    const before=(catalog||[]).length;
+    const merged=mergeCatalogRows(catalog, rows);
+    setCatalog?.(merged);
+    window.zoemecNotify?.(`${merged.length - before} insumo(s) validado(s) de "${f.name}" se agregaron a tu catalogo de precios. Generando APU con esta referencia...`, 'info');
     setModule?.('apu');
+  };
+  /* Sincroniza TODOS los documentos de Biblioteca visibles (no solo el que
+     el usuario abrio) -- punto 1 de la Biblioteca Inteligente del spec del
+     usuario ("consultar biblioteca local" antes de generar cualquier APU,
+     no solo cuando alguien elige un documento a la vez). */
+  const handleSyncAllValidatedToApu=()=>{
+    const rows=extractAllValidatedCatalogRows(files);
+    if(!rows.length){
+      window.zoemecNotify?.('Aun no hay insumos VALIDADOS en ningun documento de la Biblioteca.', 'error');
+      return;
+    }
+    const before=(catalog||[]).length;
+    const merged=mergeCatalogRows(catalog, rows);
+    setCatalog?.(merged);
+    window.zoemecNotify?.(`Catalogo sincronizado: ${merged.length - before} insumo(s) nuevo(s)/actualizado(s) de ${files.length} documento(s) de Biblioteca.`, 'info');
   };
   const handleSimilarMatrices=async(f)=>{
     if(!f?.docId){ window.zoemecNotify?.('Este archivo aun no esta sincronizado con la nube.','error'); return; }
@@ -3353,6 +3470,7 @@ function Library({user, catalog, setCatalog, setModule}){
             <button disabled={!active || active.refOnly || busyAction==='extract:'+active?.docId} onClick={()=>handleExtractInsumos(active)}>{busyAction==='extract:'+active?.docId?'Extrayendo...':'Extraer insumos'}</button>
             <button disabled={!active || busyAction==='similar:'+active?.docId} onClick={()=>handleSimilarMatrices(active)}>{busyAction==='similar:'+active?.docId?'Buscando...':'Buscar matrices similares'}</button>
             <button disabled={!active || !(active.contentInsumos||[]).length} onClick={()=>handleUseValidatedInApu(active)}>Usar validados en este APU</button>
+            <button disabled={!files?.length} onClick={handleSyncAllValidatedToApu} title="Fusiona los insumos VALIDADOS de todos los documentos de Biblioteca (no solo el abierto) con tu catalogo de precios">Sincronizar toda la biblioteca al catálogo</button>
             <button onClick={indexVisible}>Crear indice</button>
           </div>
           {active?.contentInsumos?.length ? <div className="lib-insumos-review">
@@ -3579,6 +3697,12 @@ function PlanoTakeoff({user, setModule}){
   const [edits,setEdits]=useState({});
   const [busyIndex,setBusyIndex]=useState(-1);
   const [similarByIndex,setSimilarByIndex]=useState({});
+  // Persistencia de takeoff manual (Prioridad 4, fase de correccion): mismo
+  // patron de localStorage con scope por usuario que ya usa el resto de la
+  // app (ver zoemec-biblioteca). Al recargar, PlanoManualMeasure reconstruye
+  // el trazo/calibracion/medicion desde aqui -- nunca hay que volver a
+  // dibujar el poligono.
+  const [takeoffRecords,setTakeoffRecords]=useLocalState('zoemec-plano-takeoff-manual',[],user?.uid);
 
   const loadFile=(file)=>{
     if(!file) return;
@@ -3667,6 +3791,10 @@ function PlanoTakeoff({user, setModule}){
       <p className="muted" style={{fontSize:'.78rem',marginTop:8}}>Si el analisis anterior dejo elementos en "Requiere revision" por falta de escala, captura aqui una medida real conocida y vuelve a analizar: la IA la usara para calibrar el resto.</p>
     </div>
 
+    {mimeType.startsWith('image/') && dataBase64
+      ? <PlanoManualMeasure imageDataUrl={dataBase64} fileName={fileName} mimeType={mimeType} setModule={setModule} takeoffRecords={takeoffRecords} setTakeoffRecords={setTakeoffRecords} user={user}/>
+      : dataBase64 ? <p className="muted" style={{fontSize:'.78rem'}}>La cuantificacion manual (trazo + calibracion de escala) solo esta disponible para planos en JPG/PNG en esta fase -- para PDF usa el analisis por IA de arriba.</p> : null}
+
     {result && <div className="panel">
       <div className="admin-panel-head"><h2>Resultado del analisis</h2><small className="hint">{result.numPages} pagina(s) · {result.elementos.length} elemento(s) propuesto(s){result.resultadoParcial ? ` · resultado parcial (${result.elementosDescartados} descartado(s) por limite)` : ''}{result.elementosInvalidos?.length ? ` · ${result.elementosInvalidos.length} elemento(s) invalido(s) descartado(s) por el validador` : ''}</small></div>
       <div className="visual-meta" style={{marginBottom:10}}>
@@ -3708,6 +3836,184 @@ function PlanoTakeoff({user, setModule}){
           </React.Fragment>;
         })}</tbody>
       </table>
+    </div>}
+  </div>;
+}
+
+/* Cuantificacion 2D desde plano (puntos 16-17 del spec): trazo manual sobre
+   la imagen ya cargada (canvas superpuesto, escalado 1:1 con la imagen via
+   naturalWidth/naturalHeight -- ver toNaturalPoint) + calibracion de escala
+   explicita por el usuario, usando src/domain/planoMeasurement.js (puro,
+   testeado por separado). Alcance de esta fase: JPG/PNG unicamente -- un PDF
+   requeriria renderizar la pagina a canvas con pdfjs-dist en el cliente, lo
+   cual no se agrega en este pase (limitacion real, documentada, no
+   simulada). El elemento resultante se valida y convierte a semilla de APU
+   con el MISMO motor que Planos IA (applyPlanoElementReview/toApuSeed,
+   planoReview.js) -- ningun motor nuevo. */
+function PlanoManualMeasure({imageDataUrl, fileName, mimeType, setModule, takeoffRecords, setTakeoffRecords, user}){
+  const canvasRef=useRef(null);
+  const imgRef=useRef(null);
+  const [mode,setMode]=useState(null); // 'calibrate' | 'area' | 'length'
+  const [calibPoints,setCalibPoints]=useState([]);
+  const [points,setPoints]=useState([]);
+  const [scale,setScale]=useState(null);
+  const [calibDistance,setCalibDistance]=useState('');
+  const [calibUnit,setCalibUnit]=useState('m');
+  const [tipo,setTipo]=useState('otro');
+  const [descripcion,setDescripcion]=useState('');
+  const [pendingElement,setPendingElement]=useState(null);
+  const [cantidadFinal,setCantidadFinal]=useState('');
+  const [recordId,setRecordId]=useState(null);
+  const restoredForFile=useRef(null);
+
+  // Reconstruccion al recargar (Prioridad 4, fase de correccion): si ya
+  // existe una medicion persistida para ESTE archivo, se restaura trazo +
+  // calibracion + medicion + correccion sin que el usuario vuelva a
+  // dibujar nada. Solo corre una vez por archivo (restoredForFile evita
+  // pisar lo que el usuario esta trazando ahora mismo con cada re-render).
+  useEffect(()=>{
+    if(!fileName || restoredForFile.current===fileName) return;
+    restoredForFile.current=fileName;
+    const existing=findLatestTakeoffForFile(takeoffRecords,fileName);
+    if(!existing) return;
+    setRecordId(existing.id);
+    if(existing.calibracion?.scaleUnitsPerPixel){
+      setScale(existing.calibracion.scaleUnitsPerPixel);
+      setCalibUnit(existing.calibracion.unit||'m');
+      setCalibDistance(String(existing.calibracion.realDistance??''));
+    }
+    setPoints(existing.trazo?.points||[]);
+    setTipo(existing.medicion?.tipo||'otro');
+    setDescripcion(existing.medicion?.descripcionCorregida||existing.medicion?.descripcion||'');
+    setCantidadFinal(String(existing.medicion?.cantidadCorregida ?? existing.medicion?.cantidadPropuesta ?? ''));
+    setPendingElement({
+      tipo: existing.medicion?.tipo, descripcion: existing.medicion?.descripcion,
+      unidad: existing.medicion?.unidad, cantidadPropuesta: existing.medicion?.cantidadPropuesta,
+      fuenteEscala: existing.medicion?.fuenteEscala, origenMedicion: existing.medicion?.origenMedicion,
+      confianzaIA: existing.medicion?.confianzaIA, estado: existing.medicion?.estado
+    });
+    window.zoemecNotify?.(`Medicion anterior de "${fileName}" restaurada -- no fue necesario volver a trazarla.`,'info');
+  },[fileName,takeoffRecords]);
+
+  const redraw=()=>{
+    const canvas=canvasRef.current, img=imgRef.current;
+    if(!canvas || !img || !img.naturalWidth) return;
+    if(canvas.width!==img.naturalWidth) canvas.width=img.naturalWidth;
+    if(canvas.height!==img.naturalHeight) canvas.height=img.naturalHeight;
+    const ctx=canvas.getContext('2d');
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    const drawPath=(pts,color,close)=>{
+      if(!pts.length) return;
+      ctx.strokeStyle=color; ctx.fillStyle=color; ctx.lineWidth=Math.max(2,canvas.width/400);
+      ctx.beginPath(); ctx.moveTo(pts[0][0],pts[0][1]);
+      pts.slice(1).forEach(p=>ctx.lineTo(p[0],p[1]));
+      if(close && pts.length>2) ctx.closePath();
+      ctx.stroke();
+      pts.forEach(p=>{ ctx.beginPath(); ctx.arc(p[0],p[1],Math.max(3,canvas.width/250),0,Math.PI*2); ctx.fill(); });
+    };
+    drawPath(calibPoints,'#1578B7',false);
+    drawPath(points,mode==='area'?'#2F7D3A':'#B5263D',mode==='area');
+  };
+  useEffect(redraw,[points,calibPoints,mode,imageDataUrl]);
+
+  const toNaturalPoint=(e)=>{
+    const canvas=canvasRef.current;
+    const rect=canvas.getBoundingClientRect();
+    return [ (e.clientX-rect.left)/rect.width*canvas.width, (e.clientY-rect.top)/rect.height*canvas.height ];
+  };
+
+  const handleCanvasClick=(e)=>{
+    const p=toNaturalPoint(e);
+    if(mode==='calibrate'){ setCalibPoints(prev=>[...prev,p].slice(-2)); return; }
+    if(mode==='area' || mode==='length'){ setPoints(prev=>[...prev,p]); }
+  };
+
+  const startMode=(next)=>{ setMode(next); setPoints([]); if(next==='calibrate') setCalibPoints([]); };
+
+  const confirmCalibration=()=>{
+    if(calibPoints.length!==2){ window.zoemecNotify?.('Traza 2 puntos sobre una medida conocida del plano (ej. una cota o una puerta).','error'); return; }
+    if(!(Number(calibDistance)>0)){ window.zoemecNotify?.('Captura la distancia real de esos 2 puntos (mayor a 0).','error'); return; }
+    const [[x1,y1],[x2,y2]]=calibPoints;
+    const pixelDistance=Math.hypot(x2-x1,y2-y1);
+    const s=calibrateScale(pixelDistance,Number(calibDistance));
+    if(!s){ window.zoemecNotify?.('No se pudo calibrar la escala con esos puntos.','error'); return; }
+    setScale(s); setMode(null); setCalibPoints([]);
+    window.zoemecNotify?.(`Escala calibrada: 1 pixel = ${s.toFixed(5)} ${calibUnit}.`,'info');
+  };
+
+  const finishMeasure=()=>{
+    if(!scale){ window.zoemecNotify?.('Calibra la escala primero (boton "Calibrar escala").','error'); return; }
+    const need=mode==='area'?3:2;
+    if(points.length<need){ window.zoemecNotify?.(`Traza al menos ${need} puntos antes de terminar.`,'error'); return; }
+    const el=measureElement({points,mode,scaleUnitsPerPixel:scale,unit:calibUnit,tipo,descripcion,fileName});
+    setPendingElement(el);
+    setCantidadFinal(el.cantidadPropuesta!=null?String(el.cantidadPropuesta):'');
+    setMode(null);
+    // Persistencia (Prioridad 4): el trazo/calibracion/medicion se guardan
+    // en cuanto existen, ANTES de "usar en APU" -- si el usuario recarga
+    // sin llegar a confirmar, el trazo no se pierde (ver restauracion arriba).
+    const record=createTakeoffRecord({
+      fileName, mimeType, fileDataUrl: imageDataUrl,
+      mode, points, calibration:{pixelDistance:null,realDistance:Number(calibDistance)||null,scale,unit:calibUnit},
+      elemento: el
+    });
+    setRecordId(record.id);
+    setTakeoffRecords(prev=>upsertTakeoffRecord(prev,record));
+  };
+
+  const useInApu=()=>{
+    if(!pendingElement) return;
+    const cantidadEditada=cantidadFinal!==''?Number(cantidadFinal):null;
+    const huboCorreccion=cantidadEditada!=null && cantidadEditada!==pendingElement.cantidadPropuesta;
+    const reviewed=applyPlanoElementReview(pendingElement,{
+      state:'VALIDADO_POR_USUARIO', validatedBy:user?.email||'usuario',
+      cantidadCorregida: huboCorreccion?cantidadEditada:undefined,
+      descripcionCorregida: descripcion && descripcion!==pendingElement.descripcion?descripcion:undefined
+    });
+    const seed=toApuSeed(reviewed);
+    if(!seed){ window.zoemecNotify?.('Esta medicion no tiene una cantidad valida (revisa la escala calibrada).','error'); return; }
+    // Persiste la correccion manteniendo el historial (cantidad ORIGINAL del
+    // trazo nunca se pierde -- ver planoTakeoffStore.js#applyManualCorrection).
+    if(recordId){
+      setTakeoffRecords(prev=>prev.map(r=>r.id!==recordId?r:applyManualCorrection(r,{
+        cantidadCorregida: huboCorreccion?cantidadEditada:null,
+        descripcionCorregida: reviewed.descripcionCorregida,
+        validatedBy: user?.email||'usuario'
+      })));
+    }
+    try{ localStorage.setItem('zoemec-pending-plano-seed', JSON.stringify(seed)); }catch{}
+    window.zoemecNotify?.(`"${seed.concept}" (${seed.qty} ${seed.unit}) listo para generar APU. Revisalo en APU Inteligente.`, 'info');
+    setModule?.('apu');
+  };
+
+  return <div className="panel plano-manual-measure">
+    <div className="admin-panel-head"><h2>Cuantificacion manual sobre el plano</h2><small className="hint">Traza sobre la imagen: calibra una escala real, luego mide un area o longitud. Nunca se propone una cantidad sin escala calibrada.</small></div>
+    <div style={{position:'relative',display:'inline-block',maxWidth:'100%'}}>
+      <img ref={imgRef} src={imageDataUrl} alt="Plano cargado" style={{maxWidth:'100%',display:'block'}} onLoad={redraw}/>
+      <canvas ref={canvasRef} onClick={handleCanvasClick} style={{position:'absolute',inset:0,width:'100%',height:'100%',cursor:mode?'crosshair':'default'}}/>
+    </div>
+    <div className="visual-actions" style={{marginTop:10,flexWrap:'wrap',gap:8}}>
+      <button className={mode==='calibrate'?'active':'soft'} onClick={()=>startMode('calibrate')}>Calibrar escala</button>
+      <input type="number" step="any" style={{width:90}} value={calibDistance} onChange={e=>setCalibDistance(e.target.value)} placeholder="distancia real" disabled={mode!=='calibrate'}/>
+      <input style={{width:60}} value={calibUnit} onChange={e=>setCalibUnit(e.target.value)} placeholder="m"/>
+      {mode==='calibrate' && <button onClick={confirmCalibration}>Confirmar calibracion ({calibPoints.length}/2 puntos)</button>}
+      <span className="muted" style={{fontSize:'.78rem'}}>{scale ? `Escala activa: 1 px = ${scale.toFixed(5)} ${calibUnit}` : 'Sin escala calibrada'}</span>
+    </div>
+    <div className="visual-actions" style={{marginTop:6,flexWrap:'wrap',gap:8}}>
+      <button className={mode==='area'?'active':'soft'} disabled={!scale} onClick={()=>startMode('area')}>Medir área</button>
+      <button className={mode==='length'?'active':'soft'} disabled={!scale} onClick={()=>startMode('length')}>Medir longitud</button>
+      <select value={tipo} onChange={e=>setTipo(e.target.value)}>{['piso','muro','losa','puerta','ventana','columna','trabe','plafon','otro'].map(t=><option key={t} value={t}>{t}</option>)}</select>
+      <input value={descripcion} onChange={e=>setDescripcion(e.target.value)} placeholder="Descripcion del elemento (ej. Piso Local 02)" style={{flex:1,minWidth:180}}/>
+      {(mode==='area'||mode==='length') && <button onClick={finishMeasure}>Terminar trazo ({points.length} puntos)</button>}
+    </div>
+    {pendingElement && <div className="lib-insumos-review" style={{marginTop:10}}>
+      <b>Medicion propuesta</b>
+      <p>{pendingElement.descripcion || '(sin descripcion)'} — trazo original: {pendingElement.cantidadPropuesta != null ? `${pendingElement.cantidadPropuesta} ${pendingElement.unidad}` : 'REQUIERE VALIDACIÓN (sin cantidad: escala no determinada)'}</p>
+      <p className="muted" style={{fontSize:'.78rem'}}>Origen: {pendingElement.origenMedicion} (nunca IA) · Fuente de escala: {pendingElement.fuenteEscala}</p>
+      {pendingElement.cantidadPropuesta!=null && <div className="grid-2">
+        <div><label>Cantidad final (edita si corresponde una correccion)</label><input type="number" step="any" value={cantidadFinal} onChange={e=>setCantidadFinal(e.target.value)}/></div>
+      </div>}
+      <button disabled={pendingElement.cantidadPropuesta==null} onClick={useInApu}>Validar y usar en APU</button>
     </div>}
   </div>;
 }

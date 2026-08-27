@@ -68,7 +68,7 @@ async function runScaleCase(count){
     const zip = unzipSync(new Uint8Array(fs.readFileSync(outputPath)));
     const workbookXml = strFromU8(zip['xl/workbook.xml']);
     const sheetNames = [...workbookXml.matchAll(/<sheet\b[^>]*name="([^"]*)"/g)].map(m => m[1]);
-    assert.equal(sheetNames.length, count + 2, `se esperaban ${count + 2} hojas (RESUMEN + CONTROL_REVISION + ${count}), hubo ${sheetNames.length}`);
+    assert.equal(sheetNames.length, count + 4, `se esperaban ${count + 4} hojas (PORTADA + RESUMEN + CONTROL_REVISION + PARAMETROS + ${count}), hubo ${sheetNames.length}`);
     assert.equal(new Set(sheetNames).size, sheetNames.length, 'ninguna hoja duplicada');
     assert.ok(sheetNames.includes('RESUMEN') && sheetNames.includes('CONTROL_REVISION'));
     // Ninguna hoja de worksheet debe faltar/estar vacia en el zip real.
@@ -82,13 +82,13 @@ async function runScaleCase(count){
   return professional;
 }
 
-test('Escala 25 conceptos: segmentacion -> 25 APUs -> 27 hojas, sin fusion/perdida/duplicado', async () => {
+test('Escala 25 conceptos: segmentacion -> 25 APUs -> 28 hojas, sin fusion/perdida/duplicado', async () => {
   const start = Date.now();
   await runScaleCase(25);
   assert.ok(Date.now() - start < 15000, 'no deberia tardar mas de 15s (sin llamadas de red en este pipeline determinista)');
 });
 
-test('Escala 100 conceptos: segmentacion -> 100 APUs -> 102 hojas, sin fusion/perdida/duplicado, sin timeout', async () => {
+test('Escala 100 conceptos: segmentacion -> 100 APUs -> 103 hojas, sin fusion/perdida/duplicado, sin timeout', async () => {
   const start = Date.now();
   await runScaleCase(100);
   assert.ok(Date.now() - start < 30000, 'no deberia tardar mas de 30s (sin llamadas de red en este pipeline determinista)');

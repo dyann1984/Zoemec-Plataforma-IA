@@ -12,7 +12,13 @@
    ==================================================================== */
 const CLIENT_ID = import.meta.env.VITE_ONEDRIVE_CLIENT_ID || '';
 const TENANT = import.meta.env.VITE_ONEDRIVE_TENANT_ID || 'common';
-const SCOPES = 'offline_access User.Read Files.Read Files.Read.All';
+// Files.ReadWrite/Files.ReadWrite.All (Prioridad 5, fase de correccion):
+// necesarios para que la Biblioteca ZOEMEC pueda ESCRIBIR de vuelta en
+// OneDrive (ver api/onedrive.mjs#uploadFile/ensureFolder), no solo leer.
+// Una cuenta conectada ANTES de este cambio de scope debe reconectar --
+// su refresh_token viejo (solo lectura) no incluye el permiso nuevo y
+// Microsoft rechazara la escritura con 403 hasta que reautorice.
+const SCOPES = 'offline_access User.Read Files.ReadWrite Files.ReadWrite.All';
 const AUTH_BASE = `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0`;
 const VERIFIER_KEY = 'zoemec-onedrive-verifier';
 const STATE_KEY = 'zoemec-onedrive-state';

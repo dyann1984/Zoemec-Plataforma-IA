@@ -195,3 +195,49 @@ export function resolveBatchSelection(concepts, selectedIndices){
   });
   return { selectedList, excludedConcepts };
 }
+
+/* RC10 -- causa raiz real del "112 detectados -> 1 hoja exportada": el
+   nombre del archivo descargado ("APU-PROFESIONAL-ZOEMEC (N).xlsx") solo lo
+   produce exportAPUExcelV2 SIN fileName, y el UNICO llamador asi en todo el
+   codigo es el boton de UN SOLO APU del editor (ProfessionalApuEditor.onExcel,
+   ver src/main.jsx) -- exportConceptBatch (el boton de lote) SIEMPRE pasa
+   fileName:'APU-POR-CONCEPTO-ZOEMEC.xlsx'. No hay ningun punto del codigo
+   donde exportConceptBatch reduzca un arreglo de 112 a 1 -- se audito
+   exhaustivamente (batchAPUs, buildBatchAPUs, exportConceptsAPUWorkbook,
+   exportAPUExcelV2: ninguno hace slice/find/toma-el-primero).
+
+   Aun asi, la sugerencia de arquitectura del reporte es correcta y se
+   implementa: en vez de depender EXCLUSIVAMENTE de batchAPUs (estado de
+   React transitorio, useState sin persistir, vulnerable a closures viejos
+   si algun dia cambia el orden de renders), el boton de lote ahora resuelve
+   primero contra la fuente PERSISTENTE (apus del proyecto activo, ya
+   correctamente aislado por proyecto desde RC7) buscando cada concepto por
+   su `clave` -- la misma clave que applyConceptMetadataV2 (apuGeneration.js)
+   siempre fuerza a partir de item.code/item.clave, nunca inventada. Esto
+   ademas preserva el orden original del lote (concepts.map, no el orden de
+   finalizacion de la cola concurrente) y no depende de ids frescos (uid())
+   que no se pueden derivar del concepto de origen. */
+export function resolveBatchExportApus({ concepts, persistedApus, cachedApus } = {}){
+  const list = Array.isArray(concepts) ? concepts : [];
+  if(!list.length) return [];
+  const byClave = new Map((persistedApus || []).filter(Boolean).map(a => [a.clave, a]));
+  const fromPersisted = list.map(item => byClave.get(item?.code || item?.clave)).filter(Boolean);
+  if(fromPersisted.length === list.length) return fromPersisted;
+  if(Array.isArray(cachedApus) && cachedApus.length === list.length) return cachedApus;
+  return null;
+}
+
+/* Guard contra exportacion parcial (RC10): si la cantidad de APUs
+   efectivamente resueltos para exportar no coincide con lo que la UI ya
+   anuncio (conceptsTotal/generated), NUNCA se genera un archivo parcial en
+   silencio -- se aborta con un mensaje explicito y accionable. */
+export function assertExpectedExportCount(expected, actual){
+  const exp = Number(expected) || 0;
+  const act = Number(actual) || 0;
+  if(act === 0){
+    throw new Error(`No se puede exportar: no hay ningún APU disponible para exportar (se esperaban ${exp}).`);
+  }
+  if(act < exp){
+    throw new Error(`El lote contiene ${exp} APUs, pero solo ${act} está disponible para exportación. Recarga el proyecto o vuelve a generar el lote.`);
+  }
+}

@@ -209,7 +209,7 @@ test('E2E catalogo Excel real (sanitizado): deteccion de encabezado -> extraccio
     assert.ok(sheetNames.includes('RESUMEN'), 'debe existir la hoja RESUMEN');
     assert.ok(sheetNames.includes('CONTROL_REVISION'), 'debe existir la hoja CONTROL_REVISION');
     // RESUMEN + CONTROL_REVISION + una hoja por concepto procesado.
-    assert.equal(sheetNames.length, 2 + concepts.length, `se esperaban ${2 + concepts.length} hojas (RESUMEN + CONTROL_REVISION + ${concepts.length} por concepto)`);
+    assert.equal(sheetNames.length, 4 + concepts.length, `se esperaban ${4 + concepts.length} hojas (PORTADA + RESUMEN + CONTROL_REVISION + PARAMETROS + ${concepts.length} por concepto)`);
     // Nombres de hoja unicos y dentro del limite de 31 caracteres de Excel.
     assert.equal(new Set(sheetNames).size, sheetNames.length, 'los nombres de hoja deben ser unicos');
     assert.ok(sheetNames.every(n => n.length <= 31), 'ningun nombre de hoja debe exceder 31 caracteres');

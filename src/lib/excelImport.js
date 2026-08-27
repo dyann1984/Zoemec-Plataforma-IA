@@ -16,9 +16,28 @@ export function parseExcelToCatalog(file){
 export function parseXml(text){
   return new DOMParser().parseFromString(text, 'application/xml');
 }
+/* Algunos generadores de XLSX (no solo Excel/Google Sheets) escriben el XML
+   interno con un prefijo de namespace en CADA elemento (`<x:row>`, `<ss:c>`,
+   `<w:v>`...) en vez de dejarlo sin prefijo. `getElementsByTagName('row')`
+   NO encuentra `<x:row>` -- son nombres calificados distintos para el DOM.
+   `localNameOf`/`elementsByLocalName` ignoran el prefijo de forma segura
+   (via `Element.localName`, con una alternativa por si el parser no lo
+   expone) para que la lectura de filas/celdas funcione igual sin importar
+   que prefijo (o ninguno) use el archivo real. */
+function localNameOf(node){
+  if(!node) return '';
+  if(node.localName) return node.localName;
+  const name = node.tagName || node.nodeName || '';
+  const i = name.indexOf(':');
+  return i >= 0 ? name.slice(i + 1) : name;
+}
+function elementsByLocalName(root, localName){
+  if(!root || typeof root.getElementsByTagName !== 'function') return [];
+  return Array.from(root.getElementsByTagName('*')).filter(el => localNameOf(el) === localName);
+}
 export function xmlText(node){
   if(!node) return '';
-  return Array.from(node.getElementsByTagName('t')).map(t=>t.textContent || '').join('');
+  return elementsByLocalName(node, 't').map(t=>t.textContent || '').join('');
 }
 export function colIndexFromRef(ref=''){
   const letters = String(ref).match(/[A-Z]+/i)?.[0]?.toUpperCase() || '';
@@ -45,12 +64,26 @@ function readWorkbookSheetOrder(zip, readZipText){
     const workbookXml = readZipText('xl/workbook.xml');
     const relsXml = readZipText('xl/_rels/workbook.xml.rels');
     if(!workbookXml || !relsXml) return null;
+    /* Se extraen las etiquetas completas primero (tolerando un prefijo de
+       namespace opcional en el nombre de la etiqueta, `<x:Relationship`,
+       `<x:sheet`...) y LUEGO se buscan sus atributos por separado, sin
+       asumir un orden fijo entre ellos -- algunos generadores escriben
+       Target antes que Id, o r:id antes que name. */
     const relMap = new Map();
-    for(const m of relsXml.matchAll(/<Relationship[^>]*Id="([^"]+)"[^>]*Target="([^"]+)"[^>]*\/?>/g)){
-      relMap.set(m[1], m[2].replace(/^\/?xl\//,''));
+    for(const m of relsXml.matchAll(/<(?:[\w.-]+:)?Relationship\b[^>]*\/?>/g)){
+      const tag = m[0];
+      const id = tag.match(/\bId="([^"]+)"/)?.[1];
+      const target = tag.match(/\bTarget="([^"]+)"/)?.[1];
+      if(id && target) relMap.set(id, target.replace(/^\/?xl\//,''));
     }
-    const declared = [...workbookXml.matchAll(/<sheet\b[^>]*name="([^"]*)"[^>]*r:id="([^"]+)"[^>]*\/?>/g)]
-      .map(m => ({ name: m[1], rId: m[2] }));
+    const declared = [...workbookXml.matchAll(/<(?:[\w.-]+:)?sheet\b[^>]*\/?>/g)]
+      .map(m => {
+        const tag = m[0];
+        const name = tag.match(/\bname="([^"]*)"/)?.[1];
+        const rId = tag.match(/\br:id="([^"]+)"/)?.[1];
+        return (name != null && rId) ? { name, rId } : null;
+      })
+      .filter(Boolean);
     if(!declared.length) return null;
     const order = declared.map(({name, rId}) => {
       const target = relMap.get(rId);
@@ -68,7 +101,7 @@ export async function readXlsxXmlSheetBlocks(file){
   const readZipText = (path) => zip[path] ? strFromU8(zip[path]) : '';
   const sharedDoc = readZipText('xl/sharedStrings.xml') ? parseXml(readZipText('xl/sharedStrings.xml')) : null;
   const sharedStrings = sharedDoc
-    ? Array.from(sharedDoc.getElementsByTagName('si')).map(si => xmlText(si))
+    ? elementsByLocalName(sharedDoc, 'si').map(si => xmlText(si))
     : [];
   const declaredOrder = readWorkbookSheetOrder(zip, readZipText);
   const sheetOrder = declaredOrder || Object.keys(zip)
@@ -77,16 +110,16 @@ export async function readXlsxXmlSheetBlocks(file){
     .map(path => ({ name:'', path }));
   return sheetOrder.map(({name, path}) => {
     const doc = parseXml(readZipText(path));
-    const rowNodes = Array.from(doc.getElementsByTagName('row'));
+    const rowNodes = elementsByLocalName(doc, 'row');
     const rows = [];
     rowNodes.forEach(rowNode => {
       const rowIndex = Number(rowNode.getAttribute('r') || 0) || (rows.length + 1);
       const row = [];
-      Array.from(rowNode.getElementsByTagName('c')).forEach(cell => {
+      elementsByLocalName(rowNode, 'c').forEach(cell => {
         const ref = cell.getAttribute('r') || '';
         const idx = colIndexFromRef(ref);
         const type = cell.getAttribute('t') || '';
-        const vNode = cell.getElementsByTagName('v')[0];
+        const vNode = elementsByLocalName(cell, 'v')[0];
         const raw = vNode?.textContent ?? '';
         let value = raw;
         if(type === 's') value = sharedStrings[Number(raw)] ?? '';
@@ -108,21 +141,21 @@ export async function readXlsxXmlRows(file){
   const readZipText = (path) => zip[path] ? strFromU8(zip[path]) : '';
   const sharedDoc = readZipText('xl/sharedStrings.xml') ? parseXml(readZipText('xl/sharedStrings.xml')) : null;
   const sharedStrings = sharedDoc
-    ? Array.from(sharedDoc.getElementsByTagName('si')).map(si => xmlText(si))
+    ? elementsByLocalName(sharedDoc, 'si').map(si => xmlText(si))
     : [];
   const sheetPaths = Object.keys(zip).filter(path => /^xl\/worksheets\/sheet\d+\.xml$/i.test(path)).sort(numericSheetSort);
   const allRows = [];
   sheetPaths.forEach((path, sheetIndex) => {
     const doc = parseXml(readZipText(path));
-    const rows = Array.from(doc.getElementsByTagName('row'));
+    const rows = elementsByLocalName(doc, 'row');
     if(sheetIndex > 0 && allRows.some(row => row.some(cell => String(cell ?? '').trim()))) allRows.push([]);
     rows.forEach(rowNode => {
       const row = [];
-      Array.from(rowNode.getElementsByTagName('c')).forEach(cell => {
+      elementsByLocalName(rowNode, 'c').forEach(cell => {
         const ref = cell.getAttribute('r') || '';
         const idx = colIndexFromRef(ref);
         const type = cell.getAttribute('t') || '';
-        const vNode = cell.getElementsByTagName('v')[0];
+        const vNode = elementsByLocalName(cell, 'v')[0];
         const raw = vNode?.textContent ?? '';
         let value = raw;
         if(type === 's') value = sharedStrings[Number(raw)] ?? '';
@@ -327,10 +360,10 @@ export async function parseExcelConcepts(file){
    representan el mismo catalogo con otro precio (p. ej. "... P.U. PROFORMA"
    y "... P.U. VENTA"): ver dedupeAcrossSheets, que compara contenido pero
    SOLO entre hojas distintas, nunca dentro de la misma hoja. */
-function dedupeAcrossSheets(perSheetResults){
+function dedupeAcrossSheets(perSheetResults, debugSink){
   const seenFromPriorSheets = new Set();
   const merged = [];
-  (perSheetResults || []).forEach(({ concepts }) => {
+  (perSheetResults || []).forEach(({ sheetName, concepts }) => {
     const thisSheetKeys = new Set();
     (concepts || []).forEach(item => {
       const key = [
@@ -341,6 +374,8 @@ function dedupeAcrossSheets(perSheetResults){
       ].join('|');
       if(!seenFromPriorSheets.has(key)){
         merged.push(item);
+      }else if(debugSink){
+        debugSink.push({ sheetName: sheetName || item.sourceSheet, rowNumber: item.rowNumber, content: item.concept, accepted:false, reason: `duplicado exacto (clave+concepto+unidad+cantidad) ya extraido de otra hoja del mismo catalogo` });
       }
       thisSheetKeys.add(key);
     });
@@ -355,7 +390,14 @@ function dedupeAcrossSheets(perSheetResults){
    segunda hoja caia dentro del rango de datos de la primera y se
    malinterpretaba como una "seccion" espuria, ensuciando la trazabilidad de
    los renglones de esa segunda hoja). */
-export function extractConceptsFromSheetRows(normalized, sheetName=''){
+/* debugSink (opcional, motor universal -- prueba de produccion con catalogo
+   real): array donde, si se provee, se registra UNA entrada por cada fila
+   candidata a concepto (aceptada o rechazada) con su motivo -- para poder
+   reportar "para cada rechazo: hoja, fila, contenido, motivo" sin perdida
+   silenciosa. Puramente aditivo: sin debugSink, cero cambio de
+   comportamiento (todas las llamadas existentes en la app/tests siguen
+   igual). */
+export function extractConceptsFromSheetRows(normalized, sheetName='', debugSink){
   const clean = (v) => cleanText(v).trim();
   const norm = (v) => clean(v).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
   const unitRe = /^(m2|m²|m3|m³|kg|ton|tonelada|pza|pieza|pzas|ml|m|l|lt|lote|jgo|hr|hora|dia|día|jor|jornal|serv|servicio|sal|salida|salidas)$/i;
@@ -388,11 +430,12 @@ export function extractConceptsFromSheetRows(normalized, sheetName=''){
   };
   const addConcept = (list, item) => {
     const concept = clean(item.concept).replace(/\s+/g,' ');
-    if(isNoiseConcept(concept) || concept.length < 12) return;
+    const reject = (reason) => { if(debugSink) debugSink.push({ sheetName, rowNumber: item.rowNumber, content: concept || JSON.stringify(item).slice(0,120), accepted:false, reason }); };
+    if(isNoiseConcept(concept) || concept.length < 12){ reject(isNoiseConcept(concept) ? 'texto de concepto reconocido como ruido (encabezado/total/etiqueta de seccion), no una partida real' : `descripcion demasiado corta (${concept.length} caracteres, minimo 12)`); return; }
     const rawUnit = clean(item.unit);
-    if(!unitRe.test(rawUnit)) return;
+    if(!unitRe.test(rawUnit)){ reject(`unidad "${rawUnit || '(vacia)'}" no reconocida como unidad valida`); return; }
     const rawQty = Number(item.qty) || 0;
-    if(rawQty <= 0) return;
+    if(rawQty <= 0){ reject(`cantidad ausente o <= 0 (valor leido: ${item.qty ?? '(vacio)'})`); return; }
     const unit = normalizeUnitLabel(normalizeUnit(rawUnit));
     const qty = rawQty;
     let referencePU = Number(item.referencePU) || 0;
@@ -404,6 +447,7 @@ export function extractConceptsFromSheetRows(normalized, sheetName=''){
     // aunque otro renglon ya tenga la misma clave/concepto/cantidad (un
     // catalogo real repite claves legitimamente). La unica fusion de
     // duplicados ocurre entre hojas distintas (dedupeAcrossSheets).
+    if(debugSink) debugSink.push({ sheetName, rowNumber: item.rowNumber, content: concept, accepted:true, reason:'concepto valido' });
     list.push({
       code: clean(item.code) || `CON-${String(list.length+1).padStart(3,'0')}`,
       concept,
@@ -501,6 +545,14 @@ export function extractConceptsFromSheetRows(normalized, sheetName=''){
       if(looksLikeSection){
         flush();
         section = code ? `${code} ${concept}` : concept;
+        continue;
+      }
+      // Fila que no es partida, continuacion ni encabezado de seccion (fila
+      // en blanco, encabezado repetido de otra hoja, ruido) -- se ignora,
+      // pero queda registrada (nunca perdida en silencio) cuando se pide
+      // diagnostico.
+      if(debugSink && row.some(cell => String(cell ?? '').trim())){
+        debugSink.push({ sheetName, rowNumber: i+1, content: (concept || row.filter(Boolean).join(' | ')).slice(0,160), accepted:false, reason: 'fila sin descripcion/unidad/cantidad reconocible: ignorada (no es partida, continuacion ni encabezado de seccion)' });
       }
     }
     flush();
@@ -546,7 +598,15 @@ export function extractConceptsFromSheetRows(normalized, sheetName=''){
       reason: 'se reconocio un encabezado valido, pero ninguna fila debajo tuvo a la vez descripcion, unidad valida y cantidad mayor a cero.'
     };
   }
-  return { concepts, diagnostic };
+  // headerInfo: siempre presente (aun cuando la extraccion tuvo exito),
+  // para poder reportar "fila de encabezado detectada + columnas
+  // identificadas" sin adivinar -- antes solo `diagnostic` (solo se llena
+  // si la hoja FALLO) exponia esto.
+  const headerInfo = header >= 0 ? {
+    headerRow: header + 1, columnConcept: cConcept, columnUnit: cUnit, columnQty: cQty,
+    columnPU: cPU, columnImporte: cImporte, columnCode: cCode
+  } : null;
+  return { concepts, diagnostic, headerInfo };
 }
 /* Formato legible del diagnostico de UNA hoja (ver extractConceptsFromSheetRows):
    hoja, filas inspeccionadas, fila de encabezado candidata (si hubo alguna)
@@ -569,18 +629,19 @@ export function formatCatalogDiagnostic(diagnostic){
    {sheetName, rows} (p. ej. desde read-excel-file/node en pruebas, o desde
    readSpreadsheetSheetBlocks en la app real) y aplica extraccion por hoja +
    deduplicacion SOLO entre hojas distintas. */
-export function extractConceptsFromWorkbookRows(sheetBlocks){
+export function extractConceptsFromWorkbookRows(sheetBlocks, debugSink){
   const perSheet = (sheetBlocks || []).map(({ sheetName, rows }) => {
-    const { concepts, diagnostic } = extractConceptsFromSheetRows(normalizeSpreadsheetRows(rows), sheetName || '');
-    return { sheetName: sheetName || '', concepts, diagnostic };
+    const { concepts, diagnostic, headerInfo } = extractConceptsFromSheetRows(normalizeSpreadsheetRows(rows), sheetName || '', debugSink);
+    return { sheetName: sheetName || '', concepts, diagnostic, headerInfo, rowCount: (rows || []).length };
   });
-  const concepts = dedupeAcrossSheets(perSheet);
+  const concepts = dedupeAcrossSheets(perSheet, debugSink);
   const diagnostics = perSheet.filter(s => s.diagnostic).map(s => s.diagnostic);
-  return { concepts, diagnostics };
+  const sheetSummaries = perSheet.map(({ sheetName, concepts, headerInfo, rowCount }) => ({ sheetName, rowCount, headerInfo, conceptsFound: concepts.length }));
+  return { concepts, diagnostics, sheetSummaries };
 }
-export async function parseRobustConceptCatalog(file){
+export async function parseRobustConceptCatalog(file, debugSink){
   const blocks = await readSpreadsheetSheetBlocks(file);
-  const { concepts, diagnostics } = extractConceptsFromWorkbookRows(blocks);
+  const { concepts, diagnostics } = extractConceptsFromWorkbookRows(blocks, debugSink);
   if(!concepts.length){
     const blocksText = diagnostics.map(d => formatCatalogDiagnostic(d)).join('\n\n');
     throw new Error(`No pude identificar un catalogo de conceptos reconocible.\n\n${blocksText}`);
@@ -719,6 +780,39 @@ export function parseConceptText(input){
   const pieceCount = unitFromCounting ? qty : null;
   const pieceUnit = unitFromCounting ? unit : null;
   const dimensions = technicalMatches.map(m=>m.text.trim());
+  // Variables tecnicas adicionales (motor universal de APUs): extraccion de
+  // mejor esfuerzo (regex sobre texto libre, NUNCA comprension real del
+  // texto) de espesor/profundidad/altura/diametro/peso/resistencia/grado de
+  // material/dosificacion, cuando el concepto las declara explicitamente.
+  // Ausentes por defecto (null): nunca se inventa un valor que el texto no
+  // trae. Igual que el resto de parseConceptText, nunca recorta el texto
+  // original, solo lee valores adicionales de el.
+  const thicknessMatch = text.match(/espesor\s*(?:de|promedio)?\s*(\d+(?:[.,]\d+)?)\s*(mm|cm)|\be\s*=\s*(\d+(?:[.,]\d+)?)\s*(mm|cm)/i);
+  const thickness = thicknessMatch ? parseFloat((thicknessMatch[1]||thicknessMatch[3]).replace(',','.')) : null;
+  const thicknessUnit = thicknessMatch ? (thicknessMatch[2]||thicknessMatch[4]) : null;
+  const depthMatch = text.match(/profundidad\s*(?:de)?\s*(\d+(?:[.,]\d+)?)\s*(m|cm)\b/i);
+  const depth = depthMatch ? parseFloat(depthMatch[1].replace(',','.')) : null;
+  const depthUnit = depthMatch ? depthMatch[2] : null;
+  const heightMatch = text.match(/altura\s*(?:de)?\s*(\d+(?:[.,]\d+)?)\s*(m|cm)\b/i);
+  const height = heightMatch ? parseFloat(heightMatch[1].replace(',','.')) : null;
+  const heightUnit = heightMatch ? heightMatch[2] : null;
+  const diameterMatch = text.match(/di[aá]metro\s*(?:de|nominal)?\s*(\d+(?:[.,]\d+)?)\s*(mm|cm|pulg(?:adas?)?|in|["”])|[øØ]\s*(\d+(?:[.,]\d+)?)\s*(mm|cm|pulg(?:adas?)?|in)?/i);
+  const diameter = diameterMatch ? parseFloat((diameterMatch[1]||diameterMatch[3]).replace(',','.')) : null;
+  const diameterUnit = diameterMatch ? (diameterMatch[2]||diameterMatch[4]||'pulg') : null;
+  const weightMatch = text.match(/peso\s*(?:de|total)?\s*(\d+(?:[.,]\d+)?)\s*(kg|ton|t\b)/i);
+  const weight = weightMatch ? parseFloat(weightMatch[1].replace(',','.')) : null;
+  const weightUnit = weightMatch ? weightMatch[2] : null;
+  // Resistencia: f'c (concreto, kg/cm2 o MPa) o fy (acero, kg/cm2) -- ambas
+  // formas usuales de catalogo mexicano de obra.
+  const strengthMatch = text.match(/f'?\s*c\s*=?\s*(\d+(?:[.,]\d+)?)\s*(kg\/cm2|kg\/cm²|mpa)?/i);
+  const strength = strengthMatch ? parseFloat(strengthMatch[1].replace(',','.')) : null;
+  const strengthUnit = strengthMatch ? (strengthMatch[2] || 'kg/cm²') : null;
+  const materialGradeMatch = text.match(/fy\s*=?\s*(\d+(?:[.,]\d+)?)|astm\s*a\d+|a\d{3}\b/i);
+  const materialGrade = materialGradeMatch ? materialGradeMatch[0].trim() : null;
+  // Dosificacion: la primera proporcion tipo "1:2:4" ya detectada como
+  // technicalMatch se reexpone tal cual bajo un nombre explicito.
+  const dosageMatch = dimensions.find(d => /^\d+(?:\.\d+)?\s*:\s*\d+/.test(d));
+  const dosage = dosageMatch || null;
   // originalDescription/concept: SIEMPRE el texto completo (ver comentario de
   // funcion). normalizedDescription: version aparte para matching, minuscula
   // y sin acentos, con el prefijo de etiqueta ("Concepto:", "Descripcion:")
@@ -748,7 +842,15 @@ export function parseConceptText(input){
     volumeUnit,
     pieceCount,
     pieceUnit,
-    dimensions
+    dimensions,
+    thickness, thicknessUnit,
+    depth, depthUnit,
+    height, heightUnit,
+    diameter, diameterUnit,
+    weight, weightUnit,
+    strength, strengthUnit,
+    materialGrade,
+    dosage
   };
 }
 /* Subconjunto de parseConceptText pensado para adjuntarse tal cual como
@@ -768,7 +870,15 @@ export function conceptVariablesFromParsed(parsed={}){
     volumeUnit: parsed.volumeUnit ?? null,
     pieceCount: parsed.pieceCount ?? null,
     pieceUnit: parsed.pieceUnit ?? null,
-    dimensions: Array.isArray(parsed.dimensions) ? parsed.dimensions : []
+    dimensions: Array.isArray(parsed.dimensions) ? parsed.dimensions : [],
+    thickness: parsed.thickness ?? null, thicknessUnit: parsed.thicknessUnit ?? null,
+    depth: parsed.depth ?? null, depthUnit: parsed.depthUnit ?? null,
+    height: parsed.height ?? null, heightUnit: parsed.heightUnit ?? null,
+    diameter: parsed.diameter ?? null, diameterUnit: parsed.diameterUnit ?? null,
+    weight: parsed.weight ?? null, weightUnit: parsed.weightUnit ?? null,
+    strength: parsed.strength ?? null, strengthUnit: parsed.strengthUnit ?? null,
+    materialGrade: parsed.materialGrade ?? null,
+    dosage: parsed.dosage ?? null
   };
 }
 /* Prefijo de numeracion de lista al inicio de un renglon pegado a mano

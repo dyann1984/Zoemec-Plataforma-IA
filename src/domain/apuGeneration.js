@@ -9,10 +9,16 @@
    utilidad, cargos, IVA) SIEMPRE vienen de APU_DEFAULT_FACTORS
    (src/lib/apuCalc.js) — la unica fuente de verdad ya unificada en Fase 2.
    No se reintroduce aqui ningun conjunto de porcentajes alterno. */
-import { cleanText, matchPrice, normalizeUnitLabel, parseConceptText, conceptVariablesFromParsed } from '../lib/excelImport.js';
+import { cleanText, normalizeUnitLabel, parseConceptText, conceptVariablesFromParsed } from '../lib/excelImport.js';
 import { APU_DEFAULT_FACTORS } from '../lib/apuCalc.js';
 import { uid } from '../utils/id.js';
 import { scopedKey } from '../utils/scopedStorage.js';
+import { SYSTEM_RESOURCES, SYSTEM_META, classifyConstructionSystem, extractSecondaryActivities } from './constructionSystems.js';
+import { deriveCrewFromLaborRows } from './crewModel.js';
+import { findCatalogMatches } from './catalogLookup.js';
+import { APU_DATA_STATE } from './apuSchema.js';
+import { RENDIMIENTO_FUENTE } from './apuReview.js';
+import { resolveEppRows } from './eppResolver.js';
 
 const APU_STANDARD_FACTORS = APU_DEFAULT_FACTORS;
 
@@ -47,20 +53,10 @@ function haulLaborCoefficientPerUnit(distanceM, capacidadPorViaje){
   return tiempoPorUnidadMin/HAUL_MODEL.jornadaMin;
 }
 
-/* Mapa tipo interno del motor APU -> familia compartida con la Biblioteca.
-   No cambia la clasificacion tecnica (tipo), solo la etiqueta que se muestra.
-   Las familias de texto usadas abajo coinciden con las de
-   src/domain/taxonomy.js (LIBRARY_DISCIPLINES), para que Biblioteca y APU
-   usen el mismo vocabulario de familias. */
-const APU_FAMILY_LABELS = {
-  concreto:'Cimentacion', acero:'Estructura metalica', estructura_metalica:'Estructura metalica',
-  block:'Albanileria', tablaroca:'Tablaroca y Durock', lavabo_ptr:'Tablaroca y Durock', plafon_suspendido:'Tablaroca y Durock',
-  pintura:'Acabados', aplanado:'Acabados', piso:'Acabados', marmol_granito:'Acabados', sello:'Acabados', registro:'Acabados', imper:'Acabados', adhesivo:'Acabados',
-  excavacion:'Terracerias', excavacion_mecanica:'Terracerias', desmonte_mecanico:'Terracerias', acarreo_camion:'Terracerias', acarreo_manual:'Terracerias',
-  limpieza_trazo:'Limpieza y preliminares', demolicion:'Limpieza y preliminares',
-  movimiento_mobiliario:'Equipamiento',
-  tuberia:'Hidrosanitaria', bomba:'Hidrosanitaria', generico:'General'
-};
+/* La clasificacion por keyword (que antes vivia aqui como un cascade de
+   ~40 if/else) y la familia/confianza/SAT por tipo ahora viven en
+   src/domain/constructionSystems.js (registro extensible, ver ese archivo
+   para el detalle de arquitectura). Este modulo solo lo consume. */
 
 export function canonicalAPUText(value){
   return cleanText(value ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim();
@@ -235,6 +231,43 @@ export function applyMarketPrices(apu){
   if(!touched) return apu;
   return { ...apu, materials, labor, equipment, marketSources: sources };
 }
+/* Justificacion tecnica mecanica para el APU de PLANTILLA (sin IA): compone
+   texto a partir de los renglones REALES que la plantilla ya eligio (nunca
+   prosa inventada por un modelo, ver decision confirmada con el usuario).
+   Se usa solo para APUs NUEVOS generados por plantilla; los APUs
+   historicos/migrados nunca reciben este texto retroactivamente (ver
+   migrateLegacyApuToV2 -- solo lo preserva si el v1 ya lo trae). */
+function describeTemplateRows(rows){
+  return (rows || []).map(r => r[0]).filter(Boolean).join(', ');
+}
+function composeTemplateJustifications({ family, materials, labor, equipment, herramienta, laborDetails }){
+  const materialsDesc = describeTemplateRows(materials);
+  const laborDesc = describeTemplateRows(labor);
+  const equipmentDesc = describeTemplateRows(equipment);
+  // Rendimiento de la cuadrilla principal (primer renglon de labor, ya
+  // explicito via crewModel.js): se reutiliza para explicar POR QUE el
+  // equipo/maquinaria listado tiene sentido a ese ritmo de trabajo -- sin
+  // esto, "equipo = 0.04 dia/unidad" no explicaba nada por si solo (motor
+  // universal, punto 6: "equipo vinculado al rendimiento"). No cambia
+  // ningun calculo: es texto explicativo, la formula sigue siendo la misma
+  // (calcEquipmentRow, apuCalc.js).
+  const crewRendimiento = laborDetails?.[0]?.rendimiento;
+  const crewLabel = labor?.[0]?.[0];
+  return {
+    materials: materialsDesc
+      ? `Materiales según plantilla técnica ZOEMEC para ${family}: ${materialsDesc}.`
+      : `Plantilla técnica ZOEMEC para ${family}: no requiere materiales independientes.`,
+    labor: laborDesc
+      ? `Cuadrilla según plantilla técnica ZOEMEC para ${family}: ${laborDesc}, con jornadas por unidad y salario base de catálogo ZOEMEC.`
+      : `Plantilla técnica ZOEMEC para ${family}: no requiere mano de obra independiente.`,
+    equipment: equipmentDesc
+      ? `Equipo/apoyo según plantilla técnica ZOEMEC para ${family}: ${equipmentDesc}.${crewRendimiento > 0 ? ` Utilización dimensionada para el ritmo de la cuadrilla que lo opera (${crewLabel}, rendimiento de ${crewRendimiento.toFixed(2)} unidades/jornada de 8 h) -- el equipo acompaña esa cuadrilla, no se factura tiempo ocioso.` : ''}`
+      : `Plantilla técnica ZOEMEC para ${family}: no requiere equipo o maquinaria independiente.`,
+    smallTools: `Herramienta menor calculada como ${Number(herramienta) || 0}% de mano de obra, estándar de la plantilla técnica ZOEMEC.`,
+    consumables: 'NO APLICA -- no se identificaron consumibles independientes para este procedimiento (plantilla técnica ZOEMEC; captura consumibles reales si el concepto los requiere).',
+    safety: 'Plantilla técnica ZOEMEC: EPP considerado dentro del equipo de apoyo listado arriba cuando aplica; revisar si el concepto requiere un desglose de seguridad independiente.'
+  };
+}
 export function standardAPUForConcept(item, catalog, index=0, sourceFile='Catalogo de conceptos'){
   const base = makeAPUFromConcept(item?.concept || item?.description || String(item || ''), catalog);
   return applyMarketPrices(standardizeAPU(base, item || {}, index, sourceFile));
@@ -250,207 +283,22 @@ export function makeAPUFromConcept(concept, catalog){
   // esto es seguro incluso cuando el concepto ya trae distancia/volumen.
   const parsedVars = parseConceptText(c);
   const variables = conceptVariablesFromParsed(parsedVars);
-  // Plafon / tablaroca manda: menciones como "pintura anticorrosiva" dentro de las
-  // inclusiones de un falso plafon NO deben clasificar el concepto como pintura.
-  const isSuspendedCeiling = /falso\s*plaf|plaf[oó]n(d)?\s+de\s+(tablaroca|yeso|tablacemento)|suspensi[oó]n\s*oculta|colganter[ií]a|canal\s*list[oó]n|perfacinta|redimix/.test(t);
-  const isDrywallConcept = isSuspendedCeiling || /tablaroca|durock|tablacemento|trasdosado|cajillo|panel.*yeso/.test(t);
-  const isPaintingConcept = !isDrywallConcept && (
-    /pua\s*501|pua501|mapla|suministro y aplicaci[oó]n de pintura|pintar|repint|esmalte|vin[ií]lic|acr[ií]l|ep[oó]x|sellador vin/.test(t)
-    || (/(muro|muros|plaf[oó]n|plafones)/.test(t) && /(pintura|recubrimiento|preparaci[oó]n de la superficie|lija|lavado)/.test(t))
-  );
-  // Estos 4 verbos de actividad mandan sobre cualquier sustantivo de material
-  // que aparezca despues (loseta, azulejo, tablaroca...): "Demolicion de
-  // loseta" es una demolicion, nunca una colocacion, aunque contenga la
-  // palabra "loseta" -- sin este chequeo primero, esos 4 casos caian en la
-  // plantilla del material (ej. "piso") y arrastraban insumos que no
-  // corresponden al alcance real (loseta nueva en una demolicion, boquilla
-  // en un acarreo, etc.). isAdhesiveOnlyConcept exige que el concepto NO
-  // mencione el material ceramico: si lo menciona, es la partida de
-  // colocacion completa (que ya incluye su propio adhesivo en la plantilla
-  // "piso"), no una aplicacion de adhesivo aislada.
-  const isDemolitionConcept = /demolic|demoler|desmontar|retiro\s+de\s+(loseta|piso|azulejo|cer[aá]mic|porcelanato)/.test(t);
-  const isFurnitureMoveConcept = /movimiento\s+de\s+(mueble|mobiliario)|reacomodo\s+de\s+mobiliario|protecci[oó]n\s+y\s+movimiento\s+de\s+mobiliario/.test(t);
-  const isAdhesiveOnlyConcept = /(aplicaci[oó]n|colocaci[oó]n|instalaci[oó]n)\s+de\s+adhesivo|pegazulejo|cemento\s+cola/.test(t) && !/loseta|azulejo|porcelanato|cer[aá]mic|\bpiso\b/.test(t);
-  const isManualHaulingConcept = /acarreo|acarrear/.test(t) && !/cami[oó]n|volteo|for[aá]neo/.test(t);
-  let tipo;
-  if(isDemolitionConcept) tipo='demolicion';
-  else if(isFurnitureMoveConcept) tipo='movimiento_mobiliario';
-  else if(isAdhesiveOnlyConcept) tipo='adhesivo';
-  else if(isManualHaulingConcept) tipo='acarreo_manual';
-  else if(isSuspendedCeiling) tipo='plafon_suspendido';
-  else if(isDrywallConcept) tipo='tablaroca';
-  else if(isPaintingConcept) tipo='pintura';
-  else if(/escalera|barandal|herrer|ptr|perfil tubular|estructura metal|soldadur|acero.*calibre|bastidor.*acero/.test(t)) tipo='estructura_metalica';
-  else if(/plaf|fald|tablaroca|durock|tablacemento|trasdosado|cajillo|enchape|panel.*yeso|yeso|antimoho|anti moho/.test(t)) tipo='tablaroca';
-  else if(/marmol|granito|cubierta|barra lavamanos/.test(t)) tipo='marmol_granito';
-  else if(/registro|tapa de acceso|tapa registro|paso de instalaciones/.test(t)) tipo='registro';
-  else if(/aplanado|repellado|enjarre|plaster|uniblock|resane|emboquillado|chukum/.test(t)) tipo='aplanado';
-  else if(/pintura|pintar|esmalte|vinil|acril|epox|primario|sellador vin/.test(t)) tipo='pintura';
-  else if(/plaf|fald|tablaroca|durock|tablacemento|trasdosado|cajillo|enchape|panel.*yeso|yeso|antimoho|anti moho/.test(t)) tipo='tablaroca';
-  else if(/porcelanato|loseta|azulejo|cer[aá]mic|lambr|piso|zoclo|boquilla|sardinel/.test(t)) tipo='piso';
-  else if(/marmol|m[aá]rmol|granito|cubierta|barra lavamanos/.test(t)) tipo='marmol_granito';
-  else if(/aplanado|repellado|enjarre|plaster|uniblock|resane|emboquillado|chukum/.test(t)) tipo='aplanado';
-  else if(/sellado|sello|silicon|silic[oó]n|calafate|junta|espuma/.test(t)) tipo='sello';
-  if(!tipo){
-  if(/bomba|electrobomba|equipo de bombeo|bombeo hidr[aá]ulico|motobomba/.test(t)) tipo='bomba';
-  else if(/tuber[ií]a|tubo\s|tubos\s|conducci[oó]n hidr[aá]ulica|red hidr[aá]ulica|l[ií]nea hidr[aá]ulica|bajada pluvial|drenaje sanitario/.test(t)) tipo='tuberia';
-  else if(/lavabo|durock|ptr|mueble.*bañ|mueble.*ban|base.*lavabo|cer[aá]mico/.test(t)) tipo='lavabo_ptr';
-  else if(/estructura met[aá]lica|astm|a500|fy\s*=?\s*46|soldadur|perfil de acero|placa.*acero|grout|primario anticorrosivo|montaje.*estructura|fabricaci[oó]n.*estructura/.test(t)) tipo='estructura_metalica';
-  else if(/acero|varilla|castillo|cadena|armad|fierro|malla/.test(t)) tipo='acero';
-  else if(/concreto|losa|zapata|firme|cimentaci|colado|columna de conc/.test(t)) tipo='concreto';
-  else if(isPaintingConcept) tipo='pintura';
-  else if(/block|tabique|tabic[oó]n|muro|partici[oó]n|mamposter|junteo/.test(t)) tipo='block';
-  else if(/pintura|pintar|esmalte|vinil/.test(t)) tipo='pintura';
-  else if(/impermeabiliz/.test(t)) tipo='imper';
-  else if(/aplanado|repellado|enjarre|yeso|resane/.test(t)) tipo='aplanado';
-  else if(/piso|cer[aá]mic|loseta|porcelanato|azulejo/.test(t)) tipo='piso';
-  else if(/limpieza\s*(y|,)?\s*trazo|trazo\s*y\s*nivelaci[oó]n|trazo\s+topogr[aá]fico|desyerbe|chapeo|limpieza\s+(inicial|del\s+terreno|del\s+predio|del\s+solar)/.test(t)) tipo='limpieza_trazo';
-  else if(/desmonte|desenra[ií]ce|destronque/.test(t)) tipo='desmonte_mecanico';
-  else if(/acarreo/.test(t) && /cami[oó]n|volteo|for[aá]neo/.test(t)) tipo='acarreo_camion';
-  else if(/excavaci[oó]n?.*(m[aá]quina|mec[aá]nica|retroexcavadora|excavadora)|retroexcavadora|excavadora/.test(t)) tipo='excavacion_mecanica';
-  else if(/excavaci|zanja|despalme/.test(t)) tipo='excavacion';
-  else tipo='generico';
 
-  }
-  const unmatched = tipo === 'generico';
-  const TPL = {
-    lavabo_ptr:{ unit:'m',
-      materials:[['Perfil PTR de acero de 2" x 2" cal. 14',1.15,'m',92,0],['Tablero de cemento Durock 12.7 mm',0.65,'m²',210,0],['Anclajes, fijaciones, tornillería y soldadura',1,'lote',25,0],['Pasta, cinta y malla para juntas',0.18,'jgo',85,3],['Pintura anticorrosiva / primario',0.08,'L',98,3],['Materiales misceláneos de ajuste y protección',0.04,'jgo',120,0]],
-      labor:[['Cuadrilla de herrero + ayudante',0.035,'jor',1400,1],['Trazo, nivelación y presentación',0.015,'jor',700,1],['Resanes, cortes y adecuaciones',0.02,'jor',700,1],['Limpieza, retiro y protección del área',0.02,'jor',470,1]],
-      equipment:[['Equipo de protección y andamios (5% de M.O.)',0.05,'(%MO)',49],['Soldadora y herramienta de corte',0.03,'día',120]] },
-    tablaroca:{ unit:'m²',
-      materials:[['Panel de yeso / tablacemento 12.7 mm segun especificacion',1.05,'m²',210,5],['Poste o canal metalico galvanizado',1.25,'m',38,5],['Canal de amarre y refuerzos',0.55,'m',32,5],['Tornilleria, taquetes y fijaciones',0.18,'jgo',85,3],['Cinta y compuesto para juntas',0.22,'kg',42,5],['Pasta / sellador de acabado',0.12,'L',70,5],['Materiales miscelaneos y proteccion',0.04,'jgo',120,0]],
-      labor:[['Instalador de panel (oficial)',0.12,'jor',420,1.85],['Ayudante instalador',0.12,'jor',285,1.82],['Trazo, plomeo y nivelacion',0.025,'jor',420,1.85],['Tratamiento de juntas y resanes',0.05,'jor',380,1.85],['Limpieza y retiro de desperdicio',0.035,'jor',258,1.82]],
-      equipment:[['Andamio / escalera de trabajo',0.04,'día',120],['Herramienta electrica de corte y fijacion',0.03,'día',150],['Equipo de seguridad personal',0.02,'día',90]] },
-    plafon_suspendido:{ unit:'m²',
-      materials:[
-        ['Panel de yeso (tablaroca) 12.7 mm segun especificacion',1.05,'m²',95,8],
-        ['Canaleta de carga 38 mm cal. 22 con pintura anticorrosiva',0.95,'m',38,5],
-        ['Canal liston para suspension oculta',2.3,'m',30,5],
-        ['Colganteria de alambre galvanizado No. 14',0.12,'kg',48,5],
-        ['Alambre recocido No. 16 para amarres',0.05,'kg',38,3],
-        ['Ancla de agujero tipo Ramset con fulminante',1.5,'pza',9,3],
-        ['Tornilleria S-1" y fijaciones para panel',0.18,'jgo',85,3],
-        ['Perfacinta para tratamiento de juntas',1.5,'m',3,5],
-        ['Compuesto Redimix para juntas y resanes',0.9,'kg',22,5]
-      ],
-      labor:[
-        ['Tablaroquero oficial (suspension oculta hasta 4.00 m)',0.1,'jor',420,1.85],
-        ['Ayudante instalador',0.1,'jor',285,1.82],
-        ['Trazo, nivelacion y balanceado de colganteria',0.03,'jor',420,1.85],
-        ['Tratamiento de juntas: perfacinta y Redimix',0.05,'jor',380,1.85],
-        ['Limpieza y retiro de desperdicio',0.03,'jor',258,1.82]
-      ],
-      equipment:[
-        ['Andamio de trabajo hasta 4.00 m de altura',0.06,'día',120],
-        ['Herramienta electrica: rotomartillo y atornillador',0.04,'día',150],
-        ['Equipo de seguridad personal',0.02,'día',90]
-      ] },
-    sello:{ unit:'ml',
-      materials:[['Sellador elastomerico / silicon anti hongos',0.12,'cartucho',95,5],['Primer o limpiador de superficie',0.03,'L',85,3],['Cinta de respaldo o espuma de poliuretano',0.08,'m',18,5],['Material de limpieza y proteccion',0.03,'jgo',60,0]],
-      labor:[['Oficial aplicador de sellos',0.035,'jor',380,1.85],['Ayudante',0.025,'jor',258,1.82],['Preparacion, limpieza y retiro',0.02,'jor',258,1.82]],
-      equipment:[['Pistola calafateadora y herramienta menor',0.02,'día',60],['Escalera / andamio proporcional',0.02,'día',120]] },
-    marmol_granito:{ unit:'m²',
-      materials:[['Adhesivo flexible para piedra natural',0.22,'bulto',220,5],['Boquilla / resina de junta',0.28,'kg',85,5],['Anclajes, separadores y niveladores',0.12,'jgo',120,3],['Material de limpieza y proteccion',0.05,'jgo',90,0]],
-      labor:[['Colocador especializado en marmol/granito',0.16,'jor',520,1.85],['Ayudante colocador',0.16,'jor',285,1.82],['Trazo, cortes y ajuste de piezas',0.06,'jor',520,1.85],['Limpieza final y proteccion',0.04,'jor',258,1.82]],
-      equipment:[['Cortadora con disco diamantado',0.05,'día',180],['Pulidora / herramienta menor',0.04,'día',150],['Equipo de izaje o apoyo proporcional',0.02,'día',200]] },
-    registro:{ unit:'pza',
-      materials:[['Marco y tapa de registro segun medida especificada',1,'pza',480,3],['Canal / perfil galvanizado para soporte',1.2,'m',38,5],['Tornilleria, taquetes y fijaciones',0.12,'jgo',85,3],['Panel de cierre o placa de ajuste',0.35,'m²',210,5],['Pasta, cinta y resane perimetral',0.15,'kg',42,5],['Material de limpieza y proteccion',0.03,'jgo',60,0]],
-      labor:[['Oficial instalador',0.18,'jor',420,1.85],['Ayudante instalador',0.18,'jor',285,1.82],['Trazo, nivelacion y ajuste de vano',0.04,'jor',420,1.85],['Resane y limpieza final',0.04,'jor',258,1.82]],
-      equipment:[['Herramienta electrica de corte y fijacion',0.05,'día',150],['Escalera / andamio proporcional',0.03,'día',120],['Equipo de seguridad personal',0.02,'día',90]] },
-    estructura_metalica:{ unit:'kg',
-      materials:[['Acero estructural ASTM A500 Fy=46 KSI (incl. desperdicio)',1.05,'kg',46.5,0],['Soldadura E-7018 y consumibles de taller',0.03,'kg',120,0],['Primario anticorrosivo alquidálico de alta resistencia',0.02,'L',110,0],['Grout, anclajes y placas base proporcionales',0.015,'jgo',180,0]],
-      labor:[['Cuadrilla de montadores y soldadores calificados',0.012,'jor',1650,1],['Trazo, plomeo y verificación de montaje',0.004,'jor',900,1],['Habilitado, limpieza y protección de soldadura',0.004,'jor',780,1]],
-      equipment:[['Grúa / equipo de izaje proporcional',0.015,'hr',550],['Soldadora, extensiones y herramienta de montaje',0.018,'hr',180],['Herramienta menor y equipo de protección (EPP)',0.08,'(%MO)',19.8]] },
-    concreto:{ unit:'m³',
-      materials:[['Cemento gris CPC 30R',7,'bulto',225,3],['Arena',0.55,'m³',480,5],['Grava 19 mm',0.75,'m³',520,5],['Agua',0.18,'m³',65,0],['Curacreto / membrana de curado',0.12,'L',68,3],['Clavo y madera auxiliar para niveles',0.015,'jgo',180,5]],
-      labor:[['Oficial albañil',0.22,'jor',380,1.85],['Ayudante / peón',0.22,'jor',258,1.82],['Cabo de obra',0.03,'jor',520,1.85],['Limpieza y curado',0.08,'jor',258,1.82]],
-      equipment:[['Revolvedora 1 saco',0.25,'hr',95],['Vibrador de concreto',0.2,'hr',110],['Herramienta de nivelación',0.05,'día',90]] },
-    acero:{ unit:'kg',
-      materials:[['Acero de refuerzo fy=4200',1.05,'kg',26.5,2],['Alambre recocido cal. 18',0.03,'kg',32,3]],
-      labor:[['Fierrero (oficial)',0.018,'jor',400,1.85],['Ayudante',0.018,'jor',258,1.82]],
-      equipment:[['Cizalla / dobladora',0.01,'día',180]] },
-    pintura:{ unit:'m²',
-      materials:[['Pintura vinílica / acrílica según especificación',0.18,'L',85,5],['Sellador vinílico 5x1 / primario según sustrato',0.06,'L',70,5],['Diluyente / agua limpia para aplicación',0.02,'L',28,0],['Lija fina para preparación de superficie',0.08,'pza',18,0],['Cinta masking para cortes y remates',0.05,'rollo',42,0],['Plástico, cartón y protección de áreas',0.08,'m²',12,0],['Rodillo, brocha y charola proporcional',0.035,'jgo',145,0]],
-      labor:[['Pintor oficial',0.055,'jor',360,1.85],['Ayudante de pintor',0.045,'jor',258,1.82],['Preparación, lavado ligero, lijado y limpieza de superficie',0.025,'jor',258,1.82],['Protección de áreas, cortes y limpieza final',0.02,'jor',258,1.82]],
-      equipment:[['Andamio / escalera de trabajo',0.04,'día',120],['Herramienta de aplicación: extensiones, rodillos y brochas',0.025,'día',75],['Equipo de seguridad personal',0.015,'día',90]] },
-    imper:{ unit:'m²',
-      materials:[['Impermeabilizante acrílico',1.6,'L',78,5],['Membrana de refuerzo',0.3,'m²',22,5],['Sellador / primario',0.15,'L',60,5]],
-      labor:[['Aplicador (oficial)',0.05,'jor',360,1.85],['Ayudante',0.05,'jor',258,1.82]],
-      equipment:[['Equipo de aplicación',0.03,'día',90]] },
-    aplanado:{ unit:'m²',
-      materials:[['Cemento gris CPC 30R',0.09,'bulto',225,3],['Cal hidratada',0.04,'bulto',95,3],['Arena cernida',0.025,'m³',480,5],['Agua',0.012,'m³',65,0],['Sellador / aditivo de adherencia',0.04,'L',85,3],['Materiales misceláneos',0.03,'jgo',120,0],['Plástico y protección de áreas',0.04,'m²',12,5]],
-      labor:[['Albañil (oficial)',0.18,'jor',380,1.85],['Peón',0.18,'jor',258,1.82],['Resanes, cortes y adecuaciones',0.08,'jor',380,1.85],['Limpieza, acarreos y retiro al término',0.06,'jor',258,1.82]],
-      equipment:[['Andamio / regla',0.04,'día',120],['Herramienta menor especializada',0.03,'día',85],['Carretilla y equipo de acarreo',0.02,'día',75]] },
-    piso:{ unit:'m²',
-      materials:[['Loseta cerámica 30x30',1.05,'m²',135,8],['Adhesivo / pegazulejo',0.18,'bulto',135,5],['Boquilla / junteador',0.3,'kg',28,5]],
-      labor:[['Colocador (oficial)',0.12,'jor',400,1.85],['Ayudante',0.12,'jor',258,1.82]],
-      equipment:[['Cortadora de loseta',0.03,'día',150]] },
-    // Nunca incluye loseta/piso nuevo: el alcance de una demolicion es retirar
-    // lo existente, no suministrar material de acabado.
-    demolicion:{ unit:'m²',
-      materials:[['Costales para retiro de escombro',0.4,'pza',12,0]],
-      labor:[['Oficial de demolición',0.1,'jor',380,1.85],['Ayudante',0.1,'jor',258,1.82]],
-      equipment:[['Rotomartillo / equipo de demolición',0.04,'día',180],['Herramienta menor (marro, cincel, pala)',0.04,'día',80],['Equipo de seguridad personal (EPP: careta, guantes, botas)',0.03,'día',90]] },
-    // Manejo interno de material (costales, piezas, sacos) sin camion de
-    // volteo -- ver acarreo_camion para el caso con transporte foraneo.
-    // Nunca incluye el material acarreado como insumo, solo la mano de obra
-    // y el equipo de manejo.
-    acarreo_manual:{ unit:'viaje',
-      materials:[],
-      labor:[['Peón de acarreo',0.05,'jor',258,1.82]],
-      equipment:[['Carretilla / diablito de carga',0.03,'día',70],['Herramienta menor',0.02,'día',50],['Equipo de seguridad personal (EPP: guantes, faja, botas)',0.02,'día',90]] },
-    // Aplicacion de adhesivo/cemento cola como partida independiente: nunca
-    // incluye loseta ni boquilla (ver isAdhesiveOnlyConcept -- si el concepto
-    // menciona el material ceramico, clasifica como "piso" en vez de esto).
-    adhesivo:{ unit:'m²',
-      materials:[['Adhesivo / cemento cola según especificación',0.2,'bulto',135,8],['Agua para mezcla',0.02,'m³',65,0],['Material de limpieza y protección',0.03,'jgo',60,0]],
-      labor:[['Aplicador oficial (llana dentada)',0.06,'jor',400,1.85],['Ayudante',0.06,'jor',258,1.82]],
-      equipment:[['Llana dentada y herramienta de aplicación',0.02,'día',80],['Mezclador / taladro con batidor',0.02,'día',100],['Cubetas graduadas',0.02,'día',40],['Equipo de seguridad personal (EPP: guantes, lentes)',0.02,'día',70]] },
-    // Reacomodo/proteccion de mobiliario existente: nunca incluye materiales
-    // de piso/adhesivo, solo cuadrilla, proteccion y herramienta de maniobra.
-    movimiento_mobiliario:{ unit:'lote',
-      materials:[['Material de protección (cartón, plástico, cinta)',1,'lote',180,0]],
-      labor:[['Cuadrilla de maniobras (oficial + ayudante)',0.15,'jor',700,1.85]],
-      equipment:[['Herramienta menor de maniobra',0.05,'día',60],['Equipo de seguridad personal (EPP: guantes, faja)',0.03,'día',70]] },
-    excavacion:{ unit:'m³',
-      materials:[],
-      labor:[['Peón (excavación manual)',0.6,'jor',258,1.82],['Cabo de obra',0.03,'jor',380,1.85]],
-      equipment:[['Herramienta de excavación (pala, pico, barreta)',0.05,'día',60]] },
-    limpieza_trazo:{ unit:'m²',
-      materials:[['Cal para trazo',0.05,'kg',12,0],['Estacas de madera',0.08,'pza',8,5],['Hilo nylon para trazo',0.02,'rollo',35,0],['Pintura en aerosol para referencias',0.01,'pza',55,0]],
-      labor:[['Cuadrilla de trazo y nivelación (topógrafo/albañil oficial)',0.02,'jor',480,1.85],['Ayudante de trazo',0.02,'jor',258,1.82]],
-      equipment:[['Equipo topográfico básico (nivel, estadal, cinta)',0.015,'día',180],['Herramienta menor',0.02,'día',60]] },
-    desmonte_mecanico:{ unit:'m²',
-      materials:[],
-      labor:[['Operador de maquinaria pesada',0.015,'jor',650,1.85],['Peón de apoyo',0.02,'jor',258,1.82]],
-      equipment:[['Tractor / retroexcavadora para desmonte',0.04,'hr',850],['Combustible y consumibles de equipo (costo horario)',0.04,'hr',180]] },
-    excavacion_mecanica:{ unit:'m³',
-      materials:[],
-      labor:[['Operador de excavadora / retroexcavadora',0.025,'jor',650,1.85],['Peón de apoyo',0.03,'jor',258,1.82]],
-      equipment:[['Excavadora / retroexcavadora',0.06,'hr',950],['Combustible y consumibles de equipo (costo horario)',0.06,'hr',150]] },
-    acarreo_camion:{ unit:'m³',
-      materials:[],
-      labor:[['Operador de camión de volteo',0.02,'jor',480,1.85],['Ayudante de maniobras',0.01,'jor',258,1.82]],
-      equipment:[['Camión de volteo 7 m³ (costo por hora/ciclo, editable segun distancia)',0.08,'hr',680],['Cargador frontal (carga de material, si aplica)',0.015,'hr',780]] },
-    block:{ unit:'m²',
-      materials:[['Block hueco 15x20x40',12.5,'pza',16.5,3],['Cemento gris CPC 30R',0.16,'bulto',225,3],['Arena cernida',0.035,'m³',480,5],['Agua',0.012,'m³',65,0],['Alambre / plomeo / nivelación',0.015,'jgo',90,0],['Materiales misceláneos',0.02,'jgo',120,0]],
-      labor:[['Albañil (oficial)',0.35,'jor',380,1.85],['Peón',0.35,'jor',258,1.82],['Trazo, plomeo y nivelación',0.04,'jor',380,1.85],['Acarreos internos y limpieza',0.05,'jor',258,1.82]],
-      equipment:[['Andamio / equipo básico',0.05,'día',280],['Revolvedora 1 saco',0.04,'hr',95],['Herramienta de corte y ajuste',0.02,'día',90]] },
-    bomba:{ unit:'pza',
-      materials:[['Bomba centrifuga / sumergible segun especificacion',1,'pza',8500,0],['Base o soporte antivibratorio',1,'jgo',420,0],['Valvulas de conexion (check y compuerta)',2,'pza',380,0],['Conexiones electricas, cable y proteccion termica',1,'lote',650,0],['Accesorios de acople e instalacion',1,'jgo',280,3]],
-      labor:[['Instalador electromecanico (oficial)',0.8,'jor',520,1.85],['Ayudante instalador',0.8,'jor',285,1.82],['Pruebas, arranque y ajuste de equipo',0.2,'jor',520,1.85]],
-      equipment:[['Polipasto / equipo de izaje proporcional',0.15,'día',220],['Herramienta electrica y de conexion',0.1,'día',150],['Equipo de seguridad personal',0.05,'día',90]] },
-    tuberia:{ unit:'m',
-      materials:[['Tubo segun diametro y material especificado',1.05,'m',95,3],['Coples y conexiones proporcionales',0.3,'pza',45,3],['Pegamento / soldadura segun material de tuberia',0.06,'lote',85,0],['Soporteria y abrazaderas',0.25,'pza',38,3]],
-      labor:[['Tubero / plomero (oficial)',0.09,'jor',400,1.85],['Ayudante',0.09,'jor',258,1.82],['Pruebas hidrostaticas y ajuste de juntas',0.02,'jor',400,1.85]],
-      equipment:[['Herramienta de corte y union de tuberia',0.03,'día',110],['Equipo de prueba de presion',0.02,'día',150]] },
-    generico:{ unit:'pza',
-      materials:[['Pendiente de cotización: insumo principal no identificado automáticamente',1,'pza',0,0],['Pendiente de cotización: materiales complementarios y de fijación',1,'lote',0,0]],
-      labor:[['Oficial (revisar cuadrilla segun concepto)',0.1,'jor',380,1.85],['Ayudante',0.1,'jor',258,1.82]],
-      equipment:[['Herramienta menor y equipo de apoyo (revisar segun concepto)',0.05,'día',100]] }
-  };
-  const tpl = TPL[tipo];
+  // Clasificacion (motor universal, ver constructionSystems.js): primero
+  // coincidencia exacta con el registro ordenado (mismo comportamiento
+  // documentado que el cascade anterior para los tipos ya conocidos), y si
+  // ninguna entrada coincide, un fallback por solape de palabras contra
+  // disciplinas conocidas antes de caer al generico. secondaryActivities
+  // (ej. "incluye acarreos, cortes y dobleces") se registran aparte y NUNCA
+  // cambian la clasificacion principal.
+  const classification = classifyConstructionSystem(t);
+  const tipo = classification.tipo;
+  const primaryActivity = tipo;
+  const secondaryActivities = extractSecondaryActivities(c);
+  const unmatched = classification.matchType === 'generico';
+  const approximateMatch = classification.matchType === 'score';
+
+  const tpl = SYSTEM_RESOURCES[tipo] || SYSTEM_RESOURCES.generico;
   // El rendimiento de acarreo manual consume la distancia real detectada en
   // el concepto (Fase 3/RC5: "el motor APU debe consumir distancia", no solo
   // almacenarla) -- 10 m, 25 m y 50 m producen coeficientes de mano de obra
@@ -458,12 +306,13 @@ export function makeAPUFromConcept(concept, catalog){
   // por viaje segun si la unidad detectada es volumetrica (m³) o de conteo
   // de piezas/costales (ver HAUL_MODEL arriba).
   let haulDistanceUsed = null;
+  let tplLabor = tpl.labor, tplEquipment = tpl.equipment;
   if(tipo === 'acarreo_manual'){
     const capacidadPorViaje = variables.volumeUnit === 'm³' ? HAUL_MODEL.capacidadPorViajeM3 : HAUL_MODEL.capacidadPorViajePieza;
     haulDistanceUsed = Number.isFinite(variables.distance) && variables.distance > 0 ? variables.distance : HAUL_MODEL.distanciaPorDefectoM;
     const coef = haulLaborCoefficientPerUnit(variables.distance, capacidadPorViaje);
-    tpl.labor = tpl.labor.map((r,i) => i===0 ? [r[0], coef, r[2], r[3], r[4]] : r);
-    tpl.equipment = tpl.equipment.map((r,i) => i===0 ? [r[0], coef, r[2], r[3]] : r);
+    tplLabor = tpl.labor.map((r,i) => i===0 ? [r[0], coef, r[2], r[3], r[4]] : r);
+    tplEquipment = tpl.equipment.map((r,i) => i===0 ? [r[0], coef, r[2], r[3]] : r);
   }
   const normalizeApuRow = (r) => {
     const nr = [...r];
@@ -471,43 +320,152 @@ export function makeAPUFromConcept(concept, catalog){
     nr[2] = normalizeUnitLabel(nr[2]);
     return nr;
   };
-  const useCat = (arr) => arr.map(r=>{
-    const m = matchPrice(r[0],catalog);
-    const nr = normalizeApuRow(r);
-    if(m){
-      nr[3]=m.precio;
-      if(m.unidad) nr[2]=normalizeUnitLabel(m.unidad);
-    }
-    return nr;
-  });
-  const materials = useCat(tpl.materials);
-  const labor = tpl.labor.map(normalizeApuRow);
-  const equipment = tpl.equipment.map(normalizeApuRow);
-  if(/calafate|sellado|junta/.test(t)) materials.push(normalizeApuRow(['Calafateo / sellador de juntas',0.08,'L',95,5]));
-  if(/resane|adecuacion|adecuaci[oó]n|corte|elevaci[oó]n/.test(t)) labor.push(['Cortes, elevaciones, resanes y adecuaciones',0.07,'jor',380,1.85]);
-  if(/retiro|limpieza|termino|t[eé]rmino/.test(t)) labor.push(['Retiro al término, limpieza fina y carga manual',0.06,'jor',258,1.82]);
-  if(/acarreo|acarreos/.test(t)) equipment.push(['Equipo menor para acarreos internos',0.04,'día',110]);
-  const standardClave = 'APU-' + stableHash(c);
-  const TPL_META = {
-    plafon_suspendido:{ confidence:88, sat:'72152400' },
-    pintura:{ confidence:88, sat:'72151300' },
-    lavabo_ptr:{ confidence:98, sat:'72101500' },
-    estructura_metalica:{ confidence:97, sat:'72101700' },
-    bomba:{ confidence:90, sat:'40101700' },
-    tuberia:{ confidence:88, sat:'72101507' },
-    limpieza_trazo:{ confidence:85, sat:'72101505' },
-    desmonte_mecanico:{ confidence:83, sat:'72101503' },
-    excavacion_mecanica:{ confidence:85, sat:'72101503' },
-    acarreo_camion:{ confidence:82, sat:'78101800' },
-    demolicion:{ confidence:82, sat:'72101504' },
-    acarreo_manual:{ confidence:80, sat:'78101800' },
-    adhesivo:{ confidence:85, sat:'72151600' },
-    movimiento_mobiliario:{ confidence:78, sat:'78102200' },
-    generico:{ confidence:45, sat:'72100000' }
+  // Motor de Biblioteca Inteligente: useCat ahora resuelve cada renglon con
+  // findCatalogMatches (clave/sinonimo/similitud ponderada por
+  // descripcion+categoria+unidad, con `tipo` para no cruzar categorias --
+  // ver catalogLookup.js) en vez de matchPrice puro (que solo comparaba
+  // descripcion). matchPrice se conserva SIN CAMBIOS para sus otros
+  // consumidores (apuFlow.js, Excel de precios de Oficina Tecnica). Sin
+  // catalogo o sin match de confianza suficiente, el renglon conserva
+  // exactamente el precio de plantilla de siempre -- regresion cero.
+  // sources[i] queda null cuando el renglon no tuvo match: se usa para
+  // construir materialSources/laborSources/equipmentSources (ver el return
+  // al final), que migrateLegacyApuToV2 (apuSchema.js) usa para marcar SOLO
+  // esos renglones como IMPORTADO/VERIFICADO en vez de todo el APU por igual.
+  const useCat = (arr, tipoFiltro) => {
+    const sources = [];
+    const rows = arr.map(r=>{
+      const found = findCatalogMatches(catalog, { desc: r[0], tipo: tipoFiltro });
+      const nr = normalizeApuRow(r);
+      if(found){
+        nr[3] = found.match.precio;
+        if(found.match.unidad) nr[2] = normalizeUnitLabel(found.match.unidad);
+        sources.push({
+          matchMethod: found.matchMethod,
+          confidence: found.confidence,
+          clave: found.match.clave || null,
+          categoria: found.match.categoria || null,
+          estado: found.match.estado === 'VERIFICADO' ? APU_DATA_STATE.VERIFICADO : APU_DATA_STATE.IMPORTADO,
+          proveedor: found.match.traceability?.sourceDocName || found.match.fuente || null,
+          fecha: found.match.traceability?.validatedAt || found.match.fecha || null,
+          // Rendimiento/cuadrilla de catalogo (solo relevante para mano de
+          // obra -- ver el bloque de re-derivacion mas abajo). null para
+          // materiales/equipo, cuyos renglones de catalogo nunca lo traen.
+          rendimiento: Number(found.match.rendimiento) > 0 ? Number(found.match.rendimiento) : null,
+          cuadrilla: Number(found.match.cuadrilla) > 0 ? Number(found.match.cuadrilla) : null
+        });
+      } else {
+        sources.push(null);
+      }
+      return nr;
+    });
+    return { rows, sources };
   };
-  const meta = { family: APU_FAMILY_LABELS[tipo] || tipo, confidence: TPL_META[tipo]?.confidence ?? 88, sat: TPL_META[tipo]?.sat ?? '72100000' };
+  const materialsResult = useCat(tpl.materials, 'material');
+  const materials = materialsResult.rows;
+  const materialSources = materialsResult.sources;
+  // Mano de obra tambien se resuelve contra catalogo (brecha real confirmada
+  // por auditoria de aceptacion: antes SOLO materiales/equipo lo hacian).
+  // useCat sustituye el SALARIO (indice 3) para TODOS los matches; cuando el
+  // match ademas trae un rendimiento validado, el bloque de abajo (despues
+  // de useCat) recalcula el coeficiente (indice 1) desde ese rendimiento
+  // real -- ver el comentario junto a deriveCrewFromLaborRows mas abajo.
+  const laborResult = useCat(tplLabor, 'labor');
+  const labor = laborResult.rows;
+  const laborSources = laborResult.sources;
+  // Equipo tambien se resuelve contra catalogo (antes NUNCA consultaba
+  // precios reales, solo materiales) -- brecha real confirmada por auditoria.
+  const equipmentResult = useCat(tplEquipment, 'equipment');
+  const equipment = equipmentResult.rows;
+  const equipmentSources = equipmentResult.sources;
+  if(/calafate|sellado|junta/.test(t)){ materials.push(normalizeApuRow(['Calafateo / sellador de juntas',0.08,'L',95,5])); materialSources.push(null); }
+  if(/resane|adecuacion|adecuaci[oó]n|corte|elevaci[oó]n/.test(t)){ labor.push(['Cortes, elevaciones, resanes y adecuaciones',0.07,'jor',380,1.85]); laborSources.push(null); }
+  if(/retiro|limpieza|termino|t[eé]rmino/.test(t)){ labor.push(['Retiro al término, limpieza fina y carga manual',0.06,'jor',258,1.82]); laborSources.push(null); }
+  if(/acarreo|acarreos/.test(t)){ equipment.push(['Equipo menor para acarreos internos',0.04,'día',110]); equipmentSources.push(null); }
+  // Rendimiento REAL de Biblioteca (fase de correccion "Rendimientos
+  // reales"): cuando un renglon de mano de obra tuvo match de catalogo Y ese
+  // match trae un rendimiento validado por un humano (ver toCatalogRow,
+  // libraryReview.js), el rendimiento se aplica DESDE EL ORIGEN -- se
+  // recalcula el COEFICIENTE (jornales/unidad, indice 1 del renglon v1)
+  // ANTES de derivar cuadrilla/rendimiento/jornada, nunca se sobreescribe
+  // cuadrilla/rendimiento despues dejando un coeficiente viejo sin tocar
+  // (eso hubiera sido el "overwrite posterior" que se pidio evitar). El
+  // precio SI cambia respecto al de plantilla -- es intencional: un dato
+  // real de campo debe pesar mas que un rendimiento generico de catalogo
+  // tecnico interno.
+  laborSources.forEach((source, i) => {
+    if(!source?.rendimiento) return;
+    const cuadrillaReal = source.cuadrilla || 1;
+    const coefAnterior = Number(labor[i][1]) || 0;
+    const rendimientoAnterior = coefAnterior > 0 ? 1 / coefAnterior : 0;
+    const nuevoCoef = cuadrillaReal / source.rendimiento;
+    labor[i][1] = nuevoCoef;
+    source.rendimientoOriginal = rendimientoAnterior;
+    source.rendimientoAdoptado = source.rendimiento;
+    source.cuadrillaAdoptada = cuadrillaReal;
+    source.rendimientoMetodo = source.matchMethod;
+    source.rendimientoConfidence = source.confidence;
+    // Acarreo manual: equipo[0] comparte HOY el mismo coeficiente que
+    // labor[0] (ver HAUL_MODEL/haulLaborCoefficientPerUnit arriba) -- es la
+    // UNICA disciplina con una relacion real ya modelada entre rendimiento
+    // de mano de obra y cantidad de equipo. Para el resto de las
+    // disciplinas el equipo de plantilla es POR_UNIDAD_OBRA, independiente
+    // de la cuadrilla -- forzar un acoplamiento ahi seria fabricar una
+    // relacion que no existe en los datos, no corregir una real.
+    if(tipo === 'acarreo_manual' && i === 0 && equipment[0]){
+      equipment[0][1] = nuevoCoef;
+    }
+  });
+  // Cuadrilla + rendimiento explicitos (motor universal, ver crewModel.js):
+  // paralelo a `labor` (mismo indice), reconstruido de la incidencia que
+  // ya traia cada renglon -- el precio resultante no cambia (ver nota en
+  // crewModel.js), lo que cambia es que cuadrilla/rendimiento/jornada
+  // quedan explicitos y con una fuente declarada en vez de opacos. Para los
+  // renglones con rendimiento real de Biblioteca (arriba), este resultado
+  // se REEMPLAZA COMPLETO mas abajo -- crewModel.js asume cuadrilla=1
+  // siempre, y aqui la cuadrilla puede ser la real declarada en catalogo.
+  const laborDetails = deriveCrewFromLaborRows(labor, tipo);
+  laborSources.forEach((source, i) => {
+    if(!source?.rendimiento) return;
+    laborDetails[i] = {
+      cuadrilla: source.cuadrillaAdoptada,
+      rendimiento: source.rendimientoAdoptado,
+      jornada: 8,
+      rendimientoFuente: RENDIMIENTO_FUENTE.BIBLIOTECA,
+      yieldConfidence: Math.round(Math.min(0.95, source.rendimientoConfidence) * 100)
+    };
+  });
+  // EPP dinamico (Prioridad 2, fase de correccion): resuelto por riesgo
+  // detectado en el concepto, nunca hardcodeado por disciplina -- ver
+  // eppResolver.js. Prorrateado con el MISMO rendimiento diario/cuadrilla ya
+  // derivados arriba para mano de obra (real de Biblioteca cuando existe,
+  // de plantilla si no) -- ninguna cifra nueva. Sin precio real de catalogo
+  // o sin rendimiento valido, el renglon queda REQUIERE_VALIDACION (ver
+  // eppResolver.js), nunca con un precio fabricado.
+  const { rows: seguridad, risks: eppRisks } = resolveEppRows({
+    concept: c, tipo, catalog,
+    rendimientoDiario: laborDetails[0]?.rendimiento || 0,
+    cuadrilla: laborDetails[0]?.cuadrilla || 1
+  });
+  const standardClave = 'APU-' + stableHash(c);
+  const meta = SYSTEM_META[tipo] || SYSTEM_META.generico;
   const aiNotes = [];
-  if(unmatched) aiNotes.push('APU INCOMPLETO: no se identifico con precision la familia tecnica del concepto. Los materiales marcados "Pendiente de cotización" tienen precio $0.00 y no deben tomarse como precio final; captura precios reales antes de exportar.');
+  // Concepto desconocido (§8 del motor universal): NUNCA "ERROR" plano --
+  // se explica, un renglon por causa, exactamente que falta (sistema no
+  // identificado / recursos pendientes / rendimiento pendiente / precios
+  // pendientes), para que quede accionable en vez de solo "incompleto".
+  if(unmatched){
+    aiNotes.push('Sistema constructivo no identificado con suficiente confianza: ningun sistema conocido ni una similitud minima coincidieron con este concepto.');
+    aiNotes.push('Recursos pendientes: los materiales marcados "Pendiente de cotización" (precio $0.00) son un marcador, no una propuesta tecnica -- especifica el material/elemento principal del concepto.');
+    aiNotes.push('Rendimiento pendiente: la cuadrilla y el rendimiento de este APU son de relleno (plantilla generica, confianza muy baja), no corresponden a ninguna disciplina real -- deben reemplazarse antes de aprobar.');
+    aiNotes.push('Precios pendientes: ningun precio de este APU tiene evidencia de mercado ni fuente identificable; captura precios reales antes de exportar.');
+  }
+  // Concepto desconocido resuelto por similitud (§6 del motor universal):
+  // se compuso una matriz de la disciplina MAS CERCANA por solape de
+  // palabras, nunca por coincidencia exacta -- se marca explicitamente para
+  // que quede claro que es una hipotesis, no una clasificacion certera.
+  if(approximateMatch) aiNotes.push(`Clasificacion aproximada por similitud con "${meta.discipline}" (sin coincidencia exacta de ningun sistema constructivo conocido) -- valida manualmente los recursos antes de aprobar.`);
+  if(secondaryActivities.length) aiNotes.push(`Actividades incluidas detectadas en el texto del concepto: ${secondaryActivities.join(', ')}. Ya consideradas dentro del alcance de "${meta.discipline}", no se duplican como renglones aparte.`);
   // Alcance ambiguo entre "colocacion" y "suministro y colocacion" (Fase 4,
   // caso 6): en vez de asumir en silencio que el material lo pone el
   // contratista, se deja explicita la hipotesis usada para que quede
@@ -520,12 +478,34 @@ export function makeAPUFromConcept(concept, catalog){
   }
   return {
     id:standardClave, clave:standardClave, concept:cleanText(c), unit:normalizeUnitLabel(tpl.unit), templateGenerated:true,
-    materials, labor, equipment,
+    materials, labor, equipment, laborDetails,
+    // Procedencia por renglon de catalogo (Biblioteca Inteligente): paralelo
+    // a materials/labor/equipment (mismo indice), null cuando el renglon uso
+    // el precio de plantilla. Ver migrateLegacyApuToV2 (apuSchema.js) para
+    // como se consume al migrar a v2.
+    materialSources, laborSources, equipmentSources,
+    // EPP dinamico (Prioridad 2): renglones de seguridad ya en forma v2
+    // (nunca existio un formato v1 de arreglo para seguridad -- ver
+    // eppResolver.js). eppRisks es solo informativo (que riesgos se
+    // detectaron), no se usa para calculo.
+    seguridad, eppRisks,
+    // Plantilla nunca declara consumibles propios (no existian como
+    // categoria en el catalogo tecnico ZOEMEC): nace vacio, nunca se
+    // reparte una fraccion de materials hacia aqui.
+    consumables: [],
+    technicalJustifications: composeTemplateJustifications({ family: meta.discipline, materials, labor, equipment, herramienta: APU_STANDARD_FACTORS.herramienta, laborDetails }),
     herramienta:APU_STANDARD_FACTORS.herramienta, indCampo:APU_STANDARD_FACTORS.indCampo, indOficina:APU_STANDARD_FACTORS.indOficina, finance:APU_STANDARD_FACTORS.finance, utility:APU_STANDARD_FACTORS.utility, cargos:APU_STANDARD_FACTORS.cargos, iva:APU_STANDARD_FACTORS.iva,
-    family: meta.family,
-    confidence: meta.confidence,
+    family: meta.discipline,
+    confidence: approximateMatch ? Math.max(30, Math.round(meta.confidence * 0.6)) : meta.confidence,
     sat: meta.sat,
     incomplete: unmatched,
+    // Modelo semantico del concepto (motor universal): actividad principal
+    // detectada (mismo `tipo` que ya decidia los recursos), actividades
+    // incluidas declaradas explicitamente en el texto, y como se llego a la
+    // clasificacion (match exacto / aproximado por similitud / generico).
+    primaryActivity,
+    secondaryActivities,
+    classificationMatch: classification.matchType,
     aiNotes,
     // Variables estructuradas del concepto (RC5, ver conceptVariablesFromParsed
     // en excelImport.js): nunca obligatorias, se preservan tal cual hasta v2

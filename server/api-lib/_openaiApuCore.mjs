@@ -214,9 +214,19 @@ Devuelve SOLO JSON valido con esta forma:
   "equipmentDetails": [{ "integracion": "POR_UNIDAD_OBRA|POR_JORNADA|POR_LOTE|AMORTIZABLE", "rendimientoDiario": numeroOnull, "vidaUtilDias": numeroOnull, "factorUso": numeroOnull, "modalidad": "renta_jornada|costo_horario|costo_diario|costo_lote|propio_contratista" }],
   "seguridad": [["EPP o proteccion", cantidad, "unidad", precioUnitario]],
   "seguridadDetails": [{ "integracion": "AMORTIZABLE para EPP reutilizable (casco, guantes de trabajo, botas, lentes, arnes, careta, proteccion auditiva -- el default para casi todo EPP) o POR_UNIDAD_OBRA SOLO para EPP desechable de un solo uso declarado como tal", "rendimientoDiario": numeroOnull, "vidaUtilDias": numeroOnull, "factorReposicion": numeroOnull }],
+  "consumables": [["descripcion completa del consumible", cantidad, "unidad", precioUnitario, mermaPorcentaje]],
+  "consumableSources": [{ "especificacion": "texto tecnico o null", "proveedor": "nombre real solo si viene del catalogo, si no null", "region": "region o null", "integracion": "POR_UNIDAD_OBRA o POR_LOTE", "technicalReason": "por que este consumible especifico aplica a este procedimiento" }],
   "procedimientoConstructivo": ["paso 1", "paso 2", "..."],
   "controlCalidad": [{ "especificacion": "texto", "criterio": "texto verificable" }],
   "criterioMedicion": { "incluye": ["que incluye el precio"], "excluye": ["que no incluye"] },
+  "technicalJustifications": {
+    "materials": "por que estos materiales y estas cantidades para este concepto especifico",
+    "labor": "por que esta cuadrilla y este rendimiento para este concepto especifico",
+    "equipment": "por que este equipo/maquinaria para este concepto especifico",
+    "smallTools": "por que esta herramienta menor para este concepto especifico",
+    "consumables": "por que estos consumibles, o 'NO APLICA -- no se identificaron consumibles independientes para este procedimiento.' si consumables va vacio",
+    "safety": "por que este EPP/seguridad para el riesgo especifico de este concepto"
+  },
   "herramienta": ${APU_DEFAULT_FACTORS.herramienta},
   "indCampo": ${APU_DEFAULT_FACTORS.indCampo},
   "indOficina": ${APU_DEFAULT_FACTORS.indOficina},
@@ -235,6 +245,17 @@ Reglas obligatorias sobre INTEGRACION DE RECURSOS (obligatorio, no lo omitas):
 - AMORTIZABLE: para TODO EPP REUTILIZABLE (casco, GUANTES de trabajo, botas, lentes, arnes, careta, proteccion auditiva, chaleco reflejante -- practicamente todo el EPP estandar de una cuadrilla es reutilizable) y equipo propiedad del contratista. Ejemplo INCORRECTO: "1 casco = $250" convertido en $250 por cada m² de una obra de 613.76 m², o "2 pares de guantes = $71/par" convertido en $142 por cada METRO de una obra de 80 m. Ejemplo CORRECTO: integracion:"AMORTIZABLE", cantidad:numeroDeTrabajadores, vidaUtilDias:180 (vida util tipica de un casco/guantes/botas en obra), rendimientoDiario:igualQueLaCuadrillaQueLoUsa, factorReposicion:1. El motor amortiza: (precio x trabajadores x factorReposicion) / vidaUtilDias / rendimientoDiario. Usa POR_UNIDAD_OBRA en seguridad SOLO para EPP genuinamente desechable/de un solo uso declarado como tal (ej. mascarilla desechable, guante de nitrilo desechable para manejo de quimicos, cubrebocas) -- nunca para casco/guantes de trabajo/botas/lentes/arnes/proteccion auditiva estandar, esos SIEMPRE son AMORTIZABLE salvo que el concepto explicitamente diga que son de un solo uso.
 - POR_LOTE: costo fijo de la obra completa (ej. "materiales de proteccion temporal del area", comprados una sola vez). El motor lo reparte entre la cantidad contractual total, no lo repitas tu por unidad.
 - Nunca inventes numeros de relleno para rendimientoDiario/vidaUtilDias/factorUso/factorReposicion: si no tienes una estimacion razonable, usa el mismo rendimientoDiario que declaraste en laborDetails para la cuadrilla que usa ese recurso (mismo ciclo de produccion).
+
+Reglas obligatorias sobre CONSUMIBLES Y AUXILIARES (obligatorio):
+- "consumables" son insumos que se GASTAN durante el procedimiento pero NO quedan integrados en la obra (a diferencia de "materials"): discos de corte, brocas, lijas, electrodos, costales, cinta, cuerda, combustible, lubricantes, u otros consumibles especificos de ESTE procedimiento.
+- Genera consumibles UNICAMENTE cuando el procedimiento real de este concepto los requiera. PROHIBIDO inventar consumibles genericos o aplicar un porcentaje de relleno "para no dejar la seccion vacia".
+- Si el concepto genuinamente no requiere consumibles independientes (ej. ya estan cubiertos dentro de materials/equipment), deja "consumables": [] y explica por que en technicalJustifications.consumables con el texto "NO APLICA -- no se identificaron consumibles independientes para este procedimiento." -- eso es preferible a inventar un costo.
+- "consumableSources" debe tener EXACTAMENTE el mismo numero de elementos que "consumables", en el mismo orden.
+
+Reglas obligatorias sobre JUSTIFICACION TECNICA (obligatorio, no lo omitas):
+- "technicalJustifications" es OBLIGATORIO y debe tener las 6 claves (materials, labor, equipment, smallTools, consumables, safety) siempre presentes, cada una con 1 a 3 frases.
+- Cada texto debe explicar el POR QUE de lo que declaraste en esa categoria PARA ESTE CONCEPTO EXACTO (no una explicacion generica que serviria para cualquier concepto): por que esos materiales/cantidades, por que esa cuadrilla/rendimiento, por que ese equipo, por que esa herramienta menor, por que esos consumibles (o su ausencia), por que ese EPP para el riesgo especifico de esta actividad.
+- Nunca dejes un texto vacio ni un texto de relleno ("segun normativa aplicable" sin mas): si de verdad no hay nada que justificar en una categoria (ej. equipment vacio), dilo explicitamente ("No se requiere equipo/maquinaria: la actividad es enteramente manual.").
 
 Reglas obligatorias sobre MANO DE OBRA (obligatorio):
 - Agrupa TODA la mano de obra de un mismo ciclo de produccion en una sola cuadrilla (labor con 1-2 renglones: oficial + ayudante, o un tercero solo si es un oficio realmente distinto como electricista/soldador). El "rendimiento" declarado en laborDetails debe ser el de la cuadrilla completa terminando el ciclo, no el de una sub-tarea aislada.
@@ -256,7 +277,7 @@ Reglas obligatorias:
 - "criterioMedicion" debe reflejar que unidad se mide y que excluye explicitamente (acabados adicionales, materiales no listados, etc.).
 - "confidenceBreakdown": nunca declares 100 salvo certeza absoluta; si el concepto es ambiguo o generico, baja "cantidades" y "composicion" en vez de subir el numero artificialmente.
 - Cada descripcion debe ser completa y profesional; evita textos cortados.
-- Materiales: 3 a 8 renglones. Mano de obra: 1 a 5 renglones. Equipo: 1 a 5 renglones.
+- Materiales: 3 a 8 renglones. Mano de obra: 1 a 5 renglones. Equipo: 1 a 5 renglones. Consumibles: 0 a 5 renglones (0 es valido y esperado cuando no aplica).
 - En notes explica rendimientos asumidos, alcance incluido y cualquier supuesto tecnico auditable, uno por elemento.
 - No inventes precios extravagantes; usa mercado mexicano razonable si no hay catalogo.
 - El resultado debe ser editable, auditable y comparable con NeoData/OPUS.`;

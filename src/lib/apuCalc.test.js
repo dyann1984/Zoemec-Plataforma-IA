@@ -249,10 +249,11 @@ test('calcEquipmentRow reproduce rowImporte("equipment", ...) para valores equiv
   assert.ok(close(importe, 40));
 });
 
-test('calcHerramientaDetalleRow calcula cantidad x costo x %depreciacion', () => {
+test('calcHerramientaDetalleRow calcula cantidad x valorAdquisicion x %depreciacion', () => {
   // Caso de la matriz de referencia: HM-001 Cuchara de albañil, cantidad 0.10,
-  // costo de reposicion $185, 10% de depreciacion -> importe $1.85.
-  const importe = calcHerramientaDetalleRow({ cantidad: 0.1, costo: 185, pctDepreciacion: 10 });
+  // valor de adquisicion $185, 10% de depreciacion -> importe $1.85. Nombres
+  // de campo alineados con el editor/XLSX/PDF (ver nota en apuCalc.js).
+  const importe = calcHerramientaDetalleRow({ cantidad: 0.1, valorAdquisicion: 185, depreciacionPct: 10 });
   assert.ok(close(importe, 1.85));
 });
 
@@ -281,7 +282,7 @@ test('calcAPUv2 suma seguridad al costo directo (no existia en v1)', () => {
 test('calcAPUv2 con herramientaMenor en modo detalle suma los renglones en vez del %', () => {
   const apu = {
     labor: [{ cantidad: 1, salarioBase: 100, fsr: 1 }],
-    herramientaMenor: { modo: 'detalle', detalle: [{ cantidad: 1, costo: 50, pctDepreciacion: 10 }] },
+    herramientaMenor: { modo: 'detalle', detalle: [{ cantidad: 1, valorAdquisicion: 50, depreciacionPct: 10 }] },
     factores: { indCampo: 0, indOficina: 0, finance: 0, utility: 0, cargos: 0, iva: 0 }
   };
   const t = calcAPUv2(apu);

@@ -46,14 +46,29 @@ export const REVISION_STATUS_LABEL = Object.freeze({
    como correcto.
    VALIDADO: un humano lo reviso y confirmo explicitamente (applyRendimientoDecision) --
    unico nivel que incrementa la dimension "rendimientos" de la confianza. */
+// PLANTILLA (motor universal de APUs): rendimiento reconstruido a partir de
+// la incidencia ya presente en el catalogo tecnico ZOEMEC (ver
+// src/domain/crewModel.js), cuando NO hay una matriz real de la Biblioteca
+// ZOEMEC que lo respalde -- distinto de HISTORICO, que si viene de una
+// matriz real (ver LIBRARY_CALIBRATED_TIPOS en crewModel.js).
 export const RENDIMIENTO_FUENTE = Object.freeze({
-  IA: 'IA', HISTORICO: 'HISTORICO', USUARIO: 'USUARIO', VALIDADO: 'VALIDADO'
+  IA: 'IA', HISTORICO: 'HISTORICO', USUARIO: 'USUARIO', VALIDADO: 'VALIDADO', PLANTILLA: 'PLANTILLA',
+  // BIBLIOTECA (fase de correccion "Rendimientos reales"): un rendimiento
+  // validado por un humano en la Biblioteca ZOEMEC (ver toCatalogRow,
+  // libraryReview.js, y su aplicacion en apuGeneration.js#makeAPUFromConcept)
+  // -- distinto de HISTORICO (matriz real precargada por el equipo ZOEMEC) y
+  // de VALIDADO (un humano lo confirmo DENTRO de este APU especifico,
+  // applyRendimientoDecision). Aqui el dato viene de un documento de
+  // Biblioteca ya revisado, aplicado automaticamente al generar.
+  BIBLIOTECA: 'BIBLIOTECA'
 });
 export const RENDIMIENTO_FUENTE_LABEL = Object.freeze({
   [RENDIMIENTO_FUENTE.IA]: 'Rendimiento IA',
   [RENDIMIENTO_FUENTE.HISTORICO]: 'Rendimiento histórico',
   [RENDIMIENTO_FUENTE.USUARIO]: 'Rendimiento usuario',
-  [RENDIMIENTO_FUENTE.VALIDADO]: 'Rendimiento validado'
+  [RENDIMIENTO_FUENTE.VALIDADO]: 'Rendimiento validado',
+  [RENDIMIENTO_FUENTE.PLANTILLA]: 'Rendimiento de plantilla técnica ZOEMEC',
+  [RENDIMIENTO_FUENTE.BIBLIOTECA]: 'Rendimiento de Biblioteca ZOEMEC (validado)'
 });
 
 /* Categorias cerradas para clasificar la causa dominante de una desviacion

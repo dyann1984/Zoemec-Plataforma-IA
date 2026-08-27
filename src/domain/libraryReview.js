@@ -34,15 +34,51 @@ export function applyInsumoReview(entry, { state, validatedBy = null, validatedA
   };
 }
 
-/* Unico puente real hacia el catalogo/APU: exactamente el shape {desc,
-   unidad, precio} que ya consume matchPrice() (src/lib/excelImport.js) y
-   domain/apuGeneration.js -- sin motor nuevo. Regresa null si el insumo no
-   esta VALIDADO: es la barrera dura que impide que un PROPUESTO o RECHAZADO
-   se cuele al catalogo. */
+/* Puente real hacia el catalogo/APU: shape base {desc, unidad, precio} que ya
+   consume matchPrice() (src/lib/excelImport.js) y domain/apuGeneration.js --
+   sin motor nuevo. Regresa null si el insumo no esta VALIDADO: es la barrera
+   dura que impide que un PROPUESTO o RECHAZADO se cuele al catalogo.
+
+   Campos adicionales (Fase Biblioteca Inteligente): clave/categoria/
+   sinonimos se agregan SOLO cuando el insumo ya los trae -- nunca se
+   inventan aqui. `estado: 'BIBLIOTECA'` es la clasificacion de procedencia
+   de precio del punto 12 del spec del usuario (distinta de APU_DATA_STATE
+   de apuSchema.js, que describe el renglon final del APU; el mapeo entre
+   ambas ocurre en apuGeneration.js al construir materialSources/
+   equipmentSources).
+
+   `tipo` (material|labor|equipment|epp, opcional): encontrado durante la
+   auditoria de aceptacion -- sin esto, un catalogo plano no distingue una
+   tarifa de mano de obra de un precio de material, y una coincidencia por
+   similitud de texto podria cruzar categorias por accidente. Se propaga
+   SOLO si el insumo ya lo trae (misma regla de "nunca inventar" que clave/
+   categoria/sinonimos); un insumo sin tipo sigue funcionando exactamente
+   igual que antes (matching sin filtro de categoria).
+
+   `rendimiento`/`rendimientoUnidad` (opcional): cierra el hueco real
+   encontrado en la misma auditoria -- el catalogo no tenia forma de
+   representar un rendimiento validado para reutilizar en mano de obra
+   (distinto de un precio). Se usa en apuGeneration.js para que un renglon
+   de mano de obra con match de catalogo tambien pueda adoptar un
+   rendimiento real, no solo un precio. */
 export function toCatalogRow(insumo, review){
   if(!review || review.state !== INSUMO_STATES.VALIDADO) return null;
   if(!insumo || !insumo.desc || !(Number(insumo.precio) > 0)) return null;
-  return { desc: insumo.desc, unidad: insumo.unidad || '', precio: Number(insumo.precio) };
+  const row = { desc: insumo.desc, unidad: insumo.unidad || '', precio: Number(insumo.precio), estado: 'BIBLIOTECA' };
+  if(insumo.clave) row.clave = String(insumo.clave);
+  if(insumo.categoria) row.categoria = String(insumo.categoria);
+  if(Array.isArray(insumo.sinonimos) && insumo.sinonimos.length) row.sinonimos = insumo.sinonimos.map(String);
+  if(insumo.tipo) row.tipo = String(insumo.tipo);
+  if(Number(insumo.rendimiento) > 0){
+    row.rendimiento = Number(insumo.rendimiento);
+    if(insumo.rendimientoUnidad) row.rendimientoUnidad = String(insumo.rendimientoUnidad);
+    // Cuadrilla real asociada a ese rendimiento (opcional): sin ella,
+    // apuGeneration.js asume cuadrilla=1 (mismo criterio conservador que
+    // crewModel.js para el resto de las plantillas -- nunca fabrica un
+    // tamaño de cuadrilla que la biblioteca no declaro).
+    if(Number(insumo.cuadrilla) > 0) row.cuadrilla = Number(insumo.cuadrilla);
+  }
+  return row;
 }
 
 /* Filtra un documento de Biblioteca completo (contentInsumos + insumosReview
@@ -71,4 +107,45 @@ export function extractValidatedCatalogRows(doc){
     });
   });
   return rows;
+}
+
+/* Agrega extractValidatedCatalogRows sobre TODOS los documentos de Biblioteca
+   visibles (no solo el que el usuario abrio manualmente) -- cierra el punto
+   1 de la Biblioteca Inteligente del spec del usuario ("consultar biblioteca
+   local" antes de generar, no solo cuando alguien da clic en un documento a
+   la vez). Documentos sin contentInsumos/insumosReview simplemente no
+   aportan filas (no es un error). */
+export function extractAllValidatedCatalogRows(docs){
+  return (Array.isArray(docs) ? docs : []).flatMap(doc => extractValidatedCatalogRows(doc));
+}
+
+function catalogDedupeKey(row){
+  if(row?.clave) return `clave:${String(row.clave).trim().toLowerCase()}`;
+  const desc = String(row?.desc || '').trim().toLowerCase();
+  const unidad = String(row?.unidad || '').trim().toLowerCase();
+  return `du:${desc}|${unidad}`;
+}
+
+/* Fusiona newRows dentro de existingCatalog sin duplicados y SIN perder
+   trazabilidad (bug real encontrado en main.jsx: la fusion anterior hacia
+   `.map(({traceability,...row})=>row)` y tiraba fuente/fecha/validador antes
+   de guardar el catalogo). Dedup por clave cuando ambas filas la tienen; si
+   no, por descripcion+unidad normalizadas -- una coincidencia mas fuerte que
+   el Set-por-string-exacto anterior, pero deliberadamente simple (no difusa):
+   una descripcion con redaccion distinta a proposito no se fusiona sola,
+   queda para revision humana en vez de adivinar. Si una fila nueva coincide
+   con una existente, la nueva sustituye (dato mas reciente valida). */
+export function mergeCatalogRows(existingCatalog, newRows){
+  const merged = [...(Array.isArray(existingCatalog) ? existingCatalog : [])];
+  const indexByKey = new Map(merged.map((row, i) => [catalogDedupeKey(row), i]));
+  for(const row of (Array.isArray(newRows) ? newRows : [])){
+    const key = catalogDedupeKey(row);
+    if(indexByKey.has(key)){
+      merged[indexByKey.get(key)] = row;
+    } else {
+      indexByKey.set(key, merged.length);
+      merged.push(row);
+    }
+  }
+  return merged;
 }

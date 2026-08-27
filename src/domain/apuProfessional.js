@@ -1,5 +1,6 @@
-import { calcAPUv2, findApuNumericIssuesV2, calcMaterialRow, calcLaborRow, calcEquipmentRow, calcSeguridadRow } from '../lib/apuCalc.js';
+import { calcAPUv2, findApuNumericIssuesV2, calcMaterialRow, calcLaborRow, calcEquipmentRow, calcConsumableRow, calcSeguridadRow } from '../lib/apuCalc.js';
 import { validateApuSchemaV2, APU_DATA_STATE } from './apuSchema.js';
+import { runTechnicalQualityRules } from './technicalQualityRules.js';
 
 export const PRICE_SOURCE_TYPE = Object.freeze({
   VERIFIED: 'VERIFIED', HISTORICAL: 'HISTORICAL', USER_PROVIDED: 'USER PROVIDED',
@@ -47,11 +48,11 @@ export function makePriceRecord(input = {}){
   };
 }
 
-const ROW_COST_FN = { materials: calcMaterialRow, labor: calcLaborRow, equipment: calcEquipmentRow, seguridad: calcSeguridadRow };
+const ROW_COST_FN = { materials: calcMaterialRow, labor: calcLaborRow, equipment: calcEquipmentRow, consumables: calcConsumableRow, seguridad: calcSeguridadRow };
 
 function sourceRows(apu){
   const ctx = { cantidadContractual: num(apu.cantidadObra) };
-  return ['materials','labor','equipment','seguridad'].flatMap(kind =>
+  return ['materials','labor','equipment','consumables','seguridad'].flatMap(kind =>
     (Array.isArray(apu?.[kind]) ? apu[kind] : []).map(row => ({
       kind, row, source: row.fuente || {},
       costoRenglon: Math.max(0, num(ROW_COST_FN[kind]?.(row, ctx)))
@@ -129,9 +130,50 @@ export function calculateAPUConfidence(apu = {}, options = {}){
   const rows = sourceRows(apu);
   const count = rows.length || 1;
   const labor = Array.isArray(apu.labor) ? apu.labor : [];
-  const yieldCoverage = labor.length ? labor.filter(r => num(r.rendimiento) > 0 || num(r.cantidad) > 0).length / labor.length : 0;
+  const materialsRows = Array.isArray(apu.materials) ? apu.materials : [];
+  // Cobertura de rendimiento (motor universal): cuando un renglon declara
+  // yieldConfidence (ver crewModel.js -- la ruta determinista y la de IA ya
+  // lo hacen), se pesa por esa confianza real en vez de un binario "existe
+  // rendimiento = 100%". Un rendimiento de relleno (fallback generico,
+  // yieldConfidence muy bajo) YA NO cuenta como si fuera tan confiable como
+  // uno calibrado contra la Biblioteca ZOEMEC. Renglones sin yieldConfidence
+  // (APUs anteriores a este cambio, o capturados a mano) conservan el
+  // comportamiento binario de siempre -- nunca se penaliza retroactivamente
+  // un dato que nunca declaro su procedencia.
+  const yieldCoverage = labor.length
+    ? labor.reduce((s, r) => s + (r.yieldConfidence != null ? clamp(r.yieldConfidence) : (num(r.rendimiento) > 0 || num(r.cantidad) > 0 ? 100 : 0)), 0) / labor.length / 100
+    : 0;
   const compositionChecks = [apu.materials?.length, apu.labor?.length, apu.procedimientoConstructivo?.length, apu.controlCalidad?.length, apu.criterioMedicion?.unidadMedicion].filter(Boolean).length;
   const pendingValidation = rows.filter(({source}) => source.estado === APU_DATA_STATE.REQUIERE_VALIDACION).length;
+  // Motor universal de APUs: confianza de 8 dimensiones (comprension del
+  // concepto, clasificacion, materiales, mano de obra, rendimiento, precio,
+  // evidencia de mercado, especificaciones) en vez de un numero fijo por
+  // tipo (ver constructionSystems.js -- antes TPL_META traia confidence:45
+  // fijo para "generico" sin relacion con la calidad real del recurso).
+  // "Precio" y "Rendimiento" ya existian como dimensions.precios/rendimientos
+  // (se reusan, no se duplican); las 6 restantes son nuevas.
+  const qaIssues = runTechnicalQualityRules(apu);
+  const hasCriticalQaFailure = qaIssues.some(i => i.severity === 'error');
+  const comprensionConceptoPct = apu.classificationMatch === 'exact' ? 95
+    : apu.classificationMatch === 'score' ? 55
+    : apu.classificationMatch === 'generico' ? 20
+    : text(apu.concept).length > 10 ? 75 : 30; // sin clasificacion conocida (ej. IA): neutral, ni penaliza ni premia
+  const clasificacionPct = apu.classificationMatch === 'exact' ? 100
+    : apu.classificationMatch === 'score' ? 50
+    : apu.classificationMatch === 'generico' ? 0
+    : 70;
+  const materialesPct = materialsRows.length
+    ? clamp(materialsRows.filter(r => text(r.fuente?.proveedor || r.fuente?.sourceName) || (Array.isArray(r.priceRecord?.references) && r.priceRecord.references.length)).length / materialsRows.length * 100)
+    : (apu.primaryActivity ? 60 : 0); // disciplina sin materiales propios (ej. acarreo manual): neutral, no es un defecto
+  const manoDeObraPct = labor.length
+    ? clamp(labor.filter(r => text(r.descripcion) && (num(r.cuadrilla) > 0 || num(r.cantidad) > 0)).length / labor.length * 100)
+    : 0;
+  const especificacionesFields = ['distance','volume','pieceCount','dimensions','thickness','depth','height','diameter','weight','strength','materialGrade','dosage'];
+  const especificacionesCount = especificacionesFields.filter(f => {
+    const v = apu.variables?.[f];
+    return Array.isArray(v) ? v.length > 0 : v != null;
+  }).length;
+  const especificacionesPct = clamp(especificacionesCount / especificacionesFields.length * 100);
   // Bono por rendimiento validado por un humano (ver src/domain/apuReview.js
   // #applyRendimientoDecision): NUNCA resta -- un renglon sin rendimientoFuente
   // (todo el historial previo a esta fase) se comporta exactamente igual que
@@ -151,9 +193,23 @@ export function calculateAPUConfidence(apu = {}, options = {}){
     precios: Math.round(pricesDimension(rows, now)),
     rendimientos: Math.round(clamp(yieldCoverage * 100 + rendimientoValidadoBonus)),
     cantidades: Math.round(clamp(rows.length ? rows.filter(({row}) => num(row.consumo ?? row.cantidad ?? row.cuadrilla) > 0).length / count * 100 : 0)),
-    composicion: Math.round(compositionChecks / 5 * 100)
+    composicion: Math.round(compositionChecks / 5 * 100),
+    // 8 dimensiones (motor universal): las 4 de arriba ya alimentan `score`
+    // (sin cambios, para no alterar APUs ya calculados); las 6 siguientes
+    // son informativas, se muestran pero no entran a la formula de `score`.
+    comprensionConcepto: Math.round(comprensionConceptoPct),
+    clasificacion: Math.round(clasificacionPct),
+    materiales: Math.round(materialesPct),
+    manoDeObra: Math.round(manoDeObraPct),
+    evidenciaMercado: Math.round(coberturaFuentesPct),
+    especificaciones: Math.round(especificacionesPct)
   };
-  const score = Math.round(dimensions.precios * .40 + dimensions.rendimientos * .20 + dimensions.cantidades * .20 + dimensions.composicion * .20);
+  let score = Math.round(dimensions.precios * .40 + dimensions.rendimientos * .20 + dimensions.cantidades * .20 + dimensions.composicion * .20);
+  // Una falla critica de QA tecnico (ej. "acero sin acero") limita el techo
+  // de la confianza global: nunca se promedia con el resto de dimensiones
+  // como si el problema no existiera (spec: "Una falla crítica debe limitar
+  // la confianza global").
+  if(hasCriticalQaFailure) score = Math.min(score, 40);
   return { score, level: score >= 85 ? 'ALTA' : score >= 65 ? 'MEDIA' : 'BAJA', dimensions,
     risks: score >= 85 ? 'BAJOS' : score >= 65 ? 'MEDIOS' : 'ALTOS', pendingValidation,
     // Presentacion re-etiquetada (Fase 8 requisito 8): el mismo puntaje se
@@ -171,7 +227,11 @@ export function calculateAPUConfidence(apu = {}, options = {}){
 
 export function validateAPU(apu = {}, options = {}){
   const totals = options.totals || calcAPUv2(apu);
-  const issues = [...validateApuSchemaV2(apu), ...findApuNumericIssuesV2(apu, totals)];
+  // runTechnicalQualityRules (motor universal, ver technicalQualityRules.js):
+  // reglas semanticas por disciplina ("acero sin acero" y equivalentes),
+  // derivadas del registro extensible de sistemas constructivos -- se omite
+  // en silencio (arreglo vacio) para un APU sin primaryActivity conocido.
+  const issues = [...validateApuSchemaV2(apu), ...findApuNumericIssuesV2(apu, totals), ...runTechnicalQualityRules(apu)];
   const now = options.now ? new Date(options.now) : new Date();
   sourceRows(apu).forEach(({kind,row,source}, index) => {
     if(!text(source.proveedor || source.sourceName)) issues.push({ code:'price_without_source', kind, index, severity:'warning', message:`${row.clave || kind} no tiene fuente identificable.` });
@@ -183,6 +243,12 @@ export function validateAPU(apu = {}, options = {}){
   if(!(apu.labor || []).length) issues.push({ code:'missing_labor', severity:'error', message:'El APU no contiene mano de obra.' });
   if(!text(apu.unit)) issues.push({ code:'missing_unit', severity:'error', message:'Falta la unidad del concepto.' });
   if(!text(apu.concept)) issues.push({ code:'missing_concept', severity:'error', message:'Falta la descripcion del concepto.' });
+  // Cantidad de obra en cero (punto 23 del spec del usuario: "cantidades
+  // cero" debe detectarse explicitamente). validateApuSchemaV2 solo rechaza
+  // negativos; un 0 es numericamente valido pero significa que nadie
+  // capturo la cantidad real todavia -- un presupuesto no puede construirse
+  // sobre un total de $0 por cantidad, aunque el precio unitario si exista.
+  if(!(Number(apu.cantidadObra) > 0)) issues.push({ code:'zero_cantidad_obra', severity:'warning', message:'La cantidad de obra es cero o no se ha capturado: el importe total de esta partida sera $0 hasta que se indique.' });
   const unique = new Set();
   sourceRows(apu).forEach(({kind,row}, index) => {
     const key = `${kind}:${text(row.clave || row.descripcion).toLowerCase()}`;
@@ -211,14 +277,14 @@ export function validateAPU(apu = {}, options = {}){
 export function isStructurallyEmptyApu(apu = {}){
   const concept = text(apu?.concept);
   if(!concept) return true;
-  const rowCount = (apu?.materials?.length || 0) + (apu?.labor?.length || 0) + (apu?.equipment?.length || 0) + (apu?.seguridad?.length || 0);
+  const rowCount = (apu?.materials?.length || 0) + (apu?.labor?.length || 0) + (apu?.equipment?.length || 0) + (apu?.consumables?.length || 0) + (apu?.seguridad?.length || 0);
   return rowCount === 0;
 }
 
 export function finalizeProfessionalAPU(apu = {}, options = {}){
   const normalized=structuredClone(apu);
   const stateType={VERIFICADO:PRICE_SOURCE_TYPE.VERIFIED,IMPORTADO:PRICE_SOURCE_TYPE.CATALOG,ESTIMADO_IA:PRICE_SOURCE_TYPE.AI_ESTIMATED,ASUMIDO:PRICE_SOURCE_TYPE.ESTIMATED,'USER PROVIDED':PRICE_SOURCE_TYPE.USER_PROVIDED};
-  for(const kind of ['materials','labor','equipment']) for(const row of normalized[kind]||[]){
+  for(const kind of ['materials','labor','equipment','consumables']) for(const row of normalized[kind]||[]){
     if(row.priceRecord) continue;
     const price=Number(row.precioUnitario??row.salarioBase??row.tarifa??0);
     row.priceRecord=makePriceRecord({description:row.descripcion,price,unit:row.unidad,currency:normalized.moneda||'MXN',supplier:row.fuente?.proveedor||'',sourceName:row.fuente?.sourceName||'',sourceUrl:row.fuente?.sourceUrl||'',sourceType:stateType[row.fuente?.estado]||PRICE_SOURCE_TYPE.ESTIMATED,priceDate:row.fuente?.fecha||'',confidence:row.fuente?.confidence||0,verified:row.fuente?.estado===APU_DATA_STATE.VERIFICADO});

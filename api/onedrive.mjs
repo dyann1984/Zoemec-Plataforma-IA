@@ -1,6 +1,7 @@
 import { FieldValue, getAdminDb, getAdminStorage } from '../server/api-lib/_firebaseAdmin.mjs';
 import { requireFeature } from '../server/api-lib/_authGuard.mjs';
 import { assertAllowedFile, sanitizeFileName } from '../server/api-lib/_libraryClassify.mjs';
+import { isConflictStatus, buildUploadHeaders, uploadFileName } from '../server/api-lib/_oneDriveConflict.mjs';
 
 /* Backend real de la conexion con OneDrive (Microsoft Graph). El client secret
    de la app registrada en Azure AD solo puede vivir aqui, nunca en el navegador.
@@ -259,7 +260,7 @@ export default async function handler(req, res){
        pase el contenido explicitamente (nunca se inventa un archivo). */
     if(action === 'uploadFile'){
       const accessToken = await getValidAccessToken(userRef);
-      const { name, contentBase64, folderPath } = req.body || {};
+      const { name, contentBase64, folderPath, remoteEtag, resolution } = req.body || {};
       if(!name || !contentBase64) throw new Error('Falta el nombre o el contenido del archivo a subir.');
       const safeName = sanitizeFileName(name);
       const buffer = Buffer.from(contentBase64, 'base64');
@@ -269,11 +270,47 @@ export default async function handler(req, res){
         throw error;
       }
       const path = normalizeFolderPath(folderPath || (await userRef.get()).data()?.oneDrive?.folderPath);
-      const uploadRes = await fetch(`${GRAPH_BASE}/me/drive/root:/${encodeURI(path)}/${encodeURIComponent(safeName)}:/content`, {
-        method:'PUT',
-        headers:{ Authorization:`Bearer ${accessToken}`, 'Content-Type':'application/octet-stream' },
-        body: buffer
+      const itemUrl = `${GRAPH_BASE}/me/drive/root:/${encodeURI(path)}/${encodeURIComponent(safeName)}`;
+
+      /* resolucion EXPLICITA 'remote' (el humano ya eligio conservar lo que
+         hay en OneDrive): no se escribe absolutamente nada, solo se
+         reporta la metadata remota real -- ver _oneDriveConflict.mjs. */
+      if(resolution === 'remote'){
+        const metaRes = await fetch(`${itemUrl}:?$select=id,name,eTag,lastModifiedDateTime`, { headers:{ Authorization:`Bearer ${accessToken}` } });
+        const meta = await metaRes.json().catch(() => null);
+        if(!metaRes.ok || !meta) throw new Error(meta?.error?.message || 'No se pudo leer el archivo remoto para conservarlo tal cual.');
+        await userRef.set({ oneDrive:{ lastSyncedAt: FieldValue.serverTimestamp() } }, { merge:true });
+        res.status(200).json({ ok:true, conflict:false, resolution:'remote', id:meta.id, name:meta.name, eTag:meta.eTag||null, lastModifiedDateTime:meta.lastModifiedDateTime||null });
+        return;
+      }
+
+      // Control optimista de concurrencia (gap real corregido, ver reporte
+      // de QA de OneDrive): con eTag remoto conocido y sin una resolucion
+      // explicita 'local'/'version', se envia If-Match -- Graph rechaza
+      // (409/412) si alguien mas cambio el archivo desde entonces. Nunca se
+      // asume "el mas reciente gana".
+      const headers = buildUploadHeaders({ accessToken, remoteEtag, resolution });
+      const uploadName = uploadFileName(safeName, resolution);
+      const uploadRes = await fetch(`${GRAPH_BASE}/me/drive/root:/${encodeURI(path)}/${encodeURIComponent(uploadName)}:/content`, {
+        method:'PUT', headers, body: buffer
       });
+      if(isConflictStatus(uploadRes.status)){
+        // CONFLICTO real: el eTag que el llamador conocia ya no es el
+        // actual. NUNCA se sobrescribe -- se lee la metadata remota REAL
+        // para que quien llama decida (conservar local/conservar
+        // remoto/versionar); lastSyncedAt NO se toca, la sincronizacion no
+        // termino correctamente.
+        const currentMetaRes = await fetch(`${itemUrl}:?$select=id,name,eTag,lastModifiedDateTime`, { headers:{ Authorization:`Bearer ${accessToken}` } });
+        const currentMeta = await currentMetaRes.json().catch(() => null);
+        res.status(409).json({
+          ok:false,
+          conflict:true,
+          conflictReason:'ETAG_MISMATCH',
+          remote: currentMetaRes.ok && currentMeta ? { id:currentMeta.id, name:currentMeta.name, eTag:currentMeta.eTag||null, lastModifiedDateTime:currentMeta.lastModifiedDateTime||null } : null,
+          local: { name: safeName, expectedEtag: remoteEtag || null }
+        });
+        return;
+      }
       const uploadData = await uploadRes.json().catch(() => null);
       if(!uploadRes.ok){
         const error = new Error(uploadData?.error?.message || 'No se pudo subir el archivo a OneDrive (revisa que la cuenta haya autorizado escritura).');
@@ -281,7 +318,7 @@ export default async function handler(req, res){
         throw error;
       }
       await userRef.set({ oneDrive:{ lastSyncedAt: FieldValue.serverTimestamp() } }, { merge:true });
-      res.status(200).json({ ok:true, id:uploadData.id, name:uploadData.name, eTag:uploadData.eTag||null, webUrl:uploadData.webUrl||null });
+      res.status(200).json({ ok:true, conflict:false, resolution: resolution || null, id:uploadData.id, name:uploadData.name, eTag:uploadData.eTag||null, lastModifiedDateTime:uploadData.lastModifiedDateTime||null, webUrl:uploadData.webUrl||null });
       return;
     }
 
@@ -319,7 +356,7 @@ export default async function handler(req, res){
         .get();
       const existingDoc = existingSnap.empty ? null : existingSnap.docs[0];
       if(existingDoc && existingDoc.data().oneDriveETag && existingDoc.data().oneDriveETag === meta.eTag){
-        res.status(200).json({ ok:true, docId: existingDoc.id, downloadURL: existingDoc.data().downloadURL, name: existingDoc.data().name, sinCambios:true });
+        res.status(200).json({ ok:true, docId: existingDoc.id, downloadURL: existingDoc.data().downloadURL, name: existingDoc.data().name, sinCambios:true, eTag: meta.eTag||null, lastModifiedDateTime: meta.lastModifiedDateTime||null });
         return;
       }
 
@@ -369,7 +406,7 @@ export default async function handler(req, res){
         docId = docRef.id;
       }
       await userRef.set({ oneDrive:{ lastSyncedAt: FieldValue.serverTimestamp() } }, { merge:true });
-      res.status(200).json({ ok:true, docId, downloadURL, name: safeName, actualizado: Boolean(existingDoc) });
+      res.status(200).json({ ok:true, docId, downloadURL, name: safeName, actualizado: Boolean(existingDoc), eTag: meta.eTag||null, lastModifiedDateTime: meta.lastModifiedDateTime||null });
       return;
     }
 

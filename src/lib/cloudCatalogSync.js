@@ -80,7 +80,14 @@ export const NullCloudCatalogProvider = Object.freeze({
 });
 
 function wrapUnavailable(item){
-  return { item, origen: null, fechaSincronizacion: null, version: null, ultimaActualizacion: null, conflicto: false, estado: SYNC_STATE.NO_CONFIGURADO };
+  return {
+    item, origen: null, fechaSincronizacion: null, version: null, ultimaActualizacion: null, conflicto: false, estado: SYNC_STATE.NO_CONFIGURADO,
+    // Forma completa siempre presente (nunca `undefined`) para que quien
+    // consuma un CatalogSyncRecord no tenga que distinguir por caso -- ver
+    // los mismos 6 campos en pushCatalogItem/pullCatalogItem abajo.
+    remoteEtag: null, localVersion: item?.localVersion ?? null, remoteModifiedAt: null, localModifiedAt: item?.localModifiedAt ?? null,
+    syncStatus: SYNC_STATE.NO_CONFIGURADO, conflictReason: null
+  };
 }
 
 /* Adaptador real de OneDrive (Prioridad 5): envuelve las acciones REST ya
@@ -114,15 +121,51 @@ export function createOneDriveCatalogProvider({ apiPost, folderPath } = {}){
         estado: resolveSyncState({ remoteUpdatedAt: it.lastModifiedDateTime, lastSyncedAt: status.lastSyncedAt })
       }));
     },
+    /* item puede declarar remoteEtag (el ultimo que el llamador SI vio) y,
+       tras un CONFLICTO ya reportado, `resolution: 'local'|'remote'|
+       'version'` -- la eleccion EXPLICITA de un humano, nunca automatica
+       (ver api/onedrive.mjs#uploadFile y _oneDriveConflict.mjs). Sin
+       remoteEtag (primera vez que se sincroniza este archivo), la subida
+       procede sin condicion, igual que antes de esta correccion. */
     async pushCatalogItem(item){
       const status = await ensureStatus();
       if(!status.configured || !status.connected) return wrapUnavailable(item);
       await apiPost('/api/onedrive', { action: 'ensureFolder', folderPath: folderPath || status.folderPath });
-      const result = await apiPost('/api/onedrive', { action: 'uploadFile', name: item.name, contentBase64: item.contentBase64, folderPath: folderPath || status.folderPath });
+      const result = await apiPost('/api/onedrive', {
+        action: 'uploadFile',
+        name: item.name,
+        contentBase64: item.contentBase64,
+        folderPath: folderPath || status.folderPath,
+        remoteEtag: item.remoteEtag || null,
+        resolution: item.resolution || undefined
+      });
+      if(result.conflict){
+        // CONFLICTO real reportado por el servidor: NUNCA se sobrescribio
+        // nada. Se conserva la metadata de ambos lados (remota REAL, local
+        // tal como el llamador la declaro) para que la resolucion quede en
+        // manos de un humano despues -- nunca "el mas reciente gana" en
+        // silencio.
+        return {
+          item, origen: 'onedrive', fechaSincronizacion: new Date().toISOString(),
+          version: null, ultimaActualizacion: null, conflicto: true, estado: SYNC_STATE.CONFLICTO,
+          remoteEtag: result.remote?.eTag || null,
+          localVersion: item.localVersion ?? item.remoteEtag ?? null,
+          remoteModifiedAt: result.remote?.lastModifiedDateTime || null,
+          localModifiedAt: item.localModifiedAt ?? null,
+          syncStatus: SYNC_STATE.CONFLICTO,
+          conflictReason: result.conflictReason || 'ETAG_MISMATCH'
+        };
+      }
       return {
         item, origen: 'onedrive', fechaSincronizacion: new Date().toISOString(),
-        version: result.eTag || null, ultimaActualizacion: new Date().toISOString(),
-        conflicto: false, estado: SYNC_STATE.SINCRONIZADO
+        version: result.eTag || null, ultimaActualizacion: result.lastModifiedDateTime || null,
+        conflicto: false, estado: SYNC_STATE.SINCRONIZADO,
+        remoteEtag: result.eTag || null,
+        localVersion: item.localVersion ?? null,
+        remoteModifiedAt: result.lastModifiedDateTime || null,
+        localModifiedAt: item.localModifiedAt ?? null,
+        syncStatus: SYNC_STATE.SINCRONIZADO,
+        conflictReason: null
       };
     },
     async pullCatalogItem(remoteId){
@@ -132,8 +175,12 @@ export function createOneDriveCatalogProvider({ apiPost, folderPath } = {}){
       return {
         item: { docId: data.docId, name: data.name },
         origen: 'onedrive', fechaSincronizacion: new Date().toISOString(),
-        version: null, ultimaActualizacion: new Date().toISOString(),
-        conflicto: false, estado: data.sinCambios ? SYNC_STATE.SINCRONIZADO : SYNC_STATE.PENDIENTE
+        version: data.eTag || null, ultimaActualizacion: data.lastModifiedDateTime || null,
+        conflicto: false, estado: data.sinCambios ? SYNC_STATE.SINCRONIZADO : SYNC_STATE.PENDIENTE,
+        remoteEtag: data.eTag || null, localVersion: null,
+        remoteModifiedAt: data.lastModifiedDateTime || null, localModifiedAt: null,
+        syncStatus: data.sinCambios ? SYNC_STATE.SINCRONIZADO : SYNC_STATE.PENDIENTE,
+        conflictReason: null
       };
     }
   };

@@ -30,6 +30,7 @@ import {
   isAdminUser, canUse, userInitials
 } from './domain/permissions.js';
 import { Icon } from './components/ui/Icon.jsx';
+import { ZoemecBrand } from './components/ui/ZoemecBrand.jsx';
 import { Backdrop } from './components/ui/Backdrop.jsx';
 import { Donut, Spark } from './components/ui/charts.jsx';
 import { PageHead, InfoCard, EmptyState } from './components/ui/PageElements.jsx';
@@ -767,7 +768,7 @@ function Landing({setScreen, login, company}){
   const p = LANDING_PIPELINE[step];
   return <div className="landing">
     <header className="nav-public">
-      <div className="brand-mini"><img src={company?.logo || '/images/logo-web.png'} onError={(e)=>e.currentTarget.style.display='none'} /><b>ZOEMEC</b></div>
+      <div className="brand-mini"><ZoemecBrand variant="header"/></div>
       <nav><a>Copiloto</a><a>Gemelo Digital</a><a>APU con IA</a><a>Entregables</a></nav>
       <div className="nav-actions"><button className="ghost" onClick={()=>setScreen('login')}>Iniciar sesión</button><button onClick={()=>setScreen('register')}>Comenzar gratis</button></div>
     </header>
@@ -859,7 +860,7 @@ function Auth({mode,setScreen,login,loginWithGoogle,company}){
     <div className="auth-brand">
       <Backdrop/>
       <div className="auth-brand-inner">
-        <div className="hero-logo light"><img src={company?.logo || '/images/logo-web.png'} onError={(e)=>e.currentTarget.style.display='none'} /><span>ZOEMEC</span></div>
+        <div className="hero-logo light"><ZoemecBrand variant="login"/></div>
         <h2>Ingeniería de costos, precisa y profesional.</h2>
         <p>Un copiloto tecnico que lee documentos, detecta conceptos, valida evidencia y convierte APUs en entregables listos para concurso y obra.</p>
         <div className="auth-points">
@@ -934,7 +935,7 @@ function Shell({children,user,logout,module,setModule,company,apus,clients,proje
   ];
   return <div className="app-layout">
     <aside className="sidebar">
-      <div className="brand"><img src={company.logo || '/images/logo-web.png'} onError={(e)=>e.currentTarget.style.display='none'} /><div><b>ZOEMEC</b><span>Ingeniería y construcción</span></div></div>
+      <div className="brand"><ZoemecBrand variant="sidebar" subtitle="Ingeniería y construcción"/></div>
       <div className="menu">{menu.map(m=><button key={m[0]} className={module===m[0]?'active':''} onClick={()=>setModule(m[0])}><span className="mi"><Icon name={m[1]}/></span><span className="menu-copy"><b>{m[2]}</b>{m[3] && <small>{m[3]}</small>}</span></button>)}</div>
       <button className="plan-box" onClick={()=>setModule('planes')}><b>Plan Profesional</b><p>APU, PDF, Excel, IA y biblioteca técnica.</p><div><i style={{width:'68%'}}></i></div><small>Ver permisos y cobro</small></button>
       <button className="logout-side" onClick={logout}>Salir</button>

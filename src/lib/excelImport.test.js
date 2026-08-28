@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseConceptText, parseConceptListText, conceptVariablesFromParsed } from './excelImport.js';
+import { parseConceptText, parseConceptListText, conceptVariablesFromParsed, parseCatalogRows } from './excelImport.js';
+import { findCatalogMatches } from '../domain/catalogLookup.js';
 
 test('parseConceptText no interpreta proporcion 1:4 ni dimensiones como P.U.',()=>{
   const parsed=parseConceptText('Suministro y colocación de muro de block hueco de concreto de 15 x 20 x 40 cm, asentado con mortero cemento-arena 1:4.');
@@ -186,4 +187,116 @@ test('parseConceptListText nunca fusiona renglones distintos en un solo concepto
     const hits = ['mueble','demolici','adhesivo'].filter(kw=>n.includes(kw)).length;
     assert.ok(hits<=1, `concepto fusionado detectado: "${c.concept}"`);
   });
+});
+
+// --- parseCatalogRows: preservacion de clave/categoria/estado/proveedor/
+// fecha/sinonimos/rendimiento (gap reportado 2026-08-27: el parser solo
+// extraia {desc,unidad,precio} y descartaba en silencio cualquier otra
+// columna, aunque el Excel la trajera -- obligaba al pipeline de matching
+// (findCatalogMatches, catalogLookup.js) a depender siempre de fuzzy_token,
+// nunca de clave_exacta/alias_sinonimo/categoria_unidad). Estas pruebas
+// verifican SOLO el importador (parseCatalogRows) y, al final, el
+// round-trip real hasta catalogLookup.js -- no tocan apuGeneration.js. ---
+
+test('parseCatalogRows preserva clave, categoria, estado, proveedor/fuente, fecha, sinonimos y rendimiento cuando el Excel los trae', () => {
+  const rows = [
+    ['Clave', 'Descripcion', 'Unidad', 'Precio', 'Categoria', 'Estado', 'Proveedor', 'Fecha', 'Sinonimos', 'Rendimiento'],
+    ['MAT-IMPER-01', 'Impermeabilizante acrílico elastomérico', 'L', '145', 'Impermeabilizacion', 'verificado', 'Proveedor XYZ', '2026-08-01', 'pintura impermeabilizante; sellador acrilico para azotea', '']
+  ];
+  const catalog = parseCatalogRows(rows);
+  assert.equal(catalog.length, 1);
+  const item = catalog[0];
+  assert.equal(item.desc, 'Impermeabilizante acrílico elastomérico');
+  assert.equal(item.unidad, 'L');
+  assert.equal(item.precio, 145);
+  assert.equal(item.clave, 'MAT-IMPER-01');
+  assert.equal(item.categoria, 'Impermeabilizacion');
+  assert.equal(item.estado, 'VERIFICADO');
+  assert.equal(item.fuente, 'Proveedor XYZ');
+  assert.equal(item.fecha, '2026-08-01');
+  assert.deepEqual(item.sinonimos, ['pintura impermeabilizante', 'sellador acrilico para azotea']);
+  assert.equal(item.rendimiento, undefined, 'columna Rendimiento vacia en este renglon: no se fabrica un valor');
+});
+
+test('parseCatalogRows NUNCA eleva un registro a VERIFICADO por defecto: solo con coincidencia textual explicita', () => {
+  const rows = [
+    ['Clave', 'Descripcion', 'Unidad', 'Precio', 'Estado'],
+    ['MAT-01', 'Cemento gris', 'kg', '10', ''],
+    ['MAT-02', 'Cal hidratada', 'kg', '8', 'Cotización pendiente'],
+    ['MAT-03', 'Arena', 'm³', '480', 'Verificado por Juan']
+  ];
+  const catalog = parseCatalogRows(rows);
+  assert.equal(catalog[0].estado, undefined, 'celda de Estado vacia: no se fabrica ningun estado');
+  assert.equal(catalog[1].estado, 'COTIZACIÓN PENDIENTE', 'un estado real no reconocido se preserva tal cual (mayusculas), nunca se descarta ni se convierte en VERIFICADO');
+  assert.equal(catalog[2].estado, 'VERIFICADO', 'coincidencia textual real de "verificado" (aunque venga con mas texto) si se reconoce');
+});
+
+test('parseCatalogRows: archivo minimo sin clave/categoria/estado sigue funcionando exactamente igual que antes (compatibilidad con catalogos anteriores)', () => {
+  const rows = [
+    ['Descripcion', 'Unidad', 'Precio'],
+    ['Cemento gris CPC 30R', 'kg', '10.5'],
+    ['Arena lavada', 'm³', '480']
+  ];
+  const catalog = parseCatalogRows(rows);
+  assert.equal(catalog.length, 2);
+  assert.deepEqual(Object.keys(catalog[0]).sort(), ['desc', 'precio', 'unidad'], 'sin columnas extra en el Excel, el objeto no debe traer clave/categoria/estado/etc. inventados');
+  assert.equal(catalog[0].desc, 'Cemento gris CPC 30R');
+  assert.equal(catalog[0].precio, 10.5);
+});
+
+test('parseCatalogRows: archivo sin ningun encabezado reconocible (fallback posicional) tampoco fabrica clave/categoria', () => {
+  const rows = [
+    ['Cemento gris CPC 30R', 'kg', '10.5'],
+    ['Arena lavada', 'm³', '480']
+  ];
+  const catalog = parseCatalogRows(rows);
+  assert.equal(catalog.length, 2);
+  assert.ok(!('clave' in catalog[0]) && !('categoria' in catalog[0]), 'sin fila de encabezado real, nunca se adivina una columna de clave/categoria por posicion');
+});
+
+test('parseCatalogRows reconoce aliases razonables de encabezado (CODIGO, CÓDIGO, ID, CATEGORÍA, ESTADO) sin importar mayusculas/acentos', () => {
+  const variants = [
+    ['CODIGO', 'DESCRIPCION', 'UNIDAD', 'PRECIO', 'CATEGORIA'],
+    ['CÓDIGO', 'Descripcion', 'Unidad', 'Precio', 'CATEGORÍA'],
+    ['ID', 'Descripcion', 'Unidad', 'Precio', 'Categoria'],
+    ['Cve', 'Descripcion', 'Unidad', 'Precio', 'Categoria']
+  ];
+  for (const header of variants) {
+    const rows = [header, ['MAT-01', 'Cemento gris', 'kg', '10', 'Cimentacion']];
+    const catalog = parseCatalogRows(rows);
+    assert.equal(catalog[0].clave, 'MAT-01', `alias de encabezado de clave no reconocido: "${header[0]}"`);
+    assert.equal(catalog[0].categoria, 'Cimentacion', `alias de encabezado de categoria no reconocido: "${header[4]}"`);
+  }
+});
+
+test('Round-trip real: Excel -> parseCatalogRows -> catalogLookup -- clave/categoria/sinonimos preservados SI participan en un metodo de match mas fuerte que fuzzy_token', () => {
+  const rows = [
+    ['Clave', 'Descripcion', 'Unidad', 'Precio', 'Categoria', 'Sinonimos'],
+    ['MAT-IMPER-01', 'Impermeabilizante acrílico elastomérico', 'L', '145', 'Impermeabilizacion', 'Impermeabilizante acrílico']
+  ];
+  const catalog = parseCatalogRows(rows);
+
+  // 1) clave_exacta: SOLO alcanzable si quien construye la consulta conoce
+  // la clave de antemano (no es el caso de apuGeneration.js#useCat hoy,
+  // que solo busca por descripcion -- ver reporte). Se prueba aqui la
+  // CAPACIDAD del catalogo ya parseado, no un cambio de useCat (fuera de
+  // alcance de esta correccion, que es estrictamente del importador).
+  const byClave = findCatalogMatches(catalog, { desc: 'cualquier texto', clave: 'MAT-IMPER-01' });
+  assert.equal(byClave.matchMethod, 'clave_exacta');
+  assert.equal(byClave.confidence, 1);
+  assert.equal(byClave.match.clave, 'MAT-IMPER-01');
+
+  // 2) categoria_unidad: alcanzable en cuanto la categoria SI viaja en la
+  // consulta (misma nota que arriba).
+  const byCategoria = findCatalogMatches(catalog, { desc: 'impermeabilizante generico', categoria: 'Impermeabilizacion', unidad: 'L' });
+  assert.equal(byCategoria.matchMethod, 'categoria_unidad');
+
+  // 3) alias_sinonimo: este SI es el camino real de apuGeneration.js#useCat
+  // (consulta solo con {desc, tipo}) una vez que el sinonimo viene del
+  // Excel real -- antes del fix, "sinonimos" se descartaba en el import y
+  // esta misma consulta caia forzosamente a fuzzy_token (confianza 0.667).
+  const bySinonimo = findCatalogMatches(catalog, { desc: 'Impermeabilizante acrílico' });
+  assert.equal(bySinonimo.matchMethod, 'alias_sinonimo');
+  assert.equal(bySinonimo.confidence, 0.95);
+  assert.ok(bySinonimo.confidence > 0.667, 'debe ser una confianza mayor que la de fuzzy_token, no solo distinta');
 });

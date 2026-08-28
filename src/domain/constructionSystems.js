@@ -37,9 +37,40 @@ function isManualHaulingGuarded(t){
 }
 
 /* Orden de evaluacion: identico al cascade original (cascade A completa,
-   despues cascade B), primera coincidencia gana. Ver comentario de
-   apuGeneration.js#makeAPUFromConcept (version anterior a esta migracion)
-   para el texto fuente de cada condicion. */
+   despues cascade B), primera coincidencia gana DENTRO DE CADA NIVEL DE
+   PRIORIDAD explicito (ver mas abajo) -- ya no es un simple "primero en el
+   array gana" a ciegas. Ver comentario de apuGeneration.js#makeAPUFromConcept
+   (version anterior a esta migracion) para el texto fuente de cada condicion.
+
+   PRIORIDAD EXPLICITA (bug reportado: "impermeabilizante acrilico"
+   clasificaba como pintura porque la regla de pintura, que contiene
+   "acril", se evaluaba ANTES que "impermeabiliz" solo por posicion
+   accidental en el array -- y "retiro de impermeabilizante... hasta losa
+   de concreto" clasificaba como concreto por la misma razon con "losa").
+   Cada entrada tiene un campo opcional `priority` (default 1 si se omite):
+
+     0 = sistema constructivo especifico / nombre de disciplina inequivoco.
+         La palabra que dispara la regla NO tiene otro significado plausible
+         en ninguna otra disciplina (ej. "impermeabiliz", "canalizacion
+         electrica", "minisplit", "sprinkler"). Estas reglas se evaluan
+         ANTES que cualquier regla de prioridad 1 o 2, sin importar su
+         posicion en el array.
+     1 = verbo/actividad (default). Terminos razonablemente especificos de
+         una actividad o elemento tecnico (ej. "aplanado", "colado",
+         "zapata", nombres de producto como PUA501/MAPLA). Pueden coincidir
+         entre si; dentro de este nivel gana el primero en orden de array,
+         igual que el cascade original.
+     2 = material generico. Adjetivos o sustantivos de material que
+         MULTIPLES disciplinas comparten como contexto (ej. "acrilico",
+         "vinilico", "primario", "yeso" a secas, "plaf" a secas) -- nunca
+         deben ganarle a un sistema constructivo especifico (nivel 0) ni a
+         una actividad concreta (nivel 1) solo por texto compartido. Se
+         evaluan al final, y solo si nada de nivel 0/1 coincidio.
+
+   classifyConstructionSystem() evalua nivel 0 completo, luego nivel 1
+   completo, luego nivel 2 completo (cada nivel en el orden en que las
+   entradas aparecen en este array) -- la prioridad es explicita y
+   documentada, ya no un efecto secundario de donde quedo la entrada. */
 export const CONSTRUCTION_SYSTEMS_ORDER = [
   { tipo:'demolicion', test:t=>/demolic|demoler|desmontar|retiro\s+de\s+(loseta|piso|azulejo|cer[aá]mic|porcelanato)/.test(t) },
   { tipo:'movimiento_mobiliario', test:t=>/movimiento\s+de\s+(mueble|mobiliario)|reacomodo\s+de\s+mobiliario|protecci[oó]n\s+y\s+movimiento\s+de\s+mobiliario/.test(t) },
@@ -55,13 +86,35 @@ export const CONSTRUCTION_SYSTEMS_ORDER = [
     // (evidencia motor universal, VAL-023). Los nombres de producto reales
     // (PUA 501/MAPLA) y la rama muro/plafon+recubrimiento ya cubren la
     // pintura epoxica genuina sin necesitar el match bare.
+    // "vin[ií]lic"/"acr[ií]l" YA NO viven aqui como match "bare": son
+    // adjetivos de material compartidos con impermeabilizacion
+    // ("impermeabilizante acrilico"), no una actividad de pintura por si
+    // solos -- ver la regla priority:2 mas abajo. "fachada(s)" se agrega al
+    // grupo de sustrato junto a muro/plafon: es el sustrato tipico de
+    // pintura de exteriores y NUNCA es sustrato de impermeabilizacion en la
+    // practica real (azotea/losa si lo son, fachada no), asi que ampliarlo
+    // aqui no reintroduce el riesgo de colision que motivo este fix.
     return !isDrywall && (
-      /pua\s*501|pua501|mapla|suministro y aplicaci[oó]n de pintura|pintar|repint|esmalte|vin[ií]lic|acr[ií]l|sellador vin/.test(t)
-      || (/(muro|muros|plaf[oó]n|plafones)/.test(t) && /(pintura|recubrimiento|preparaci[oó]n de la superficie|lija|lavado|ep[oó]x)/.test(t))
+      /pua\s*501|pua501|mapla|suministro y aplicaci[oó]n de pintura|pintar|repint|esmalte|sellador vin/.test(t)
+      || (/(muro|muros|plaf[oó]n|plafones|fachadas?)/.test(t) && /(pintura|recubrimiento|preparaci[oó]n de la superficie|lija|lavado|ep[oó]x)/.test(t))
     );
   } },
   { tipo:'estructura_metalica', test:t=>/escalera|barandal|herrer|ptr|perfil tubular|estructura metal|soldadur|acero.*calibre|bastidor.*acero/.test(t) },
-  { tipo:'tablaroca', test:t=>/plaf|fald|tablaroca|durock|tablacemento|trasdosado|cajillo|enchape|panel.*yeso|yeso|antimoho|anti moho/.test(t) },
+  { tipo:'tablaroca', test:t=>/fald|tablaroca|durock|tablacemento|trasdosado|cajillo|panel.*yeso/.test(t) },
+  /* Regla priority:2 (material generico): "yeso"/"plaf" a secas y "enchape"/
+     "antimoho" NO identifican un sistema de tablaroca/drywall por si solos
+     -- "aplanado ... con yeso" es un aplanado (mezcla aplicada con llana),
+     no un panel prefabricado. Bug encontrado durante el mismo audit que el
+     de pintura/impermeabilizacion (mismo patron: palabra de material
+     compartida ganando por posicion de array a la actividad real): "Aplanado
+     fino en muros interiores con yeso" clasificaba como tablaroca en vez de
+     aplanado. Los terminos realmente especificos del sistema (tablaroca,
+     durock, tablacemento, trasdosado, cajillo, "panel...yeso") se quedan en
+     la regla de arriba (priority 1); solo el "yeso"/"plaf" sueltos bajan de
+     nivel. Los casos genuinos de plafon ("plafon de yeso", "falso plafon")
+     ya estan cubiertos por la regla plafon_suspendido/tablaroca de mas
+     arriba en este mismo array, que sigue en priority 1. */
+  { tipo:'tablaroca', priority:2, pattern:/plaf|enchape|antimoho|anti moho|yeso/, test:t=>/plaf|enchape|antimoho|anti moho|yeso/.test(t) },
   { tipo:'marmol_granito', test:t=>/marmol|granito|cubierta|barra lavamanos/.test(t) },
   { tipo:'registro', test:t=>/registro|tapa de acceso|tapa registro|paso de instalaciones/.test(t) },
   { tipo:'aplanado', test:t=>/aplanado|repellado|enjarre|plaster|uniblock|resane|emboquillado|chukum/.test(t) },
@@ -73,7 +126,22 @@ export const CONSTRUCTION_SYSTEMS_ORDER = [
   // "epox" de este chequeo generico (isPaintingConcept, mas arriba, sigue
   // reconociendo pintura epoxica real via su propio contexto de
   // muro/plafon/recubrimiento, sin este cambio).
-  { tipo:'pintura', test:t=>/pintura|pintar|esmalte|vinil|acril|primario|sellador vin/.test(t) },
+  { tipo:'pintura', test:t=>/pintura|pintar|esmalte/.test(t) },
+  /* Regla priority:2 (material generico): "acrilico"/"vinilico"/"primario"
+     a secas NO identifican pintura por si mismos -- "impermeabilizante
+     acrilico", "adhesivo acrilico" y "sellador vinilico" (impermeabilizacion,
+     pisos) usan exactamente el mismo vocabulario. Bug reportado: esta regla
+     vivia mas arriba (linea original ~59/76) SIN nivel de prioridad, y
+     ganaba por posicion de array a "impermeabiliz" (ver CONSTRUCTION_
+     SYSTEMS_ORDER, comentario de prioridad). Ahora solo se evalua si NADA
+     de priority 0 o 1 coincidio (impermeabilizacion, pintura con contexto
+     de sustrato, etc. siempre le ganan).
+     El guard "!/impermeab/" es el caso explicito pedido: un texto como
+     "Primer acrilico impermeable" (sin verbo de pintura, sin sustrato
+     muro/plafon/fachada, pero con la palabra "impermeable") NO debe
+     asumirse como pintura -- se deja caer al fallback por solape de
+     palabras (matchType:'score', confianza baja) en vez de fingir certeza. */
+  { tipo:'pintura', priority:2, pattern:/vin[ií]lic|acr[ií]l|primario/, test:t=>/vin[ií]lic|acr[ií]l|primario/.test(t) && !/impermeab/.test(t) },
   { tipo:'piso', test:t=>/porcelanato|loseta|azulejo|cer[aá]mic|lambr|piso|zoclo|boquilla|sardinel/.test(t) },
   { tipo:'marmol_granito', test:t=>/marmol|m[aá]rmol|granito|cubierta|barra lavamanos/.test(t) },
   { tipo:'sello', test:t=>/sellado|sello|silicon|silic[oó]n|calafate|junta|espuma/.test(t) },
@@ -95,7 +163,15 @@ export const CONSTRUCTION_SYSTEMS_ORDER = [
   { tipo:'concreto', test:t=>/concreto|losa|zapata|firme|cimentaci|colado|columna de conc/.test(t) },
   { tipo:'acero', test:t=>/acero|varilla|castillo|cadena|armad|fierro|malla/.test(t) },
   { tipo:'block', test:t=>/block|tabique|tabic[oó]n|muro|partici[oó]n|mamposter|junteo/.test(t) },
-  { tipo:'imper', test:t=>/impermeabiliz/.test(t) },
+  // priority:0 -- "impermeabiliz" es una raiz que no significa nada mas en
+  // ninguna otra disciplina (a diferencia de "acrilico"/"losa"/"concreto",
+  // que impermeabilizacion comparte como vocabulario de contexto). Bug
+  // reportado + bug encontrado durante el mismo audit: "impermeabilizante
+  // acrilico" (colisionaba con pintura) y "retiro de impermeabilizante...
+  // hasta losa de concreto" (colisionaba con concreto, por la palabra
+  // "losa") clasificaban mal solo porque "impermeabiliz" vivia sin
+  // prioridad explicita, mas abajo en el array que 'pintura' y 'concreto'.
+  { tipo:'imper', priority:0, pattern:/impermeabiliz/, test:t=>/impermeabiliz/.test(t) },
   { tipo:'limpieza_trazo', test:t=>/limpieza\s*(y|,)?\s*trazo|trazo\s*y\s*nivelaci[oó]n|trazo\s+topogr[aá]fico|desyerbe|chapeo|limpieza\s+(inicial|del\s+terreno|del\s+predio|del\s+solar)/.test(t) },
   { tipo:'desmonte_mecanico', test:t=>/desmonte|desenra[ií]ce|destronque/.test(t) },
   { tipo:'acarreo_camion', test:t=>/acarreo/.test(t) && /cami[oó]n|volteo|for[aá]neo/.test(t) },
@@ -103,20 +179,35 @@ export const CONSTRUCTION_SYSTEMS_ORDER = [
   { tipo:'excavacion', test:t=>/excavaci|zanja|despalme/.test(t) },
   // --- Disciplinas nuevas (motor universal): sin cobertura previa en el
   // cascade original. Cada una con recursos reales propios (SYSTEM_RESOURCES),
-  // nunca relleno generico. ---
-  { tipo:'electrica', test:t=>/electricidad|el[eé]ctric[oa]|luminaria|contacto\s|apagador|canalizaci[oó]n el[eé]ctrica|conduit|charola\s*(porta)?cable|centro\s*de\s*carga|tablero\s*el[eé]ctrico|cableado\s*el[eé]ctrico/.test(t) },
-  { tipo:'voz_datos', test:t=>/voz\s*y\s*datos|cableado\s*estructurado|categor[ií]a\s*[567]|patch\s*panel|rack\s*de\s*telecomunicaciones|fibra\s*[oó]ptica/.test(t) },
-  { tipo:'cctv', test:t=>/cctv|c[aá]mara\s*de\s*seguridad|videovigilancia|circuito\s*cerrado/.test(t) },
-  { tipo:'hvac', test:t=>/hvac|aire\s*acondicionado|minisplit|mini\s*split|chiller|ducto\s*de\s*aire|difusor|climatizaci[oó]n/.test(t) },
-  { tipo:'gas', test:t=>/tuber[ií]a\s*de\s*gas|instalaci[oó]n\s*de\s*gas|regulador\s*de\s*gas|tanque\s*estacionario/.test(t) },
-  { tipo:'contra_incendio', test:t=>/contra\s*incendio|sprinkler|rociador(es)?|hidrante|extintor|gabinete\s*contra\s*incendio|red\s*h[uú]meda|red\s*seca/.test(t) },
-  { tipo:'elevadores', test:t=>/elevador|ascensor|montacargas\s*el[eé]ctrico|escalera\s*el[eé]ctrica/.test(t) },
-  { tipo:'canceleria_aluminio_vidrio', test:t=>/canceler[ií]a|ventana\s*de\s*aluminio|puerta\s*de\s*aluminio|perfil\s*de\s*aluminio|vidrio\s*templado|cristal\s*templado|dvh|doble\s*vidriado/.test(t) },
-  { tipo:'carpinteria', test:t=>/carpinter[ií]a|puerta\s*de\s*madera|closet\s*de\s*madera|mueble\s*de\s*madera|marco\s*de\s*madera/.test(t) },
-  { tipo:'herreria', test:t=>/herrer[ií]a|reja\s*met[aá]lica|port[oó]n\s*met[aá]lico|barandal\s*met[aá]lico(?!.*ptr)/.test(t) },
-  { tipo:'jardineria', test:t=>/jardiner[ií]a|[aá]rea\s*verde|pasto\s*en\s*rollo|siembra\s*de|riego\s*por\s*goteo|sistema\s*de\s*riego/.test(t) },
-  { tipo:'pavimento', test:t=>/pavimento|carpeta\s*asf[aá]ltica|adoqu[ií]n|guarnici[oó]n|banqueta|concreto\s*hidr[aá]ulico\s*para\s*calle/.test(t) },
-  { tipo:'senalizacion', test:t=>/se[nñ]alizaci[oó]n|se[nñ]al[eé]tica|pintura\s*de\s*franjas|topes\s*vehiculares/.test(t) }
+  // nunca relleno generico.
+  //
+  // priority:0 en las 13 -- bug encontrado durante el mismo audit de
+  // pintura/impermeabilizacion: por vivir al FINAL del array (posicion
+  // "nueva" al agregarse), cualquiera de estas colisionaba con las reglas
+  // genericas de obra civil (block/tablaroca, que testean "muro"/"tabique"/
+  // "yeso" a secas) cuando el texto mencionaba el sustrato/ubicacion de la
+  // instalacion junto con el trabajo real. Ej.: "Instalacion de contacto
+  // duplex en muro de tablaroca" clasificaba como tablaroca (Tablaroca y
+  // Durock) en vez de electrica, solo porque 'block'/'tablaroca' aparecen
+  // antes en el array -- "contacto\s"/"conduit"/"canalizacion electrica" no
+  // significan nada mas que trabajo electrico, exactamente el mismo patron
+  // que impermeabilizacion. Subirlas a priority:0 es la correccion
+  // estructural (no un parche solo para electrica): las 13 comparten la
+  // misma raiz del problema y el mismo tipo de regla (nombre de sistema
+  // inequivoco), asi que reciben el mismo nivel de prioridad. ---
+  { tipo:'electrica', priority:0, test:t=>/electricidad|el[eé]ctric[oa]|luminaria|contacto\s|apagador|canalizaci[oó]n el[eé]ctrica|conduit|charola\s*(porta)?cable|centro\s*de\s*carga|tablero\s*el[eé]ctrico|cableado\s*el[eé]ctrico/.test(t) },
+  { tipo:'voz_datos', priority:0, test:t=>/voz\s*y\s*datos|cableado\s*estructurado|categor[ií]a\s*[567]|patch\s*panel|rack\s*de\s*telecomunicaciones|fibra\s*[oó]ptica/.test(t) },
+  { tipo:'cctv', priority:0, test:t=>/cctv|c[aá]mara\s*de\s*seguridad|videovigilancia|circuito\s*cerrado/.test(t) },
+  { tipo:'hvac', priority:0, test:t=>/hvac|aire\s*acondicionado|minisplit|mini\s*split|chiller|ducto\s*de\s*aire|difusor|climatizaci[oó]n/.test(t) },
+  { tipo:'gas', priority:0, test:t=>/tuber[ií]a\s*de\s*gas|instalaci[oó]n\s*de\s*gas|regulador\s*de\s*gas|tanque\s*estacionario/.test(t) },
+  { tipo:'contra_incendio', priority:0, test:t=>/contra\s*incendio|sprinkler|rociador(es)?|hidrante|extintor|gabinete\s*contra\s*incendio|red\s*h[uú]meda|red\s*seca/.test(t) },
+  { tipo:'elevadores', priority:0, test:t=>/elevador|ascensor|montacargas\s*el[eé]ctrico|escalera\s*el[eé]ctrica/.test(t) },
+  { tipo:'canceleria_aluminio_vidrio', priority:0, test:t=>/canceler[ií]a|ventana\s*de\s*aluminio|puerta\s*de\s*aluminio|perfil\s*de\s*aluminio|vidrio\s*templado|cristal\s*templado|dvh|doble\s*vidriado/.test(t) },
+  { tipo:'carpinteria', priority:0, test:t=>/carpinter[ií]a|puerta\s*de\s*madera|closet\s*de\s*madera|mueble\s*de\s*madera|marco\s*de\s*madera/.test(t) },
+  { tipo:'herreria', priority:0, test:t=>/herrer[ií]a|reja\s*met[aá]lica|port[oó]n\s*met[aá]lico|barandal\s*met[aá]lico(?!.*ptr)/.test(t) },
+  { tipo:'jardineria', priority:0, test:t=>/jardiner[ií]a|[aá]rea\s*verde|pasto\s*en\s*rollo|siembra\s*de|riego\s*por\s*goteo|sistema\s*de\s*riego/.test(t) },
+  { tipo:'pavimento', priority:0, test:t=>/pavimento|carpeta\s*asf[aá]ltica|adoqu[ií]n|guarnici[oó]n|banqueta|concreto\s*hidr[aá]ulico\s*para\s*calle/.test(t) },
+  { tipo:'senalizacion', priority:0, test:t=>/se[nñ]alizaci[oó]n|se[nñ]al[eé]tica|pintura\s*de\s*franjas|topes\s*vehiculares/.test(t) }
 ];
 
 /* Recursos por tipo (misma forma [descripcion,cantidad,unidad,precio,merma]
@@ -376,28 +467,83 @@ export function splitPrimaryText(t){
   return primary.length >= 10 ? primary : text;
 }
 
-/* Clasifica un concepto (texto ya en minusculas): primero exacto (mismo
-   orden y semantica que el cascade original) sobre la descripcion PRINCIPAL
-   (ver splitPrimaryText), y si nada coincide, un fallback por solape de
-   palabras contra keywordBag de TODAS las disciplinas conocidas -- sobre el
-   texto completo (una palabra suelta en "incluye" SI puede aportar una
-   pista aproximada cuando no hubo match exacto, a diferencia del match
-   exacto que nunca debe decidirse por ella). Devuelve { tipo,
-   matchType:'exact'|'score'|'generico', score? }, nunca null. */
+/* Cada entrada recibe un `id` estable (tipo#indice-original-en-el-array) y
+   una `priority` explicita (0/1/2, default 1 si la entrada no la declara --
+   ver el comentario de prioridad junto a CONSTRUCTION_SYSTEMS_ORDER). Se
+   precalcula UNA sola vez al cargar el modulo (no en cada llamada a
+   classifyConstructionSystem): tres listas, una por nivel, cada una en el
+   mismo orden relativo en que las entradas aparecen en el array original --
+   la prioridad decide QUE NIVEL se evalua primero; el orden de array sigue
+   siendo el desempate DENTRO de un mismo nivel, exactamente como el cascade
+   original, nunca al revés. */
+const RULES_WITH_ID = CONSTRUCTION_SYSTEMS_ORDER.map((entry, i) => ({
+  ...entry,
+  id: entry.id || `${entry.tipo}#${i}`,
+  priority: entry.priority ?? 1
+}));
+const RULES_BY_PRIORITY = [0, 1, 2].flatMap(p => RULES_WITH_ID.filter(entry => entry.priority === p));
+
+function confidenceFor(tipo, priority){
+  const base = typeof SYSTEM_META[tipo]?.confidence === 'number' ? SYSTEM_META[tipo].confidence : 70;
+  // Nivel 2 (material generico) es, por definicion, el ultimo recurso antes
+  // del fallback por score -- su confianza nunca debe leerse igual de firme
+  // que un match de sistema especifico (nivel 0) o de actividad (nivel 1).
+  return priority === 2 ? Math.max(50, base - 15) : base;
+}
+
+/* Clasifica un concepto (texto ya en minusculas): primero exacto por nivel
+   de prioridad explicito (0 -> 1 -> 2, ver RULES_BY_PRIORITY) sobre la
+   descripcion PRINCIPAL (ver splitPrimaryText), y si nada coincide, un
+   fallback por solape de palabras contra keywordBag de TODAS las
+   disciplinas conocidas -- sobre el texto completo (una palabra suelta en
+   "incluye" SI puede aportar una pista aproximada cuando no hubo match
+   exacto, a diferencia del match exacto que nunca debe decidirse por ella).
+
+   Devuelve { tipo, matchType:'exact'|'score'|'generico', priority?, ruleId?,
+   discipline, confidence, matchedTerms, score? }, nunca null. Los campos
+   nuevos (priority/ruleId/discipline/confidence/matchedTerms) son evidencia
+   de diagnostico -- ningun consumidor existente los requiere, solo lee
+   `.tipo` y `.matchType` (ver apuGeneration.js#makeAPUFromConcept). */
 export function classifyConstructionSystem(t){
   const primaryText = splitPrimaryText(t);
-  for(const entry of CONSTRUCTION_SYSTEMS_ORDER){
-    if(entry.test(primaryText)) return { tipo: entry.tipo, matchType: 'exact' };
+  for(const entry of RULES_BY_PRIORITY){
+    if(entry.test(primaryText)){
+      const matchedTerms = entry.pattern ? [...new Set(primaryText.match(entry.pattern) || [])] : [];
+      return {
+        tipo: entry.tipo,
+        matchType: 'exact',
+        priority: entry.priority,
+        ruleId: entry.id,
+        discipline: SYSTEM_META[entry.tipo]?.discipline || null,
+        confidence: confidenceFor(entry.tipo, entry.priority),
+        matchedTerms
+      };
+    }
   }
   const tokens = new Set(tokenize(t));
   let best = null;
   for(const [tipo, meta] of Object.entries(SYSTEM_META)){
     if(tipo === 'generico' || !meta.keywordBag?.length) continue;
-    const score = meta.keywordBag.reduce((s, kw) => s + (tokens.has(kw) || t.includes(kw) ? 1 : 0), 0);
-    if(score > 0 && (!best || score > best.score)) best = { tipo, score };
+    const matched = meta.keywordBag.filter(kw => tokens.has(kw) || t.includes(kw));
+    if(matched.length > 0 && (!best || matched.length > best.score)) best = { tipo, score: matched.length, matchedTerms: matched };
   }
-  if(best && best.score >= MIN_SCORE_FALLBACK) return { tipo: best.tipo, matchType: 'score', score: best.score };
-  return { tipo: 'generico', matchType: 'generico' };
+  if(best && best.score >= MIN_SCORE_FALLBACK){
+    return {
+      tipo: best.tipo,
+      matchType: 'score',
+      score: best.score,
+      discipline: SYSTEM_META[best.tipo]?.discipline || null,
+      confidence: Math.min(60, SYSTEM_META[best.tipo]?.confidence ?? 60),
+      matchedTerms: best.matchedTerms
+    };
+  }
+  return {
+    tipo: 'generico',
+    matchType: 'generico',
+    discipline: SYSTEM_META.generico?.discipline || 'General',
+    confidence: SYSTEM_META.generico?.confidence ?? 45,
+    matchedTerms: []
+  };
 }
 
 /* Actividades secundarias declaradas explicitamente en el propio texto del

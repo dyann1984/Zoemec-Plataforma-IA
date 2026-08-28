@@ -20,6 +20,15 @@ import { RENDIMIENTO_FUENTE } from './apuReview.js';
    proviene de un catalogo de precios importado con proveedor real. */
 export const APU_DATA_STATE = Object.freeze({
   VERIFICADO: 'VERIFICADO',
+  // BIBLIOTECA (gap de trazabilidad reportado): un renglon que SI encontro
+  // coincidencia real en el catalogo/Biblioteca Inteligente (findCatalogMatches,
+  // ver catalogLookup.js) pero cuyo catalogo de origen NO trae un estado
+  // VERIFICADO por un humano (ver libraryReview.js) -- antes se colapsaba al
+  // mismo IMPORTADO generico que un renglon literalmente importado de un
+  // Excel de conceptos sin ningun match de Biblioteca, indistinguible en
+  // pantalla/Excel/PDF. Nunca se asigna VERIFICADO solo por venir de
+  // Biblioteca: ese estado sigue exigiendo la validacion humana existente.
+  BIBLIOTECA: 'BIBLIOTECA',
   IMPORTADO: 'IMPORTADO',
   ESTIMADO_IA: 'ESTIMADO_IA',
   ASUMIDO: 'ASUMIDO',
@@ -31,6 +40,7 @@ export const APU_DATA_STATE = Object.freeze({
    comprobado: el texto en pantalla es tan importante como el dato interno. */
 export const APU_DATA_STATE_LABEL = Object.freeze({
   [APU_DATA_STATE.VERIFICADO]: 'FUENTE EXTERNA VALIDADA',
+  [APU_DATA_STATE.BIBLIOTECA]: 'BIBLIOTECA',
   [APU_DATA_STATE.IMPORTADO]: 'IMPORTADO',
   [APU_DATA_STATE.ESTIMADO_IA]: 'ESTIMADO IA',
   [APU_DATA_STATE.ASUMIDO]: 'BASE ZOEMEC',
@@ -75,7 +85,52 @@ export const PRICE_EVIDENCE_LEVEL = Object.freeze({
 });
 
 function makeEmptyFuente(estado = APU_DATA_STATE.REQUIERE_VALIDACION){
-  return { proveedor: null, fecha: null, region: null, estado };
+  return {
+    proveedor: null, fecha: null, region: null, estado,
+    // Campos de trazabilidad de Biblioteca (gap reportado): siempre
+    // presentes (null cuando no aplican) para que ningun consumidor tenga
+    // que verificar su existencia antes de leerlos.
+    matchMethod: null, confidence: null, catalogItemId: null,
+    origenPrecio: origenPrecioFor(null, estado)
+  };
+}
+/* Etiqueta de UNA palabra que resume de donde salio el precio de un renglon,
+   pensada para ser mas facil de escanear en Excel/PDF que el `estado`
+   detallado (que ya distingue BIBLIOTECA/VERIFICADO/etc.) -- son dos ejes
+   relacionados pero no identicos: `estado` es el nivel de confianza/
+   verificacion, `origenPrecio` es el mecanismo que lo genero. */
+function origenPrecioFor(source, estado){
+  if(source) return 'BIBLIOTECA';
+  switch(estado){
+    case APU_DATA_STATE.VERIFICADO: return 'BIBLIOTECA';
+    case APU_DATA_STATE.BIBLIOTECA: return 'BIBLIOTECA';
+    case APU_DATA_STATE.ESTIMADO_IA: return 'IA';
+    case APU_DATA_STATE.ASUMIDO: return 'PLANTILLA';
+    case APU_DATA_STATE.IMPORTADO: return 'IMPORTADO';
+    default: return 'REQUIERE_VALIDACION';
+  }
+}
+/* Construye el objeto `fuente` completo de un renglon a partir de `source`
+   (entrada de materialSources/laborSources/equipmentSources, ver
+   apuGeneration.js#useCat) cuando SI hubo match de catalogo real -- gap de
+   trazabilidad reportado: antes se armaba un objeto parcial (solo
+   proveedor/fecha/estado) que descartaba matchMethod/confidence/categoria
+   aunque `source` los traiga, dejando un match real indistinguible de un
+   renglon de plantilla en UI/Excel/PDF. Sin `source`, se comporta igual que
+   antes (makeEmptyFuente). */
+function fuenteFromSource(source, estado){
+  if(!source) return makeEmptyFuente(estado);
+  const resolvedEstado = source.estado || estado;
+  return {
+    proveedor: source.proveedor || null,
+    fecha: source.fecha || null,
+    region: null,
+    estado: resolvedEstado,
+    matchMethod: source.matchMethod || null,
+    confidence: typeof source.confidence === 'number' ? Math.round(source.confidence * 100) : null,
+    catalogItemId: source.clave || null,
+    origenPrecio: origenPrecioFor(source, resolvedEstado)
+  };
 }
 
 /* APU completo en esquema v2. Todas las secciones nuevas nacen vacias (no se
@@ -168,9 +223,7 @@ function migrateMaterialRow(row, index, estado, source){
     consumo: Number(row?.[1]) || 0,
     desperdicioPct: Number(row?.[4]) || 0,
     precioUnitario: Number(row?.[3]) || 0,
-    fuente: source
-      ? { proveedor: source.proveedor || null, fecha: source.fecha || null, region: null, estado: source.estado }
-      : makeEmptyFuente(estado),
+    fuente: fuenteFromSource(source, estado),
     origen: null
   };
 }
@@ -194,9 +247,7 @@ function migrateLaborRow(row, index, estado, detail, source){
     cantidad: Number(row?.[1]) || 0,
     salarioBase: Number(row?.[3]) || 0,
     fsr: Number(row?.[4]) || 1,
-    fuente: source
-      ? { proveedor: source.proveedor || null, fecha: source.fecha || null, region: null, estado: source.estado }
-      : makeEmptyFuente(estado),
+    fuente: fuenteFromSource(source, estado),
     estado: source?.estado || estado,
     rendimientoFuente: detail?.rendimientoFuente ?? null,
     yieldConfidence: detail?.yieldConfidence ?? null,
@@ -223,9 +274,7 @@ function migrateEquipmentRow(row, index, estado, source){
     cantidad: Number(row?.[1]) || 0,
     tarifa: Number(row?.[3]) || 0,
     rendimiento: null,
-    fuente: source
-      ? { proveedor: source.proveedor || null, fecha: source.fecha || null, region: null, estado: source.estado }
-      : makeEmptyFuente(estado)
+    fuente: fuenteFromSource(source, estado)
   };
 }
 

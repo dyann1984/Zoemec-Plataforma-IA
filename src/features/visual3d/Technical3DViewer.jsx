@@ -14,7 +14,7 @@
    automatizados (WebGL no esta disponible en el entorno de pruebas/CI de
    este proyecto) -- la geometria que consume (geometry3d.js) si esta
    probada de forma pura. Verificacion visual en navegador real pendiente. */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TechnicalModelProvider } from '../../lib/visualizationProviders.js';
@@ -39,7 +39,12 @@ function buildMesh(element){
   const geometry = new THREE.BoxGeometry(width, height, depth);
   const material = new THREE.MeshStandardMaterial({ color: COLOR_BY_TYPE[element.type] || 0xaaaaaa });
   const mesh = new THREE.Mesh(geometry, material);
-  mesh.userData = { clave: element.clave, label: element.label, type: element.type };
+  // `id` (ej. "floor-1") es el identificador UNICO por elemento dentro de
+  // este APU (ver geometry3d.js#deriveGeometryFromApu); `clave` es la clave
+  // del APU completo -- varios elementos del MISMO apu comparten la misma
+  // `clave`, asi que la seleccion/highlight debe distinguirse por `id`,
+  // nunca por `clave` (eso resaltaria todos los elementos del apu a la vez).
+  mesh.userData = { id: element.id, clave: element.clave, label: element.label, type: element.type };
   if(element.type === 'wall') mesh.position.y = height / 2;
   else if(element.type === 'ceiling') mesh.position.y = 2.5;
   else mesh.position.y = height / 2;
@@ -66,11 +71,31 @@ function MissingDimensionForm({ element, onComplete }){
   </div>;
 }
 
+/* Color de resalte cuando un elemento esta seleccionado (highlight emisivo
+   sobre el material real del mesh -- nunca se sustituye la geometria ni se
+   agrega un mesh nuevo). */
+const SELECTION_EMISSIVE = 0x9146ff;
+
 export function Technical3DViewer({ apu, onSelectElement }){
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
+  const meshesRef = useRef([]);
+  // Bug reportado (seleccion 3D nunca conectada): onSelectElement puede
+  // llegar como una funcion NUEVA en cada render del padre (ej. un arrow
+  // function inline). Guardarla en un ref y NO incluirla en las
+  // dependencias del efecto que crea la escena evita reconstruir todo
+  // three.js (camara, controles, zoom acumulado) cada vez que el padre
+  // renderiza por cualquier otro motivo -- solo se reconstruye cuando los
+  // ELEMENTOS 3D realmente cambian.
+  const onSelectElementRef = useRef(onSelectElement);
+  onSelectElementRef.current = onSelectElement;
   const [geometryResult, setGeometryResult] = useState(null);
   const [resolvedElements, setResolvedElements] = useState([]);
+  // Elemento actualmente resaltado, por `id` de elemento -- NUNCA por
+  // `clave` (varios elementos del mismo APU comparten la misma clave, ver
+  // buildMesh mas arriba). Puramente de UI: no inventa ninguna relacion con
+  // Takeoff 2D que no exista ya en los datos del elemento.
+  const [selectedElementId, setSelectedElementId] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -78,12 +103,31 @@ export function Technical3DViewer({ apu, onSelectElement }){
       if(cancelled) return;
       setGeometryResult(result);
       setResolvedElements(result.ok ? result.elements : []);
+      setSelectedElementId(null);
     });
     return () => { cancelled = true; };
   }, [apu]);
 
-  const pendingElements = resolvedElements.filter(el => (el.missingDimensions || []).length > 0);
-  const readyElements = resolvedElements.filter(el => (el.missingDimensions || []).length === 0);
+  // Bug reportado (zoom 3D no funcionaba): `resolvedElements.filter(...)`
+  // sin memoizar devuelve un ARRAY NUEVO en cada render del componente,
+  // aunque el contenido no haya cambiado. Como el efecto que crea la escena
+  // depende de `readyElements`, cualquier re-render incidental del padre
+  // (por una razon totalmente ajena al modelo 3D) volvia a ejecutar ese
+  // efecto: destruia la escena/camara/controles y los recreaba con la
+  // camara en su posicion inicial fija -- el usuario podia rotar (un solo
+  // gesto rapido, sin re-render de por medio) pero el zoom por rueda, hecho
+  // de muchos eventos `wheel` pequenos en el tiempo, quedaba deshecho casi
+  // de inmediato por el siguiente re-render. Memoizar por `resolvedElements`
+  // (que solo cambia cuando el APU realmente cambia, ver el efecto de
+  // arriba) mantiene la escena estable entre re-renders no relacionados.
+  const pendingElements = useMemo(
+    () => resolvedElements.filter(el => (el.missingDimensions || []).length > 0),
+    [resolvedElements]
+  );
+  const readyElements = useMemo(
+    () => resolvedElements.filter(el => (el.missingDimensions || []).length === 0),
+    [resolvedElements]
+  );
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -97,9 +141,22 @@ export function Technical3DViewer({ apu, onSelectElement }){
     renderer.setSize(width, height);
     mount.innerHTML = '';
     mount.appendChild(renderer.domElement);
+    // touch-action:none evita que el navegador interprete el gesto de
+    // rueda/arrastre sobre el canvas como scroll/gesto de la pagina antes
+    // de que OrbitControls reciba el evento -- el resto de la pagina
+    // conserva su scroll normal (el listener queda acotado al canvas).
+    renderer.domElement.style.touchAction = 'none';
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
+    // Configuracion EXPLICITA (antes dependia de los defaults de la
+    // libreria): zoom y pan habilitados, con limites reales para que la
+    // camara nunca atraviese el modelo ni se aleje al infinito.
+    controls.enableZoom = true;
+    controls.enablePan = true;
+    controls.zoomSpeed = 1;
+    controls.minDistance = 1.5;
+    controls.maxDistance = 50;
 
     scene.add(new THREE.AmbientLight(0xffffff, 0.6));
     const dir = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -109,6 +166,7 @@ export function Technical3DViewer({ apu, onSelectElement }){
 
     const meshes = readyElements.map(buildMesh);
     meshes.forEach(m => scene.add(m));
+    meshesRef.current = meshes;
 
     const raycaster = new THREE.Raycaster();
     const onClick = (event) => {
@@ -119,7 +177,11 @@ export function Technical3DViewer({ apu, onSelectElement }){
       );
       raycaster.setFromCamera(pointer, camera);
       const hit = raycaster.intersectObjects(meshes)[0];
-      if(hit) onSelectElement?.(hit.object.userData);
+      if(hit){
+        const data = hit.object.userData;
+        setSelectedElementId(data.id);
+        onSelectElementRef.current?.(data);
+      }
     };
     renderer.domElement.addEventListener('click', onClick);
 
@@ -134,9 +196,21 @@ export function Technical3DViewer({ apu, onSelectElement }){
       controls.dispose();
       meshes.forEach(m => { m.geometry.dispose(); m.material.dispose(); });
       renderer.dispose();
+      meshesRef.current = [];
       if(mount) mount.innerHTML = '';
     };
-  }, [readyElements, onSelectElement]);
+  }, [readyElements]);
+
+  // Highlight IMPERATIVO del elemento seleccionado: ajusta el material de
+  // los meshes ya existentes (nunca reconstruye la escena/camara -- eso
+  // reintroduciria el mismo bug de zoom de arriba).
+  useEffect(() => {
+    meshesRef.current.forEach(m => {
+      const isSelected = !!selectedElementId && m.userData.id === selectedElementId;
+      m.material.emissive?.setHex(isSelected ? SELECTION_EMISSIVE : 0x000000);
+      m.material.emissiveIntensity = isSelected ? 0.55 : 0;
+    });
+  }, [selectedElementId]);
 
   if(!geometryResult) return null;
 
@@ -147,12 +221,25 @@ export function Technical3DViewer({ apu, onSelectElement }){
     </div>;
   }
 
+  // Elemento seleccionado (para el panel de info): SOLO datos que ya existen
+  // en resolvedElements -- si el elemento no declara concepto/dimensiones,
+  // no se inventan (ver "si no existe relacion, no inventarla").
+  const selectedElement = selectedElementId ? resolvedElements.find(el => el.id === selectedElementId) : null;
+
   return <div className="technical-3d-viewer">
-    <div className="admin-panel-head"><h2>MODELO TÉCNICO 3D</h2><small className="hint">Geometría paramétrica determinista derivada de datos reales del APU -- nunca un render generado por IA. Orbita con clic + arrastrar, zoom con la rueda.</small></div>
+    <div className="admin-panel-head"><h2>MODELO TÉCNICO 3D</h2><small className="hint">Geometría paramétrica determinista derivada de datos reales del APU -- nunca un render generado por IA. Orbita con clic + arrastrar, zoom con la rueda, desplaza con clic derecho + arrastrar (pan).</small></div>
     {pendingElements.map(el => <MissingDimensionForm key={el.id} element={el} onComplete={(updated)=>{
       setResolvedElements(prev => prev.map(e => e.id === updated.id ? updated : e));
     }}/>)}
     {readyElements.length > 0 && <div ref={mountRef} style={{width:'100%',minHeight:360}}/>}
+    {selectedElement && <div className="panel" style={{marginTop:8}}>
+      <b>Elemento seleccionado</b>
+      <p className="muted" style={{fontSize:'.82rem',margin:'4px 0 0'}}>
+        Clave: {selectedElement.clave || '—'} · Concepto: {apu?.concept || apu?.clave || '—'}
+        {selectedElement.label ? ` · ${selectedElement.label}` : ''}
+        {selectedElement.dimensions ? ` · Dimensiones: ${Object.entries(selectedElement.dimensions).map(([k,v])=>`${k}=${v}`).join(', ')}` : ''}
+      </p>
+    </div>}
     {!readyElements.length && !pendingElements.length && <p className="muted">Sin elementos para visualizar.</p>}
   </div>;
 }

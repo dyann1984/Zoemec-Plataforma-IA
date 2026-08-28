@@ -105,6 +105,7 @@ function PriceReviewPanel({apu,onChange}){
 export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindPrices,user}){
  const final=useMemo(()=>finalizeProfessionalAPU(apu),[apu]);const [notice,setNotice]=useState(null),[modal,setModal]=useState(''),[quotes,setQuotes]=useState([]);
  const [moreOpen,setMoreOpen]=useState(false);
+ const [selectedApuElement,setSelectedApuElement]=useState(null);
  const cacheKey=scopedKey(`apu:versions:${apu.id}`,user?.uid);const [history,setHistory]=useState(()=>apu.versionHistory||JSON.parse(localStorage.getItem(cacheKey)||'[]'));
  const actor=user?.email||'Usuario';
  const withAudit=(next,field,before,after)=>({...next,audit:auditChange(next.audit||apu.audit,{user:actor,field,before,after})});
@@ -124,7 +125,7 @@ export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindP
  // por que); el guard interno sigue siendo la barrera real, nunca se retira.
  const isEmptyApu=isStructurallyEmptyApu(final);
  const emptyApuTitle='Este APU no tiene concepto ni contenido técnico (materiales/mano de obra/equipo/EPP) todavía -- no hay nada que exportar.';
- const table=(k,title)=><Accordion key={k} title={title} summary={sectionSummary(k)} defaultOpen={k==='labor'}><div className="apu-table-scroll"><table className="data-table"><thead><tr>{SPEC[k].map(([f,l])=><th key={f}>{l}</th>)}<th>Fuente</th><th>Fecha</th><th>Estado</th><th/></tr></thead><tbody>{rows(k).map((r,i)=><tr key={r.clave||i}>{SPEC[k].map(([f])=><td key={f}><input value={r[f]??''} onChange={e=>update(k,i,f,e.target.value)}/></td>)}<td><input value={r.fuente?.proveedor||''} onChange={e=>{const n=structuredClone(apu),x=k==='tools'?n.herramientaMenor.detalle[i]:n[k][i];x.fuente={...(x.fuente||{}),proveedor:e.target.value,estado:x.fuente?.estado||APU_DATA_STATE.REQUIERE_VALIDACION};onChange(n)}}/></td><td><input value={r.fuente?.fecha||''} onChange={e=>{const n=structuredClone(apu),x=k==='tools'?n.herramientaMenor.detalle[i]:n[k][i];x.fuente={...(x.fuente||{}),fecha:e.target.value};onChange(n)}}/></td><td>{apuDataStateLabel(r.fuente?.estado)}</td><td><button onClick={()=>remove(k,i)}>×</button></td></tr>)}</tbody></table></div><button onClick={()=>add(k)}>+ Agregar</button></Accordion>;
+ const table=(k,title)=><Accordion key={k} title={title} summary={sectionSummary(k)} defaultOpen={k==='labor'}><div className="apu-table-scroll"><table className="data-table"><thead><tr>{SPEC[k].map(([f,l])=><th key={f}>{l}</th>)}<th>Fuente</th><th>Fecha</th><th>Estado</th><th/></tr></thead><tbody>{rows(k).map((r,i)=><tr key={r.clave||i}>{SPEC[k].map(([f])=><td key={f}><input value={r[f]??''} onChange={e=>update(k,i,f,e.target.value)}/></td>)}<td><input value={r.fuente?.proveedor||''} placeholder={r.fuente?.estado===APU_DATA_STATE.BIBLIOTECA?'Biblioteca ZOEMEC':''} onChange={e=>{const n=structuredClone(apu),x=k==='tools'?n.herramientaMenor.detalle[i]:n[k][i];x.fuente={...(x.fuente||{}),proveedor:e.target.value,estado:x.fuente?.estado||APU_DATA_STATE.REQUIERE_VALIDACION};onChange(n)}}/></td><td><input value={r.fuente?.fecha||''} onChange={e=>{const n=structuredClone(apu),x=k==='tools'?n.herramientaMenor.detalle[i]:n[k][i];x.fuente={...(x.fuente||{}),fecha:e.target.value};onChange(n)}}/></td><td title={r.fuente?.matchMethod?`Método de coincidencia: ${r.fuente.matchMethod} · Confianza: ${r.fuente.confidence??0}% · Origen del precio: ${r.fuente.origenPrecio||''}${r.fuente.catalogItemId?` · Insumo de catálogo: ${r.fuente.catalogItemId}`:''}`:undefined}>{apuDataStateLabel(r.fuente?.estado)}</td><td><button onClick={()=>remove(k,i)}>×</button></td></tr>)}</tbody></table></div><button onClick={()=>add(k)}>+ Agregar</button></Accordion>;
  const list=(f,title,object=false)=><Accordion key={f} title={title} summary={`${(apu[f]||[]).length} elemento(s)`}>{(apu[f]||[]).map((v,i)=><div className="pro-list-row" key={i}><textarea value={object?(v.especificacion||v.texto||''):v} onChange={e=>{const n=structuredClone(apu);n[f][i]=object?{...v,[f==='supuestos'?'texto':'especificacion']:e.target.value}:e.target.value;onChange(n)}}/><button onClick={()=>{const n=structuredClone(apu);n[f].splice(i,1);onChange(n)}}>×</button></div>)}<button onClick={()=>onChange({...apu,[f]:[...(apu[f]||[]),object?(f==='supuestos'?{texto:''}:{especificacion:'',criterio:'',norma:''}):'']})}>+ Agregar</button></Accordion>;
  return <div className="professional-apu-editor">
   <PriceReviewPanel apu={apu} onChange={onChange}/>
@@ -165,7 +166,19 @@ export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindP
   </Accordion>
   <h3 className="pro-section-title">G. Visualización 3D</h3>
   <Accordion title="Modelo técnico 3D" summary="Geometría paramétrica derivada de datos reales del APU">
-   <Technical3DViewer apu={apu}/>
+   {/* onSelectElement: bug reportado (seleccion 3D nunca conectada) --
+       setSelectedApuElement es la funcion que devuelve useState, con
+       identidad ESTABLE entre renders (React la garantiza), asi que pasarla
+       aqui nunca provoca que Technical3DViewer reconstruya su escena three.js
+       por un cambio de referencia de esta funcion. El propio visor ya
+       resalta el elemento y muestra su info (clave/concepto/dimensiones); el
+       aviso de abajo confirma que la seleccion SI llega hasta este
+       componente padre, con el dato real devuelto por el raycast. */}
+   <Technical3DViewer apu={apu} onSelectElement={setSelectedApuElement}/>
+   {selectedApuElement && <p className="muted" style={{fontSize:'.78rem',marginTop:6}}>
+     Último elemento 3D seleccionado: <b>{selectedApuElement.label || selectedApuElement.clave || selectedApuElement.id}</b>
+     {selectedApuElement.type ? ` (${selectedApuElement.type})` : ''}
+   </p>}
   </Accordion>
   <div className="pro-economy"><b>Costo directo {money(final.calculated.direct)}</b><strong>PRECIO UNITARIO SIN IVA {money(final.calculated.pu)}</strong><span>Cantidad {num(apu.cantidadObra)}</span><b>Importe sin IVA {money(final.calculated.importeTotal)}</b><span>IVA {money(final.calculated.iva*apu.cantidadObra)}</span><b>Importe con IVA {money(final.calculated.importeTotal+final.calculated.iva*apu.cantidadObra)}</b></div>
   {notice&&<div className="validation-panel"><h3>{notice.status}</h3>{(notice.issues||[]).map((x,i)=><p key={i}>{x.message}</p>)}</div>}

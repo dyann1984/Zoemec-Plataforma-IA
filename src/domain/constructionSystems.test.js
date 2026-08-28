@@ -57,6 +57,118 @@ test('Concepto sin ningun sentido tecnico cae al fallback generico mejorado, nun
   assert.equal(result.tipo, 'generico');
 });
 
+// --- Prioridad explicita de clasificacion (bug reportado: "impermeabilizante
+// acrilico" clasificaba como pintura porque la regla de pintura, que
+// contiene "acril", se evaluaba antes que "impermeabiliz" solo por posicion
+// accidental en el array). Cada caso reproduce una colision real encontrada
+// durante el mismo audit -- no solo el ejemplo original. */
+test('Impermeabilizacion vs pintura: "impermeabilizante acrilico" ya NO cae en pintura solo por la palabra "acrilico"', () => {
+  const cases = [
+    'Impermeabilizacion con impermeabilizante acrilico',
+    'impermeabilización con impermeabilizante acrílico elastomérico',
+    'Suministro y colocacion de impermeabilizante por termofusion, membrana 4mm.',
+    'Impermeabilizacion con manto asfaltico'
+  ];
+  for(const c of cases){
+    const r = classifyConstructionSystem(c.toLowerCase());
+    assert.equal(r.tipo, 'imper', `"${c}" deberia clasificar como imper, clasifico como ${r.tipo}`);
+    assert.equal(r.priority, 0, 'imper debe ganar por prioridad 0 (sistema constructivo especifico), no por orden de array');
+  }
+});
+
+test('Impermeabilizacion vs pintura: la pintura acrilica/vinilica real (con contexto de actividad o sustrato) sigue clasificando como pintura', () => {
+  const cases = [
+    'Aplicacion de pintura acrilica en muro',
+    'Pintura vinilica en plafon',
+    'Suministro y aplicacion de pintura vinilica en muros, 2 manos, 40m2',
+    'Pintura acrilica impermeable para fachadas',
+    'Aplicacion de pintura acrilica impermeable en fachada, 2 manos'
+  ];
+  for(const c of cases){
+    const r = classifyConstructionSystem(c.toLowerCase());
+    assert.equal(r.tipo, 'pintura', `"${c}" deberia clasificar como pintura, clasifico como ${r.tipo}`);
+  }
+});
+
+test('Caso ambiguo (pedido explicito): "Primer acrilico impermeable" no se asume como pintura ni como impermeabilizacion', () => {
+  const r = classifyConstructionSystem('primer acrilico impermeable');
+  assert.notEqual(r.tipo, 'imper', 'no debe asumirse imper: no hay raiz "impermeabiliz", solo el adjetivo "impermeable"');
+  assert.notEqual(r.matchType, 'exact', 'un texto sin verbo de pintura ni sustrato (muro/plafon/fachada) y sin raiz "impermeabiliz" no debe resolverse con certeza (matchType exact)');
+});
+
+test('Impermeabilizacion vs concreto: "losa"/"concreto" como contexto no le ganan a impermeabilizacion', () => {
+  const r = classifyConstructionSystem('retiro de impermeabilizante prefabricado existente hasta losa de concreto.');
+  assert.equal(r.tipo, 'imper');
+  const r2 = classifyConstructionSystem("colado de losa de concreto f'c=200 kg/cm2");
+  assert.equal(r2.tipo, 'concreto', 'un concreto real (sin mencionar impermeabilizacion) debe seguir clasificando como concreto');
+});
+
+test('Concreto vs mortero: un muro de tabique con mortero de junteo clasifica como block (albañileria), no como concreto', () => {
+  const r = classifyConstructionSystem('muro de tabique asentado con mortero cemento-cal-arena');
+  assert.equal(r.tipo, 'block');
+});
+
+test('Demolicion vs retiro generico: "retiro de X" solo es demolicion cuando X es un acabado a demoler, nunca un retiro generico (ej. mobiliario)', () => {
+  const demo = classifyConstructionSystem('retiro de loseta existente en area de cocina');
+  assert.equal(demo.tipo, 'demolicion');
+  const generico = classifyConstructionSystem('retiro de mueble de la oficina');
+  assert.notEqual(generico.tipo, 'demolicion', '"retiro de mueble" no es demolicion de obra');
+});
+
+test('Instalacion electrica vs obra civil: el sustrato (muro de block/tablaroca) no le gana a la actividad electrica', () => {
+  const cases = [
+    'Canalizacion electrica con conduit en muro de block',
+    'Instalacion de contacto duplex en muro de tablaroca',
+    'Instalacion electrica de contactos y apagadores'
+  ];
+  for(const c of cases){
+    const r = classifyConstructionSystem(c.toLowerCase());
+    assert.equal(r.tipo, 'electrica', `"${c}" deberia clasificar como electrica, clasifico como ${r.tipo}`);
+    assert.equal(r.priority, 0);
+  }
+});
+
+test('Plafon vs muro: "aplanado...con yeso" en un muro es aplanado (actividad), no tablaroca solo por la palabra "yeso"', () => {
+  const aplanado = classifyConstructionSystem('aplanado fino en muros interiores con yeso, espesor de 1.5cm');
+  assert.equal(aplanado.tipo, 'aplanado', `deberia clasificar como aplanado, clasifico como ${aplanado.tipo}`);
+  const plafon = classifyConstructionSystem('plafon de yeso liso con perimetral de esquinero, 85m2');
+  assert.equal(plafon.tipo, 'plafon_suspendido', 'un plafon de yeso real (compuesto "plafon de yeso") debe seguir clasificando como plafon_suspendido');
+  const tablarocaReal = classifyConstructionSystem('suministro y colocacion de muro de tablaroca');
+  assert.equal(tablarocaReal.tipo, 'tablaroca', 'tablaroca/durock explicitos siguen clasificando como tablaroca');
+});
+
+test('Piso vs recubrimiento: loseta en piso sigue siendo piso, recubrimiento vinilico en muro sigue siendo pintura', () => {
+  const piso = classifyConstructionSystem('colocacion de loseta ceramica en piso');
+  assert.equal(piso.tipo, 'piso');
+  const recubrimiento = classifyConstructionSystem('aplicacion de recubrimiento vinilico en muro');
+  assert.equal(recubrimiento.tipo, 'pintura');
+});
+
+test('Evidencia de clasificacion: un match exacto expone familia, regla que gano, confianza y prioridad', () => {
+  const r = classifyConstructionSystem('impermeabilizacion con manto asfaltico');
+  assert.equal(r.tipo, 'imper');
+  assert.equal(r.matchType, 'exact');
+  assert.equal(r.discipline, 'Acabados');
+  assert.equal(r.priority, 0);
+  assert.ok(r.ruleId && r.ruleId.startsWith('imper#'), `ruleId deberia identificar la regla que gano, fue "${r.ruleId}"`);
+  assert.equal(typeof r.confidence, 'number');
+  assert.ok(r.confidence > 0);
+  assert.ok(Array.isArray(r.matchedTerms));
+});
+
+test('Evidencia de clasificacion: un match generico (priority:2) reporta confianza reducida respecto al mismo tipo en priority 0/1', () => {
+  // "Producto acrilico industrial" no trae ni verbo de pintura (pintura/pintar/
+  // esmalte) ni sustrato (muro/plafon/fachada) -- solo dispara la regla
+  // priority:2 (acr[ií]l bare), a proposito, para aislar la penalizacion de
+  // confianza sin depender de que otra regla mas especifica coincida primero.
+  const r = classifyConstructionSystem('producto acrilico industrial');
+  assert.equal(r.tipo, 'pintura');
+  assert.equal(r.priority, 2, `esperaba que solo la regla priority:2 coincidiera, gano la regla ${r.ruleId} (priority ${r.priority})`);
+  const r1 = classifyConstructionSystem('suministro y aplicacion de pintura vinilica en muros, 40m2');
+  assert.equal(r1.priority, 1);
+  assert.ok(r.confidence < r1.confidence, `un match priority:2 (${r.confidence}) debe reportar menor confianza que un match priority:1 del mismo tipo (${r1.confidence})`);
+});
+
 test('extractSecondaryActivities solo lee la clausula "incluye...", nunca cambia fuera de ese contexto', () => {
   assert.deepEqual(extractSecondaryActivities('Concepto sin ninguna clausula de inclusion'), []);
   assert.deepEqual(new Set(extractSecondaryActivities('Muro de block, incluye acarreo y limpieza.')), new Set(['acarreo', 'limpieza']));

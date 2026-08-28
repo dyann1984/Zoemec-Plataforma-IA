@@ -656,14 +656,55 @@ export function mergeCatalogs(base=[], incoming=[]){
   });
   return [...map.values()];
 }
+/* Estados reales que un catalogo de precios puede declarar por renglon (ver
+   APU_DATA_STATE, src/domain/apuSchema.js) -- 'VERIFICADO' es el UNICO que
+   requiere una coincidencia textual explicita: nunca se eleva un registro a
+   VERIFICADO porque la columna Estado venga vacia o con un valor que no
+   sea reconocido, eso seria fabricar validacion humana que no existe. */
+function normalizeCatalogEstado(raw){
+  const v = String(raw||'').trim();
+  if(!v) return null;
+  if(/verificad/i.test(v)) return 'VERIFICADO';
+  return v.toUpperCase();
+}
+/* Bug reportado (gap de trazabilidad, 2026-08-27): este parser solo
+   extraia {desc,unidad,precio} de un Excel de catalogo de precios, aunque
+   el archivo trajera clave/categoria/estado/proveedor/fecha/sinonimos/
+   rendimiento -- esas columnas se descartaban en silencio, obligando al
+   pipeline de matching (findCatalogMatches, catalogLookup.js) a depender
+   SIEMPRE de fuzzy_token (nunca podia usar clave_exacta/alias_sinonimo/
+   categoria_unidad, que exigen esos campos). Correccion ESTRICTAMENTE
+   limitada a este importador: se detectan columnas adicionales por
+   encabezado (con alias razonables, acentos incluidos) cuando SI existe
+   una fila de encabezado real (misma deteccion de descripcion+precio que
+   ya existia, sin cambios); sin encabezado (fallback posicional de
+   siempre) el comportamiento es IDENTICO al anterior, nunca se adivina
+   una columna de clave/categoria por posicion. Ningun campo se fabrica:
+   solo se agrega al objeto de salida cuando la celda correspondiente
+   trae un valor real no vacio. */
 export function parseCatalogRows(rows){
   rows = normalizeSpreadsheetRows(rows);
-  let hi=-1,cD=-1,cU=-1,cP=-1;
+  let hi=-1,cD=-1,cU=-1,cP=-1,cK=-1,cC=-1,cE=-1,cF=-1,cH=-1,cS=-1,cR=-1;
   for(let i=0;i<Math.min(rows.length,10);i++){
     const r=(rows[i]||[]).map(x=>(x==null?'':x).toString().toLowerCase());
     const d=r.findIndex(x=>/descrip|concepto|insumo|material/.test(x));
     const p=r.findIndex(x=>/precio|costo|unitario|importe|p\.?u/.test(x));
-    if(d>-1&&p>-1){hi=i;cD=d;cP=p;cU=r.findIndex(x=>/unidad|u\.m|^u$/.test(x));break;}
+    if(d>-1&&p>-1){
+      hi=i;cD=d;cP=p;
+      cU=r.findIndex(x=>/unidad|u\.m|^u$/.test(x));
+      // Clave/codigo/id: identificador estable del insumo (catalogItemId).
+      // "clave" tambien aparece dentro de "clave_exacta" en documentacion,
+      // pero eso nunca es un encabezado real de columna -- sin riesgo de
+      // falso positivo en una fila de encabezados de 1-3 palabras por celda.
+      cK=r.findIndex(x=>/^clave$|^c[oó]digo$|^cve$|^id$|^sku$/.test(x.trim()));
+      cC=r.findIndex(x=>/categor[ií]a/.test(x));
+      cE=r.findIndex(x=>/^estado$|^validaci[oó]n$|^validado$/.test(x.trim()));
+      cF=r.findIndex(x=>/proveedor|^fuente$/.test(x));
+      cH=r.findIndex(x=>/^fecha|fecha de cotizaci[oó]n|vigencia/.test(x));
+      cS=r.findIndex(x=>/sin[oó]nimo|alias/.test(x));
+      cR=r.findIndex(x=>/rendimiento/.test(x));
+      break;
+    }
   }
   const out=[]; const start=hi>-1?hi+1:0;
   for(let i=start;i<rows.length;i++){
@@ -671,7 +712,28 @@ export function parseCatalogRows(rows){
     if(cD>-1){desc=r[cD];unidad=cU>-1?r[cU]:'';precio=r[cP];}
     else{desc=r[0];unidad=r[1];precio=r.find((v,idx)=>idx>0&&!isNaN(parseFloat(v)));}
     precio=parseFloat((precio==null?'':precio).toString().replace(/[^0-9.\-]/g,''));
-    if(desc&&!isNaN(precio)&&precio>0) out.push({desc:desc.toString().trim(),unidad:(unidad||'').toString().trim(),precio});
+    if(!(desc&&!isNaN(precio)&&precio>0)) continue;
+    const item={desc:desc.toString().trim(),unidad:(unidad||'').toString().trim(),precio};
+    // Extras: solo cuando la fila de encabezado los detecto (cD>-1, ver
+    // arriba) Y la celda de este renglon trae un valor real -- nunca se
+    // fabrica un campo ausente.
+    if(cK>-1){const v=String(r[cK]??'').trim();if(v) item.clave=v;}
+    if(cC>-1){const v=String(r[cC]??'').trim();if(v) item.categoria=v;}
+    if(cE>-1){const estado=normalizeCatalogEstado(r[cE]);if(estado) item.estado=estado;}
+    if(cF>-1){const v=String(r[cF]??'').trim();if(v) item.fuente=v;}
+    if(cH>-1){const v=String(r[cH]??'').trim();if(v) item.fecha=v;}
+    if(cS>-1){
+      const raw=String(r[cS]??'').trim();
+      if(raw){
+        const sinonimos=raw.split(/[;|,]/).map(s=>s.trim()).filter(Boolean);
+        if(sinonimos.length) item.sinonimos=sinonimos;
+      }
+    }
+    if(cR>-1){
+      const rendimiento=parseFloat(String(r[cR]??'').replace(/[^0-9.\-]/g,''));
+      if(!isNaN(rendimiento)&&rendimiento>0) item.rendimiento=rendimiento;
+    }
+    out.push(item);
   }
   return out;
 }

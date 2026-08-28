@@ -44,7 +44,7 @@ import { libKey, enrichLibraryMeta, scoreLibraryFile } from './domain/library.js
 import { INSUMO_STATES, applyInsumoReview, extractValidatedCatalogRows, extractAllValidatedCatalogRows, mergeCatalogRows } from './domain/libraryReview.js';
 import { toApuSeed, applyPlanoElementReview } from './domain/planoReview.js';
 import { calibrateScale, measureElement } from './domain/planoMeasurement.js';
-import { createTakeoffRecord, applyManualCorrection, upsertTakeoffRecord, findLatestTakeoffForFile } from './domain/planoTakeoffStore.js';
+import { createTakeoffRecord, applyManualCorrection, upsertTakeoffRecord, findLatestTakeoffForFile, hashFileContent } from './domain/planoTakeoffStore.js';
 import {
   emptyApuWorkspaceState, removeBatchApus, describeAmbiguousSingleExport,
   duplicateGroupKey, groupConceptsByDuplicateKey, defaultBatchSelection, isExportableConceptItem,
@@ -3864,23 +3864,58 @@ function PlanoManualMeasure({imageDataUrl, fileName, mimeType, setModule, takeof
   const [pendingElement,setPendingElement]=useState(null);
   const [cantidadFinal,setCantidadFinal]=useState('');
   const [recordId,setRecordId]=useState(null);
-  const restoredForFile=useRef(null);
+  const restoredForKey=useRef(null);
 
-  // Reconstruccion al recargar (Prioridad 4, fase de correccion): si ya
-  // existe una medicion persistida para ESTE archivo, se restaura trazo +
-  // calibracion + medicion + correccion sin que el usuario vuelva a
-  // dibujar nada. Solo corre una vez por archivo (restoredForFile evita
-  // pisar lo que el usuario esta trazando ahora mismo con cada re-render).
+  // Identidad real del archivo cargado (bug reportado: dos archivos con el
+  // MISMO nombre pero contenido distinto compartian estado por error --
+  // escala, trazo y medicion de uno se filtraban al otro). El nombre solo
+  // ya NO es la identidad: se combina con un hash del contenido real (ver
+  // hashFileContent, planoTakeoffStore.js) para que cada imagen realmente
+  // distinta tenga su propia clave de restauracion, aunque comparta nombre.
+  const fileHash=useMemo(()=>imageDataUrl?hashFileContent(imageDataUrl):null,[imageDataUrl]);
+  const restoreKey=fileName?`${fileName}::${fileHash||''}`:null;
+
+  // Reconstruccion al cambiar de archivo (Prioridad 4, fase de correccion +
+  // fix de aislamiento 2026-08-27): SIEMPRE se resuelve el estado completo
+  // de ESTE archivo (identificado por restoreKey) -- si existe una medicion
+  // persistida se restaura completa (calibracion+trazo+medicion+concepto);
+  // si NO existe, se resetea todo explicitamente, nunca se deja el estado
+  // en memoria del archivo anterior. Corre una vez por identidad distinta
+  // (restoredForKey evita pisar lo que el usuario esta trazando ahora mismo
+  // con cada re-render), y vuelve a correr si se regresa a un archivo ya
+  // visitado antes (A -> B -> A), porque restoreKey vuelve a cambiar.
   useEffect(()=>{
-    if(!fileName || restoredForFile.current===fileName) return;
-    restoredForFile.current=fileName;
-    const existing=findLatestTakeoffForFile(takeoffRecords,fileName);
-    if(!existing) return;
+    if(!restoreKey || restoredForKey.current===restoreKey) return;
+    restoredForKey.current=restoreKey;
+    // Estado transitorio de trazo en curso: nunca debe sobrevivir un cambio
+    // de archivo, exista o no un registro persistido para el nuevo.
+    setMode(null);
+    setCalibPoints([]);
+    const existing=findLatestTakeoffForFile(takeoffRecords,fileName,fileHash);
+    if(!existing){
+      // Archivo sin estado persistido: reset completo, nunca hereda datos
+      // del archivo anterior (calibracion, puntos, medicion, concepto,
+      // corrección manual ni cualquier dato derivado).
+      setRecordId(null);
+      setScale(null);
+      setCalibDistance('');
+      setCalibUnit('m');
+      setPoints([]);
+      setTipo('otro');
+      setDescripcion('');
+      setCantidadFinal('');
+      setPendingElement(null);
+      return;
+    }
     setRecordId(existing.id);
     if(existing.calibracion?.scaleUnitsPerPixel){
       setScale(existing.calibracion.scaleUnitsPerPixel);
       setCalibUnit(existing.calibracion.unit||'m');
       setCalibDistance(String(existing.calibracion.realDistance??''));
+    } else {
+      setScale(null);
+      setCalibUnit('m');
+      setCalibDistance('');
     }
     setPoints(existing.trazo?.points||[]);
     setTipo(existing.medicion?.tipo||'otro');
@@ -3893,7 +3928,7 @@ function PlanoManualMeasure({imageDataUrl, fileName, mimeType, setModule, takeof
       confianzaIA: existing.medicion?.confianzaIA, estado: existing.medicion?.estado
     });
     window.zoemecNotify?.(`Medicion anterior de "${fileName}" restaurada -- no fue necesario volver a trazarla.`,'info');
-  },[fileName,takeoffRecords]);
+  },[restoreKey,fileName,fileHash,takeoffRecords]);
 
   const redraw=()=>{
     const canvas=canvasRef.current, img=imgRef.current;
@@ -3953,7 +3988,7 @@ function PlanoManualMeasure({imageDataUrl, fileName, mimeType, setModule, takeof
     // en cuanto existen, ANTES de "usar en APU" -- si el usuario recarga
     // sin llegar a confirmar, el trazo no se pierde (ver restauracion arriba).
     const record=createTakeoffRecord({
-      fileName, mimeType, fileDataUrl: imageDataUrl,
+      fileName, mimeType, fileDataUrl: imageDataUrl, fileHash,
       mode, points, calibration:{pixelDistance:null,realDistance:Number(calibDistance)||null,scale,unit:calibUnit},
       elemento: el
     });

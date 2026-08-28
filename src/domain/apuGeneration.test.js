@@ -331,17 +331,156 @@ test('Test AC: con catalogo real de EPP, el precio se aplica y el renglon deja d
   assert.ok(casco.rendimientoDiario > 0);
 });
 
-test('Test U (pipeline v2 real): un renglon con match de catalogo llega a migrateLegacyApuToV2 marcado IMPORTADO, aunque el resto del APU sea de plantilla (ASUMIDO)', () => {
+test('Test U (pipeline v2 real): un renglon con match de catalogo llega a migrateLegacyApuToV2 marcado BIBLIOTECA (no IMPORTADO generico), aunque el resto del APU sea de plantilla (ASUMIDO)', () => {
   const catalog = [
     { desc: 'Loseta cerámica antiderrapante 30x30 nacional', unidad: 'm²', precio: 199, clave: 'MAT-LOSETA-30' }
   ];
   const v1 = makeAPUFromConcept('colocación de loseta 64m2', catalog);
   const v2 = migrateLegacyApuToV2(v1);
   const idx = v1.materials.findIndex(r => /loseta/i.test(r[0]));
-  assert.equal(v2.materials[idx].fuente.estado, 'IMPORTADO');
+  // Gap de trazabilidad reportado (2026-08-27): un match real de Biblioteca
+  // Inteligente sin validacion humana previa en el catalogo de origen ya NO
+  // se colapsa al mismo 'IMPORTADO' generico que un renglon literalmente
+  // importado sin match -- debe ser distinguible como 'BIBLIOTECA' end to
+  // end (UI/Excel/PDF), preservando ademas matchMethod/confidence/
+  // catalogItemId/origenPrecio sobre el mismo renglon.
+  assert.equal(v2.materials[idx].fuente.estado, 'BIBLIOTECA');
   assert.equal(v2.materials[idx].clave, 'MAT-LOSETA-30');
+  assert.equal(v2.materials[idx].fuente.catalogItemId, 'MAT-LOSETA-30');
+  assert.equal(v2.materials[idx].fuente.origenPrecio, 'BIBLIOTECA');
+  assert.ok(typeof v2.materials[idx].fuente.matchMethod === 'string' && v2.materials[idx].fuente.matchMethod.length > 0, 'debe declarar el metodo de coincidencia (clave_exacta/alias_sinonimo/descripcion_normalizada/categoria_unidad/fuzzy_token)');
+  assert.ok(typeof v2.materials[idx].fuente.confidence === 'number' && v2.materials[idx].fuente.confidence > 0, 'debe declarar una confianza numerica (0-100), nunca null cuando si hubo match');
   // Un material SIN match de catalogo en el mismo APU conserva el estado
-  // uniforme anterior (ASUMIDO -- plantilla sin sourceFile ni IA).
+  // uniforme anterior (ASUMIDO -- plantilla sin sourceFile ni IA), sin
+  // matchMethod/confidence/catalogItemId fabricados.
   const otherIdx = v1.materials.findIndex((_, i) => i !== idx);
   assert.equal(v2.materials[otherIdx].fuente.estado, 'ASUMIDO');
+  assert.equal(v2.materials[otherIdx].fuente.matchMethod, null);
+  assert.equal(v2.materials[otherIdx].fuente.confidence, null);
+  assert.equal(v2.materials[otherIdx].fuente.catalogItemId, null);
+  assert.equal(v2.materials[otherIdx].fuente.origenPrecio, 'PLANTILLA');
+});
+
+test('Trazabilidad de Biblioteca: un match SI verificado por un humano en el catalogo de origen hereda VERIFICADO, nunca BIBLIOTECA a secas', () => {
+  const catalog = [
+    { desc: 'Loseta cerámica antiderrapante 30x30 nacional', unidad: 'm²', precio: 199, clave: 'MAT-LOSETA-30', estado: 'VERIFICADO', fuente: 'Proveedor XYZ', fecha: '2026-08-01' }
+  ];
+  const v1 = makeAPUFromConcept('colocación de loseta 64m2', catalog);
+  const v2 = migrateLegacyApuToV2(v1);
+  const idx = v1.materials.findIndex(r => /loseta/i.test(r[0]));
+  assert.equal(v2.materials[idx].fuente.estado, 'VERIFICADO');
+  assert.equal(v2.materials[idx].fuente.origenPrecio, 'BIBLIOTECA');
+  assert.ok(v2.materials[idx].fuente.matchMethod);
+});
+
+test('Trazabilidad de Biblioteca en mano de obra y equipo: mismo contrato que materiales (matchMethod/confidence/catalogItemId/origenPrecio)', () => {
+  const catalog = [
+    { desc: 'Colocador (oficial)', unidad: 'jor', precio: 900, clave: 'MO-COLOC-01', tipo: 'labor' }
+  ];
+  const v1 = makeAPUFromConcept('colocación de loseta 64m2', catalog);
+  const v2 = migrateLegacyApuToV2(v1);
+  const idx = v1.labor.findIndex(r => /colocador/i.test(r[0]));
+  assert.notEqual(idx, -1);
+  assert.equal(v2.labor[idx].fuente.estado, 'BIBLIOTECA');
+  assert.equal(v2.labor[idx].fuente.catalogItemId, 'MO-COLOC-01');
+  assert.equal(v2.labor[idx].fuente.origenPrecio, 'BIBLIOTECA');
+  assert.ok(v2.labor[idx].fuente.matchMethod);
+  assert.ok(v2.labor[idx].fuente.confidence > 0);
+});
+
+// --- Cierre de brecha (fase de correccion): useCat() consultaba el catalogo
+// solo con {desc, tipo}, ignorando `unidad` aunque el renglon de plantilla
+// SI la trae siempre (nr[2]). `clave`/`categoria` NO se agregan: los
+// renglones de SYSTEM_RESOURCES son arreglos planos sin esos campos por
+// renglon -- enviarlos inventaria datos que no existen, algo prohibido
+// explicitamente. Por eso clave_exacta y categoria_unidad (que EXIGEN
+// query.clave/query.categoria, ver catalogLookup.js) siguen sin poder
+// alcanzarse desde este caller; los tests de abajo documentan ese limite a
+// proposito, no lo esconden. ---
+test('Test Z1: unidad ahora SI llega al matcher -- desempata fuzzy_token a favor del candidato con la unidad correcta, aunque su texto se parezca menos', () => {
+  const candidatoUnidadIncorrecta = { desc: 'Loseta ceramica 30x30 modelo especial de bodega surtido variado', unidad: 'pza', precio: 111 };
+  const candidatoUnidadCorrecta = { desc: 'Loseta ceramica 30x30 pieza premium importada linea plus extra', unidad: 'm²', precio: 199 };
+  // Sin el bonus de unidad, el candidato de texto mas parecido (menos
+  // palabras extra) ganaria por puro solape Jaccard -- ver aserción de abajo
+  // que reproduce ese calculo para dejar constancia de POR QUE cambia.
+  const apu = makeAPUFromConcept('colocación de loseta 64m2', [candidatoUnidadIncorrecta, candidatoUnidadCorrecta]);
+  const idx = apu.materials.findIndex(r => /loseta/i.test(r[0]));
+  assert.ok(idx >= 0);
+  assert.equal(apu.materials[idx][3], 199, 'debe ganar el candidato con unidad m² (coincide con el renglon de plantilla), no el de texto mas parecido');
+  assert.equal(apu.materialSources[idx].matchMethod, 'fuzzy_token');
+  assert.ok(apu.materialSources[idx].confidence > 0 && apu.materialSources[idx].confidence <= 100);
+});
+
+test('Test Z2: sin unidad/clave/categoria compatibles, el precio de plantilla NUNCA cambia (regresion de seguridad)', () => {
+  const catalogSinMatchReal = [
+    { desc: 'Producto totalmente ajeno sin relacion alguna', unidad: 'lote', precio: 99999 }
+  ];
+  const sinCatalogo = makeAPUFromConcept('colocación de loseta 64m2', []);
+  const conCatalogoInutil = makeAPUFromConcept('colocación de loseta 64m2', catalogSinMatchReal);
+  assert.deepEqual(conCatalogoInutil.materials, sinCatalogo.materials, 'sin match real, los renglones de plantilla quedan identicos');
+  assert.deepEqual(conCatalogoInutil.materialSources, sinCatalogo.materialSources);
+});
+
+test('Test Z3: clave_exacta y categoria_unidad siguen sin ser alcanzables desde useCat (los renglones de plantilla no tienen clave/categoria propios -- no se inventan)', () => {
+  const catalog = [
+    // Aunque el catalogo SI trae clave y categoria, el renglon de plantilla
+    // (SYSTEM_RESOURCES) nunca declara los suyos -- la query nunca envia
+    // query.clave/query.categoria, asi que clave_exacta/categoria_unidad no
+    // pueden competir; el match real cae en descripcion_normalizada/fuzzy.
+    { desc: 'Loseta cerámica 30x30', unidad: 'm²', categoria: 'Pisos', precio: 199, clave: 'MAT-LOSETA-30' }
+  ];
+  const apu = makeAPUFromConcept('colocación de loseta 64m2', catalog);
+  const idx = apu.materials.findIndex(r => /loseta/i.test(r[0]));
+  assert.ok(idx >= 0);
+  assert.notEqual(apu.materialSources[idx].matchMethod, 'clave_exacta');
+  assert.notEqual(apu.materialSources[idx].matchMethod, 'categoria_unidad');
+  // El match SI ocurre (texto identico salvo normalizacion) y SI propaga su
+  // clave/categoria reales -- lo que no existe es la CAPACIDAD de buscar POR
+  // esos campos desde este caller, no la propagacion de lo encontrado.
+  assert.equal(apu.materialSources[idx].matchMethod, 'descripcion_normalizada');
+  assert.equal(apu.materialSources[idx].clave, 'MAT-LOSETA-30');
+  assert.equal(apu.materialSources[idx].categoria, 'Pisos');
+});
+
+test('Test Z4: end-to-end con catalogo enriquecido -- matchMethod/confidence/catalogItemId/fuente/estado siguen llegando a migrateLegacyApuToV2 tras el cambio en useCat', () => {
+  const catalog = [
+    { desc: 'Loseta ceramica 30x30 pieza premium importada linea plus extra', unidad: 'm²', categoria: 'Pisos', precio: 199, clave: 'MAT-LOSETA-30', estado: 'REQUIERE_VALIDACION', fuente: 'Proveedor XYZ', fecha: '2026-08-27' }
+  ];
+  const v1 = makeAPUFromConcept('colocación de loseta 64m2', catalog);
+  const v2 = migrateLegacyApuToV2(v1);
+  const idx = v1.materials.findIndex(r => /loseta/i.test(r[0]));
+  assert.ok(idx >= 0);
+  assert.equal(v1.materials[idx][3], 199);
+  assert.equal(v2.materials[idx].fuente.matchMethod, 'fuzzy_token');
+  assert.ok(v2.materials[idx].fuente.confidence > 0);
+  assert.equal(v2.materials[idx].fuente.catalogItemId, 'MAT-LOSETA-30');
+  assert.equal(v2.materials[idx].fuente.estado, 'BIBLIOTECA'); // catalogo NO trae VERIFICADO -> nunca se asume
+  assert.equal(v2.materials[idx].fuente.proveedor, 'Proveedor XYZ');
+});
+
+test('Test Z5 (concepto real de impermeabilizacion, catalogo enriquecido con clave/categoria/unidad): antes/despues del cambio en useCat -- reporta matchMethod/confidence/catalogItemId/fuente/estado', () => {
+  const catalogEnriquecido = [
+    { desc: 'Impermeabilizante acrílico elastomérico 20 años', unidad: 'L', categoria: 'Impermeabilizantes', precio: 145, clave: 'MAT-IMPER-01', sinonimos: ['Impermeabilizante acrílico'], estado: 'VERIFICADO', fuente: 'Comex', fecha: '2026-08-20' },
+    { desc: 'Aplicador de impermeabilizante certificado', unidad: 'jor', categoria: 'Mano de obra especializada', precio: 520, tipo: 'labor', sinonimos: ['Aplicador (oficial)'], estado: 'VERIFICADO', fuente: 'Cuadrilla propia', fecha: '2026-08-20' }
+  ];
+  const v1 = makeAPUFromConcept('Impermeabilización de azotea con impermeabilizante acrílico, 3 capas', catalogEnriquecido);
+  const v2 = migrateLegacyApuToV2(v1);
+  const matIdx = v1.materials.findIndex(r => /impermeabilizante/i.test(r[0]));
+  const laborIdx = v1.labor.findIndex(r => /aplicador/i.test(r[0]));
+  assert.ok(matIdx >= 0, 'debe generar un renglon de impermeabilizante (no pintura -- ver constructionSystems.js)');
+  assert.ok(laborIdx >= 0);
+  assert.equal(v1.materials[matIdx][3], 145);
+  assert.equal(v1.labor[laborIdx][3], 520);
+  // reporte ANTES(solo desc+tipo) | DESPUES(desc+tipo+unidad): el alias ya
+  // ganaba con el caller viejo (alias_sinonimo no depende de unidad), asi
+  // que aqui el "antes/despues" pedido por el usuario es: mismo metodo,
+  // misma confianza, ninguna regresion -- la mejora de unidad se demuestra
+  // en Test Z1 con un caso donde SI cambia el ganador.
+  assert.equal(v2.materials[matIdx].fuente.matchMethod, 'alias_sinonimo');
+  assert.equal(v2.materials[matIdx].fuente.catalogItemId, 'MAT-IMPER-01');
+  assert.equal(v2.materials[matIdx].fuente.estado, 'VERIFICADO');
+  assert.equal(v2.materials[matIdx].fuente.proveedor, 'Comex');
+  assert.equal(v2.labor[laborIdx].fuente.matchMethod, 'alias_sinonimo');
+  assert.equal(v2.labor[laborIdx].fuente.estado, 'VERIFICADO');
+  assert.equal(v2.labor[laborIdx].fuente.proveedor, 'Cuadrilla propia');
 });

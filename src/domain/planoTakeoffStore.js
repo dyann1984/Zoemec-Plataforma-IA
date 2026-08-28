@@ -10,7 +10,27 @@
    mismo patron que `catalog`/`zoemec-biblioteca` en main.jsx) vive en
    main.jsx -- este modulo es puro y testeable sin React/localStorage. */
 
-export function createTakeoffRecord({ fileName, mimeType, fileDataUrl, mode, points, calibration, elemento, concepto } = {}){
+/* Hash corto y estable de un string (FNV-1a de 32 bits, en base36) -- SIN
+   dependencias nuevas. Bug reportado (aislamiento de Takeoff 2D entre
+   archivos): antes la identidad de un plano era SOLO su `fileName`; dos
+   archivos distintos subidos con el MISMO nombre (caso real: exportar dos
+   veces "plano.jpg" de fuentes distintas) compartian el mismo registro
+   persistido por error. El nombre NO deja de guardarse (sigue siendo la
+   referencia legible para el usuario), pero la identidad real para
+   encontrar/aislar un registro ahora es nombre+hash de contenido -- ver
+   findLatestTakeoffForFile. No es criptografico, no necesita serlo: solo
+   necesita distinguir dos imagenes distintas de forma estable y barata. */
+export function hashFileContent(value){
+  const text = String(value || '');
+  let hash = 2166136261;
+  for(let i = 0; i < text.length; i++){
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+export function createTakeoffRecord({ fileName, mimeType, fileDataUrl, fileHash, mode, points, calibration, elemento, concepto } = {}){
   const now = new Date().toISOString();
   return {
     id: `takeoff-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -19,6 +39,11 @@ export function createTakeoffRecord({ fileName, mimeType, fileDataUrl, mode, poi
     origen: {
       fileName: fileName || '',
       mimeType: mimeType || '',
+      // Identidad de contenido (ver hashFileContent arriba): se calcula
+      // SIEMPRE a partir del dataURL real en memoria, ANTES de decidir si
+      // se persiste completo o no -- asi que sobrevive aunque la imagen sea
+      // demasiado grande para guardarse completa (guardia de abajo).
+      fileHash: fileHash || (typeof fileDataUrl === 'string' && fileDataUrl ? hashFileContent(fileDataUrl) : null),
       // Guardia de tamaño real (localStorage tiene un limite ~5-10MB por
       // origen): una imagen grande NO se persiste completa -- se guarda
       // null y el nombre/fecha quedan como referencia, nunca se trunca en
@@ -99,12 +124,30 @@ export function upsertTakeoffRecord(records, record){
   return next;
 }
 
-/* Busca el registro persistido mas reciente para un archivo (por nombre) --
-   permite reconstruir el trazo/calibracion al recargar el proyecto sin
-   volver a dibujarlo, cuando el usuario vuelve a abrir el mismo plano. */
-export function findLatestTakeoffForFile(records, fileName){
+/* Busca el registro persistido mas reciente para un archivo -- permite
+   reconstruir el trazo/calibracion al recargar el proyecto o al volver a
+   abrir el mismo plano, sin volver a dibujarlo. `fileHash` (opcional, ver
+   hashFileContent arriba) es la identidad real: cuando el LLAMADOR lo
+   declara (siempre lo hace el flujo real, PlanoManualMeasure en main.jsx,
+   porque ya tiene la imagen cargada en memoria), un registro SOLO cuenta
+   como el mismo archivo si su propio `fileHash` coincide exactamente --
+   nunca se asume que coincide solo porque el registro sea viejo y no traiga
+   hash. Bug reportado y reproducido: con un fallback "sin hash, empareja
+   por nombre igual", un registro persistido ANTES de esta correccion (sin
+   fileHash) seguia emparejando por nombre para CUALQUIER archivo nuevo con
+   ese mismo nombre, exactamente el caso que se pidio aislar -- de nada
+   sirve declarar un hash si un registro sin hash lo puede seguir
+   "ganando" por nombre. La unica vez que se empareja solo por nombre es
+   cuando el LLAMADOR no tiene forma de calcular un hash (no le paso el
+   parametro) -- compatibilidad real con codigo viejo que invoque esta
+   funcion con 2 argumentos, no con datos viejos. */
+export function findLatestTakeoffForFile(records, fileName, fileHash){
   const list = Array.isArray(records) ? records : [];
-  const matches = list.filter(r => r.origen?.fileName && fileName && r.origen.fileName === fileName);
+  const matches = list.filter(r => {
+    if(!r.origen?.fileName || !fileName || r.origen.fileName !== fileName) return false;
+    if(fileHash) return r.origen.fileHash === fileHash;
+    return true;
+  });
   if(!matches.length) return null;
   return matches.reduce((latest, r) => (r.updatedAt > latest.updatedAt ? r : latest));
 }

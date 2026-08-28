@@ -121,8 +121,13 @@ export function buildProfessionalAPUSheet(rawApu){
   const pu=add([asCell('PRECIO UNITARIO FINAL',{fontWeight:'bold',color:'#FFFFFF',backgroundColor:'#2F7D3A'}),null,null,null,null,null,null,null,null,formula(`=J${subtotalRow}`,{fontWeight:'bold',color:'#FFFFFF',backgroundColor:'#2F7D3A'}),null,null]);
   add(['IMPORTE TOTAL',null,null,null,null,null,null,null,`${Number(apu.cantidadObra||0)} ${apu.unit}`,formula(`=J${pu}*${Number(apu.cantidadObra||0)}`,{fontWeight:'bold'}),null,null]);add([]);
 
+  // Gap de trazabilidad reportado: un renglon resuelto por Biblioteca
+  // Inteligente (fuente.matchMethod/confidence, ver apuSchema.js#
+  // fuenteFromSource) ya no debe verse identico a uno de plantilla en esta
+  // tabla -- Proveedor/Fuente muestran el match real (metodo + insumo de
+  // catalogo) en vez de quedar en blanco, sin inventar un proveedor.
   span('16. FUENTES DE PRECIOS',COLORS.measure);head(['Recurso','Clave','Descripcion','Unidad','Precio','Fecha','Proveedor','Tipo','Verificado','Fuente','URL','Confianza']);
-  ['materials','labor','equipment','consumables'].flatMap(k=>(apu[k]||[]).map(r=>[k,r])).forEach(([kind,r])=>add([kind,r.clave,r.descripcion,r.unidad,Number(r.precioUnitario??r.salarioBase??r.tarifa??0),r.fuente?.fecha||'',r.fuente?.proveedor||'',apuDataStateLabel(r.fuente?.estado),r.fuente?.estado==='VERIFICADO'?'SI':'NO',r.fuente?.sourceName||'',r.fuente?.sourceUrl||'',Number(r.fuente?.confidence||0)]));add([]);
+  ['materials','labor','equipment','consumables'].flatMap(k=>(apu[k]||[]).map(r=>[k,r])).forEach(([kind,r])=>add([kind,r.clave,r.descripcion,r.unidad,Number(r.precioUnitario??r.salarioBase??r.tarifa??0),r.fuente?.fecha||'',r.fuente?.proveedor||(r.fuente?.estado==='BIBLIOTECA'||r.fuente?.estado==='VERIFICADO'?'Biblioteca ZOEMEC':''),apuDataStateLabel(r.fuente?.estado),r.fuente?.estado==='VERIFICADO'?'SI':'NO',r.fuente?.sourceName||(r.fuente?.matchMethod?`Biblioteca: ${r.fuente.matchMethod}${r.fuente.catalogItemId?` (${r.fuente.catalogItemId})`:''}`:''),r.fuente?.sourceUrl||'',Number(r.fuente?.confidence||0)]));add([]);
   span('17-18. SUPUESTOS, CONFIANZA Y FIRMAS');(apu.supuestos||[]).forEach((v,i)=>add([i+1,asCell(v.texto||v,{columnSpan:11,wrap:true}),...Array(10).fill(null)]));
   add([asCell('Confianza',XLS.label),`${apu.confidence.score}% ${apu.confidence.level}`,asCell('Precios',XLS.label),`${apu.confidence.dimensions.precios}%`,asCell('Rendimientos',XLS.label),`${apu.confidence.dimensions.rendimientos}%`,asCell('Riesgos',XLS.label),apu.confidence.risks,asCell('Estado',XLS.label),apu.validationStatus,null,null]);
   add([asCell('Elaboro',XLS.label),apu.elaboro||'',null,asCell('Reviso',XLS.label),apu.reviso||'',null,asCell('Aprobo',XLS.label),apu.aprobo||'',null,asCell('Version',XLS.label),apu.version||'V1',null]);
@@ -543,9 +548,13 @@ function drawApuSections(doc,rawApu,opts={}){
   {const excLines=doc.splitTextToSize(pdfText((apu.criterioMedicion?.excluye||[]).join('; ')||'Sin exclusiones explicitas registradas.'),W-2*M);ensure(excLines.length*3.4+2);doc.text(excLines,M,y+3.4);y+=excLines.length*3.4+3;}
 
   // ---- Fuentes, supuestos/notas, trazabilidad, confianza, firmas ----
-  table('13. FUENTES DE PRECIOS',[7,140,136],['Recurso','Proveedor/Fuente','Fecha','Estado'],
-    ['materials','labor','equipment','consumables','seguridad'].flatMap(k=>(apu[k]||[]).map(r=>[r.descripcion,r.fuente?.proveedor||r.fuente?.sourceName||'Sin proveedor',r.fuente?.fecha||'',apuDataStateLabel(r.fuente?.estado)])),
-    [2.6,1.6,0.9,1]);
+  // "Método (confianza)" -- gap de trazabilidad reportado: cuando el
+  // renglon vino de un match real de Biblioteca (fuente.matchMethod, ver
+  // apuSchema.js#fuenteFromSource) el metodo de coincidencia y su confianza
+  // quedan visibles/auditables tambien en el PDF, no solo en Excel.
+  table('13. FUENTES DE PRECIOS',[7,140,136],['Recurso','Proveedor/Fuente','Fecha','Estado','Método (confianza)'],
+    ['materials','labor','equipment','consumables','seguridad'].flatMap(k=>(apu[k]||[]).map(r=>[r.descripcion,r.fuente?.proveedor||r.fuente?.sourceName||(r.fuente?.estado==='BIBLIOTECA'||r.fuente?.estado==='VERIFICADO'?'Biblioteca ZOEMEC':'Sin proveedor'),r.fuente?.fecha||'',apuDataStateLabel(r.fuente?.estado),r.fuente?.matchMethod?`${r.fuente.matchMethod} (${r.fuente.confidence??0}%)`:''])),
+    [2.1,1.4,0.8,0.9,1.1]);
   table('14. SUPUESTOS, NOTAS Y OBSERVACIONES',[7,140,136],['#','Supuesto / nota'],
     (apu.supuestos||[]).map((v,i)=>[i+1,v.texto||v]),[0.3,3.4]);
   bar('15. TRAZABILIDAD',[109,45,145]);

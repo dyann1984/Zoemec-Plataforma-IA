@@ -4,6 +4,45 @@ import { readXlsxCells, findRowByLabel } from './helpers/xlsxRead.mjs';import { 
 function golden(i=1){const a=makeEmptyAPUv2();Object.assign(a,{clave:`ALB-APL-${String(i).padStart(3,'0')}`,concept:'Aplanado fino en muros a plomo y regla con mortero cemento-arena 1:4, espesor promedio 1.5 cm, incluye preparacion de superficie, materiales, mano de obra, herramienta, equipo, andamios, limpieza y todo lo necesario para su correcta ejecucion.',unit:'m²',cantidadObra:125,proyecto:'Golden test ZOEMEC',cliente:'Cliente de prueba',version:'V1'});const fuente={estado:APU_DATA_STATE.VERIFICADO,proveedor:'Catalogo proporcionado',fecha:'2026-08-01'};a.materials=[{clave:'MAT-001',descripcion:'Cemento CPC 30R',unidad:'kg',consumo:5.6,desperdicioPct:0,precioUnitario:2.35,fuente},{clave:'MAT-002',descripcion:'Arena lavada',unidad:'m³',consumo:.018,desperdicioPct:5,precioUnitario:450,fuente}];a.labor=[{clave:'MO-001',descripcion:'Oficial albañil',unidad:'jor',cuadrilla:1,rendimiento:25,jornada:8,salarioBase:802.15,fsr:1.382,fuente},{clave:'MO-002',descripcion:'Ayudante albañil',unidad:'jor',cuadrilla:1,rendimiento:25,jornada:8,salarioBase:601.61,fsr:1.382,fuente}];a.equipment=[{clave:'EQ-001',descripcion:'Andamio tubular',unidad:'dia',cantidad:.1,tarifa:150,rendimiento:25,fuente}];a.seguridad=[{clave:'SP-001',descripcion:'Casco de seguridad',unidad:'pza',cantidad:.001,precioUnitario:220,observaciones:'Uso obligatorio'}];a.procedimientoConstructivo=['Preparar superficie','Humedecer muro','Aplicar y reglear mortero','Curar'];a.controlCalidad=[{especificacion:'Aplome',criterio:'± 3 mm en 3 m'}];a.criterioMedicion={unidadMedicion:'m²',incluye:['materiales','mano de obra','limpieza'],excluye:['acabados adicionales']};a.supuestos=[{texto:'Jornada de 8 horas'}];return a;}
 test('golden: motor y exportadores v2 conservan CD, subtotal, IVA, PU y total',async()=>{const a=golden(),t=calcAPUv2(a);const dir=fs.mkdtempSync(path.join(os.tmpdir(),'zoemec-v2-'));const before=process.cwd();process.chdir(dir);try{await exportAPUExcelV2(a,{writeXlsxFileImpl:writeXlsxFileNode,fileName:'golden.xlsx'});const {doc,apu}=exportAPUPdfV2(a,{fileName:'golden.pdf'});assert.ok(fs.statSync('golden.xlsx').size>1000);assert.ok(fs.statSync('golden.pdf').size>1000);assert.deepEqual(['direct','iva','pu','importeTotal'].map(k=>apu.calculated[k]),['direct','iva','pu','importeTotal'].map(k=>t[k]));const raw=Buffer.from(doc.output('arraybuffer')).toString('latin1');[t.direct,t.iva,t.pu,t.importeTotal].forEach(v=>assert.ok(raw.includes(`(${new Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN'}).format(v).replace('MX$','$')})`)));}finally{process.chdir(before);fs.rmSync(dir,{recursive:true,force:true});}});
 test('Web, Excel y PDF comparten exactamente el snapshot profesional finalizado',()=>{const web=finalizeProfessionalAPU(golden());const excel=buildProfessionalAPUSheet(web).apu;const pdf=exportAPUPdfV2(web,{save:false}).apu;const projection=a=>({identity:[a.id,a.clave,a.concept,a.unit,a.cantidadObra,a.version],resources:{materials:a.materials,labor:a.labor,tools:a.herramientaMenor,equipment:a.equipment,seguridad:a.seguridad},factors:a.factores,calculated:a.calculated,confidence:a.confidence,validationStatus:a.validationStatus,sources:[...a.materials,...a.labor,...a.equipment].map(r=>r.priceRecord)});assert.deepEqual(projection(excel),projection(web));assert.deepEqual(projection(pdf),projection(web));});
+test('Gap de trazabilidad de Biblioteca (2026-08-27): un renglon BIBLIOTECA con matchMethod/confidence/catalogItemId reales llega visible a Excel y PDF, nunca en blanco/generico', async () => {
+  const a = golden();
+  const fuenteBiblioteca = {
+    estado: 'BIBLIOTECA',
+    proveedor: null,
+    fecha: null,
+    matchMethod: 'fuzzy_token',
+    confidence: 67,
+    catalogItemId: 'MAT-IMPER-01',
+    origenPrecio: 'BIBLIOTECA'
+  };
+  a.materials[0] = { ...a.materials[0], clave: 'MAT-IMPER-01', descripcion: 'Impermeabilizante acrílico', precioUnitario: 145, fuente: fuenteBiblioteca };
+  a.labor[0] = { ...a.labor[0], clave: 'MO-APLIC-01', descripcion: 'Aplicador (oficial)', salarioBase: 520, fuente: fuenteBiblioteca };
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zoemec-biblioteca-trace-'));
+  const before = process.cwd(); process.chdir(dir);
+  try {
+    await exportAPUExcelV2(a, { writeXlsxFileImpl: writeXlsxFileNode, fileName: 'trace.xlsx' });
+    const zip = unzipSync(fs.readFileSync('trace.xlsx'));
+    const xml = strFromU8(zip['xl/worksheets/sheet2.xml']);
+    // Buscar el texto en sharedStrings (write-excel-file guarda texto ahi, no inline)
+    const shared = strFromU8(zip['xl/sharedStrings.xml'] || new Uint8Array());
+    const excelText = xml + shared;
+    assert.match(excelText, /BIBLIOTECA/, 'el estado BIBLIOTECA debe aparecer en el Excel, no colapsar a IMPORTADO generico');
+    assert.match(excelText, /fuzzy_token/, 'el matchMethod real debe quedar visible/auditable en el Excel (16. FUENTES DE PRECIOS)');
+    assert.match(excelText, /MAT-IMPER-01/, 'el catalogItemId (clave del insumo de catalogo) debe quedar visible en el Excel');
+    assert.match(excelText, /67/, 'la confianza numerica del match debe quedar visible en el Excel');
+
+    const { doc } = exportAPUPdfV2(a, { save: false });
+    const pdfText = Buffer.from(doc.output('arraybuffer')).toString('latin1');
+    assert.match(pdfText, /BIBLIOTECA/, 'el estado BIBLIOTECA debe aparecer en el PDF, no colapsar a IMPORTADO generico');
+    assert.match(pdfText, /fuzzy_token/, 'el matchMethod real debe quedar visible/auditable en el PDF (13. FUENTES DE PRECIOS)');
+    assert.match(pdfText, /67/, 'la confianza numerica del match debe quedar visible en el PDF');
+  } finally {
+    process.chdir(before);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('buildParametrosSheet: hoja PARAMETROS con moneda/vigencia/IVA/tolerancia/version, contenido real (no inventado)',()=>{
   const a=golden();a.moneda='MXN';a.fechaBase='2026-08-01';a.version='V2';
   const sheet=buildParametrosSheet([a],{engineVersion:'V2-test'});

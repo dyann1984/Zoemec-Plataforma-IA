@@ -335,8 +335,24 @@ export function makeAPUFromConcept(concept, catalog){
   const useCat = (arr, tipoFiltro) => {
     const sources = [];
     const rows = arr.map(r=>{
-      const found = findCatalogMatches(catalog, { desc: r[0], tipo: tipoFiltro });
       const nr = normalizeApuRow(r);
+      // Se envia todo lo que el renglon de plantilla REALMENTE trae para que
+      // findCatalogMatches pueda decidir con su propio orden de prioridad
+      // (clave_exacta > alias_sinonimo > descripcion_normalizada >
+      // categoria_unidad > fuzzy_token, ver catalogLookup.js) -- no se
+      // duplica esa logica aqui. `unidad` (nr[2]) SI existe siempre en el
+      // renglon y ahora se envia (antes se ignoraba, dejando la bonificacion
+      // de unidad de fuzzy_token y la etapa categoria_unidad sin poder usar
+      // ese dato). `clave` y `categoria` NO se envian: los renglones de
+      // SYSTEM_RESOURCES (constructionSystems.js) son arreglos planos
+      // [desc, coeficiente, unidad, precio, desperdicio] que nunca traen su
+      // propio codigo/categoria -- inventar un valor aqui violaria la regla
+      // explicita de no fabricar clave/categoria. Esto significa que
+      // clave_exacta y categoria_unidad seguiran sin alcanzarse desde este
+      // caller hasta que las plantillas (o una fuente distinta de recursos)
+      // declaren esos campos por renglon; ambas etapas ya estan probadas y
+      // operativas a nivel de findCatalogMatches (catalogLookup.test.js).
+      const found = findCatalogMatches(catalog, { desc: r[0], tipo: tipoFiltro, unidad: nr[2] });
       if(found){
         nr[3] = found.match.precio;
         if(found.match.unidad) nr[2] = normalizeUnitLabel(found.match.unidad);
@@ -345,7 +361,13 @@ export function makeAPUFromConcept(concept, catalog){
           confidence: found.confidence,
           clave: found.match.clave || null,
           categoria: found.match.categoria || null,
-          estado: found.match.estado === 'VERIFICADO' ? APU_DATA_STATE.VERIFICADO : APU_DATA_STATE.IMPORTADO,
+          // BIBLIOTECA (gap de trazabilidad reportado): un match real de
+          // catalogo/Biblioteca sin validacion humana previa (found.match.
+          // estado !== 'VERIFICADO') ya NO se colapsa al mismo IMPORTADO
+          // generico que un renglon literalmente importado sin match --
+          // sigue exigiendose 'VERIFICADO' explicito en el catalogo de
+          // origen para heredar VERIFICADO aqui, nunca se asume.
+          estado: found.match.estado === 'VERIFICADO' ? APU_DATA_STATE.VERIFICADO : APU_DATA_STATE.BIBLIOTECA,
           proveedor: found.match.traceability?.sourceDocName || found.match.fuente || null,
           fecha: found.match.traceability?.validatedAt || found.match.fecha || null,
           // Rendimiento/cuadrilla de catalogo (solo relevante para mano de

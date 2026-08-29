@@ -33,7 +33,10 @@ import { RENDIMIENTO_FUENTE } from './apuReview.js';
    El resto de las disciplinas usa RENDIMIENTO_FUENTE.PLANTILLA (base
    tecnica ZOEMEC, no calibrada contra una matriz real todavia) -- nunca se
    presenta como si tuviera el mismo respaldo. */
-const LIBRARY_CALIBRATED_TIPOS = new Set(['concreto', 'acero']);
+// Exportado (antes privado) para que apuChallenge.js pueda etiquetar
+// honestamente su baseline recalculado como "historico calibrado" solo para
+// estas disciplinas, y "plantilla tecnica" para el resto -- nunca al reves.
+export const LIBRARY_CALIBRATED_TIPOS = new Set(['concreto', 'acero']);
 
 /* Confianza del rendimiento (0-100, ver yieldConfidence del reporte):
    deliberadamente NUNCA alta (max 85) -- ninguna de las dos fuentes es

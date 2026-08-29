@@ -10,7 +10,7 @@ import { xcell, fcell, XLS, exportWorkbookExcel, money, num } from './apuExport.
 
 const COLORS={labor:'#123F78',materials:'#D56A00',tools:'#2F7D3A',equipment:'#1578B7',consumables:'#8C6D1F',safety:'#B5263D',procedure:'#6D2D91',quality:'#D5A900',measure:'#078C88'};
 const NO_JUSTIFICATION_TEXT='Sin justificación técnica registrada -- APU generado antes de esta funcionalidad.';
-const safeSheet=value=>String(value||'APU').replace(/[\\/?*\[\]:]/g,'-').slice(0,31);
+export const safeSheet=value=>String(value||'APU').replace(/[\\/?*\[\]:]/g,'-').slice(0,31);
 const sourceText=row=>row?.fuente?.sourceName||row?.fuente?.proveedor||apuDataStateLabel(row?.fuente?.estado);
 const asCell=(value,style={})=>xcell(value,style);
 const formula=(value,style={})=>fcell(value,{...XLS.calc,...style});
@@ -355,7 +355,7 @@ function apuEvidenceLabel(level){
    la segunda se perdia en silencio. Aqui se desambigua con un sufijo (2),
    (3)... SOLO cuando de verdad colisiona, respetando el limite de 31
    caracteres de Excel. */
-function disambiguateSheetNames(sheets){
+export function disambiguateSheetNames(sheets){
   const seen=new Map();
   return sheets.map(s=>{
     const count=(seen.get(s.sheet)||0)+1;
@@ -409,7 +409,7 @@ export async function exportAPUExcelV2(apus,options={}){
    el llamador pase startPage explicito, para que la numeracion de
    "Pagina N" del pie sea absoluta dentro del PDF maestro y no se reinicie
    por cada APU. */
-function drawApuSections(doc,rawApu,opts={}){
+export function drawApuSections(doc,rawApu,opts={}){
   assertExportableApus(rawApu);
   const apu=finalizeProfessionalAPU(rawApu); const t=apu.calculated;
   const W=doc.internal.pageSize.getWidth(),H=doc.internal.pageSize.getHeight(),M=12;

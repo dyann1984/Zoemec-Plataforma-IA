@@ -225,13 +225,15 @@ export function calculateAPUConfidence(apu = {}, options = {}){
     } };
 }
 
-export function validateAPU(apu = {}, options = {}){
-  const totals = options.totals || calcAPUv2(apu);
-  // runTechnicalQualityRules (motor universal, ver technicalQualityRules.js):
-  // reglas semanticas por disciplina ("acero sin acero" y equivalentes),
-  // derivadas del registro extensible de sistemas constructivos -- se omite
-  // en silencio (arreglo vacio) para un APU sin primaryActivity conocido.
-  const issues = [...validateApuSchemaV2(apu), ...findApuNumericIssuesV2(apu, totals), ...runTechnicalQualityRules(apu)];
+/* Checks de negocio (no numericos, no de esquema, no semanticos por
+   disciplina -- esos ya los cubren findApuNumericIssuesV2, validateApuSchemaV2
+   y runTechnicalQualityRules respectivamente) que antes vivian inline dentro
+   de validateAPU. Extraidos a funcion propia y exportados para que
+   apuAuditor.js (motor de auditoria consolidado) pueda reusar exactamente
+   la misma logica sin duplicarla -- validateAPU sigue llamandola igual que
+   antes, mismo array de issues, mismo comportamiento. */
+export function collectApuBusinessIssues(apu = {}, options = {}){
+  const issues = [];
   const now = options.now ? new Date(options.now) : new Date();
   sourceRows(apu).forEach(({kind,row,source}, index) => {
     if(!text(source.proveedor || source.sourceName)) issues.push({ code:'price_without_source', kind, index, severity:'warning', message:`${row.clave || kind} no tiene fuente identificable.` });
@@ -255,6 +257,17 @@ export function validateAPU(apu = {}, options = {}){
     if(unique.has(key)) issues.push({ code:'duplicate_resource', kind, index, severity:'warning', message:`Recurso duplicado: ${row.clave || row.descripcion}.` });
     unique.add(key);
   });
+  return issues;
+}
+
+export function validateAPU(apu = {}, options = {}){
+  const totals = options.totals || calcAPUv2(apu);
+  // runTechnicalQualityRules (motor universal, ver technicalQualityRules.js):
+  // reglas semanticas por disciplina ("acero sin acero" y equivalentes),
+  // derivadas del registro extensible de sistemas constructivos -- se omite
+  // en silencio (arreglo vacio) para un APU sin primaryActivity conocido.
+  const now = options.now ? new Date(options.now) : new Date();
+  const issues = [...validateApuSchemaV2(apu), ...findApuNumericIssuesV2(apu, totals), ...runTechnicalQualityRules(apu), ...collectApuBusinessIssues(apu, { now })];
   const hasErrors = issues.some(issue => issue.severity === 'error' || !issue.severity);
   return { status: hasErrors ? 'REQUIERE REVISION' : issues.length ? 'CON OBSERVACIONES' : 'VALIDADO', issues, totals, confidence: calculateAPUConfidence(apu, { now }) };
 }

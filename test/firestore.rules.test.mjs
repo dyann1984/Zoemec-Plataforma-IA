@@ -221,3 +221,139 @@ describe('firestore.rules — payments', () => {
     await assertFails(alice.doc('payments/p1').get());
   });
 });
+
+describe('firestore.rules — technicalMemory / challengeDecisions (Fase 6)', () => {
+  it('nadie escribe technicalMemory desde el cliente, ni el propio usuario -- toda escritura pasa por api/technical-memory.mjs (SDK admin)', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('technicalMemory/m1').set({ status: 'APPROVED', value: 999 }));
+  });
+
+  // FIX Fase 9 (hallazgo F-002, P0): technicalMemory puede contener
+  // APPROVED_PRICE/PREFERRED_SUPPLIER de scope PROJECT/ORGANIZATION --
+  // informacion de licitacion, no "dato tecnico generico". Ninguna cuenta
+  // (ni siquiera la propia, salvo admin) puede leerlo con el SDK de cliente
+  // directo -- la UI real siempre lee via el endpoint (que si filtra por
+  // proyecto/usuario). Antes esta prueba se llamaba "cualquier usuario
+  // autenticado SI puede leer" y afirmaba `assertSucceeds`; una PoC real
+  // demostro que eso permitia leer precios/proveedores de OTRA organizacion.
+  it('ningun usuario NO-admin puede leer technicalMemory con el SDK de cliente directo (cierra fuga cross-tenant de precios/proveedores)', async () => {
+    await seed((db) => db.doc('technicalMemory/m1').set({ status: 'PROPOSED', value: 5 }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('technicalMemory/m1').get());
+  });
+
+  it('un admin SI puede leer technicalMemory directo (via el catch-all de administrador)', async () => {
+    await seed((db) => db.doc('technicalMemory/m1').set({ status: 'PROPOSED', value: 5 }));
+    await seed((db) => db.doc('users/admin-uid').set({ role: 'admin' }));
+    const admin = testEnv.authenticatedContext('admin-uid').firestore();
+    await assertSucceeds(admin.doc('technicalMemory/m1').get());
+  });
+
+  it('un usuario no autenticado no puede leer technicalMemory', async () => {
+    await seed((db) => db.doc('technicalMemory/m1').set({ status: 'PROPOSED', value: 5 }));
+    const anon = testEnv.unauthenticatedContext().firestore();
+    await assertFails(anon.doc('technicalMemory/m1').get());
+  });
+
+  it('nadie escribe technicalMemoryAudit desde el cliente, y solo un admin puede leerlo', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('technicalMemoryAudit/a1').set({ action: 'APPROVED' }));
+    await seed((db) => db.doc('technicalMemoryAudit/a1').set({ action: 'APPROVED' }));
+    await assertFails(alice.doc('technicalMemoryAudit/a1').get());
+  });
+
+  it('nadie escribe challengeDecisions desde el cliente, ni el propio usuario', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('challengeDecisions/d1').set({ decision: 'MAINTAIN' }));
+  });
+
+  // FIX Fase 9 (hallazgo F-002, P0): mismo criterio que technicalMemory --
+  // ninguna cuenta no-admin lee challengeDecisions con el SDK de cliente
+  // directo (la UI real siempre pasa por el endpoint, que filtra).
+  it('ningun usuario NO-admin puede leer challengeDecisions con el SDK de cliente directo', async () => {
+    await seed((db) => db.doc('challengeDecisions/d1').set({ decision: 'MAINTAIN' }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('challengeDecisions/d1').get());
+  });
+
+  it('nadie escribe challengeDecisionAudit desde el cliente, y solo un admin puede leerlo', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('challengeDecisionAudit/a1').set({ action: 'DECISION_RECORDED' }));
+    await seed((db) => db.doc('challengeDecisionAudit/a1').set({ action: 'DECISION_RECORDED' }));
+    await assertFails(alice.doc('challengeDecisionAudit/a1').get());
+  });
+});
+
+describe('firestore.rules — projects / apus / apuVersions (Fase 7)', () => {
+  it('nadie escribe projects desde el cliente, ni el propio dueno -- toda escritura pasa por api/projects.mjs (SDK admin)', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('projects/p1').set({ ownerUid: 'alice', name: 'Obra' }));
+  });
+
+  it('el dueno real SI puede leer su propio proyecto', async () => {
+    await seed((db) => db.doc('projects/p1').set({ ownerUid: 'alice', name: 'Obra' }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(alice.doc('projects/p1').get());
+  });
+
+  it('un usuario distinto NO puede leer el proyecto de otro (dato propio, no tecnico)', async () => {
+    await seed((db) => db.doc('projects/p1').set({ ownerUid: 'alice', name: 'Obra' }));
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(bob.doc('projects/p1').get());
+  });
+
+  it('nadie escribe projectAudit desde el cliente, y solo el dueno puede leerlo', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('projectAudit/a1').set({ action: 'PROJECT_CREATED', ownerUid: 'alice' }));
+    await seed((db) => db.doc('projectAudit/a1').set({ action: 'PROJECT_CREATED', ownerUid: 'alice' }));
+    await assertSucceeds(alice.doc('projectAudit/a1').get());
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(bob.doc('projectAudit/a1').get());
+  });
+
+  it('nadie escribe apus desde el cliente, ni el propio dueno -- toda escritura pasa por api/apus.mjs (SDK admin)', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('apus/a1').set({ ownerUid: 'alice', currentVersion: 'V1' }));
+  });
+
+  it('el dueno real SI puede leer su propio APU, otro usuario no', async () => {
+    await seed((db) => db.doc('apus/a1').set({ ownerUid: 'alice', currentVersion: 'V1' }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(alice.doc('apus/a1').get());
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(bob.doc('apus/a1').get());
+  });
+
+  it('nadie escribe apuVersions desde el cliente; el dueno real si puede leer, otro usuario no', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('apuVersions/a1__V1').set({ ownerUid: 'alice', version: 'V1' }));
+    await seed((db) => db.doc('apuVersions/a1__V1').set({ ownerUid: 'alice', version: 'V1' }));
+    await assertSucceeds(alice.doc('apuVersions/a1__V1').get());
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(bob.doc('apuVersions/a1__V1').get());
+  });
+
+  it('nadie escribe apuAudit desde el cliente; el dueno real si puede leer, otro usuario no', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('apuAudit/a1').set({ action: 'APU_CREATED', ownerUid: 'alice' }));
+    await seed((db) => db.doc('apuAudit/a1').set({ action: 'APU_CREATED', ownerUid: 'alice' }));
+    await assertSucceeds(alice.doc('apuAudit/a1').get());
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(bob.doc('apuAudit/a1').get());
+  });
+});
+
+describe('firestore.rules — exportEvents (Fase 8)', () => {
+  it('nadie escribe exportEvents desde el cliente -- toda escritura pasa por api/export-events.mjs (SDK admin)', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('exportEvents/e1').set({ ownerUid: 'alice', format: 'PDF' }));
+  });
+
+  it('el dueno real SI puede leer su propio evento, otro usuario no', async () => {
+    await seed((db) => db.doc('exportEvents/e1').set({ ownerUid: 'alice', format: 'PDF' }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(alice.doc('exportEvents/e1').get());
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(bob.doc('exportEvents/e1').get());
+  });
+});

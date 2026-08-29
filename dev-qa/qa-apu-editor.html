@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <title>ZOEMEC QA -- ProfessionalApuEditor (harness de desarrollo, NO produccion)</title>
+  </head>
+  <body>
+    <!-- ARNES DE QA (Fase 5): solo para verificar visualmente ZoemecIntelligencePanel
+         dentro de ProfessionalApuEditor sin pasar por Firebase Auth real, que no
+         tiene una via de bypass segura en este proyecto. NO forma parte del build
+         de produccion -- vite.config.js no lo referencia como entrada, asi que
+         `npm run build` nunca lo incluye en dist/. Solo accesible via `npm run dev`
+         navegando a esta ruta explicita. Ver dev-qa/qa-apu-editor.jsx. -->
+    <div id="root"></div>
+    <script type="module" src="/dev-qa/qa-apu-editor.jsx"></script>
+  </body>
+</html>

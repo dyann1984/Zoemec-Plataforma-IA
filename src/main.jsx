@@ -12,6 +12,8 @@ import { APU_DEFAULT_FACTORS, DEFAULT_IVA_RATE, calcAPU, rowImporte, toSafeNonNe
 import { migrateLegacyApuToV2 } from './domain/apuSchema.js';
 import { finalizeProfessionalAPU, makePriceRecord } from './domain/apuProfessional.js';
 import { exportAPUExcelV2, exportAPUPdfV2, exportAPUPdfMaster } from './lib/apuExportV2.js';
+import { exportProjectDossierPdf } from './lib/apuProjectDossierPdf.js';
+import { exportProjectDossierExcel } from './lib/apuProjectDossierXlsx.js';
 import {
   money, num, excelCell, XLS, xcell, fcell, styleHeader, styleSection,
   exportRowsCSV, exportRowsExcel, exportWorkbookExcel,
@@ -22,6 +24,8 @@ import { uid } from './utils/id.js';
 import { getDeviceId, readLocal, writeLocal } from './utils/localStorage.js';
 import { setActiveUid } from './utils/scopedStorage.js';
 import { useLocalState } from './hooks/useLocalState.js';
+import { useAuthoritativeProjects } from './hooks/useAuthoritativeProjects.js';
+import { useAuthoritativeApus } from './hooks/useAuthoritativeApus.js';
 import { authHeaders, apiPost, readJsonSafe, httpErrorMessage, apiGetSafe, aiServerUrl } from './services/apiClient.js';
 import { firebaseMessage, friendlyServiceError } from './services/errorMessages.js';
 import { loadOrCreateProfile, fallbackProfile, buildSession, connectOneDrive } from './services/userSession.js';
@@ -272,10 +276,14 @@ function App(){
   const [accounts, setAccounts] = useLocalState('zoemec-accounts', [], user?.uid);
   const [usage, setUsage] = useLocalState('zoemec-usage', {}, user?.uid);
   const [company, setCompany] = useCloudState(user, 'zoemec-company', defaultCompany);
-  const [rawApus, setRawApus] = useCloudState(user, 'zoemec-apus', []);
+  // Fase 7: Proyecto/APU ya no viven solo en el blob de useCloudState -- un
+  // documento real por entidad, validado/auditado/versionado server-side
+  // (ver src/hooks/useAuthoritativeProjects.js / useAuthoritativeApus.js).
+  // Mismo contrato [value, setValue], el resto de este archivo no cambia.
+  const [rawApus, setRawApus, linkApuToProject] = useAuthoritativeApus(user, []);
   const [clients, setClients] = useCloudState(user, 'zoemec-clients', []);
   const [rawBudgets, setRawBudgets] = useCloudState(user, 'zoemec-budgets', []);
-  const [projects, setProjects] = useCloudState(user, 'zoemec-projects', []);
+  const [projects, setProjects] = useAuthoritativeProjects(user, []);
   const [rawCatalog, setRawCatalog] = useCloudState(user, 'zoemec-catalogo', []);
   const [rawBudgetItems, setRawBudgetItems] = useCloudState(user, 'zoemec-budget-items', [{concept:'Muro de block 15 cm',unit:'m²',qty:120,pu:825.39},{concept:'Piso cerámico 30x30 cm',unit:'m²',qty:86,pu:384.51}]);
   // activeProjectId: aislamiento real de datos por proyecto (seccion 13/1 del
@@ -587,7 +595,7 @@ function App(){
   else if(!hasValidSession(user)) content = <Landing setScreen={setScreen} login={login} company={companyView} />;
   else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView} apus={apus} clients={clients} projects={projects} activeProject={activeProject} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId}>
     {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} activeProject={activeProject} user={user} demoMode={DEMO_MODE} demoContext={DEMO_MODE ? createDemoContext() : null} />}
-    {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} />}
+    {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} rawApus={rawApus} linkApuToProject={linkApuToProject} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} />}
     {module === 'presupuestos' && <Budgets company={companyView} budgets={budgets} setBudgets={setBudgets} items={budgetItems} setItems={setBudgetItems} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} />}
     {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={(pid)=>{ setRawApus(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgets(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawCatalog(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgetItems(l=>l.filter(x=>(x?.projectId??null)!==pid)); }} />}
     {module === 'biblioteca' && <Library user={user} catalog={catalog} setCatalog={setCatalog} setModule={setModule} />}
@@ -1295,7 +1303,7 @@ function ResourceCards({apu}){
   </div>;
 }
 
-function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog,activeProjectId,activeProject,onNeedProject}){
+function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog,projects,rawApus,linkApuToProject,activeProjectId,activeProject,onNeedProject}){
   const requireProject=()=>{
     if(activeProjectId) return true;
     if(confirm('Para guardar necesitas un proyecto activo (asi tus APUs quedan asociados a una obra y nunca se mezclan con otra). ¿Crear o seleccionar un proyecto ahora?')) onNeedProject?.();
@@ -1311,6 +1319,17 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   const [aiQty,setAiQty]=useState('');
   const [apu,setApu]=useState(()=>makeEmptyAPU());
   const [apuV2,setApuV2]=useState(()=>finalizeProfessionalAPU(migrateLegacyApuToV2(makeEmptyAPU())));
+  // stableApuId (Fase 8 Parte 2, fix de identidad): apuV2.id cambia cada vez
+  // que se regenera el desarrollo (generate()/generateAI() minan un id
+  // fresco cada vez -- ver apuGeneration.js#makeAPUFromConcept -- eso es
+  // intencional para esos flujos y NO se toca). Pero para la persistencia
+  // autoritativa (Fase 7: saveVersion/dossier) esa inestabilidad causaba un
+  // 404 real: la segunda vez que se guardaba tras "Actualizar desarrollo",
+  // el id ya no era el mismo que el servidor conocia. stableApuId es una
+  // identidad SEPARADA que solo cambia cuando de verdad es otra APU (Limpiar,
+  // o "Abrir" un guardado distinto) -- se estampa sobre professionalApu mas
+  // abajo, sin tocar generate()/generateAI() ni el efecto de migracion v1->v2.
+  const [stableApuId,setStableApuId]=useState(()=>apuV2.id);
   // skipMigrateIdRef: cuando generateAI ya construyo un apuV2 rico (procedimiento,
   // calidad, seguridad, fuentes, confianza real desde el esquema v2), este efecto
   // NO debe pisarlo con la migracion vacia de apuV1->v2 solo porque apu.id cambio.
@@ -1398,7 +1417,11 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     setConcept(empty.concept);
     setAiUnit(empty.aiUnit);
     setAiQty(empty.aiQty);
-    setApu(makeEmptyAPU());
+    const freshApu = makeEmptyAPU();
+    setApu(freshApu);
+    // Limpiar/Crear manualmente es el unico momento (junto con "Abrir" otro
+    // guardado) en que de verdad es OTRA identidad -- ver stableApuId arriba.
+    setStableApuId(freshApu.id);
     setAiOpen(empty.aiOpen);
     setExcelInfo(empty.excelInfo);
     setConceptBatch(empty.conceptBatch);
@@ -1508,6 +1531,13 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     const { selectedList, excludedConcepts } = resolveBatchSelection(conceptBatch.concepts, batchSelection);
     if(!selectedList.length){ alert('Selecciona al menos un concepto valido (con descripcion) para generar.'); return; }
     if(!requireProject()) return;
+    // FIX Fase 9 (hallazgo F-006, P1): este camino de generacion por lote
+    // nunca habia llamado requireApuAccess()/markApuUsed() -- una cuenta
+    // Gratis podia generar CUALQUIER cantidad de APUs reales pegando varios
+    // conceptos a la vez, evadiendo por completo el limite de "1 APU
+    // gratis" que si aplica al camino de un solo concepto (ver save()/
+    // requireApuAccess() mas abajo). Mismo candado, mismo mensaje.
+    if(!requireApuAccess()) return;
     setBatchBusy(true);
     setBatchResult(null);
     cancelRequestedRef.current = false;
@@ -1529,6 +1559,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       // distintos entre si. Con esto, si el usuario exporta justo despues
       // de generar el mismo lote completo, se reusan estos APUs reales.
       setBatchAPUs(apuList);
+      if(apuList.length) markApuUsed();
       const items = apuList.map(a => ({ concept: a.concept, unit: a.unit, qty: Number(a.cantidadObra ?? a.sourceQty ?? 1) || 1, pu: a.calculated?.pu ?? calcAPU(a).pu }));
       const subtotal = items.reduce((s, it) => s + Number(it.qty) * Number(it.pu), 0);
       const iva = subtotal * DEFAULT_IVA_RATE / 100;
@@ -1547,7 +1578,14 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     }
   };
   const totals=calcAPU(apu);
-  const professionalApu=useMemo(()=>finalizeProfessionalAPU({...apuV2,cantidadObra:Number(apuV2.cantidadObra||excelInfo?.qty||apu.sourceQty||1)}),[apuV2,excelInfo?.qty,apu.sourceQty]);
+  // id/projectId estampados aqui (Fase 8 Parte 2, fix de identidad y de
+  // "APU nace sin proyecto"): professionalApu es el UNICO objeto que ven
+  // ProfessionalApuEditor/saveVersion/el dossier -- apuV2.id sigue
+  // cambiando internamente como siempre (generate()/generateAI() no se
+  // tocan), pero lo que la persistencia ve es siempre stableApuId. Igual
+  // con projectId: nunca se rellena despues, nace ya con el proyecto activo
+  // si existe uno (activeProjectId, ya trackeado mas arriba).
+  const professionalApu=useMemo(()=>finalizeProfessionalAPU({...apuV2,id:stableApuId,projectId:apuV2.projectId||activeProjectId||null,cantidadObra:Number(apuV2.cantidadObra||excelInfo?.qty||apu.sourceQty||1)}),[apuV2,stableApuId,activeProjectId,excelInfo?.qty,apu.sourceQty]);
   const userUsage = usage?.[user?.email] || {apusCreated:0};
   const isFree = user?.role !== 'admin' && (user?.plan || 'Gratis') === 'Gratis';
   const requireApuAccess = () => {
@@ -1985,8 +2023,21 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
           job = markItemDone(job, entry.itemKey, v2, { requiresReview });
           const finishedEntry = job.items.find(it => it.itemKey === entry.itemKey);
           if(persist) await saveItemState(db, user.uid, job.batchId, finishedEntry).catch(() => {});
-          const tagged = { ...v2, projectId: activeProjectId };
-          setApus(prev => [tagged, ...prev.filter(x => x.clave !== tagged.clave)]);
+          // FIX Fase 9 (hallazgo F-010, P0): `clave` es solo un rotulo de
+          // posicion DENTRO de un lote ("CON-001", "CON-002"...) que
+          // apuSchema.js reinicia en cada corrida -- nunca es unico entre
+          // lotes distintos. Filtrar solo por `clave` (sin `batchId`) hacia
+          // que generar un SEGUNDO lote en el MISMO proyecto archivara en
+          // silencio los APUs del primer lote cuyo CON-00N coincidiera con
+          // el nuevo (confirmado real: 2 de 3 APUs previos desaparecian del
+          // proyecto sin aviso al pegar un segundo lote de 2 conceptos).
+          // `id` no sirve como llave alterna: generateBatchAPU/
+          // applyConceptMetadataV2 le asigna un id NUEVO en cada intento,
+          // incluso al reintentar el MISMO item dentro del MISMO lote -- por
+          // eso el dedup real es (clave + batchId): reemplaza un reintento
+          // del mismo item en ESTE lote, nunca un item de un lote anterior.
+          const tagged = { ...v2, projectId: activeProjectId, batchId: job.batchId };
+          setApus(prev => [tagged, ...prev.filter(x => x.clave !== tagged.clave || x.batchId !== tagged.batchId)]);
           setLastBatchApuIds(prev => [...prev, tagged.id]);
         }catch(error){
           job = markItemError(job, entry.itemKey, error);
@@ -2357,7 +2408,19 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         : <button type="button" className="link-inline exec-detail-toggle" onClick={()=>setShowExecutive(true)}>Ver confianza, validación y trazabilidad técnica ▾</button>}
     </>}
 
-    <ProfessionalApuEditor apu={professionalApu} onChange={setApuV2} user={user} onSave={saved=>{ if(!requireProject()) return; setApus([saved,...apus.filter(x=>x.id!==saved.id)]); }} onFindPrices={findV2Prices} onExcel={exportExcel} onPdf={exportPDF}/>
+    <ProfessionalApuEditor apu={professionalApu} onChange={setApuV2} user={user} onSave={saved=>{
+      if(!requireProject()) return;
+      // FIX Fase 9 (hallazgo F-006b, P1): "Guardar version" del editor
+      // moderno nunca llamaba requireApuAccess()/markApuUsed() -- el camino
+      // real de persistencia desde Fase 7 no tenia NINGUN candado de plan
+      // Gratis. Solo se cuenta contra el limite al CREAR un APU nuevo
+      // (id que todavia no existe en la lista) -- volver a guardar una
+      // version de un APU ya propio nunca deberia costar otro "APU gratis".
+      const isNew = !apus.some(x=>x.id===saved.id);
+      if(isNew && !requireApuAccess()) return;
+      setApus([saved,...apus.filter(x=>x.id!==saved.id)]);
+      if(isNew) markApuUsed();
+    }} onFindPrices={findV2Prices} onExcel={exportExcel} onPdf={exportPDF}/>
     <div className="apu-grid legacy-editor-compat">
       <div className="panel">
         <label>Concepto</label>
@@ -2427,6 +2490,23 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       </div>
     </div>
 
+    {(rawApus||[]).some(a=>a.projectLinkRequired) && <div className="panel" style={{marginTop:16}}>
+      <h2>APUs sin proyecto vinculado <small className="hint">({(rawApus||[]).filter(a=>a.projectLinkRequired).length})</small></h2>
+      <div className="saved-grid">{(rawApus||[]).filter(a=>a.projectLinkRequired).map(a=>{
+        let selectedProjectId='';
+        return <div className="saved-card" key={a.id}>
+          <div className="sc-concept">{a.concept||a.clave||a.id}</div>
+          <div className="sc-actions">
+            <select onChange={e=>{selectedProjectId=e.target.value;}} defaultValue="">
+              <option value="" disabled>Elegir proyecto...</option>
+              {(projects||[]).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <button onClick={async ()=>{ if(selectedProjectId) await linkApuToProject(a.id,selectedProjectId); }}>Vincular</button>
+          </div>
+        </div>;
+      })}</div>
+    </div>}
+
     {apus.length>0 && <div className="panel" style={{marginTop:16}}>
       <h2>Mis APU guardados <small className="hint">({apus.length})</small></h2>
       <div className="saved-grid">{apus.map(a=>{const pu=a.calculated?.pu ?? calcAPU(a).pu;return <div className="saved-card" key={a.id}>
@@ -2442,6 +2522,9 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
           } else {
             setApu(a);
           }
+          // "Abrir" SI es otra identidad real -- adopta el id verdadero del
+          // guardado (ver stableApuId).
+          setStableApuId(a.id);
           setShowExecutive(false);
         }}>Abrir</button><button className="del" onClick={()=>setApus(apus.filter(x=>x.id!==a.id))}>Borrar</button></div>
       </div>;})}</div>
@@ -2878,6 +2961,21 @@ function Projects({projects,setProjects,activeProjectId,setActiveProjectId,setMo
     setStartPrompt(true);
   };
   const update = (i,k,v) => setProjects(list.map((p,idx)=>idx===i?{...p,[k]:v}:p));
+  // Dossier de Proyecto (Fase 8 Parte 2): reusa tal cual exportProjectDossierPdf/
+  // exportProjectDossierExcel (apuProjectDossierPdf.js/apuProjectDossierXlsx.js),
+  // que ya resuelven server-side (GET /api/apus?projectId=) los APUs reales
+  // del proyecto -- este boton nunca envia un arreglo de APUs del cliente.
+  const [dossierState,setDossierState]=useState(null); // {projectId, format, status:'generating'|'error', message}
+  const generateProjectDossier = async (projectId, format) => {
+    setDossierState({projectId, format, status:'generating'});
+    try{
+      const run = format==='PDF' ? exportProjectDossierPdf : exportProjectDossierExcel;
+      await run({projectId});
+      setDossierState(null);
+    }catch(err){
+      setDossierState({projectId, format, status:'error', message:err.message});
+    }
+  };
   const remove = (i) => {
     const removed=list[i];
     if(!confirm(`¿Eliminar "${removed?.name||'este proyecto'}"? También se borrarán sus APUs, presupuestos y catálogo guardados.`)) return;
@@ -2922,6 +3020,11 @@ function Projects({projects,setProjects,activeProjectId,setActiveProjectId,setMo
       <progress value={p.progress} max="100"/>
       <small>{p.progress}% de avance - <a onClick={()=>remove(i)} style={{color:'var(--danger)'}}>eliminar</a></small>
       {p.id!==activeProjectId && <button className="soft" onClick={()=>setActiveProjectId?.(p.id)}>Usar este proyecto</button>}
+      {p.id===activeProjectId && <div className="sc-actions">
+        <button className="soft" disabled={dossierState?.projectId===p.id && dossierState?.status==='generating'} onClick={()=>generateProjectDossier(p.id,'PDF')}>{dossierState?.projectId===p.id && dossierState?.format==='PDF' && dossierState?.status==='generating' ? 'Generando PDF...' : 'Dossier de Proyecto (PDF)'}</button>
+        <button className="soft" disabled={dossierState?.projectId===p.id && dossierState?.status==='generating'} onClick={()=>generateProjectDossier(p.id,'XLSX')}>{dossierState?.projectId===p.id && dossierState?.format==='XLSX' && dossierState?.status==='generating' ? 'Generando Excel...' : 'Dossier de Proyecto (Excel)'}</button>
+        {dossierState?.projectId===p.id && dossierState?.status==='error' && <small style={{color:'var(--danger)'}}>{dossierState.message}</small>}
+      </div>}
     </div>)}</div> : <div className="panel"><EmptyState icon="proyectos" title="Tu cartera de proyectos está vacía" text="Crea el primer proyecto para activar el seguimiento de avance y presupuesto." actionLabel="+ Nuevo proyecto" onAction={add}/></div>}</section>
 }
 function Clients({clients,setClients,embedded=false}){

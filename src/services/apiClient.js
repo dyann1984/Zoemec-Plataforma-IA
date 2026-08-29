@@ -39,7 +39,16 @@ export async function apiPost(path, body){
     body:JSON.stringify(body || {})
   });
   const data = await readJsonSafe(res);
-  if(!res.ok) throw new Error(data.error || 'No se pudo completar la solicitud.');
+  if(!res.ok){
+    // FIX Fase 9 (hallazgo F-004): propaga data.code/data.currentVersion (ej.
+    // VERSION_CONFLICT de api/apus.mjs#handleSaveVersion) al Error lanzado --
+    // antes se perdian, obligando a cualquier llamador a adivinar el tipo de
+    // error leyendo el texto del mensaje.
+    const err = new Error(data.error || 'No se pudo completar la solicitud.');
+    if(data.code) err.code = data.code;
+    if(data.currentVersion) err.currentVersion = data.currentVersion;
+    throw err;
+  }
   return data;
 }
 

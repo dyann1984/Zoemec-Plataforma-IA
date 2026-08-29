@@ -24,7 +24,13 @@ function parseServiceAccount(){
 }
 
 export function hasAdminCredentials(){
-  return Boolean(parseServiceAccount() || process.env.GOOGLE_APPLICATION_CREDENTIALS);
+  // FIRESTORE_EMULATOR_HOST (Fase 4 -- Memoria Tecnica, ver
+  // _technicalMemoryFirestoreAdapter.mjs): `firebase emulators:exec` lo
+  // define automaticamente para el proceso hijo. El SDK admin no valida
+  // credenciales contra el emulador local -- exigirlas ahi solo bloqueaba
+  // pruebas contra el emulador sin aportar ninguna seguridad real (nunca
+  // esta definida en produccion, asi que esto no cambia nada ahi).
+  return Boolean(parseServiceAccount() || process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.FIRESTORE_EMULATOR_HOST);
 }
 
 function initAdminApp(){

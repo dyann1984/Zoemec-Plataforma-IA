@@ -191,7 +191,10 @@ export async function requireAdmin(req){
     error.status = 403;
     throw error;
   }
-  return { uid: decoded.uid };
+  // email agregado (Fase 6 -- Memoria Tecnica): antes solo devolvia uid, que
+  // no es legible para mostrar "aprobado por" en UI. Aditivo, ningun
+  // llamador existente (health.mjs) desestructuraba mas que .uid.
+  return { uid: decoded.uid, email: decoded.email || profile.email || '' };
 }
 
 /* Verificacion de identidad sin gating de plan/feature: para endpoints como

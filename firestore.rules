@@ -106,6 +106,81 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
+    // Memoria Tecnica + decisiones de Challenge (Fase 6): toda escritura
+    // pasa por api/technical-memory.mjs / api/challenge-decisions.mjs (SDK
+    // admin, ignora estas reglas) para poder validar transiciones de estado,
+    // resolver identidad del token real y usar transacciones -- el cliente
+    // JAMAS escribe estas colecciones directo, mismo patron ya establecido
+    // para "payments".
+    //
+    // FIX Fase 9 (hallazgo F-002, P0): la lectura YA NO es "cualquier cuenta
+    // autenticada". El schema real (src/domain/technicalMemory.js) incluye
+    // tipos como APPROVED_PRICE/PREFERRED_SUPPLIER con scope PROJECT/
+    // ORGANIZATION -- precios aprobados y proveedores preferidos son
+    // informacion de licitacion, no "dato tecnico generico". PoC real
+    // confirmo que una cuenta ajena (SDK de cliente directo, sin pasar por
+    // el endpoint) podia leer TODA la coleccion cross-tenant. La UI real
+    // SIEMPRE lee via el endpoint (que si filtra por proyecto/usuario) y
+    // NUNCA con el SDK de cliente directo -- por eso cerrar la lectura aqui
+    // (igual que ya estaba escritura) no quita ninguna funcionalidad real,
+    // mismo patron ya usado en projects/apus/apuVersions/exportEvents.
+    match /technicalMemory/{docId} {
+      allow read: if false;
+      allow write: if false;
+    }
+    match /technicalMemoryAudit/{docId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+    match /challengeDecisions/{docId} {
+      allow read: if false;
+      allow write: if false;
+    }
+    match /challengeDecisionAudit/{docId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // Persistencia autoritativa de Proyecto/APU + versionado (Fase 7):
+    // reemplaza SOLO para estas dos entidades el patron anterior de
+    // users/{uid}/state (blob gzip via useCloudState -- ver src/cloud.js,
+    // escritura directa del cliente sin validacion). Toda escritura aqui
+    // pasa por api/projects.mjs / api/apus.mjs (SDK admin, ignora estas
+    // reglas) para poder validar dueno real, usar transacciones y crear
+    // version inmutable -- el cliente JAMAS escribe estas colecciones
+    // directo (mismo patron que technicalMemory/challengeDecisions). La
+    // lectura si es directa del dueno (dato propio, no requiere pasar por
+    // el endpoint para consultarlo) o de un administrador.
+    match /projects/{docId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+      allow write: if false;
+    }
+    match /projectAudit/{docId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+      allow write: if false;
+    }
+    match /apus/{docId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+      allow write: if false;
+    }
+    match /apuVersions/{docId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+      allow write: if false;
+    }
+    match /apuAudit/{docId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+      allow write: if false;
+    }
+
+    // Eventos de exportacion del Dossier APU Auditable (Fase 8, regla 22):
+    // append-only, nunca editable ni borrable -- toda escritura pasa por
+    // api/export-events.mjs (SDK admin). Mismo criterio de lectura que
+    // apuAudit/projectAudit: solo el dueno del evento o un admin.
+    match /exportEvents/{docId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+      allow write: if false;
+    }
+
     match /{document=**} {
       allow read, write: if isAdmin();
     }

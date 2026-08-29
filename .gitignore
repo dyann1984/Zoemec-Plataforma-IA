@@ -20,3 +20,9 @@ ui-debug.log
 samples/library/
 design-assets/
 .env*
+
+# Auditorias/QA locales de un solo uso, marcadas explicitamente "no se
+# commitea" en su propio encabezado -- pueden contener datos extraidos de
+# catalogos/Excel reales de un cliente, nunca deben entrar al historial.
+audit-ebdi-existing.mjs
+evidence-ebdi-audit/

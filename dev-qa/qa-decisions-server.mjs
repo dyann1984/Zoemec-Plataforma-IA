@@ -20,11 +20,15 @@ process.env.FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'zoemec-pla
 
 import http from 'node:http';
 import { URL } from 'node:url';
-import technicalMemoryHandler from '../api/technical-memory.mjs';
-import challengeDecisionsHandler from '../api/challenge-decisions.mjs';
-import projectsHandler from '../api/projects.mjs';
-import apusHandler from '../api/apus.mjs';
-import exportEventsHandler from '../api/export-events.mjs';
+// Parche de compatibilidad Vercel Hobby: los handlers reales se reubicaron
+// de api/*.mjs a server/api-lib/_route-*.mjs (ver api/gateway.mjs) -- este
+// arnes de QA local los sigue montando directamente, sin pasar por el
+// router (no es necesario para QA local, donde no hay limite de funciones).
+import technicalMemoryHandler from '../server/api-lib/_route-technical-memory.mjs';
+import challengeDecisionsHandler from '../server/api-lib/_route-challenge-decisions.mjs';
+import projectsHandler from '../server/api-lib/_route-projects.mjs';
+import apusHandler from '../server/api-lib/_route-apus.mjs';
+import exportEventsHandler from '../server/api-lib/_route-export-events.mjs';
 
 const PORT = Number(process.env.ZOEMEC_AI_PORT || 8787);
 const ROUTES = {

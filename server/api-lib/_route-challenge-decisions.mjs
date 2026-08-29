@@ -38,11 +38,17 @@
    autenticado puede registrar SU propia decision; modificar una decision ya
    registrada por OTRO usuario requiere admin (regla 4/14N del spec -- no
    existe un dueno de "todas las decisiones de un APU", cada decision tiene
-   un autor real). */
-import { requireAuth } from '../server/api-lib/_authGuard.mjs';
-import { getAdminDb } from '../server/api-lib/_firebaseAdmin.mjs';
-import { appendAudit } from '../server/api-lib/_decisionAudit.mjs';
-import { runApuChallenge, challengeSeverity } from '../src/domain/apuChallenge.js';
+   un autor real).
+
+   Reubicado fuera de api/ en el parche de compatibilidad con Vercel Hobby
+   (consolidacion de funciones serverless) -- ver api/gateway.mjs y
+   VERCEL_HOBBY_COMPAT.md. Contenido/logica identicos a la version original
+   en api/challenge-decisions.mjs, solo cambiaron las rutas relativas de
+   import. */
+import { requireAuth } from './_authGuard.mjs';
+import { getAdminDb } from './_firebaseAdmin.mjs';
+import { appendAudit } from './_decisionAudit.mjs';
+import { runApuChallenge, challengeSeverity } from '../../src/domain/apuChallenge.js';
 
 const COLLECTION = 'challengeDecisions';
 const AUDIT_COLLECTION = 'challengeDecisionAudit';

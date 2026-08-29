@@ -1,5 +1,10 @@
-import { requireAdmin } from '../server/api-lib/_authGuard.mjs';
-import { getAdminDb } from '../server/api-lib/_firebaseAdmin.mjs';
+/* Diagnostico real de produccion (solo administradores). Reubicado fuera de
+   api/ en el parche de compatibilidad con Vercel Hobby (consolidacion de
+   funciones serverless) -- ver api/gateway.mjs y VERCEL_HOBBY_COMPAT.md.
+   Contenido/logica identicos a la version original en api/health.mjs, solo
+   cambio la ruta relativa de import. */
+import { requireAdmin } from './_authGuard.mjs';
+import { getAdminDb } from './_firebaseAdmin.mjs';
 
 /* Diagnostico real de las dependencias de produccion, solo para administradores.
    Cada verificacion es una prueba real (no un valor inventado). Si algo no se

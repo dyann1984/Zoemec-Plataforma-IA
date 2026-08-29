@@ -8,7 +8,7 @@ process.env.GOOGLE_APPLICATION_CREDENTIALS = process.env.GOOGLE_APPLICATION_CRED
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import handler from '../api/technical-memory.mjs';
+import handler from '../server/api-lib/_route-technical-memory.mjs';
 import { getAdminAuth, getAdminDb } from '../server/api-lib/_firebaseAdmin.mjs';
 import { MEMORY_SCOPE, MEMORY_TYPE, MEMORY_STATUS } from '../src/domain/technicalMemory.js';
 

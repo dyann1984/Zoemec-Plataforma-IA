@@ -8,10 +8,15 @@
    lee del body. Autorizacion: cada usuario administra solo sus propios
    proyectos (no es un recurso de moderacion como Memoria Tecnica, no hay
    bypass de admin para editar proyectos ajenos -- nadie lo pidio, no se
-   inventa). */
-import { requireAuth } from '../server/api-lib/_authGuard.mjs';
-import { getAdminDb } from '../server/api-lib/_firebaseAdmin.mjs';
-import { appendAudit } from '../server/api-lib/_decisionAudit.mjs';
+   inventa).
+
+   Reubicado fuera de api/ en el parche de compatibilidad con Vercel Hobby
+   (consolidacion de funciones serverless) -- ver api/gateway.mjs y
+   VERCEL_HOBBY_COMPAT.md. Contenido/logica identicos a la version original
+   en api/projects.mjs, solo cambiaron las rutas relativas de import. */
+import { requireAuth } from './_authGuard.mjs';
+import { getAdminDb } from './_firebaseAdmin.mjs';
+import { appendAudit } from './_decisionAudit.mjs';
 
 const COLLECTION = 'projects';
 const AUDIT_COLLECTION = 'projectAudit';

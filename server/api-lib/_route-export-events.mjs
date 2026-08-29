@@ -8,10 +8,15 @@
    Identidad SIEMPRE de requireAuth (nunca del body). No hay accion de
    lectura publica: cada usuario solo puede listar SUS propios eventos
    (mismo criterio que projects.mjs/apus.mjs -- no es un recurso de
-   moderacion compartido). */
-import { requireAuth } from '../server/api-lib/_authGuard.mjs';
-import { getAdminDb } from '../server/api-lib/_firebaseAdmin.mjs';
-import { computeSnapshotHash } from '../src/domain/snapshotHash.js';
+   moderacion compartido).
+
+   Reubicado fuera de api/ en el parche de compatibilidad con Vercel Hobby
+   (consolidacion de funciones serverless) -- ver api/gateway.mjs y
+   VERCEL_HOBBY_COMPAT.md. Contenido/logica identicos a la version original
+   en api/export-events.mjs, solo cambiaron las rutas relativas de import. */
+import { requireAuth } from './_authGuard.mjs';
+import { getAdminDb } from './_firebaseAdmin.mjs';
+import { computeSnapshotHash } from '../../src/domain/snapshotHash.js';
 
 const COLLECTION = 'exportEvents';
 const VALID_FORMATS = new Set(['PDF', 'XLSX']);

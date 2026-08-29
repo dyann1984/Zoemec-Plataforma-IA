@@ -17,11 +17,16 @@
 
    Identidad SIEMPRE del token verificado (requireAuth); ownerUid nunca del
    body. Cada usuario administra solo sus propios APUs (mismo criterio que
-   projects.mjs -- no hay bypass de admin, nadie lo pidio). */
-import { requireAuth } from '../server/api-lib/_authGuard.mjs';
-import { getAdminDb } from '../server/api-lib/_firebaseAdmin.mjs';
-import { appendAudit } from '../server/api-lib/_decisionAudit.mjs';
-import { createApuVersion, restoreApuVersion } from '../src/domain/apuVersioning.js';
+   projects.mjs -- no hay bypass de admin, nadie lo pidio).
+
+   Reubicado fuera de api/ en el parche de compatibilidad con Vercel Hobby
+   (consolidacion de funciones serverless) -- ver api/gateway.mjs y
+   VERCEL_HOBBY_COMPAT.md. Contenido/logica identicos a la version original
+   en api/apus.mjs, solo cambiaron las rutas relativas de import. */
+import { requireAuth } from './_authGuard.mjs';
+import { getAdminDb } from './_firebaseAdmin.mjs';
+import { appendAudit } from './_decisionAudit.mjs';
+import { createApuVersion, restoreApuVersion } from '../../src/domain/apuVersioning.js';
 
 const COLLECTION = 'apus';
 const VERSIONS_COLLECTION = 'apuVersions';

@@ -15,8 +15,8 @@ process.env.GOOGLE_APPLICATION_CREDENTIALS = process.env.GOOGLE_APPLICATION_CRED
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import projectsHandler from '../api/projects.mjs';
-import apusHandler from '../api/apus.mjs';
+import projectsHandler from '../server/api-lib/_route-projects.mjs';
+import apusHandler from '../server/api-lib/_route-apus.mjs';
 import { getAdminAuth, getAdminDb } from '../server/api-lib/_firebaseAdmin.mjs';
 
 const AUTH_HOST = process.env.FIREBASE_AUTH_EMULATOR_HOST;

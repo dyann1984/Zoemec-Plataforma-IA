@@ -16,12 +16,18 @@
      - Crear PROPOSAL: cualquier usuario autenticado (requireAuth).
      - APPROVE / REJECT / SUPERSEDE: requireAdmin. Documentado aqui porque
        no existe todavia un rol intermedio; si se agrega uno mas adelante,
-       este es el unico lugar que hay que cambiar. */
-import { requireAuth, requireAdmin } from '../server/api-lib/_authGuard.mjs';
-import { getAdminDb } from '../server/api-lib/_firebaseAdmin.mjs';
-import { appendAudit } from '../server/api-lib/_decisionAudit.mjs';
-import { createFirestoreMemoryRepository } from '../server/api-lib/_technicalMemoryFirestoreAdapter.mjs';
-import { createMemoryProposal, approveMemoryEntry, rejectMemoryEntry, supersedeMemoryEntry, MEMORY_STATUS } from '../src/domain/technicalMemory.js';
+       este es el unico lugar que hay que cambiar.
+
+   Reubicado fuera de api/ en el parche de compatibilidad con Vercel Hobby
+   (consolidacion de funciones serverless) -- ver api/gateway.mjs y
+   VERCEL_HOBBY_COMPAT.md. Contenido/logica identicos a la version original
+   en api/technical-memory.mjs, solo cambiaron las rutas relativas de
+   import. */
+import { requireAuth, requireAdmin } from './_authGuard.mjs';
+import { getAdminDb } from './_firebaseAdmin.mjs';
+import { appendAudit } from './_decisionAudit.mjs';
+import { createFirestoreMemoryRepository } from './_technicalMemoryFirestoreAdapter.mjs';
+import { createMemoryProposal, approveMemoryEntry, rejectMemoryEntry, supersedeMemoryEntry, MEMORY_STATUS } from '../../src/domain/technicalMemory.js';
 
 const COLLECTION = 'technicalMemory';
 const AUDIT_COLLECTION = 'technicalMemoryAudit';

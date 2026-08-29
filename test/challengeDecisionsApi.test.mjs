@@ -10,7 +10,7 @@ process.env.GOOGLE_APPLICATION_CREDENTIALS = process.env.GOOGLE_APPLICATION_CRED
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import handler from '../api/challenge-decisions.mjs';
+import handler from '../server/api-lib/_route-challenge-decisions.mjs';
 import { getAdminAuth, getAdminDb } from '../server/api-lib/_firebaseAdmin.mjs';
 import { runApuChallenge } from '../src/domain/apuChallenge.js';
 import { SYSTEM_RESOURCES } from '../src/domain/constructionSystems.js';

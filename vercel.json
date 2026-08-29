@@ -27,6 +27,12 @@
     }
   ],
   "rewrites": [
+    { "source": "/api/apus", "destination": "/api/gateway" },
+    { "source": "/api/projects", "destination": "/api/gateway" },
+    { "source": "/api/challenge-decisions", "destination": "/api/gateway" },
+    { "source": "/api/technical-memory", "destination": "/api/gateway" },
+    { "source": "/api/export-events", "destination": "/api/gateway" },
+    { "source": "/api/health", "destination": "/api/gateway" },
     { "source": "/api/:path*", "destination": "/api/:path*" },
     { "source": "/src/:path*", "destination": "/src/:path*" },
     { "source": "/@vite/:path*", "destination": "/@vite/:path*" },

@@ -13,9 +13,9 @@ process.env.GOOGLE_APPLICATION_CREDENTIALS = process.env.GOOGLE_APPLICATION_CRED
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import handler from '../api/export-events.mjs';
-import apusHandler from '../api/apus.mjs';
-import projectsHandler from '../api/projects.mjs';
+import handler from '../server/api-lib/_route-export-events.mjs';
+import apusHandler from '../server/api-lib/_route-apus.mjs';
+import projectsHandler from '../server/api-lib/_route-projects.mjs';
 import { getAdminAuth } from '../server/api-lib/_firebaseAdmin.mjs';
 import { computeSnapshotHash } from '../src/domain/snapshotHash.js';
 

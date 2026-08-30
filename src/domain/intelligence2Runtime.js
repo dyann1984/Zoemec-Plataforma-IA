@@ -21,6 +21,26 @@ import { createPriceTelemetry } from './priceTelemetry.js';
 import { createInFlightRegistry } from './inFlightRegistry.js';
 import { apiPost } from '../services/apiClient.js';
 
+/* Hotfix 2.1.1 -- FASE 5 del controlled live retest: no existia ninguna
+   forma REAL de activar PRICE_SEARCH_RESOURCE_TYPES en un Preview ya
+   desplegado sin editar codigo y volver a desplegar (INTELLIGENCE2_CONFIG
+   era una constante de modulo fija). Se agrega una unica variable de
+   entorno de BUILD (Vite expone solo las que empiezan con VITE_), fijada
+   SOLO en el ambiente Preview de Vercel -- nunca en Production -- para que
+   una prueba controlada pueda restringir categorias sin volver a tocar
+   este archivo cada vez. Formato: lista separada por comas, ej.
+   "materials" o "materials,equipment". Vacia/ausente (el caso de
+   produccion siempre) -> null, exactamente el comportamiento productivo
+   actual (las 4 categorias). `import.meta.env` no existe bajo Node puro
+   (node --test) -- el optional chaining lo deja simplemente undefined ahi,
+   nunca lanza. */
+export function parseResourceTypesEnv(raw){
+  const value = String(raw ?? '').trim();
+  if(!value) return null;
+  const kinds = value.split(',').map(s => s.trim()).filter(Boolean);
+  return kinds.length ? kinds : null;
+}
+
 /* Configuracion central, mutable a proposito (regla 9: "no quiero politicas
    imposibles de cambiar") -- ajustar antes de correr el lote de 40 conceptos
    sin tener que tocar ningun otro archivo. */
@@ -29,11 +49,12 @@ export const INTELLIGENCE2_CONFIG = {
   defaultTtlMs: PRICE_CACHE_TTL_MS.NORMAL,
   /* Hotfix 2.1.1 -- regla 7: `null` preserva el comportamiento productivo
      actual (materials + labor + equipment + seguridad, igual que siempre).
-     Para una prueba controlada, ajustar aqui antes de correrla (ej.
-     ['materials']) sin tocar main.jsx ni enrichApuWithIntelligence2 -- este
-     valor llega a ese orquestador via createIntelligence2RunContext()
-     abajo, que main.jsx ya esparce (...runContext) en cada llamada. */
-  priceSearchResourceTypes: null
+     Se puede ajustar aqui en codigo (ej. ['materials']) o, sin tocar este
+     archivo, con VITE_PRICE_SEARCH_RESOURCE_TYPES en el ambiente de build
+     -- este valor llega a enrichApuWithIntelligence2 via
+     createIntelligence2RunContext() abajo, que main.jsx ya esparce
+     (...runContext) en cada llamada. */
+  priceSearchResourceTypes: parseResourceTypesEnv(typeof import.meta !== 'undefined' ? import.meta.env?.VITE_PRICE_SEARCH_RESOURCE_TYPES : undefined)
 };
 
 let sharedCache = null;

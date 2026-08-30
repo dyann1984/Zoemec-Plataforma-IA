@@ -44,7 +44,8 @@ import {
   conceptApuKey, applyConceptMetadataV2, templateFallbackAPU,
   saveMarketPrice, standardAPUForConcept, makeAPUFromConcept, makeEmptyAPU
 } from './domain/apuGeneration.js';
-import { enrichAPUWithMarketPrices } from './domain/priceIntelligence.js';
+import { enrichApuWithIntelligence2 } from './domain/materialPriceIntelligence2.js';
+import { createIntelligence2RunContext } from './domain/intelligence2Runtime.js';
 import { libKey, enrichLibraryMeta, scoreLibraryFile } from './domain/library.js';
 import { INSUMO_STATES, applyInsumoReview, extractValidatedCatalogRows, extractAllValidatedCatalogRows, mergeCatalogRows } from './domain/libraryReview.js';
 import { toApuSeed, applyPlanoElementReview } from './domain/planoReview.js';
@@ -1673,6 +1674,14 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   // dispara una generacion, cambia de concepto/sale del modulo antes de que
   // responda, y la respuesta tardia NO debe contaminar el desarrollo activo).
   const aiRequestSeqRef=useRef(0);
+  // Material & Price Intelligence 2.1: contexto de budget/telemetry/
+  // single-flight COMPARTIDO entre todos los conceptos de UNA corrida de
+  // lote (creado al inicio de buildBatchAPUs/runQueueJob, reutilizado por
+  // cada llamada a generateBatchAPU dentro de esa corrida) -- asi 20
+  // conceptos con el mismo insumo dentro del mismo lote deduplican de
+  // verdad (1 busqueda real, no 20). El cache en si es un singleton de
+  // sesion (ver intelligence2Runtime.js#getSharedPriceCache), no vive aqui.
+  const batchIntelligence2ContextRef=useRef(null);
   // Cambiar de proyecto activo mientras este componente sigue montado (el
   // usuario no sale de "APU Inteligente", solo cambia el selector de proyecto)
   // debe limpiar el borrador en pantalla e invalidar cualquier generacion de
@@ -1737,15 +1746,25 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         referencePU: Number(parsed.referencePU || 0) || 0,
         variables: conceptVariablesFromParsed(parsed)
       };
-      // Price Intelligence real, mismo comportamiento que el flujo de lote:
-      // busca precio de mercado con validacion de equivalencia tecnica
-      // (ver src/lib/technicalMatch.js) antes de calcular con el Motor APU
-      // v2. Si falla, el borrador conserva los precios ESTIMADO_IA de la IA.
+      // Material & Price Intelligence 2.1 (integracion final): mismo
+      // orquestador que el flujo de lote (generateBatchAPU) -- proteccion de
+      // unidad/cantidad/concepto capturados por el usuario (UNIT_WARNING si
+      // la IA propone algo distinto, nunca se sobreescribe en silencio),
+      // Material Origin por recurso, cache+budget+single-flight, y solo
+      // entonces busqueda real de precio de mercado (mismo endpoint
+      // /api/price-intelligence de siempre, ver src/domain/intelligence2Runtime.js).
+      // Si falla por completo, el borrador conserva los precios ESTIMADO_IA
+      // de la IA (igual que antes).
       let enrichedDraft = draft;
       try{
         setAiStatus('Buscando precios de mercado reales y validando equivalencia tecnica...');
-        const result = await enrichAPUWithMarketPrices(draft, { location: activeProject?.ubicacion || '', dateBase: draft.fechaBase });
+        const runContext = createIntelligence2RunContext({ location: activeProject?.ubicacion || '', dateBase: draft.fechaBase });
+        const result = await enrichApuWithIntelligence2({
+          aiApu: draft, userInput: { concept: parsed.concept, unit: parsed.unit, qty: parsed.qty },
+          concept: parsed.concept, ...runContext
+        });
         enrichedDraft = result.apu;
+        if(result.unitWarning) console.warn('[Material & Price Intelligence 2.1] UNIT_WARNING:', result.unitWarning);
       }catch{ /* Price Intelligence caida por completo: se sigue con el borrador de la IA */ }
       setAiStatus('Calculando rendimientos, seguridad, procedimiento y medicion...');
       const v2 = finalizeProfessionalAPU(enrichedDraft);
@@ -1897,17 +1916,25 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     }
     if(data){
       const withMeta = applyConceptMetadataV2(data.apu, item, index, sourceFile);
-      // Price Intelligence real: busca precio de mercado (web_search real,
-      // ver api/_priceIntelligenceCore.mjs) para cada recurso propuesto por la
-      // IA ANTES de calcular con el Motor APU v2, para que el precio unitario
-      // final se calcule con evidencia de mercado cuando existe, no solo con
-      // la estimacion de la IA. Si la busqueda falla, el renglon conserva su
-      // precio ESTIMADO_IA original (nunca bloquea la generacion del APU).
+      // Material & Price Intelligence 2.1 (integracion final): mismo
+      // orquestador que la generacion individual (generateAI) -- proteccion
+      // de unidad/cantidad/clave/concepto capturados por el usuario en el
+      // catalogo de conceptos (UNIT_WARNING si la IA propone otra unidad,
+      // nunca se sobreescribe en silencio), Material Origin por recurso,
+      // cache+budget+single-flight COMPARTIDOS entre los conceptos del
+      // mismo lote (20 conceptos con el mismo insumo -> 1 busqueda real, no
+      // 20), y solo entonces busqueda real de precio de mercado. Si falla
+      // por completo, el renglon conserva su precio ESTIMADO_IA original
+      // (nunca bloquea la generacion del APU).
       let enriched = withMeta;
       try{
         setAiStatus(`Buscando precios de mercado reales para "${item.concept?.slice(0,60) || 'concepto'}"...`);
-        const result = await enrichAPUWithMarketPrices(withMeta, { location: activeProject?.ubicacion || '', dateBase: withMeta.fechaBase });
+        const result = await enrichApuWithIntelligence2({
+          aiApu: withMeta, userInput: { concept: item.concept, unit: item.unit, qty: item.qty, clave: item.code },
+          concept: item.concept, ...batchIntelligence2ContextRef.current
+        });
         enriched = result.apu;
+        if(result.unitWarning) console.warn(`[Material & Price Intelligence 2.1] UNIT_WARNING (${item.code || item.concept}):`, result.unitWarning);
       }catch{ /* si Price Intelligence falla por completo, se sigue con el APU tal cual la IA lo genero */ }
       const v2 = finalizeProfessionalAPU(enriched);
       v2.aiGenerated = true;
@@ -1941,6 +1968,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   };
 
   const buildBatchAPUs=async(list)=>{
+    batchIntelligence2ContextRef.current = createIntelligence2RunContext({ location: activeProject?.ubicacion || '' });
     setAiStatus(`Validando repetidos y estandarizando ${list.length} conceptos.`);
     const groups = new Map();
     list.forEach((item, index) => {
@@ -1995,6 +2023,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
      llamada ya en curso, para no dejar un resultado a medio calcular. */
   const CONCEPT_CONCURRENCY = 4;
   const runQueueJob = async (initialJob) => {
+    batchIntelligence2ContextRef.current = createIntelligence2RunContext({ location: activeProject?.ubicacion || '' });
     let job = initialJob;
     setActiveJob(job);
     const persist = firebaseReady && Boolean(user?.uid);

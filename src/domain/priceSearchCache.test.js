@@ -106,6 +106,47 @@ test('TEST J -- fallo del store (ej. Firestore caido) degrada a MISS de forma se
   assert.ok(saveResult.storeError);
 });
 
+/* ======================================================================
+   HOTFIX 2.1.1 -- regla 4 (read-after-write verification). Un store.set()
+   que no lanza NO es prueba suficiente de que el documento quedo
+   realmente disponible (causa sospechada del bug real del live test:
+   "Lentes de seguridad" volvio a CACHE_MISS pese a un save() previo sin
+   error). save() ahora hace SIEMPRE una lectura de verificacion tras un
+   set() exitoso antes de declarar persisted:true.
+   ====================================================================== */
+
+test('TEST -- read-after-write exitoso: store normal -> persisted:true, verified:true', async () => {
+  const cache = createPriceSearchCache({ now: () => 1000 });
+  const entry = await cache.save(FINGERPRINT_CEMENTO, { priceStatus: 'VERIFIED_MARKET' });
+  assert.equal(entry.persisted, true);
+  assert.equal(entry.verified, true);
+});
+
+test('TEST -- store.set() no lanza pero el documento no queda recuperable (store "mentiroso"): persisted:false, verified:false, storeError explicito', async () => {
+  const lyingStore = {
+    get: async () => undefined, // nunca confirma el documento, ni siquiera tras "guardarlo"
+    set: async () => { /* no lanza */ },
+    delete: async () => {}
+  };
+  const cache = createPriceSearchCache({ store: lyingStore, now: () => 1000 });
+  const entry = await cache.save(FINGERPRINT_CEMENTO, { priceStatus: 'VERIFIED_MARKET' });
+  assert.equal(entry.persisted, false, 'sin confirmacion de lectura, persisted nunca debe ser true solo porque set() no lanzo');
+  assert.equal(entry.verified, false);
+  assert.ok(entry.storeError);
+});
+
+test('TEST -- store.get() de verificacion lanza tras un set() exitoso: persisted:false de forma segura, nunca lanza hacia el llamador', async () => {
+  const flakyStore = {
+    get: async () => { throw new Error('lectura de verificacion caida'); },
+    set: async () => { /* set exitoso */ },
+    delete: async () => {}
+  };
+  const cache = createPriceSearchCache({ store: flakyStore, now: () => 1000 });
+  const entry = await cache.save(FINGERPRINT_CEMENTO, { priceStatus: 'VERIFIED_MARKET' });
+  assert.equal(entry.persisted, false);
+  assert.ok(entry.storeError);
+});
+
 test('aislamiento tenant -- tenantScope.organizationId distintas producen fingerprints distintos', async () => {
   const a = await buildQueryFingerprint({ ...FINGERPRINT_CEMENTO, tenantScope: { organizationId: 'ORG-A' } });
   const b = await buildQueryFingerprint({ ...FINGERPRINT_CEMENTO, tenantScope: { organizationId: 'ORG-B' } });

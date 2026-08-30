@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { enrichApuWithIntelligence2, resolveResourcePrice } from './materialPriceIntelligence2.js';
 import { createPriceSearchCache, createInMemoryPriceCacheStore, CACHE_RESULT } from './priceSearchCache.js';
-import { createPriceSearchBudget, PRICE_SEARCH_DEFERRED } from './priceSearchBudget.js';
+import { createPriceSearchBudget, PRICE_SEARCH_DEFERRED, PRICE_SEARCH_SKIPPED_CATEGORY } from './priceSearchBudget.js';
 import { createPriceTelemetry } from './priceTelemetry.js';
 import { createInFlightRegistry } from './inFlightRegistry.js';
 import { PRICE_STATUS } from './priceStatus.js';
@@ -225,4 +225,108 @@ test('TEST L -- aislamiento tenant: un recurso marcado tenant-specific nunca com
   await resolveResourcePrice({ resource: { ...baseResource, tenantSpecific: true, organizationId: 'ORG-B' }, cache: ctx.cache, budget: ctx.budget, searchFn });
 
   assert.equal(searchCalls, 3, 'global + ORG-A + ORG-B deben ser 3 fingerprints distintos, ninguno debe reusar el cache de otro');
+});
+
+/* ======================================================================
+   HOTFIX 2.1.1 -- regla 7/9 (K, L, M, N del spec del hotfix): control de
+   categorias de busqueda por PRICE_SEARCH_RESOURCE_TYPES. El live test
+   real mostro 9 busquedas (3 materiales + 1 labor + 1 equipment + 4
+   seguridad) para un concepto de 3 materiales -- este es el fixture que
+   reproduce esa misma forma (9 recursos totales) para probar el control
+   de consumo por categoria. `resourceTypes` viaja hasta aqui via el mismo
+   spread (...ctx) que main.jsx ya usa -- ver intelligence2Runtime.js. */
+function nineResourceApuFixture(){
+  return {
+    concept: 'Suministro y colocacion de tuberia PVC hidraulica de 1 pulgada, cedula 40, incluye pegamento y conexiones necesarias.',
+    unit: 'm', family: 'plomeria', primaryActivity: 'tuberia', cantidadObra: 20,
+    materials: [
+      { descripcion: 'Tuberia PVC hidraulica 1 pulgada cedula 40', consumo: 1, unidad: 'm', precioUnitario: 45, fuente: {} },
+      { descripcion: 'Conexiones PVC hidraulicas', consumo: 1, unidad: 'pza', precioUnitario: 12, fuente: {} },
+      { descripcion: 'Pegamento solvente para PVC', consumo: 1, unidad: 'pza', precioUnitario: 150, fuente: {} }
+    ],
+    labor: [{ descripcion: 'Cuadrilla 1 oficial + 1 ayudante', cuadrilla: 1, rendimiento: 8, salarioBase: 250, fsr: 1.85, fuente: {} }],
+    equipment: [{ descripcion: 'Herramienta manual para corte y ensamblado', consumo: 1, unidad: 'jornada', tarifa: 50, fuente: {} }],
+    seguridad: [
+      { descripcion: 'Casco de seguridad', consumo: 1, unidad: 'pza', precioUnitario: 250, fuente: {} },
+      { descripcion: 'Guantes de trabajo resistentes a quimicos', consumo: 1, unidad: 'par', precioUnitario: 35, fuente: {} },
+      { descripcion: 'Lentes de seguridad', consumo: 1, unidad: 'pza', precioUnitario: 80, fuente: {} },
+      { descripcion: 'Botas de seguridad', consumo: 1, unidad: 'pza', precioUnitario: 400, fuente: {} }
+    ],
+    factores: {}
+  };
+}
+
+test('TEST K -- resourceTypes=["materials"]: labor/equipment/seguridad NUNCA llaman searchFn', async () => {
+  const ctx = freshContext();
+  let searchCalls = 0;
+  const searchFn = async () => { searchCalls++; return altoResult(); };
+  const apu = nineResourceApuFixture();
+
+  await enrichApuWithIntelligence2({
+    aiApu: apu, userInput: { unit: 'm', qty: 20 }, concept: apu.concept, ...ctx, searchFn, resourceTypes: ['materials']
+  });
+
+  assert.equal(searchCalls, 3, 'solo los 3 materiales deben disparar busqueda real; labor/equipment/seguridad quedan fuera');
+});
+
+test('TEST L -- categoria deshabilitada: cada recurso queda marcado PRICE_SEARCH_SKIPPED_CATEGORY (nunca PRICE_SEARCH_DEFERRED)', async () => {
+  const ctx = freshContext();
+  const searchFn = async () => altoResult();
+  const apu = nineResourceApuFixture();
+
+  const result = await enrichApuWithIntelligence2({
+    aiApu: apu, userInput: { unit: 'm', qty: 20 }, concept: apu.concept, ...ctx, searchFn, resourceTypes: ['materials']
+  });
+
+  assert.equal(result.apu.labor[0].priceSearchStatus, PRICE_SEARCH_SKIPPED_CATEGORY);
+  assert.equal(result.apu.equipment[0].priceSearchStatus, PRICE_SEARCH_SKIPPED_CATEGORY);
+  result.apu.seguridad.forEach(row => assert.equal(row.priceSearchStatus, PRICE_SEARCH_SKIPPED_CATEGORY));
+  // Distincion explicita con "se intento pero no habia saldo":
+  result.apu.labor.concat(result.apu.equipment, result.apu.seguridad).forEach(row => {
+    assert.notEqual(row.priceSearchStatus, PRICE_SEARCH_DEFERRED);
+  });
+  // Material Origin se sigue calculando aunque la categoria este deshabilitada (calculo local, sin costo):
+  assert.ok(result.apu.labor[0].materialOrigin, 'una categoria deshabilitada debe seguir trayendo Material Origin (no cuesta red)');
+});
+
+test('TEST M -- 3 materiales + 6 recursos de otras categorias, resourceTypes=["materials"]: maximo 3 busquedas reales en total', async () => {
+  const ctx = freshContext();
+  let searchCalls = 0;
+  const searchFn = async () => { searchCalls++; return altoResult(); };
+  const apu = nineResourceApuFixture();
+
+  const result = await enrichApuWithIntelligence2({
+    aiApu: apu, userInput: { unit: 'm', qty: 20 }, concept: apu.concept, ...ctx, searchFn, resourceTypes: ['materials']
+  });
+
+  assert.equal(searchCalls, 3, 'el limite real de busquedas para este concepto de 9 recursos debe quedar en 3, no en 9');
+  assert.equal(result.apu.materials.length + result.apu.labor.length + result.apu.equipment.length + result.apu.seguridad.length, 9, 'el APU sigue completo, con sus 9 recursos, solo se restringe QUIEN busca precio de mercado');
+});
+
+test('TEST N -- segunda ejecucion identica con resourceTypes=["materials"]: los 3 materiales dan CACHE_HIT, 0 busquedas nuevas', async () => {
+  const ctx = freshContext();
+  let searchCalls = 0;
+  const searchFn = async () => { searchCalls++; return altoResult(); };
+  const apu1 = nineResourceApuFixture();
+  const apu2 = nineResourceApuFixture();
+
+  await enrichApuWithIntelligence2({ aiApu: apu1, userInput: { unit: 'm', qty: 20 }, concept: apu1.concept, ...ctx, searchFn, resourceTypes: ['materials'] });
+  assert.equal(searchCalls, 3);
+
+  const second = await enrichApuWithIntelligence2({ aiApu: apu2, userInput: { unit: 'm', qty: 20 }, concept: apu2.concept, ...ctx, searchFn, resourceTypes: ['materials'] });
+  assert.equal(searchCalls, 3, 'la segunda corrida identica NO debe volver a llamar searchFn para los 3 materiales ya cacheados');
+  second.apu.materials.forEach(row => assert.equal(row.priceSearchStatus, CACHE_RESULT.HIT));
+});
+
+test('resourceTypes ausente (null, default): preserva el comportamiento productivo actual -- las 4 categorias buscan precio', async () => {
+  const ctx = freshContext();
+  let searchCalls = 0;
+  const searchFn = async () => { searchCalls++; return altoResult(); };
+  const apu = nineResourceApuFixture();
+
+  await enrichApuWithIntelligence2({
+    aiApu: apu, userInput: { unit: 'm', qty: 20 }, concept: apu.concept, ...ctx, searchFn
+  });
+
+  assert.equal(searchCalls, 9, 'sin resourceTypes explicito, el comportamiento productivo actual (todas las categorias) no debe cambiar');
 });

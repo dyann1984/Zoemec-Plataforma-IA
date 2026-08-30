@@ -26,7 +26,14 @@ import { apiPost } from '../services/apiClient.js';
    sin tener que tocar ningun otro archivo. */
 export const INTELLIGENCE2_CONFIG = {
   maxPriceSearchesPerBatch: 40,
-  defaultTtlMs: PRICE_CACHE_TTL_MS.NORMAL
+  defaultTtlMs: PRICE_CACHE_TTL_MS.NORMAL,
+  /* Hotfix 2.1.1 -- regla 7: `null` preserva el comportamiento productivo
+     actual (materials + labor + equipment + seguridad, igual que siempre).
+     Para una prueba controlada, ajustar aqui antes de correrla (ej.
+     ['materials']) sin tocar main.jsx ni enrichApuWithIntelligence2 -- este
+     valor llega a ese orquestador via createIntelligence2RunContext()
+     abajo, que main.jsx ya esparce (...runContext) en cada llamada. */
+  priceSearchResourceTypes: null
 };
 
 let sharedCache = null;
@@ -54,12 +61,16 @@ export function createProductionSearchFn({ location = '', dateBase = '' } = {}){
 /* createIntelligence2RunContext: agrupa lo que necesita CADA llamada a
    enrichApuWithIntelligence2 (individual o batch) -- cache compartido de
    sesion + budget/telemetry/inFlightRegistry frescos para esa corrida. */
-export function createIntelligence2RunContext({ maxPriceSearches = INTELLIGENCE2_CONFIG.maxPriceSearchesPerBatch, location = '', dateBase = '' } = {}){
+export function createIntelligence2RunContext({
+  maxPriceSearches = INTELLIGENCE2_CONFIG.maxPriceSearchesPerBatch, location = '', dateBase = '',
+  resourceTypes = INTELLIGENCE2_CONFIG.priceSearchResourceTypes
+} = {}){
   return {
     cache: getSharedPriceCache(),
     budget: createPriceSearchBudget({ maxSearches: maxPriceSearches }),
     telemetry: createPriceTelemetry(),
     inFlightRegistry: createInFlightRegistry(),
-    searchFn: createProductionSearchFn({ location, dateBase })
+    searchFn: createProductionSearchFn({ location, dateBase }),
+    resourceTypes
   };
 }

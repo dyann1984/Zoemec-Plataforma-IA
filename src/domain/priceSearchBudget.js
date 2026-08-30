@@ -7,6 +7,14 @@
 
 export const PRICE_SEARCH_DEFERRED = 'PRICE_SEARCH_DEFERRED';
 
+/* Hotfix 2.1.1 -- regla 7 (control de categorias de busqueda): distinto de
+   PRICE_SEARCH_DEFERRED (presupuesto agotado a mitad de corrida). Un
+   recurso queda PRICE_SEARCH_SKIPPED_CATEGORY cuando su `kind` no esta
+   habilitado por PRICE_SEARCH_RESOURCE_TYPES -- nunca llega a consumir
+   presupuesto ni a llamar searchFn, y eso debe distinguirse claramente de
+   "se intento pero ya no habia saldo". */
+export const PRICE_SEARCH_SKIPPED_CATEGORY = 'PRICE_SEARCH_SKIPPED_CATEGORY';
+
 /* createPriceSearchBudget: contador simple pero explicito. canSearch() nunca
    lanza ni bloquea -- el llamador decide que hacer cuando el presupuesto se
    agota (regla explicita: "NO fallar todo el batch", los recursos

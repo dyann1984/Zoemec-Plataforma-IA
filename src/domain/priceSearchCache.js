@@ -117,7 +117,17 @@ export function createPriceSearchCache({ store = createInMemoryPriceCacheStore()
      Guarda exactamente los campos pedidos: queryHash, searchedAt, expiresAt,
      sourceCount, references, selectedReference, technicalMatch,
      normalization, priceStatus, priceConfidence -- ademas de lo que el
-     llamador adjunte (category/volatilityClass, etc.). */
+     llamador adjunte (category/volatilityClass, etc.).
+
+     Hotfix 2.1.1 (regla 4 del hotfix -- read-after-write): un `store.set()`
+     que no lanza NO es prueba suficiente de que el documento quedo
+     realmente disponible (ver caso real del live test: un cache write se
+     perdio sin que store.set() lanzara ningun error observado). Por eso,
+     tras un set() exitoso, se hace SIEMPRE una lectura inmediata de
+     verificacion -- solo en el camino de escritura (nunca en cada lookup/
+     cache hit, eso si tendria costo en cada peticion). Solo si esa lectura
+     confirma el mismo queryHash, persisted:true es una garantia real, no
+     una suposicion. */
   async function save(fingerprintInput, resultData = {}, { ttlMs = defaultTtlMs } = {}){
     assertCacheKeySafe(fingerprintInput);
     const queryHash = await buildQueryFingerprint(fingerprintInput);
@@ -135,9 +145,20 @@ export function createPriceSearchCache({ store = createInMemoryPriceCacheStore()
       priceConfidence: resultData.priceConfidence ?? null,
       ...resultData
     };
-    try{ await store.set(queryHash, entry); }
-    catch(err){ return { ...entry, persisted: false, storeError: err?.message || String(err) }; }
-    return { ...entry, persisted: true };
+    try{
+      await store.set(queryHash, entry);
+    }catch(err){
+      return { ...entry, persisted: false, verified: false, storeError: err?.message || String(err), storeErrorCode: err?.code ?? null };
+    }
+    try{
+      const verify = await store.get(queryHash);
+      if(!verify || verify.queryHash !== queryHash){
+        return { ...entry, persisted: false, verified: false, storeError: 'read-after-write: el documento no se pudo recuperar tras guardarlo.', storeErrorCode: null };
+      }
+    }catch(err){
+      return { ...entry, persisted: false, verified: false, storeError: `read-after-write: ${err?.message || String(err)}`, storeErrorCode: err?.code ?? null };
+    }
+    return { ...entry, persisted: true, verified: true };
   }
 
   async function invalidate(fingerprintInput){

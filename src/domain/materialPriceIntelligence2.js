@@ -20,7 +20,7 @@ import { derivePriceStatus, priceStatusToLegacyState, PRICE_STATUS } from './pri
 import { normalizePresentationPrice } from './priceNormalization.js';
 import { computePriceConfidence } from './priceConfidence.js';
 import { CACHE_RESULT } from './priceSearchCache.js';
-import { PRICE_SEARCH_DEFERRED } from './priceSearchBudget.js';
+import { PRICE_SEARCH_DEFERRED, PRICE_SEARCH_SKIPPED_CATEGORY } from './priceSearchBudget.js';
 import { resolveAuthoritativeInput } from './unitAuthority.js';
 
 const RESOURCE_KINDS = Object.freeze(['materials', 'labor', 'equipment', 'seguridad']);
@@ -179,7 +179,9 @@ function attachIntelligence2FieldsToRow(row, resolved){
   row.searchedAt = resolved.searchedAt ?? null;
   row.expiresAt = resolved.expiresAt ?? null;
   row.normalization = resolved.normalization ?? null;
-  row.priceSearchStatus = resolved.deferred ? PRICE_SEARCH_DEFERRED : (resolved.cacheResult || null);
+  row.priceSearchStatus = resolved.skippedCategory ? PRICE_SEARCH_SKIPPED_CATEGORY
+    : resolved.deferred ? PRICE_SEARCH_DEFERRED
+    : (resolved.cacheResult || null);
   if(resolved.normalization?.normalizationRequired) row.normalizationStatus = 'NORMALIZATION_REQUIRED';
   row.priceRecord = {
     ...(row.priceRecord || {}),
@@ -212,9 +214,20 @@ function attachIntelligence2FieldsToRow(row, resolved){
      -> Price Confidence (priceConfidence.js)
      -> provenance (attachIntelligence2FieldsToRow)
    (el llamador continua con finalizeProfessionalAPU y los motores
-   Intelligence existentes, sin cambios). */
+   Intelligence existentes, sin cambios).
+
+   `resourceTypes` (hotfix 2.1.1 -- regla 7, "control de categorias de
+   busqueda"): array opcional de kinds ('materials'|'labor'|'equipment'|
+   'seguridad') habilitados para busqueda real de precio. `null`/ausente
+   preserva el comportamiento productivo actual (las 4 categorias, igual
+   que siempre) -- SOLO cuando el llamador lo declara explicitamente (ver
+   INTELLIGENCE2_CONFIG.priceSearchResourceTypes en intelligence2Runtime.js,
+   pensado para pruebas controladas, ej. solo 'materials') se restringe.
+   Un kind fuera de resourceTypes NUNCA llama a cache/budget/searchFn --
+   cero costo, cero red -- pero SI se sigue clasificando su Material Origin
+   (calculo puro, local, sin costo) para que el reporte siga siendo util. */
 export async function enrichApuWithIntelligence2({
-  aiApu, userInput = {}, concept = '', cache, budget, telemetry = null, inFlightRegistry = null, searchFn, ttlMsFor
+  aiApu, userInput = {}, concept = '', cache, budget, telemetry = null, inFlightRegistry = null, searchFn, ttlMsFor, resourceTypes = null
 } = {}){
   const { resolved, unitWarning, overriddenFields } = resolveAuthoritativeInput({ userInput, aiProposed: aiApu });
   const apu = { ...aiApu, concept: resolved.concept ?? aiApu.concept, unit: resolved.unit ?? aiApu.unit };
@@ -225,8 +238,19 @@ export async function enrichApuWithIntelligence2({
 
   let deferredCount = 0;
   for(const kind of RESOURCE_KINDS){
+    const kindEnabled = !Array.isArray(resourceTypes) || resourceTypes.includes(kind);
     const rows = Array.isArray(apu[kind]) ? apu[kind] : [];
     for(const row of rows){
+      if(!kindEnabled){
+        const origin = classifyMaterialOrigin({
+          description: row.descripcion, concept: resolved.concept ?? concept,
+          aiProposedOrigin: row.materialOrigin || null,
+          technicallyRequired: Boolean(row.technicallyRequired),
+          optional: Boolean(row.optional)
+        });
+        attachIntelligence2FieldsToRow(row, { origin, skippedCategory: true, deferred: false, cacheResult: null });
+        continue;
+      }
       const priceField = PRICE_FIELD_BY_KIND[kind];
       const resolvedResource = await resolveResourcePrice({
         resource: {

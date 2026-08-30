@@ -60,3 +60,61 @@ test('INFERRED_REQUIRED nunca se muestra como especificado explicitamente', () =
   assert.match(label, /inferido/i);
   assert.doesNotMatch(label, /especificado en el concepto/i);
 });
+
+/* ======================================================================
+   HOTFIX 2.1.1 -- BUG B (live test real): "Suministro y colocacion de
+   tuberia PVC hidraulica de 1 pulgada, cedula 40, incluye pegamento y
+   conexiones necesarias." Los 9 recursos reales quedaron UNRESOLVED pese a
+   nombrar materiales presentes literalmente en el concepto. Causa raiz
+   real: el filtro de palabras < 4 caracteres descartaba "pvc" del bigrama
+   (rompiendo la adyacencia "tuberia [pvc] hidraulica"), y la comparacion
+   por substring crudo se rompia con la puntuacion del concepto
+   ("pulgada, cedula" nunca contiene "pulgada cedula"). TEST F/G/H/I/J del
+   spec del hotfix, con el concepto REAL de la prueba en vivo. */
+const CONCEPT_LIVE_TEST = 'Suministro y colocacion de tuberia PVC hidraulica de 1 pulgada, cedula 40, incluye pegamento y conexiones necesarias.';
+
+test('TEST F -- tuberia PVC hidraulica del concepto real -> EXPLICIT (palabra corta "PVC" entre dos palabras clave, ya no rompe el match)', () => {
+  const origin = classifyMaterialOrigin({
+    description: 'Tuberia PVC hidraulica 1 pulgada cedula 40', concept: CONCEPT_LIVE_TEST
+  });
+  assert.equal(origin, MATERIAL_ORIGIN.EXPLICIT);
+});
+
+test('TEST G -- pegamento (descripcion IA con calificadores que el concepto no repite) -> EXPLICIT', () => {
+  const origin = classifyMaterialOrigin({
+    description: 'Pegamento solvente para PVC', concept: CONCEPT_LIVE_TEST
+  });
+  assert.equal(origin, MATERIAL_ORIGIN.EXPLICIT);
+});
+
+test('TEST H -- conexiones PVC hidraulicas (plural en la descripcion, singular en el concepto) -> EXPLICIT', () => {
+  const origin = classifyMaterialOrigin({
+    description: 'Conexiones PVC hidraulicas', concept: CONCEPT_LIVE_TEST
+  });
+  assert.equal(origin, MATERIAL_ORIGIN.EXPLICIT);
+});
+
+test('TEST I -- material realmente inferido (no nombrado en el concepto real) -> INFERRED_REQUIRED, no un falso EXPLICIT por "tuberia" sola', () => {
+  const origin = classifyMaterialOrigin({
+    description: 'Cuadrilla de instalacion con herramienta especializada de corte',
+    concept: CONCEPT_LIVE_TEST, technicallyRequired: true
+  });
+  assert.equal(origin, MATERIAL_ORIGIN.INFERRED_REQUIRED);
+});
+
+test('TEST J -- material opcional dependiente de especificacion sobre el concepto real -> OPTIONAL', () => {
+  const origin = classifyMaterialOrigin({
+    description: 'Recubrimiento anticorrosivo especial segun especificacion del cliente',
+    concept: CONCEPT_LIVE_TEST, optional: true
+  });
+  assert.equal(origin, MATERIAL_ORIGIN.OPTIONAL);
+});
+
+test('proteccion contra falso positivo se conserva: una sola palabra generica compartida (ej. "tuberia") nunca basta para EXPLICIT', () => {
+  const origin = classifyMaterialOrigin({
+    description: 'Electrodo de soldadura E-7018 para union de tuberia',
+    concept: CONCEPT_LIVE_TEST, technicallyRequired: true
+  });
+  assert.notEqual(origin, MATERIAL_ORIGIN.EXPLICIT);
+  assert.equal(origin, MATERIAL_ORIGIN.INFERRED_REQUIRED);
+});

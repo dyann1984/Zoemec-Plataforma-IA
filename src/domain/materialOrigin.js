@@ -21,32 +21,81 @@ function normalize(value){
     .normalize('NFD').replace(/[̀-ͯ]/g, ''); // quita acentos para comparar de forma estable
 }
 
-function substantiveWords(normText){
-  return normText.split(/[^a-z0-9]+/).filter(w => w.length >= 4);
+/* Hotfix 2.1.1 -- BUG B del live test: "tuberia PVC hidraulica" y "cedula
+   40" quedaban UNRESOLVED aunque aparecian literalmente en el concepto.
+   Causa raiz real (confirmada, no solo bigramas fragiles):
+     1. El filtro previo por longitud (>=4) descartaba palabras cortas pero
+        significativas como "pvc" -- si esa palabra se sentaba ENTRE dos
+        palabras clave de la descripcion ("tuberia [pvc] hidraulica"), el
+        bigrama "tuberia hidraulica" dejaba de ser adyacente en el
+        concepto y el match fallaba.
+     2. normConcept.includes(bigram) comparaba el bigrama (sin puntuacion)
+        contra el texto CRUDO del concepto (con comas/puntos intactos):
+        "...1 pulgada, cedula 40..." nunca contiene el substring literal
+        "pulgada cedula" por la coma de por medio, aunque para cualquier
+        lector humano son la misma frase.
+   Reemplazo: normalizacion linguistica real (sin acentos, sin puntuacion,
+   singular/plural) + comparacion por PALABRAS SIGNIFICATIVAS (stopwords
+   excluidas por lista explicita, no por longitud) en vez de bigramas
+   fragiles. Sigue siendo determinista -- ninguna similitud difusa,
+   ninguna distancia de edicion, solo interseccion de conjuntos de
+   palabras ya normalizadas -- y sigue exigiendo mayoria de las palabras
+   significativas de la descripcion (nunca una sola palabra generica como
+   "tuberia" sola, ver STOPWORDS/EXPLICIT_COVERAGE_THRESHOLD abajo). */
+const STOPWORDS = new Set([
+  'de', 'del', 'la', 'el', 'los', 'las', 'un', 'una', 'unos', 'unas',
+  'y', 'e', 'o', 'u', 'en', 'con', 'para', 'por', 'a', 'al', 'que',
+  'su', 'sus', 'sin', 'entre', 'sobre', 'como', 'se', 'segun', 'cuando'
+]);
+
+/* singularize: reduccion morfologica minima y explicita (no un stemmer
+   generico) -- solo para que "conexiones"/"conexion", "hidraulicas"/
+   "hidraulica" o "necesarias"/"necesaria" comparen igual. Deliberadamente
+   conservadora (exige longitud minima antes de recortar) para no mutilar
+   palabras cortas reales ("gas", "mas", "tres"). */
+function singularize(word){
+  if(word.length > 5 && word.endsWith('es')) return word.slice(0, -2);
+  if(word.length > 3 && word.endsWith('s')) return word.slice(0, -1);
+  return word;
 }
 
-/* Un material es EXPLICIT cuando su descripcion (o una FRASE reconocible de
-   ella) aparece literalmente en el texto del concepto -- no requiere IA: es
-   una comprobacion determinista sobre texto normalizado. Deliberadamente NO
-   basta con que UNA sola palabra suelta coincida (ej. "tuberia" aparece en
-   casi cualquier concepto de plomeria y causaria falsos EXPLICIT en
-   materiales que en realidad son inferidos, como un electrodo de soldadura
-   para esa tuberia) -- se exige una coincidencia de FRASE: substring
-   completo, o al menos un par de palabras sustantivas consecutivas
-   (bigrama) de la descripcion presente tal cual en el concepto (cubre
-   "valvula check" -> concepto "...incluye valvula check, coples..."). */
+function tokenize(normText){
+  return normText.split(/[^a-z0-9]+/).filter(Boolean);
+}
+
+function significantWords(normText){
+  return tokenize(normText)
+    .filter(w => !STOPWORDS.has(w) && !/^\d+$/.test(w))
+    .map(singularize);
+}
+
+// Mas de la mitad de las palabras significativas de la descripcion deben
+// aparecer, literalmente (ya normalizadas), en el concepto. Para
+// descripciones de 1-2 palabras esto exige, en la practica, TODAS las
+// palabras -- preserva la proteccion original contra un falso EXPLICIT por
+// una sola palabra generica compartida (ej. "tuberia" en "electrodo de
+// soldadura para tuberia": 1 de 4 palabras significativas, 25% < umbral).
+const EXPLICIT_COVERAGE_THRESHOLD = 0.5;
+
+/* Un material es EXPLICIT cuando su descripcion aparece, literalmente o en
+   su mayoria de palabras significativas, en el texto del concepto -- no
+   requiere IA: es una comprobacion determinista sobre texto normalizado.
+   Cubre tanto una frase identica completa ("valvula check" -> concepto
+   "...incluye valvula check, coples...") como una descripcion mas
+   elaborada generada por IA que agrega calificadores que el concepto no
+   repite palabra por palabra (ej. descripcion "Pegamento solvente para
+   PVC" contra un concepto que solo dice "...incluye pegamento..."). */
 function appearsExplicitlyInConcept(description, concept){
   const normDesc = normalize(description);
   const normConcept = normalize(concept);
   if(!normDesc || !normConcept) return false;
-  if(normConcept.includes(normDesc)) return true;
+  if(normConcept.includes(normDesc)) return true; // frase completa identica (camino rapido)
 
-  const words = substantiveWords(normDesc);
-  for(let i = 0; i < words.length - 1; i++){
-    const bigram = `${words[i]} ${words[i + 1]}`;
-    if(normConcept.includes(bigram)) return true;
-  }
-  return false;
+  const descWords = significantWords(normDesc);
+  if(!descWords.length) return false;
+  const conceptWords = new Set(significantWords(normConcept));
+  const matched = descWords.filter(w => conceptWords.has(w)).length;
+  return matched / descWords.length > EXPLICIT_COVERAGE_THRESHOLD;
 }
 
 const VALID_ORIGINS = new Set(Object.values(MATERIAL_ORIGIN));

@@ -79,6 +79,32 @@ async function claimDailySearchBudget(db, maxDailySearches){
    `searchImpl` es inyectable SOLO para pruebas (por defecto es la funcion
    real, sin mock) -- asi las pruebas contra el emulador de Firestore nunca
    llaman a OpenAI de verdad. */
+export const CACHE_WRITE_STATUS = Object.freeze({
+  PERSISTED: 'PERSISTED',
+  FAILED: 'FAILED',
+  NOT_APPLICABLE: 'NOT_APPLICABLE'
+});
+
+/* logCacheWriteFailure: unico punto donde un fallo de escritura del cache
+   persistente se hace VISIBLE (hotfix 2.1.1 -- regla 1: "cache save no
+   puede fallar silenciosamente"). Antes de este hotfix, cache.save()
+   atrapaba el error y searchMarketReferencesWithCache lo ignoraba por
+   completo: el bug del live test (queryHash ya buscado que volvio a
+   consumir OpenAI) nunca aparecio en ningun log porque nada lo registraba.
+   Solo campos seguros: queryHash (identidad tecnica publica del insumo,
+   nunca projectId/clientName/userEmail/cantidades), codigo/mensaje de
+   error, operacion y timestamp -- NUNCA credenciales ni el service
+   account. */
+function logCacheWriteFailure({ queryHash, operation, errorCode, error }){
+  console.error('[PriceIntelligenceCache] cache write failed', {
+    queryHash: queryHash || null,
+    operation,
+    errorCode: errorCode || null,
+    error: error || 'unknown',
+    timestamp: new Date().toISOString()
+  });
+}
+
 export async function searchMarketReferencesWithCache({
   description, unit, kind = 'materials', location = '', dateBase = '', categoriaLaboral = '',
   technicalSpecification = '', region = '', currency = 'MXN', tenantScope = null,
@@ -100,7 +126,7 @@ export async function searchMarketReferencesWithCache({
       fichaTecnica: entry.technicalMatch, referencias: entry.references,
       precioRecomendado: entry.selectedReference?.precioNormalizado ?? null,
       nivelEvidencia: entry.priceStatus === 'VERIFIED_MARKET' ? 'MERCADO' : entry.priceStatus === 'MARKET_REFERENCE' ? 'REFERENCIAL' : 'ESTIMADO_IA',
-      cacheStatus: CACHE_RESULT.HIT, webSearchPerformed: false,
+      cacheStatus: CACHE_RESULT.HIT, webSearchPerformed: false, cacheWriteStatus: CACHE_WRITE_STATUS.NOT_APPLICABLE,
       queryHash: lookup.queryHash, searchedAt: entry.searchedAt, expiresAt: entry.expiresAt
     };
   }
@@ -114,7 +140,8 @@ export async function searchMarketReferencesWithCache({
     // cliente lo cuente correctamente (no como una busqueda real).
     return {
       fichaTecnica: {}, referencias: [], precioRecomendado: null, nivelEvidencia: 'ESTIMADO_IA',
-      cacheStatus, webSearchPerformed: false, deferred: true, reason: 'DAILY_SEARCH_BUDGET_EXHAUSTED',
+      cacheStatus, webSearchPerformed: false, cacheWriteStatus: CACHE_WRITE_STATUS.NOT_APPLICABLE,
+      deferred: true, reason: 'DAILY_SEARCH_BUDGET_EXHAUSTED',
       queryHash: lookup.queryHash
     };
   }
@@ -128,8 +155,18 @@ export async function searchMarketReferencesWithCache({
     priceStatus, priceConfidence: confidence
   });
 
+  // Hotfix 2.1.1 -- regla 1: la respuesta NUNCA finge persistencia. Si
+  // entry.persisted es false (store.set() fallo O la verificacion
+  // read-after-write no confirmo el documento), se registra server-side de
+  // inmediato y el llamador (cliente) recibe cacheWriteStatus:FAILED en vez
+  // de un queryHash silenciosamente huerfano.
+  const cacheWriteStatus = entry.persisted ? CACHE_WRITE_STATUS.PERSISTED : CACHE_WRITE_STATUS.FAILED;
+  if(!entry.persisted){
+    logCacheWriteFailure({ queryHash: entry.queryHash, operation: 'cache.save', errorCode: entry.storeErrorCode, error: entry.storeError });
+  }
+
   return {
-    ...searchResult, cacheStatus, webSearchPerformed: true,
+    ...searchResult, cacheStatus, webSearchPerformed: true, cacheWriteStatus,
     queryHash: entry.queryHash, searchedAt: entry.searchedAt, expiresAt: entry.expiresAt
   };
 }

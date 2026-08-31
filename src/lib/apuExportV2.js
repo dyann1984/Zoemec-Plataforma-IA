@@ -3,6 +3,7 @@ import { jsPDF } from 'jspdf';
 import { calcAPUv2, calcEquipmentRow, calcSeguridadRow, APU_DEFAULT_FACTORS } from './apuCalc.js';
 import { reconcileAPU, DEFAULT_RECONCILIATION_TOLERANCE } from './apuReconciliation.js';
 import { finalizeProfessionalAPU, isStructurallyEmptyApu } from '../domain/apuProfessional.js';
+import { runApuConfidence, formatGlobalConfidence, dimensionPercentLabel } from '../domain/apuConfidence.js';
 import { apuDataStateLabel } from '../domain/apuSchema.js';
 import { buildReviewRow, REVISION_STATUS_LABEL } from '../domain/apuReview.js';
 import { computeConceptStatus, conceptStatusLabel } from '../domain/apuCompletionStatus.js';
@@ -44,6 +45,14 @@ const pdfIntegration=row=>{
 
 export function buildProfessionalAPUSheet(rawApu){
   const apu=finalizeProfessionalAPU(rawApu);
+  // Fuente unica de verdad del Confidence global (ver apuConfidence.js):
+  // nunca se usa apu.confidence.score/.level/.dimensions.* directamente en
+  // ninguna celda visible -- ese objeto es la dimension interna
+  // "composicion/precios/rendimientos/cantidades" SIN gating por fallas
+  // criticas, y runApuConfidence() ya la reusa internamente + le aplica el
+  // gating real (nunca se recalcula por separado, nunca se duplica logica).
+  const globalConfidence=runApuConfidence(apu);
+  const gc=formatGlobalConfidence(globalConfidence);
   const rows=[]; const widths=[11,17,38,12,12,13,13,13,16,20,16,18];
   const add=(row=[])=>{const full=[...row];while(full.length<12)full.push(null);rows.push(full);return rows.length;};
   const span=(text,color='#123F78')=>add([asCell(text,{columnSpan:12,fontWeight:'bold',color:'#FFFFFF',backgroundColor:color,align:'center'}),...Array(11).fill(null)]);
@@ -129,7 +138,7 @@ export function buildProfessionalAPUSheet(rawApu){
   span('16. FUENTES DE PRECIOS',COLORS.measure);head(['Recurso','Clave','Descripcion','Unidad','Precio','Fecha','Proveedor','Tipo','Verificado','Fuente','URL','Confianza']);
   ['materials','labor','equipment','consumables'].flatMap(k=>(apu[k]||[]).map(r=>[k,r])).forEach(([kind,r])=>add([kind,r.clave,r.descripcion,r.unidad,Number(r.precioUnitario??r.salarioBase??r.tarifa??0),r.fuente?.fecha||'',r.fuente?.proveedor||(r.fuente?.estado==='BIBLIOTECA'||r.fuente?.estado==='VERIFICADO'?'Biblioteca ZOEMEC':''),apuDataStateLabel(r.fuente?.estado),r.fuente?.estado==='VERIFICADO'?'SI':'NO',r.fuente?.sourceName||(r.fuente?.matchMethod?`Biblioteca: ${r.fuente.matchMethod}${r.fuente.catalogItemId?` (${r.fuente.catalogItemId})`:''}`:''),r.fuente?.sourceUrl||'',Number(r.fuente?.confidence||0)]));add([]);
   span('17-18. SUPUESTOS, CONFIANZA Y FIRMAS');(apu.supuestos||[]).forEach((v,i)=>add([i+1,asCell(v.texto||v,{columnSpan:11,wrap:true}),...Array(10).fill(null)]));
-  add([asCell('Confianza',XLS.label),`${apu.confidence.score}% ${apu.confidence.level}`,asCell('Precios',XLS.label),`${apu.confidence.dimensions.precios}%`,asCell('Rendimientos',XLS.label),`${apu.confidence.dimensions.rendimientos}%`,asCell('Riesgos',XLS.label),apu.confidence.risks,asCell('Estado',XLS.label),apu.validationStatus,null,null]);
+  add([asCell('Confianza',XLS.label),gc.fullLabel,asCell('Precios',XLS.label),dimensionPercentLabel(globalConfidence.dimensions.prices),asCell('Rendimientos',XLS.label),dimensionPercentLabel(globalConfidence.dimensions.productivity),asCell('Riesgos',XLS.label),gc.risk,asCell('Estado',XLS.label),apu.validationStatus,null,null]);
   add([asCell('Elaboro',XLS.label),apu.elaboro||'',null,asCell('Reviso',XLS.label),apu.reviso||'',null,asCell('Aprobo',XLS.label),apu.aprobo||'',null,asCell('Version',XLS.label),apu.version||'V1',null]);
   return {sheet:safeSheet(`${apu.clave}_${String(apu.concept).split(/\s+/).slice(0,2).join('_')}`),rows,widths,stickyRowsCount:4,apu};
 }
@@ -221,6 +230,7 @@ export function buildProfessionalSummarySheet(apus){
   const rows=[[asCell('RESUMEN GENERAL DEL PRESUPUESTO',{...XLS.title,columnSpan:12}),...Array(11).fill(null)],['Clave','Concepto','Unidad','Cantidad','PU original (Excel)','PU calculado (Motor v2)','Diferencia','Importe sin IVA','IVA','Importe con IVA','Estado','Confianza'].map(v=>asCell(v,XLS.head))];
   const finalized=apus.map(raw=>finalizeProfessionalAPU(raw));
   finalized.forEach(a=>{
+    const gc=formatGlobalConfidence(runApuConfidence(a));
     const puCalc=Number(a.calculated.pu||0);
     const puOriginal=Number(a.referencePU||0);
     const diferencia=puOriginal>0?puCalc-puOriginal:null;
@@ -233,7 +243,7 @@ export function buildProfessionalSummarySheet(apus){
       Number(a.calculated.iva||0)*Number(a.cantidadObra||0),
       Number(a.calculated.importeTotal||0)+Number(a.calculated.iva||0)*Number(a.cantidadObra||0),
       a.validationStatus,
-      `${a.confidence.score}%`
+      gc.scoreLabel
     ]);
   });
   const first=3,last=rows.length;
@@ -245,18 +255,24 @@ export function buildProfessionalSummarySheet(apus){
 /* Bandeja de Revision Tecnica en Excel (Fase 8 requisito 9): una fila por
    concepto con las mismas columnas que la bandeja en pantalla (ver
    src/domain/apuReview.js#buildReviewRow), para poder revisar/filtrar sin
-   abrir la app. "Confianza tecnica"/"Confianza precios" reusan la
-   confianza re-etiquetada de calculateAPUConfidence (apu.confidence.presentation);
-   "Evidencia mercado" es la cobertura de fuentes cost-weighted (independiente
-   de la calidad tecnica de esa evidencia). Nunca decide "validado" por si
-   sola: el estado que se exporta es el mismo REVISION_STATUS ya derivado o
-   confirmado en la app (deriveRevisionStatus/applyRevisionDecision). */
+   abrir la app. "Confianza tecnica"/"Confianza precios" (auditoria JUDGE
+   READY) ya NO leen apu.confidence.presentation (una sola sub-dimension de
+   calculateAPUConfidence, SIN gating, reetiquetada -- esa era la fuente real
+   del "60%" que no coincidia con el resto de la app) -- ahora leen las
+   dimensiones equivalentes de runApuConfidence() (structure/prices), que SI
+   limitan su techo ante una falla critica de Auditoria y declaran N/D en vez
+   de inventar un numero cuando no hay base. "Evidencia mercado" es la
+   cobertura de fuentes cost-weighted (independiente de la calidad tecnica de
+   esa evidencia). Nunca decide "validado" por si sola: el estado que se
+   exporta es el mismo REVISION_STATUS ya derivado o confirmado en la app
+   (deriveRevisionStatus/applyRevisionDecision). */
 export function buildControlRevisionSheet(apus){
   const list = Array.isArray(apus) ? apus : [apus];
   const finalized = list.map(raw => finalizeProfessionalAPU(raw));
   const rows = [[asCell('BANDEJA DE REVISION TECNICA', { ...XLS.title, columnSpan: 11 }), ...Array(10).fill(null)],
     ['Clave', 'Concepto', 'PU original', 'PU ZOEMEC', 'Diferencia %', 'Confianza técnica', 'Confianza precios', 'Evidencia mercado', 'Rendimiento validado', 'Completitud', 'Estado / Observaciones'].map(v => asCell(v, XLS.head))];
   finalized.forEach(apu => {
+    const globalConfidence = runApuConfidence(apu);
     const r = buildReviewRow(apu);
     const diffStyle = r.diferenciaPct != null && Math.abs(r.diferenciaPct) > 25 ? { color: '#B54A62', fontWeight: 'bold' } : {};
     const motivos = (r.motivos || []).join('; ');
@@ -276,8 +292,8 @@ export function buildControlRevisionSheet(apus){
       r.puOriginal != null ? r.puOriginal : asCell('Sin referencia', { color: '#8A6B2E' }),
       r.puCalculado,
       r.diferenciaPct != null ? asCell(Number(r.diferenciaPct.toFixed(1)), diffStyle) : asCell('—', { color: '#8A6B2E' }),
-      `${apu.confidence.presentation.confianzaTecnica}%`,
-      `${apu.confidence.presentation.confianzaPrecios}%`,
+      dimensionPercentLabel(globalConfidence.dimensions.structure),
+      dimensionPercentLabel(globalConfidence.dimensions.prices),
       `${r.evidenciaMercado}%`,
       r.rendimientoValidado ? 'SI' : 'NO',
       asCell(conceptStatusLabel(status), statusStyle),
@@ -412,6 +428,7 @@ export async function exportAPUExcelV2(apus,options={}){
 export function drawApuSections(doc,rawApu,opts={}){
   assertExportableApus(rawApu);
   const apu=finalizeProfessionalAPU(rawApu); const t=apu.calculated;
+  const globalConfidence=runApuConfidence(apu);
   const W=doc.internal.pageSize.getWidth(),H=doc.internal.pageSize.getHeight(),M=12;
   let y=opts.startY??12, page=opts.startPage??doc.getNumberOfPages();
   const layout={pageHeight:H,topMargin:M,bottomLimit:H-13,generalHeaders:[],sections:[],rows:[]};
@@ -565,10 +582,10 @@ export function drawApuSections(doc,rawApu,opts={}){
   kv('Validado el',apu.validatedAt?new Date(apu.validatedAt).toLocaleString('es-MX'):'');
   y+=2;
   bar('16. CONFIANZA DEL ANALISIS',[7,140,136]);
-  kv('Confianza global',`${apu.confidence.score}% ${apu.confidence.level}`);
-  kv('Precios',`${apu.confidence.dimensions.precios}%`);
-  kv('Rendimientos',`${apu.confidence.dimensions.rendimientos}%`);
-  kv('Riesgos',apu.confidence.risks);
+  kv('Confianza global',formatGlobalConfidence(globalConfidence).fullLabel);
+  kv('Precios',dimensionPercentLabel(globalConfidence.dimensions.prices));
+  kv('Rendimientos',dimensionPercentLabel(globalConfidence.dimensions.productivity));
+  kv('Riesgos',formatGlobalConfidence(globalConfidence).risk);
   y+=6;
   ensure(28);doc.setDrawColor(150);doc.setFontSize(7);doc.setTextColor(30);
   const sigW=(W-2*M-10)/3;

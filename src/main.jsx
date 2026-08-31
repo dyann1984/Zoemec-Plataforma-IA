@@ -11,6 +11,7 @@ import { createDemoContext } from './lib/apuFlow.js';
 import { APU_DEFAULT_FACTORS, DEFAULT_IVA_RATE, calcAPU, rowImporte, toSafeNonNegativeNumber } from './lib/apuCalc.js';
 import { migrateLegacyApuToV2 } from './domain/apuSchema.js';
 import { finalizeProfessionalAPU, makePriceRecord } from './domain/apuProfessional.js';
+import { runApuConfidence, formatGlobalConfidence } from './domain/apuConfidence.js';
 import { exportAPUExcelV2, exportAPUPdfV2, exportAPUPdfMaster } from './lib/apuExportV2.js';
 import { exportProjectDossierPdf } from './lib/apuProjectDossierPdf.js';
 import { exportProjectDossierExcel } from './lib/apuProjectDossierXlsx.js';
@@ -1245,19 +1246,24 @@ function AIProgress({active}){
 /* Tarjetas compactas con los numeros reales del APU (calcAPUv2 vía
    finalizeProfessionalAPU): nunca valores inventados. Visibles antes del
    editor tanto en modo edicion como en modo resultado. */
-function ExecutiveSummaryCards({apu}){
+function ExecutiveSummaryCards({apu,globalConfidence}){
   const hasContent = (apu?.materials?.length||0) + (apu?.labor?.length||0) > 0;
   if(!hasContent) return null;
   const t = apu.calculated || {};
   const direct = t.direct || 0;
   const segs = [['Materiales',t.mat,'#9D6FD0'],['Mano de obra',t.mo,'#2A1740'],['Equipo',t.equipo,'#B8A4CC'],['Herramienta',t.herramienta,'#C7A35C']];
   const validado = apu.validationStatus === 'VALIDADO';
+  // Fuente unica de verdad del Confidence global (ver apuConfidence.js): el
+  // llamador ya calculo runApuConfidence(apu) una sola vez (se comparte con
+  // "Confianza del analisis" y la tarjeta legacy de abajo, para que las tres
+  // superficies de esta misma pantalla muestren siempre el mismo numero).
+  const gc = formatGlobalConfidence(globalConfidence);
   return <div className="exec-kpis">
     <div className="exec-kpi-card gold"><small>Precio unitario</small><b>{money(t.pu)}</b><span>/ {apu.unit || 'unidad'}</span></div>
     <div className="exec-kpi-card"><small>Costo directo</small><b>{money(direct)}</b><span>base del análisis</span></div>
     <div className="exec-kpi-card"><small>Cantidad</small><b>{num(apu.cantidadObra)}</b><span>{apu.unit || 'unidad'}</span></div>
     <div className="exec-kpi-card"><small>Importe</small><b>{money(t.importeTotal)}</b><span>sin IVA</span></div>
-    <div className="exec-kpi-card"><small>Confianza IA</small><b>{apu.confidence?.score ?? 0}%</b><span>{apu.confidence?.level || '—'}</span></div>
+    <div className="exec-kpi-card"><small>Confianza global</small><b>{gc.scoreLabel}</b><span>{gc.score==null?'':gc.level}</span></div>
     <div className={`exec-kpi-card${validado?' ok':' warn'}`}><small>Estado</small><b>{validado?'Validado':'Revisión necesaria'}</b><span>{(apu.warnings||[]).length} observación(es)</span></div>
     <div className="exec-kpi-breakdown">{segs.map(([label,v,color])=><div key={label} className="exec-kpi-seg"><i style={{background:color}}/><span>{label}</span><b>{direct>0?Math.round((v||0)/direct*100):0}%</b></div>)}</div>
   </div>;
@@ -1587,6 +1593,13 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   // con projectId: nunca se rellena despues, nace ya con el proyecto activo
   // si existe uno (activeProjectId, ya trackeado mas arriba).
   const professionalApu=useMemo(()=>finalizeProfessionalAPU({...apuV2,id:stableApuId,projectId:apuV2.projectId||activeProjectId||null,cantidadObra:Number(apuV2.cantidadObra||excelInfo?.qty||apu.sourceQty||1)}),[apuV2,stableApuId,activeProjectId,excelInfo?.qty,apu.sourceQty]);
+  // Fuente unica de verdad del Confidence global (ver src/domain/apuConfidence.js
+  // #runApuConfidence -- auditoria JUDGE READY): se calcula UNA vez por render
+  // aqui y se comparte entre ExecutiveSummaryCards, "Confianza del analisis" y
+  // la tarjeta legacy de abajo, para que las tres superficies de esta misma
+  // pantalla (y Excel/PDF, que llaman a runApuConfidence de forma independiente
+  // sobre el mismo apu finalizado) muestren siempre el mismo numero.
+  const globalConfidence=useMemo(()=>runApuConfidence(professionalApu),[professionalApu]);
   const userUsage = usage?.[user?.email] || {apusCreated:0};
   const isFree = user?.role !== 'admin' && (user?.plan || 'Gratis') === 'Gratis';
   const requireApuAccess = () => {
@@ -1775,7 +1788,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       setApu(shim);
       setApuV2({ ...v2, id: shim.id });
       setExcelInfo({fileName:'OpenAI API',concept:shim.concept,unit:shim.unit,qty:parsed.qty,referencePU:parsed.referencePU,catalog});
-      setAiStatus(`IA lista: ${v2.confidence.level} confianza ${v2.confidence.score}%`);
+      setAiStatus(`IA lista: ${formatGlobalConfidence(runApuConfidence(v2)).fullLabel} de confianza global`);
       setAiOpen(false);
       setShowExecutive(true);
       alert('APU generado correctamente');
@@ -2393,7 +2406,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       {/* A. Encabezado ejecutivo */}
       <ApuExecHeader apu={professionalApu} apuLegacy={apu}/>
       {/* B. Resultado economico: PU protagonista + desglose */}
-      <ExecutiveSummaryCards apu={professionalApu}/>
+      <ExecutiveSummaryCards apu={professionalApu} globalConfidence={globalConfidence}/>
       <div className="apu-breakdown-detail">
         <Cost label="Indirectos" v={professionalApu.calculated.indirect}/>
         <Cost label="Financiamiento" v={professionalApu.calculated.finance}/>
@@ -2405,7 +2418,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       {showExecutive
         ? <div className="panel exec-detail">
           <div className="exec-confidence">
-            <b>Confianza del análisis: {professionalApu.confidence.score}% ({professionalApu.confidence.level})</b>
+            <b>Confianza del análisis: {formatGlobalConfidence(globalConfidence).fullLabel}</b>
             <small>{(() => {
               const rows = ['materials','labor','equipment'].flatMap(k => professionalApu[k] || []);
               const needsReview = rows.filter(r => !r.fuente?.proveedor || r.fuente?.estado === 'ESTIMADO_IA' || r.fuente?.estado === 'REQUIERE_VALIDACION').length;
@@ -2465,7 +2478,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         </div>
         <div className="apu-detect">
           <div><small>Familia detectada</small><b>{apu.family || 'APU general'}</b></div>
-          <div><small>Confianza IA</small><b>{apu.confidence || 88}%</b></div>
+          <div><small>Confianza IA</small><b>{formatGlobalConfidence(globalConfidence).scoreLabel}</b></div>
           <div><small>Clave SAT sugerida</small><b>{apu.sat || '72100000'}</b></div>
           <div><small>Origen</small><b>{apu.templateFallback ? 'Plantilla tecnica' : apu.aiGenerated ? 'IA real (OpenAI)' : 'Matriz base ZOEMEC'}</b></div>
         </div>

@@ -251,6 +251,46 @@ export function runApuConfidence(apu = {}, options = {}){
   return { score, status, recommendation: STATUS_RECOMMENDATION[status], dimensions, criticalFactors, explanation, pendingValidation: base.pendingValidation };
 }
 
+/* FUENTE UNICA DE VERDAD PARA PRESENTACION (auditoria JUDGE READY): antes de
+   esto, tres lugares distintos mostraban "la confianza" de un mismo APU con
+   tres numeros distintos para el mismo concepto -- ExecutiveSummaryCards y
+   "Confianza del analisis" (main.jsx) leian apu.confidence.score/.level
+   (calculateAPUConfidence, SIN gating por fallas criticas de calculo/
+   estructura, SIN anularse cuando la disciplina es desconocida), y la hoja
+   Excel CONTROL_REVISION mostraba apu.confidence.presentation.confianzaTecnica
+   (una sola sub-dimension --composicion-- reetiquetada, nunca un puntaje
+   global) -- mientras que el panel ZOEMEC INTELLIGENCE (via
+   apuDossierData.js) ya llamaba a runApuConfidence() de este archivo, el
+   UNICO calculo que de verdad limita el techo ante una falla critica y NUNCA
+   inventa un numero cuando la evidencia es insuficiente (ver arriba). Estas
+   dos funciones son la unica forma soportada de mostrar el resultado de
+   runApuConfidence() en cualquier superficie (UI, Excel, PDF, Dossier) --
+   ningun otro archivo debe formatear score/status a mano. */
+export const CONFIDENCE_LEVEL_LABEL_ES = Object.freeze({ HIGH: 'ALTA', MEDIUM: 'MEDIA', LOW: 'BAJA', INSUFFICIENT_EVIDENCE: 'EVIDENCIA INSUFICIENTE' });
+export const CONFIDENCE_RISK_LABEL_ES = Object.freeze({ HIGH: 'BAJOS', MEDIUM: 'MEDIOS', LOW: 'ALTOS', INSUFFICIENT_EVIDENCE: 'NO EVALUABLE' });
+
+/* Formatea el resultado de runApuConfidence() para presentacion. score==null
+   (INSUFFICIENT_EVIDENCE) nunca se convierte en "0%" ni en ningun numero --
+   siempre se declara explicitamente como evidencia insuficiente. */
+export function formatGlobalConfidence(result){
+  const status = result?.status || CONFIDENCE_STATUS.INSUFFICIENT_EVIDENCE;
+  const level = CONFIDENCE_LEVEL_LABEL_ES[status] || CONFIDENCE_LEVEL_LABEL_ES.INSUFFICIENT_EVIDENCE;
+  const risk = CONFIDENCE_RISK_LABEL_ES[status] || CONFIDENCE_RISK_LABEL_ES.INSUFFICIENT_EVIDENCE;
+  const score = result?.score ?? null;
+  return {
+    score, status, level, risk,
+    scoreLabel: score == null ? 'EVIDENCIA INSUFICIENTE' : `${score}%`,
+    fullLabel: score == null ? 'EVIDENCIA INSUFICIENTE' : `${score}% ${level}`
+  };
+}
+
+/* Formatea UNA dimension individual (ver runApuConfidence().dimensions) para
+   presentacion -- nunca oculta que una dimension es null (sin base para
+   evaluarla) mostrando "0%", que se leeria como "evaluado y es malo". */
+export function dimensionPercentLabel(dim){
+  return dim?.score == null ? 'N/D' : `${dim.score}%`;
+}
+
 /* Agregacion a nivel proyecto (Fase 8 Parte 2, seccion 2 del spec:
    "Confidence distribution"). Mismo criterio que runProjectBidRisk
    (bidRisk.js): consume runApuConfidence por cada APU, nunca reimplementa

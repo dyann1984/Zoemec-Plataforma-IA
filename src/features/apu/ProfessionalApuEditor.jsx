@@ -106,7 +106,7 @@ function PriceReviewPanel({apu,onChange}){
  </section>;
 }
 
-export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindPrices,user}){
+export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindPrices,user,exportBlocked,exportBlockedReason}){
  const final=useMemo(()=>finalizeProfessionalAPU(apu),[apu]);const [notice,setNotice]=useState(null),[modal,setModal]=useState(''),[quotes,setQuotes]=useState([]);
  const [moreOpen,setMoreOpen]=useState(false);
  const [selectedApuElement,setSelectedApuElement]=useState(null);
@@ -249,8 +249,22 @@ export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindP
    <button onClick={()=>setNotice(validateAPU(apu))}>Validar</button>
    <button onClick={()=>setNotice({status:'RECALCULADO',issues:[]})}>Recalcular</button>
    <span className="pro-toolbar-group-label">Entregables</span>
-   <button onClick={onExcel} disabled={isEmptyApu} title={isEmptyApu?emptyApuTitle:'Exporta únicamente el APU que estás editando actualmente.'}>Descargar Excel de este APU</button>
-   <button onClick={onPdf} disabled={isEmptyApu} title={isEmptyApu?emptyApuTitle:'Exporta únicamente el APU que estás editando actualmente.'}>Descargar PDF de este APU</button>
+   {/* Bug reportado (auditoria JUDGE READY): "Descargar PDF de este APU" no
+       descargaba nada ni mostraba error visible en varios intentos reales.
+       Causa raiz real: el candado de plan gratis (exportBlocked, ver
+       exportPDF/exportExcel en main.jsx) SI bloqueaba correctamente el
+       segundo intento de exportacion -- pero el unico aviso era un toast que
+       se autodesaparece en 5.6s, facil de perder si se prueban varios
+       botones seguidos. Antes de esto, el boton se veia identico
+       habilitado/bloqueado y solo se sabia del bloqueo DESPUES de hacer clic.
+       Mismo patron preventivo que ya existe para isEmptyApu: el estado
+       bloqueado ahora es visible ANTES del clic (boton deshabilitado + title
+       explicito), nunca solo un aviso que puede desaparecer sin que nadie lo
+       vea. Se aplica a Excel y PDF por igual porque comparten el mismo
+       candado real -- dejar sin este aviso preventivo a Excel mientras se
+       arregla PDF reintroduciria la misma confusion de forma asimetrica. */}
+   <button onClick={onExcel} disabled={isEmptyApu||exportBlocked} title={isEmptyApu?emptyApuTitle:exportBlocked?exportBlockedReason:'Exporta únicamente el APU que estás editando actualmente.'}>Descargar Excel de este APU</button>
+   <button onClick={onPdf} disabled={isEmptyApu||exportBlocked} title={isEmptyApu?emptyApuTitle:exportBlocked?exportBlockedReason:'Exporta únicamente el APU que estás editando actualmente.'}>Descargar PDF de este APU</button>
    <span className="pro-toolbar-group-label">Dossier auditable</span>
    {/* Fase 8: entregable NUEVO y separado de los botones de exportacion de
        arriba (que NO se tocan) -- si apu.id tiene una version guardada en

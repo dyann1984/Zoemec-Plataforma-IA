@@ -2252,20 +2252,37 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     return true;
   };
   const exportPDF=async()=>{
-    if(isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; }
+    // Bug reportado (auditoria JUDGE READY): "Descargar PDF de este APU" no
+    // descargaba nada ni mostraba error visible en varios intentos reales.
+    // El exportador (exportAPUPdfV2) no esta roto -- probado directo, genera
+    // un PDF real y valido. La causa real vive aqui, en el handler: este
+    // candado de plan gratis usaba alert() nativo, exactamente igual que
+    // exportExcel de abajo. Un alert() bloqueante es facil de perder de
+    // vista (queda detras de otra ventana, un navegador con dialogos
+    // suprimidos lo descarta en silencio, o simplemente no se nota que es un
+    // dialogo del navegador y no un fallo de la app) -- indistinguible de
+    // "el boton no hace nada". Se reemplaza por window.zoemecNotify, el
+    // mismo mecanismo de error visible y persistente que ya usa el resto de
+    // la app (ver OneDrive/Google Drive mas abajo en este archivo) en vez de
+    // un dialogo nativo que puede pasar inadvertido.
+    if(isFree && userUsage.apusCreated>=1){ window.zoemecNotify?.('La exportación ilimitada requiere plan activo.', 'error'); return; }
     if(!confirmSingleExportIfAmbiguous()) return;
     setExportBusy(true);
-    try{ exportAPUPdfV2(professionalApu); }
-    catch(error){ alert(error?.message || 'No se pudo generar el PDF.'); return; }
+    try{ await exportAPUPdfV2(professionalApu); }
+    catch(error){ window.zoemecNotify?.(error?.message || 'No se pudo generar el PDF.', 'error'); return; }
     finally{ setExportBusy(false); }
     if(isFree) markApuUsed();
   };
   const exportExcel=async()=>{
-    if(isFree && userUsage.apusCreated>=1){ alert('La exportacion ilimitada requiere plan activo.'); return; }
+    // Mismo candado que exportPDF de arriba, mismo tratamiento (ver
+    // comentario ahi): el boton ya queda deshabilitado antes del clic
+    // (exportBlocked, ProfessionalApuEditor.jsx) cuando este guard bloquearia
+    // -- esto queda como respaldo si igual se dispara onExcel por otra via.
+    if(isFree && userUsage.apusCreated>=1){ window.zoemecNotify?.('La exportación ilimitada requiere plan activo.', 'error'); return; }
     if(!confirmSingleExportIfAmbiguous()) return;
     setExportBusy(true);
     try{ await exportAPUExcelV2(professionalApu); }
-    catch(error){ alert(error?.message || 'No se pudo generar el Excel.'); return; }
+    catch(error){ window.zoemecNotify?.(error?.message || 'No se pudo generar el Excel.', 'error'); return; }
     finally{ setExportBusy(false); }
     if(isFree) markApuUsed();
   };
@@ -2462,7 +2479,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       if(isNew && !requireApuAccess()) return;
       setApus([saved,...apus.filter(x=>x.id!==saved.id)]);
       if(isNew) markApuUsed();
-    }} onFindPrices={findV2Prices} onExcel={exportExcel} onPdf={exportPDF}/>
+    }} onFindPrices={findV2Prices} onExcel={exportExcel} onPdf={exportPDF} exportBlocked={isFree && userUsage.apusCreated>=1} exportBlockedReason="Tu plan gratis ya exportó 1 APU. Activa un plan para exportar más."/>
     <div className="apu-grid legacy-editor-compat">
       <div className="panel">
         <label>Concepto</label>

@@ -12,6 +12,8 @@ import { APU_DEFAULT_FACTORS, DEFAULT_IVA_RATE, calcAPU, rowImporte, toSafeNonNe
 import { migrateLegacyApuToV2 } from './domain/apuSchema.js';
 import { finalizeProfessionalAPU, makePriceRecord } from './domain/apuProfessional.js';
 import { runApuConfidence, formatGlobalConfidence } from './domain/apuConfidence.js';
+import { AI_PROGRESS_STEPS, nextProgressIndex, resolveBusyLabel, canStartAiGeneration } from './domain/aiGenerationProgress.js';
+import { validateProjectDraft } from './domain/projectDraftValidation.js';
 import { exportAPUExcelV2, exportAPUPdfV2, exportAPUPdfMaster } from './lib/apuExportV2.js';
 import { exportProjectDossierPdf } from './lib/apuProjectDossierPdf.js';
 import { exportProjectDossierExcel } from './lib/apuProjectDossierXlsx.js';
@@ -1231,12 +1233,11 @@ function ApuStepper({stepIndex}){
    real a /api/generate-apu): NO afirma que cada etapa termino en el backend,
    solo orienta al usuario mientras espera. El estado real (aiStatus) se
    muestra aparte una vez que la llamada responde. */
-const AI_PROGRESS_STEPS = ['Analizando concepto...','Definiendo cuadrilla...','Calculando rendimientos...','Identificando materiales...','Evaluando equipo y herramienta...','Generando procedimiento...','Validando calidad y medición...','Construyendo APU...'];
 function AIProgress({active}){
   const [i,setI]=useState(0);
   useEffect(()=>{
     if(!active){ setI(0); return; }
-    const id=window.setInterval(()=>setI(v=>(v+1)%AI_PROGRESS_STEPS.length), 1100);
+    const id=window.setInterval(()=>setI(v=>nextProgressIndex(v, AI_PROGRESS_STEPS.length)), 1100);
     return ()=>window.clearInterval(id);
   },[active]);
   if(!active) return null;
@@ -1710,8 +1711,16 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   },[activeProjectId]);
   const generateAI=async()=>{
     if(!requireApuAccess()) return;
-    if(!concept.trim()){ alert('Pega o sube un concepto real para generar con IA.'); return; }
-    if(aiBusy) return;
+    // Guard puro (src/domain/aiGenerationProgress.js): mismo criterio de
+    // siempre (concepto real + no estar ya generando), ahora testeable sin
+    // renderizar el componente. Evita que un doble clic / doble Enter
+    // dispare una segunda llamada real a /api/generate-apu mientras la
+    // primera sigue en curso.
+    const guard = canStartAiGeneration({aiBusy, concept});
+    if(!guard.allowed){
+      if(guard.reason==='empty_concept') alert('Pega o sube un concepto real para generar con IA.');
+      return;
+    }
     if(routeIfMultipleConcepts()) return;
     const requestId = ++aiRequestSeqRef.current;
     setAiBusy(true);
@@ -2321,7 +2330,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         <small className="muted">Si el concepto trae números propios (medidas, diámetros), captura aquí la unidad y cantidad reales para no confundir al detector automático.</small>
       </div>
       <div className="ai-panel-primary-action">
-        <button className="ai-btn" onClick={generateAI} disabled={aiBusy}><Icon name="apu" size={17}/> {aiBusy?'Generando...':'Generar APU con IA real'}</button>
+        <button className="ai-btn" onClick={generateAI} disabled={aiBusy} aria-busy={aiBusy}><Icon name="apu" size={17}/> {aiBusy?'Generando APU con IA...':'Generar APU con IA real'}</button>
       </div>
       <div className="ai-panel-foot">
         <label className="up-btn ghost-up">Importar catálogo de precios<input ref={priceCatalogInputRef} type="file" accept=".xlsx,.csv" hidden onChange={e=>importExcel(e.target.files[0])}/></label>
@@ -2333,7 +2342,17 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         {activeProjectId && <button className="danger-solid" type="button" onClick={emptyActiveProject} title="Elimina PERMANENTEMENTE todos los APUs y conceptos guardados de este proyecto (la Bandeja de revisión técnica completa). No elimina el proyecto, la Biblioteca, el catálogo de precios, los clientes ni otros proyectos.">Vaciar proyecto</button>}
       </div>
       <button type="button" className="link-inline" onClick={generate}>¿Prefieres partir de una matriz base sin IA? Generar desarrollo</button>
-      {aiBusy && <AIProgress active={aiBusy}/>}
+      {aiBusy && <>
+        {/* Nota real (no decorativa): aiStatus refleja el paso real que esta
+            ejecutando generateAI() en este momento (analizando, buscando
+            precios, calculando rendimientos...), nunca un porcentaje
+            inventado. Se muestra en .ai-note-busy (patron ya usado para el
+            loader de Google Drive) porque esa clase trae su propio fondo
+            claro y por lo tanto es visible sin depender del contraste de
+            .ai-panel. */}
+        <div className="ai-note-busy"><span className="asst-dots"><i/><i/><i/></span><b>{resolveBusyLabel(aiStatus)}</b></div>
+        <AIProgress active={aiBusy}/>
+      </>}
       {aiStatus && !aiBusy && <div className="ai-note"><b>{aiStatus}</b></div>}
       {excelInfo && <div className="excel-preview">
         <div><small>Archivo</small><b>{excelInfo.fileName}</b></div>
@@ -3003,19 +3022,33 @@ function Projects({projects,setProjects,activeProjectId,setActiveProjectId,setMo
   const [showForm,setShowForm]=useState(false);
   const [startPrompt,setStartPrompt]=useState(false);
   const [draft,setDraft]=useState({name:'',client:'',ubicacion:'',moneda:'MXN',budget:'',progress:0,status:'Anteproyecto'});
+  // Antes, un Cliente vacio hacia que "Crear y comenzar" no hiciera nada
+  // visible: el unico aviso era un alert() -- globalmente convertido en un
+  // toast que se autodesaparece (ver NoticeHost) -- facil de perder. El
+  // requisito de Cliente NO cambia (sigue obligatorio, igual que Nombre):
+  // solo se vuelve visible con un estado de error persistente por campo,
+  // borde rojo y foco automatico en el primer campo faltante.
+  const [formErrors,setFormErrors]=useState({});
+  const nameInputRef=useRef(null);
+  const clientInputRef=useRef(null);
   const add = () => setShowForm(true);
-  const save = () => {
-    if(!draft.name.trim() || !draft.client.trim()){
-      alert('Captura nombre del proyecto y cliente.');
+  const clearDraft = () => { setDraft({name:'',client:'',ubicacion:'',moneda:'MXN',budget:'',progress:0,status:'Anteproyecto'}); setFormErrors({}); };
+  const save = (e) => {
+    e?.preventDefault?.();
+    const errors=validateProjectDraft(draft);
+    if(Object.keys(errors).length){
+      setFormErrors(errors);
+      (errors.name ? nameInputRef : clientInputRef).current?.focus();
       return;
     }
+    setFormErrors({});
     const next={id:'PRO-'+uid(),name:draft.name.trim(),client:draft.client.trim(),ubicacion:draft.ubicacion.trim(),moneda:draft.moneda||'MXN',progress:Number(draft.progress)||0,budget:Number(draft.budget)||0,status:draft.status||'Anteproyecto'};
     setProjects([next, ...list]);
     // Proyecto nuevo = espacio realmente vacio y activo de inmediato (seccion 15
     // del sprint): sin esto, el usuario creaba el proyecto pero seguia viendo
     // los APUs/presupuesto del proyecto que tuviera activo antes.
     setActiveProjectId?.(next.id);
-    setDraft({name:'',client:'',ubicacion:'',moneda:'MXN',budget:'',progress:0,status:'Anteproyecto'});
+    clearDraft();
     setShowForm(false);
     setStartPrompt(true);
   };
@@ -3047,17 +3080,27 @@ function Projects({projects,setProjects,activeProjectId,setActiveProjectId,setMo
     {showForm && <div className="record-modal" role="dialog" aria-modal="true">
     <div className="record-backdrop" onClick={()=>setShowForm(false)}></div>
     <div className="panel record-form project-form">
-      <div className="record-form-head"><div><span>Alta de proyecto</span><h2>Datos iniciales de obra</h2></div><button className="secondary" onClick={()=>setShowForm(false)}>Cancelar</button></div>
+      <div className="record-form-head"><div><span>Alta de proyecto</span><h2>Datos iniciales de obra</h2></div><button type="button" className="secondary" onClick={()=>setShowForm(false)}>Cancelar</button></div>
+      <form onSubmit={save} noValidate>
       <div className="field-grid">
-        <div className="nf"><label>Nombre del proyecto</label><input value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})} placeholder="Ej. Remodelacion local comercial"/></div>
-        <div className="nf"><label>Cliente</label><input value={draft.client} onChange={e=>setDraft({...draft,client:e.target.value})} placeholder="Nombre del cliente o empresa"/></div>
+        <div className={`nf${formErrors.name?' has-error':''}`}>
+          <label>Nombre del proyecto</label>
+          <input ref={nameInputRef} value={draft.name} onChange={e=>{setDraft({...draft,name:e.target.value}); if(formErrors.name) setFormErrors({...formErrors,name:undefined});}} placeholder="Ej. Remodelacion local comercial" aria-required="true" aria-invalid={!!formErrors.name}/>
+          {formErrors.name && <span className="nf-error-msg">{formErrors.name}</span>}
+        </div>
+        <div className={`nf${formErrors.client?' has-error':''}`}>
+          <label>Cliente</label>
+          <input ref={clientInputRef} value={draft.client} onChange={e=>{setDraft({...draft,client:e.target.value}); if(formErrors.client) setFormErrors({...formErrors,client:undefined});}} placeholder="Nombre del cliente o empresa" aria-required="true" aria-invalid={!!formErrors.client}/>
+          {formErrors.client && <span className="nf-error-msg">{formErrors.client}</span>}
+        </div>
         <div className="nf"><label>Ubicación</label><input value={draft.ubicacion} onChange={e=>setDraft({...draft,ubicacion:e.target.value})} placeholder="Ciudad, estado"/></div>
         <div className="nf"><label>Moneda</label><select value={draft.moneda} onChange={e=>setDraft({...draft,moneda:e.target.value})}><option>MXN</option><option>USD</option></select></div>
         <div className="nf"><label>Presupuesto estimado</label><input type="number" value={draft.budget} onChange={e=>setDraft({...draft,budget:e.target.value})} placeholder="0.00"/></div>
         <div className="nf"><label>Estado</label><select value={draft.status} onChange={e=>setDraft({...draft,status:e.target.value})}><option>Anteproyecto</option><option>Cotizacion</option><option>En ejecucion</option><option>Pausado</option><option>Cerrado</option></select></div>
         <div className="nf wide"><label>Avance inicial: {draft.progress}%</label><input type="range" min="0" max="100" value={draft.progress} onChange={e=>setDraft({...draft,progress:e.target.value})}/></div>
       </div>
-      <div className="form-actions"><button className="secondary" onClick={()=>setDraft({name:'',client:'',ubicacion:'',moneda:'MXN',budget:'',progress:0,status:'Anteproyecto'})}>Limpiar</button><button onClick={save}>Crear y comenzar</button></div>
+      <div className="form-actions"><button type="button" className="secondary" onClick={clearDraft}>Limpiar</button><button type="submit">Crear y comenzar</button></div>
+      </form>
     </div></div>}
     {startPrompt && <div className="record-modal" role="dialog" aria-modal="true">
       <div className="record-backdrop" onClick={()=>setStartPrompt(false)}></div>

@@ -254,3 +254,84 @@ for(const [familyLabel, concept] of FAMILY_CASES){
     });
   });
 }
+
+/* Bug reportado (auditoria JUDGE READY, evidencia real en navegador): "Muro
+   de block hueco de concreto de 15x20x40 cm, asentado con mortero
+   cemento-arena..." clasificaba como concreto (Cimentacion: cemento, arena,
+   grava, agua, curacreto, clavo y madera -- la matriz completa de una
+   colada de concreto) en vez de block (Albañileria: block, cemento, arena,
+   agua -- materiales de mamposteria reales), porque la palabra bare
+   "concreto" (sin ningun indicador de colado estructural) le ganaba a
+   "block" solo por posicion de array. Esta era ademas la frase de ejemplo
+   por defecto del propio motor (apuGeneration.js#makeAPUFromConcept sin
+   concepto), asi que el bug tambien afectaba al fallback sin texto. */
+test('Bug reportado: muro de block de concreto clasifica como block (Albañileria), no como concreto (Cimentacion)', () => {
+  const r = classifyConstructionSystem('muro de block hueco de concreto de 15x20x40 cm, asentado con mortero cemento-arena proporcion 1:5, incluye acarreo del material en obra, mano de obra de albañil y ayudante, andamio tubular y herramienta menor.');
+  assert.equal(r.tipo, 'block');
+  assert.equal(r.discipline, 'Albanileria');
+
+  const apu = makeAPUFromConcept('Muro de block hueco de concreto de 15x20x40 cm, asentado con mortero cemento-arena proporcion 1:5, incluye acarreo del material en obra, mano de obra de albañil y ayudante, andamio tubular y herramienta menor.', []);
+  assert.equal(apu.primaryActivity, 'block');
+  assert.equal(apu.family, 'Albanileria');
+  assert.ok(apu.materials.some(r => /block/i.test(r[0])), 'debe traer block como material real');
+  // No debe traer la matriz de concreto/cimentacion (colada en sitio): sin
+  // grava ni membrana/curacreto de curado, que solo existen en SYSTEM_RESOURCES.concreto.
+  assert.ok(!apu.materials.some(r => /grava|curacreto/i.test(r[0])), 'no debe traer recursos propios de una colada de concreto');
+});
+
+test('Motor universal sin concepto (fallback por defecto) tambien clasifica como block, no como concreto', () => {
+  const apu = makeAPUFromConcept('', []);
+  assert.equal(apu.primaryActivity, 'block');
+  assert.equal(apu.family, 'Albanileria');
+});
+
+test('Regresion preservada: un muro de tabique (sin la palabra "concreto") sigue clasificando como block', () => {
+  const r = classifyConstructionSystem('muro de tabique rojo recocido de 14 cm, asentado con mortero cemento-arena');
+  assert.equal(r.tipo, 'block');
+});
+
+test('Regresion preservada: un firme/losa/zapata de concreto real (colado estructural) sigue clasificando como concreto, aunque tambien exista vocabulario de mamposteria en el proyecto', () => {
+  const casos = [
+    ["Firme de concreto f'c=150 kg/cm2 de 8 cm de espesor, incluye malla electrosoldada", 'concreto'],
+    ["Colado de losa de concreto f'c=200 kg/cm2, incluye cimbra y descimbrado", 'concreto'],
+    ['Zapata aislada de concreto de 1.20x1.20x0.40 m, armada con varilla del No. 4 @ 15 cm', 'concreto'],
+    ['Excavacion manual de cepa en material tipo II, ancho 0.60 m, hasta 1.5 m de profundidad', 'excavacion'],
+    // "castillo" solo (sin la palabra "concreto") clasifica como acero --
+    // comportamiento preexistente, sin cambios por este fix (el patron de
+    // 'acero' ya incluia 'castillo' como palabra clave literal).
+    ['Castillo armado con 4 varillas del No. 3 y estribos @ 20 cm', 'acero'],
+    // "castillo DE CONCRETO armado" explicita el material -- clasifica como
+    // concreto (comportamiento preexistente, tampoco cambia por este fix: no
+    // trae block/tabique, asi que el guard nuevo de la seccion 'concreto'
+    // nunca se activa aqui).
+    ['Castillo de concreto armado de 15x15 cm, con 4 varillas del No. 3 y estribos @ 20 cm', 'concreto'],
+    ['Demolicion de muro de tabique existente con retiro de escombro fuera de obra', 'demolicion'],
+    ['Acarreo manual de material producto de excavacion a una distancia de 20 m', 'acarreo_manual'],
+    // "adhesivo" sin mencionar loseta/azulejo/porcelanato/piso clasifica como
+    // adhesivo por si solo -- si el texto trae loseta/piso, el propio motor
+    // (por diseno preexistente, no modificado por este fix) lo trata como el
+    // renglon de piso completo, no como adhesivo aislado.
+    ['Aplicacion de adhesivo cemento cola en muro para fijacion de placas de piedra', 'adhesivo'],
+    ['Colocacion de loseta ceramica de 30x30 cm con adhesivo, incluye boquilla', 'piso']
+  ];
+  for(const [texto, esperado] of casos){
+    const r = classifyConstructionSystem(texto.toLowerCase());
+    assert.equal(r.tipo, esperado, `"${texto}" deberia clasificar como ${esperado}, clasifico como ${r.tipo}`);
+  }
+});
+
+test('Concepto ambiguo sin vocabulario reconocible cae a generico (o score bajo), nunca a block/concreto por accidente', () => {
+  const r = classifyConstructionSystem('suministro e instalacion de equipo especial segun especificaciones del proyecto');
+  assert.notEqual(r.tipo, 'block');
+  assert.notEqual(r.tipo, 'concreto');
+  assert.notEqual(r.matchType, 'exact', 'un concepto realmente ambiguo no debe resolverse con falsa precision (matchType exact)');
+});
+
+test('Un muro de block NO recibe recursos de excavacion, acero de zapata, concreto de cimentacion ni cimbra, salvo que el propio concepto lo indique explicitamente', () => {
+  const apu = makeAPUFromConcept('Muro de block hueco 15x20x40 cm asentado con mortero cemento-arena, incluye plomeo, nivelacion y acarreos internos', []);
+  assert.equal(apu.family, 'Albanileria');
+  const allMaterialNames = apu.materials.map(r => String(r[0]).toLowerCase()).join(' | ');
+  assert.ok(!/grava|curacreto/.test(allMaterialNames), 'no debe traer materiales de colado de concreto');
+  assert.ok(!/varilla|estribo|acero de refuerzo/.test(allMaterialNames), 'no debe traer acero de refuerzo de zapata sin que el concepto lo pida');
+  assert.ok(!/cimbra/.test(allMaterialNames), 'no debe traer cimbra sin que el concepto lo pida');
+});

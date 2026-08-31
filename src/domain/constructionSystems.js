@@ -160,7 +160,33 @@ export const CONSTRUCTION_SYSTEMS_ORDER = [
   // porque "armad"/"varilla" se evaluaba primero. Un concepto de acero como
   // linea PROPIA ("Suministro y habilitado de acero de refuerzo fy=4200")
   // sigue clasificando como acero: no menciona "concreto/losa/zapata/...".
-  { tipo:'concreto', test:t=>/concreto|losa|zapata|firme|cimentaci|colado|columna de conc/.test(t) },
+  //
+  // Bug reportado (auditoria JUDGE READY): "Muro de block hueco DE CONCRETO
+  // de 15x20x40 cm, asentado con mortero cemento-arena..." clasificaba como
+  // concreto (Cimentacion: cemento/arena/grava/curacreto, colado en sitio)
+  // en vez de block (Albañileria), porque la palabra bare "concreto" (sin
+  // ningun indicador real de colado estructural) le ganaba a "block" solo
+  // por posicion de array dentro del mismo nivel de prioridad. "Block de
+  // concreto" es el nombre comercial estandar de esa pieza de mamposteria
+  // (en contraste con "block de barro"/tabique) -- "concreto" ahi describe
+  // el MATERIAL del block, no un elemento colado en sitio. Este era el
+  // concepto de ejemplo por defecto de este mismo motor (ver
+  // apuGeneration.js#makeAPUFromConcept), asi que el bug afectaba tambien al
+  // fallback sin concepto, no solo a un caso aislado.
+  // Fix quirurgico: un indicador real de colado estructural (losa/zapata/
+  // firme/cimentacion/colado/columna de concreto) sigue ganando siempre,
+  // sin importar que mas mencione el texto -- preserva el caso de zapata de
+  // arriba. Bare "concreto" SIN ninguno de esos indicadores cede el turno a
+  // 'block' (evaluado despues, mismo nivel de prioridad) solo cuando el
+  // texto tambien nombra la pieza de mamposteria (block/tabique/tabicon) --
+  // nunca por "muro"/"mamposteria" solos, para no romper un "muro de
+  // concreto armado" real (elemento colado, sin block/tabique de por
+  // medio), que debe seguir clasificando como concreto.
+  { tipo:'concreto', test:t=>{
+      if(/losa|zapata|firme|cimentaci|colado|columna de conc/.test(t)) return true;
+      if(!/concreto/.test(t)) return false;
+      return !/\bblock\b|tabique|tabic[oó]n/.test(t);
+  } },
   { tipo:'acero', test:t=>/acero|varilla|castillo|cadena|armad|fierro|malla/.test(t) },
   { tipo:'block', test:t=>/block|tabique|tabic[oó]n|muro|partici[oó]n|mamposter|junteo/.test(t) },
   // priority:0 -- "impermeabiliz" es una raiz que no significa nada mas en

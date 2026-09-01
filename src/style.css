@@ -1289,13 +1289,23 @@ svg.ic{display:block;flex:none}
   letter-spacing:.12em;
   text-transform:uppercase;
   color:#D8C2F2;
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
 }
 .command-strip b,.command-total b{
   color:#fff;
   font-size:1.05rem;
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  text-align:right;
 }
 .command-flow{
   display:flex;
+  flex-wrap:wrap;
   align-items:center;
   gap:10px;
   margin:18px 0;
@@ -1321,7 +1331,7 @@ svg.ic{display:block;flex:none}
 }
 .command-table div{
   display:grid;
-  grid-template-columns:34px 1fr 42px 90px;
+  grid-template-columns:34px minmax(0,1fr) 42px 90px;
   align-items:center;
   gap:10px;
   min-height:54px;
@@ -1334,9 +1344,13 @@ svg.ic{display:block;flex:none}
   font-family:var(--mono);
   color:#6F3FA7;
 }
-.command-table span{font-weight:800;line-height:1.25}
+/* min-width:0 + overflow:hidden con ellipsis (Prioridad visual: la version
+   EN es mas larga que la ES original y se desbordaba fuera de la fila --
+   ver reporte de QA en Preview -- las traducciones nunca deben depender de
+   caber en el mismo ancho que el texto original). */
+.command-table span{font-weight:800;line-height:1.25;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .command-table em{color:#5B6470;font-style:normal;text-align:center}
-.command-table strong{font-family:var(--mono);text-align:right;color:#171020}
+.command-table strong{font-family:var(--mono);text-align:right;color:#171020;white-space:nowrap}
 .hero-benefits{
   position:relative;
   z-index:2;

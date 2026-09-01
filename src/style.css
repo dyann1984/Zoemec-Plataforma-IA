@@ -1561,8 +1561,12 @@ svg.ic{display:block;flex:none}
   position:absolute;
   z-index:1;
   inset:0;
+  /* Franja intermedia mas oscura que antes (.05/.12 -> .26/.34): la foto de
+     obra competia visualmente con las etiquetas del panel de IA cuando el
+     visitante estaba en modo oscuro -- se sigue viendo la foto (textura de
+     fondo), pero ya no distrae del contenido. */
   background:
-    linear-gradient(180deg,rgba(9,5,17,.62) 0%,rgba(9,5,17,.05) 30%,rgba(9,5,17,.12) 62%,rgba(9,5,17,.82) 100%);
+    linear-gradient(180deg,rgba(9,5,17,.62) 0%,rgba(9,5,17,.26) 30%,rgba(9,5,17,.34) 62%,rgba(9,5,17,.82) 100%);
   pointer-events:none;
 }
 .stage-photo{
@@ -2666,6 +2670,30 @@ svg.ic{display:block;flex:none}
 .locale-switch button.active{background:var(--accent-solid);color:#fff}
 .locale-switch button:not(.active):hover{background:var(--mint);color:var(--ink)}
 
+/* Toggle compacto de un solo boton (reemplaza el par ES/EN en la landing
+   publica -- header mas limpio): muestra el idioma AL QUE CAMBIA, mismo
+   patron que .theme-toggle (que muestra sol/luna del estado destino, no
+   del estado actual). */
+.locale-toggle{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:40px;
+  height:40px;
+  border-radius:8px;
+  border:1.5px solid var(--line-2);
+  background:var(--surface);
+  color:var(--ink);
+  font-family:var(--mono);
+  font-size:.78rem;
+  font-weight:700;
+  letter-spacing:.03em;
+  cursor:pointer;
+  box-shadow:none;
+  padding:0;
+}
+.locale-toggle:hover{background:var(--mint)}
+
 .theme-toggle{
   display:inline-flex;
   align-items:center;
@@ -2722,7 +2750,8 @@ svg.ic{display:block;flex:none}
   .landing .nav-public{padding:12px 4vw}
   .landing .nav-actions{gap:8px;flex-wrap:wrap;justify-content:flex-end}
   .locale-switch button{min-width:36px;height:36px}
-  .theme-toggle,.install-btn{height:36px}
+  .locale-toggle,.theme-toggle{height:36px;width:36px}
+  .install-btn{height:36px}
   .ios-install-hint{width:100%;order:10;justify-content:center;margin-top:8px}
 }
 

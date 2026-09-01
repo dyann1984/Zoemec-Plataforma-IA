@@ -6,19 +6,17 @@
    normal) como desde ThemeContext.test.js (node --test, sin transpilar). */
 export const STORAGE_KEY = 'zoemec-theme';
 
-/* Precedencia: 1) preferencia guardada explicitamente por el usuario,
-   2) prefers-color-scheme del sistema operativo/navegador (si nunca
-   eligio nada), 3) 'light' si ninguno de los dos esta disponible (ej.
-   bajo node --test plano, sin window). */
+/* Precedencia (cambio deliberado: claro por defecto): 1) preferencia
+   guardada explicitamente por el usuario, 2) 'light' siempre que no haya
+   nada guardado -- YA NO se sigue prefers-color-scheme del sistema en la
+   primera visita, para que la landing y el resto de la app arranquen en
+   claro de forma consistente sin importar el modo del SO/navegador del
+   visitante. El usuario sigue pudiendo cambiar a oscuro con el toggle, y
+   esa eleccion sí se respeta y persiste (ver STORAGE_KEY arriba). */
 export function readInitialTheme(){
   try{
     const stored = localStorage.getItem(STORAGE_KEY);
     if(stored === 'light' || stored === 'dark') return stored;
   }catch{ /* almacenamiento no disponible */ }
-  try{
-    if(typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches){
-      return 'dark';
-    }
-  }catch{ /* matchMedia no disponible */ }
   return 'light';
 }

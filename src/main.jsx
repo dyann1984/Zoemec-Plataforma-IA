@@ -767,32 +767,19 @@ function Assistant({ context={}, setModule }){
   </>;
 }
 
-const LANDING_PIPELINE = [
-  { tag:'Excel', flow:['Excel','Contexto BIM','APU'], head:'ZOE está leyendo', metric:'48 conceptos',
-    rows:[['01','Falso plafón de tablaroca','m²','94%'],['02','Estructura metálica ASTM A500','kg','91%'],['03','Pintura vinílica en muros','m²','88%']],
-    foot:['Extrayendo conceptos','Contexto BIM'] },
-  { tag:'Biblioteca', flow:['Catálogo','Coincidencias','Precios'], head:'ZOE consulta biblioteca', metric:'12 matrices base',
-    rows:[['01','Concreto premezclado f\'c=250','m³','96%'],['02','Bomba centrífuga 1 HP','pza','90%'],['03','Tubería PVC hidráulica 1/2"','m','93%']],
-    foot:['Cruzando evidencia técnica','Catálogo base ZOEMEC'] },
-  { tag:'APU', flow:['Materiales','Mano de obra','Equipo'], head:'ZOE genera la matriz', metric:'3 insumos por concepto',
-    rows:[['01','Cemento gris CPC 30R','bulto','$225.00'],['02','Oficial albañil','jor','1.85 FSR'],['03','Revolvedora 1 saco','hr','$95.00']],
-    foot:['Aplicando indirectos y utilidad', 'Metodología RLOPSRM'] },
-  { tag:'Validación', flow:['Indirectos','Financiamiento','Utilidad'], head:'ZOE valida resultados', metric:'Confianza 94%',
-    rows:[['01','Costo directo','—','$2,716.26'],['02','Indirectos + financiamiento','—','$469.91'],['03','Utilidad + cargos','—','$336.14']],
-    foot:['Precio unitario integrado', 'Listo para revisión'] },
-];
 
 function Landing({setScreen, login, company}){
   const [step, setStep] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setStep(s => (s + 1) % LANDING_PIPELINE.length), 3200);
-    return () => clearInterval(t);
-  }, []);
-  const p = LANDING_PIPELINE[step];
   // useI18n() ya expone t(); se alias a tr() para no chocar con la variable
-  // local "t" (id del setInterval) del efecto de arriba -- distinta funcion,
+  // local "t" (id del setInterval) del efecto de abajo -- distinta funcion,
   // mismo nombre corto, mejor no reusarlo y generar confusion al leer.
   const { t: tr, locale, setLocale } = useI18n();
+  const pipeline = tr('panel.pipeline');
+  useEffect(() => {
+    const t = setInterval(() => setStep(s => (s + 1) % pipeline.length), 3200);
+    return () => clearInterval(t);
+  }, [pipeline.length]);
+  const p = pipeline[step] || pipeline[0];
   const { theme, toggleTheme } = useTheme();
   const { canInstall, promptInstall, showIOSHint } = useInstallPrompt();
   return <div className="landing">
@@ -800,10 +787,9 @@ function Landing({setScreen, login, company}){
       <div className="brand-mini"><ZoemecBrand variant="header"/></div>
       <nav><a>{tr('nav.plataforma')}</a><a>{tr('nav.gemeloDigital')}</a><a>{tr('nav.apuConIA')}</a><a>{tr('nav.entregables')}</a></nav>
       <div className="nav-actions">
-        <div className="locale-switch" role="group" aria-label={tr('toggle.langToggleLabel')}>
-          <button className={locale==='es'?'active':''} onClick={()=>setLocale('es')} aria-pressed={locale==='es'}>ES</button>
-          <button className={locale==='en'?'active':''} onClick={()=>setLocale('en')} aria-pressed={locale==='en'}>EN</button>
-        </div>
+        <button className="locale-toggle" onClick={()=>setLocale(locale==='es'?'en':'es')} aria-label={tr('toggle.langToggleLabel')} title={locale==='es'?'English':'Español'}>
+          {locale==='es'?'EN':'ES'}
+        </button>
         <button className="theme-toggle" onClick={toggleTheme} aria-label={tr('toggle.themeToggleLabel')} title={theme==='light'?tr('toggle.themeDark'):tr('toggle.themeLight')}>
           <Icon name={theme==='light'?'moon':'sun'} size={18}/>
         </button>

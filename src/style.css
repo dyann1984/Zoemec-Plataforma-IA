@@ -1186,7 +1186,16 @@ svg.ic{display:block;flex:none}
   font-size:.95rem;
   font-weight:650;
 }
-.landing .nav-actions button{
+/* :not(.locale-segmented-btn):not(.theme-toggle) -- causa raiz real del
+   header "demasiado grande" reportado: esta regla generica tiene la MISMA
+   especificidad (.landing .nav-actions button = 0,2,1) que las reglas
+   dedicadas .locale-segmented-btn/.theme-toggle (0,1,0), asi que SIEMPRE
+   gana sobre ellas sin importar el orden en el archivo -- min-width:148px
+   y padding:14px 20px se aplicaban a los controles compactos por encima
+   de sus propios min-width:40px/padding:0 10px. La exclusion agregada en
+   la capa "premium landing" (mas abajo) no alcanzaba a esta capa, mas
+   antigua en el archivo. */
+.landing .nav-actions button:not(.locale-segmented-btn):not(.theme-toggle){
   min-width:148px;
   padding:14px 20px;
   border-radius:6px;
@@ -1399,7 +1408,7 @@ svg.ic{display:block;flex:none}
   .landing .brand-mini{font-size:1.65rem}
   .landing .brand-mini img{height:64px;width:64px}
   .landing .nav-actions{width:100%}
-  .landing .nav-actions button{flex:1;min-width:0}
+  .landing .nav-actions button:not(.locale-segmented-btn):not(.theme-toggle){flex:1;min-width:0}
   .hero-build{min-height:auto;padding:44px 22px 26px}
   .hero-build .hero-copy h1{font-size:1.7rem;max-width:none}
   .hero-build .hero-actions button{min-width:100%}
@@ -1452,7 +1461,7 @@ svg.ic{display:block;flex:none}
   filter:drop-shadow(0 0 6px rgba(145,70,255,.65)) drop-shadow(0 0 14px rgba(145,70,255,.25));
 }
 .landing .nav-public nav a{color:#d9d1e8;font-size:.82rem;text-transform:uppercase;letter-spacing:.08em}
-.landing .nav-actions button{border-radius:999px;min-width:136px}
+.landing .nav-actions button:not(.locale-segmented-btn):not(.theme-toggle){border-radius:999px;min-width:136px}
 .landing .nav-actions .ghost{background:rgba(255,255,255,.06);color:#fff;border-color:rgba(255,255,255,.22)}
 .hero-build{
   position:relative;
@@ -1672,15 +1681,23 @@ svg.ic{display:block;flex:none}
     linear-gradient(180deg,#100819 0%,#07040C 100%);
   border-right:1px solid rgba(255,255,255,.1);
 }
+/* Causa raiz del bug de contraste en dark mode (Dashboard/APU/etc.):
+   .main y .topbar traian un color de fondo fijo (#f6f2ea /
+   rgba(246,242,234,...)) de la capa "hackathon AI OS", anterior al
+   sistema de temas -- nunca reaccionaba a [data-theme="dark"]. Todo lo
+   que se pinta encima (PageHead h1/span/p, topbar) SI usa tokens
+   reactivos (--ink/--teal/--muted/--surface), que en oscuro se aclaran
+   -- texto claro sobre un fondo que se quedaba claro siempre. Cambiado a
+   var(--paper)/var(--surface), que si invierten con el tema. */
 .main{
   background:
     radial-gradient(circle at 76% -4%,rgba(123,66,188,.18),transparent 30%),
     linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px) 0 0/28px 28px,
     linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px) 0 0/28px 28px,
-    #f6f2ea;
+    var(--paper);
 }
 .topbar{
-  background:rgba(246,242,234,.74);
+  background:var(--surface);
   border-bottom:1px solid rgba(27,16,42,.1);
 }
 .ai-os .page-head h1{font-size:clamp(2rem,4vw,4rem);letter-spacing:-.045em}
@@ -2699,7 +2716,9 @@ svg.ic{display:block;flex:none}
    --teal) en vez de --accent-solid solido + blanco. */
 .locale-segmented{
   display:inline-flex;
+  flex:0 0 auto;
   align-items:stretch;
+  width:86px;
   height:40px;
   border:1.5px solid var(--line-2);
   border-radius:8px;
@@ -2726,9 +2745,11 @@ svg.ic{display:block;flex:none}
 
 .theme-toggle{
   display:inline-flex;
+  flex:0 0 40px;
   align-items:center;
   justify-content:center;
   width:40px;
+  min-width:40px;
   height:40px;
   border-radius:8px;
   border:1.5px solid var(--line-2);

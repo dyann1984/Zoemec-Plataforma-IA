@@ -787,9 +787,10 @@ function Landing({setScreen, login, company}){
       <div className="brand-mini"><ZoemecBrand variant="header"/></div>
       <nav><a>{tr('nav.plataforma')}</a><a>{tr('nav.gemeloDigital')}</a><a>{tr('nav.apuConIA')}</a><a>{tr('nav.entregables')}</a></nav>
       <div className="nav-actions">
-        <button className="locale-toggle" onClick={()=>setLocale(locale==='es'?'en':'es')} aria-label={tr('toggle.langToggleLabel')} title={locale==='es'?'English':'Español'}>
-          {locale==='es'?'EN':'ES'}
-        </button>
+        <div className="locale-segmented" role="group" aria-label={tr('toggle.langToggleLabel')}>
+          <button className={'locale-segmented-btn'+(locale==='es'?' active':'')} onClick={()=>setLocale('es')} aria-pressed={locale==='es'}>ES</button>
+          <button className={'locale-segmented-btn'+(locale==='en'?' active':'')} onClick={()=>setLocale('en')} aria-pressed={locale==='en'}>EN</button>
+        </div>
         <button className="theme-toggle" onClick={toggleTheme} aria-label={tr('toggle.themeToggleLabel')} title={theme==='light'?tr('toggle.themeDark'):tr('toggle.themeLight')}>
           <Icon name={theme==='light'?'moon':'sun'} size={18}/>
         </button>

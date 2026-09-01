@@ -2461,9 +2461,16 @@ svg.ic{display:block;flex:none}
 .landing .brand-mini img{filter:none}
 .landing .nav-public nav a{color:var(--ink-text);text-transform:none;letter-spacing:0;font-size:.93rem;font-weight:600}
 .landing .nav-public nav a:hover{color:var(--teal)}
-.landing .nav-actions button{border-radius:8px;min-width:132px;box-shadow:none}
+/* :not(.locale-segmented button):not(.theme-toggle) -- los controles
+   secundarios compactos (idioma/tema) del header publico NUNCA deben
+   heredar el min-width:132px ni el relleno morado solido de los CTA
+   (Iniciar sesion/Comenzar gratis): sin esta exclusion, cualquier <button>
+   nuevo dentro de .nav-actions se infla a boton CTA por esta regla
+   generica, que es exactamente el defecto reportado ("controles enormes,
+   parecen boton CTA"). */
+.landing .nav-actions button:not(.locale-segmented-btn):not(.theme-toggle){border-radius:8px;min-width:132px;box-shadow:none}
 .landing .nav-actions .ghost{background:var(--surface);color:var(--ink);border:1.5px solid var(--line-2)}
-.landing .nav-actions button:not(.ghost){background:var(--accent-solid);color:#fff;border:1px solid var(--teal)}
+.landing .nav-actions button:not(.ghost):not(.locale-segmented-btn):not(.theme-toggle){background:var(--accent-solid);color:#fff;border:1px solid var(--teal)}
 
 .hero-build{
   background:linear-gradient(180deg,var(--surface-soft-1) 0%,var(--surface-soft-2) 55%,var(--surface-soft-3) 100%);
@@ -2684,29 +2691,38 @@ svg.ic{display:block;flex:none}
 .locale-switch button.active{background:var(--accent-solid);color:#fff}
 .locale-switch button:not(.active):hover{background:var(--mint);color:var(--ink)}
 
-/* Toggle compacto de un solo boton (reemplaza el par ES/EN en la landing
-   publica -- header mas limpio): muestra el idioma AL QUE CAMBIA, mismo
-   patron que .theme-toggle (que muestra sol/luna del estado destino, no
-   del estado actual). */
-.locale-toggle{
+/* Selector ES|EN compacto y segmentado (cambio quirurgico: la version de
+   un solo boton se veia bien aislada pero heredaba min-width:132px +
+   fondo morado solido de .landing .nav-actions button -- ver exclusion
+   arriba -- y terminaba pareciendo un CTA grande). Ancho total objetivo
+   ~84-92px, alto 40px; estado activo con resaltado sutil (--mint, texto
+   --teal) en vez de --accent-solid solido + blanco. */
+.locale-segmented{
   display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  width:40px;
+  align-items:stretch;
   height:40px;
-  border-radius:8px;
   border:1.5px solid var(--line-2);
+  border-radius:8px;
+  overflow:hidden;
   background:var(--surface);
-  color:var(--ink);
+}
+.locale-segmented-btn{
+  flex:1;
+  min-width:40px;
+  padding:0 10px;
+  border:0;
+  background:transparent;
+  color:var(--muted);
   font-family:var(--mono);
-  font-size:.78rem;
+  font-size:.74rem;
   font-weight:700;
   letter-spacing:.03em;
   cursor:pointer;
   box-shadow:none;
-  padding:0;
 }
-.locale-toggle:hover{background:var(--mint)}
+.locale-segmented-btn+.locale-segmented-btn{border-left:1px solid var(--line-2)}
+.locale-segmented-btn.active{background:var(--mint);color:var(--teal)}
+.locale-segmented-btn:not(.active):hover{color:var(--ink)}
 
 .theme-toggle{
   display:inline-flex;
@@ -2764,7 +2780,9 @@ svg.ic{display:block;flex:none}
   .landing .nav-public{padding:12px 4vw}
   .landing .nav-actions{gap:8px;flex-wrap:wrap;justify-content:flex-end}
   .locale-switch button{min-width:36px;height:36px}
-  .locale-toggle,.theme-toggle{height:36px;width:36px}
+  .locale-segmented{height:36px}
+  .locale-segmented-btn{min-width:34px}
+  .theme-toggle{height:36px;width:36px}
   .install-btn{height:36px}
   .ios-install-hint{width:100%;order:10;justify-content:center;margin-top:8px}
 }

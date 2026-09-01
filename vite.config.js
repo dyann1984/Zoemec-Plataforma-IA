@@ -24,6 +24,8 @@ export default defineConfig({
           if (id.includes('node_modules/dompurify')) return 'vendor-dompurify';
           if (id.includes('node_modules/canvg') || id.includes('node_modules/rgbcolor') || id.includes('node_modules/stackblur-canvas')) return 'vendor-svg-render';
           if (id.includes('node_modules/jspdf')) return 'vendor-pdf';
+          if (id.includes('node_modules/pdfjs-dist')) return 'vendor-pdfjs';
+          if (id.includes('node_modules/three')) return 'vendor-three';
           if (id.includes('node_modules/fflate')) return 'vendor-compression';
           if (id.includes('node_modules/write-excel-file') || id.includes('node_modules/read-excel-file')) return 'vendor-excel';
           if (id.includes('node_modules/react') || id.includes('node_modules/scheduler')) return 'vendor-react';

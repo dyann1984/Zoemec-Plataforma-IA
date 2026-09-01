@@ -2361,3 +2361,220 @@ svg.ic{display:block;flex:none}
   .zi-tabpanel{padding:12px}
   .zi-dim-grid{grid-template-columns:1fr}
 }
+
+/* ====================================================================
+   ZOEMEC · Landing profesional B2B (Fase 2). Se agrega al final a
+   proposito, igual patron que las 2 capas de tema previas (LANDING
+   PREMIUM y "hackathon visual layer" de arriba): la cascada CSS hace
+   que esta capa gane sin necesidad de borrar las anteriores. Objetivo:
+   70-75% superficies claras, morado como acento controlado, tipografia
+   Inter en el hero, sin efectos sci-fi (particulas/orbit chips/scan).
+   ==================================================================== */
+.landing{background:var(--paper);color:var(--ink-text)}
+.landing::before{display:none}
+.landing .nav-public{
+  position:relative;
+  height:96px;
+  background:#fff;
+  border-bottom:1px solid var(--line);
+  box-shadow:0 2px 14px rgba(23,16,32,.05);
+  backdrop-filter:none;
+}
+.landing .brand-mini{color:var(--ink);text-shadow:none}
+.landing .brand-mini img{filter:none}
+.landing .nav-public nav a{color:var(--ink-text);text-transform:none;letter-spacing:0;font-size:.93rem;font-weight:600}
+.landing .nav-public nav a:hover{color:var(--teal)}
+.landing .nav-actions button{border-radius:8px;min-width:132px;box-shadow:none}
+.landing .nav-actions .ghost{background:#fff;color:var(--ink);border:1.5px solid var(--line-2)}
+.landing .nav-actions button:not(.ghost){background:var(--teal);color:#fff;border:1px solid var(--teal)}
+
+.hero-build{
+  background:linear-gradient(180deg,#F9F6FC 0%,#FBFAFD 55%,#fff 100%);
+  padding:72px 4.8vw 64px;
+  gap:52px;
+  grid-template-columns:minmax(420px,1fr) minmax(400px,.95fr);
+}
+.hero-build::after{display:none}
+.hero-atmosphere,.hero-visual-orbit,.hero-scan{display:none}
+
+.eyebrow{
+  display:inline-flex;
+  color:var(--teal);
+  background:var(--mint);
+  border:1px solid var(--line-2);
+  border-radius:999px;
+  padding:8px 16px;
+  font-family:var(--mono);
+  font-size:.72rem;
+  letter-spacing:.1em;
+}
+.hero-build .hero-copy{padding-right:8px}
+.hero-build .hero-copy h1{
+  font-family:var(--body);
+  font-weight:700;
+  color:var(--ink);
+  background:none;
+  -webkit-background-clip:initial;
+  background-clip:initial;
+  text-shadow:none;
+  font-size:clamp(2.15rem,3.6vw,3.4rem);
+  line-height:1.16;
+  letter-spacing:-.01em;
+  max-width:15ch;
+  margin:20px 0 18px;
+}
+.hero-build .hero-copy h1 .hl{color:var(--teal)}
+.hero-build .hero-copy p{color:var(--muted);text-shadow:none;font-size:1.06rem;line-height:1.6}
+
+.hero-capabilities{
+  display:grid;
+  grid-template-columns:repeat(2,1fr);
+  gap:14px 22px;
+  margin:6px 0 28px;
+  max-width:520px;
+}
+.hero-capabilities div{display:flex;align-items:center;gap:10px}
+.hero-capabilities svg{color:var(--teal);flex:none}
+.hero-capabilities b{font-size:.87rem;color:var(--ink);font-weight:650}
+
+.hero-build .hero-actions{margin-bottom:0}
+.hero-build .hero-actions button{
+  background:var(--teal);
+  border:1px solid var(--teal);
+  box-shadow:none;
+  border-radius:8px;
+  min-width:190px;
+}
+.hero-build .hero-actions button::after{display:none}
+.hero-build .hero-actions .secondary{
+  background:#fff;
+  color:var(--ink);
+  border:1.5px solid var(--line-2);
+  text-decoration:none;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width:190px;
+  border-radius:8px;
+  font-weight:700;
+  font-size:.96rem;
+  padding:16px 24px;
+}
+
+.future-stage{
+  transform:none;
+  min-height:560px;
+  border:1px solid var(--line);
+  border-radius:20px;
+  background:#fff;
+  box-shadow:var(--shadow);
+}
+.future-stage::before{display:none}
+.future-stage::after{
+  background:linear-gradient(180deg,rgba(23,16,32,.30) 0%,rgba(23,16,32,.02) 32%,rgba(23,16,32,.04) 60%,rgba(23,16,32,.6) 100%);
+}
+.stage-status{
+  background:rgba(255,255,255,.94);
+  border:1px solid var(--line);
+  backdrop-filter:blur(10px);
+  box-shadow:0 8px 24px rgba(23,16,32,.08);
+}
+.stage-status span{color:var(--teal)}
+.stage-status b{color:var(--ink)}
+.ai-console{
+  background:rgba(255,255,255,.97);
+  border:1px solid var(--line);
+  box-shadow:0 20px 50px rgba(23,16,32,.14);
+  backdrop-filter:blur(6px);
+}
+.command-strip,.command-total{background:var(--mint);border:1px solid var(--line)}
+.command-strip span,.command-total span{color:var(--teal)}
+.command-strip b,.command-total b{color:var(--ink)}
+.command-flow span{background:var(--mint);color:var(--ink);border:1px solid var(--line)}
+.command-flow i{background:var(--line-2)}
+.stage-tag{color:var(--muted);background:#fff;border:1px solid var(--line)}
+
+.landing-story{background:var(--paper);border-top:1px solid var(--line)}
+.landing-story-head h2{color:var(--ink)}
+.story-step{border:1px solid var(--line);background:#fff;box-shadow:var(--shadow-sm)}
+.story-step b{color:var(--teal)}
+.story-step h3{color:var(--ink)}
+.story-step p{color:var(--muted)}
+
+.landing-preview{background:#fff}
+.preview-grid figure{border:1px solid var(--line);background:#fff;box-shadow:var(--shadow-sm)}
+.preview-grid figcaption{color:var(--muted);border-top:1px solid var(--line)}
+
+.trust-strip{
+  background:linear-gradient(135deg,var(--petrol),var(--teal));
+  padding:40px 4.8vw;
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:24px;
+}
+.trust-strip div{display:flex;align-items:flex-start;gap:12px}
+.trust-strip svg{color:#fff;flex:none;margin-top:2px}
+.trust-strip b{display:block;color:#fff;font-size:.93rem;margin-bottom:4px}
+.trust-strip span{color:rgba(255,255,255,.8);font-size:.81rem;line-height:1.4}
+
+@media (max-width:1100px){
+  .hero-build{grid-template-columns:1fr}
+  .hero-capabilities{grid-template-columns:1fr 1fr}
+  .trust-strip{grid-template-columns:1fr 1fr}
+}
+@media (max-width:720px){
+  .landing .nav-public nav{display:none}
+  .hero-build .hero-copy h1{max-width:none;font-size:1.9rem}
+  .hero-build .hero-actions button,.hero-build .hero-actions .secondary{min-width:100%}
+  .hero-capabilities{grid-template-columns:1fr 1fr;max-width:none}
+  .trust-strip{grid-template-columns:1fr;padding:28px 22px}
+}
+
+/* ====================================================================
+   ZOEMEC · Login/registro e interior — Fase 5 (override, mismo patron
+   aditivo). Prioridad: la transicion inmediata landing -> login no debe
+   sentirse como una app distinta. El resto del interior (paneles,
+   tablas, formularios) ya usa el sistema base claro "Mesa de dibujo
+   digital" definido arriba (.panel, .data-table, etc. -- no tenian
+   override oscuro), asi que no se tocan aqui. Sidebar/os-command/os-bim/
+   asst-* se dejan como acentos morados/oscuros contenidos e
+   intencionales (patron valido de SaaS B2B), solo se atenua el glow
+   del sidebar para que no lea "neon".
+   ==================================================================== */
+.app-layout{background:var(--paper)}
+.sidebar{
+  background:
+    radial-gradient(circle at 12% 8%,rgba(123,66,188,.18),transparent 28%),
+    linear-gradient(180deg,#140A22 0%,#0D0716 100%);
+}
+
+.auth-split{background:var(--paper);color:var(--ink-text)}
+.auth-brand{
+  background:linear-gradient(160deg,var(--petrol),var(--teal));
+}
+.auth-brand .backdrop{opacity:.14}
+.auth-brand-inner h2{
+  background:none;
+  -webkit-background-clip:initial;
+  background-clip:initial;
+  color:#fff;
+}
+.auth-brand-inner p{color:rgba(255,255,255,.82)}
+.auth-points span{color:#fff}
+.auth-status{color:rgba(255,255,255,.78)}
+.auth-announcement{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.24)}
+.auth-announcement p{color:#fff}
+.auth-form-side{background:#fff}
+.auth-form-side .auth-card{
+  background:var(--card);
+  border:1px solid var(--line);
+  color:var(--ink-text);
+  backdrop-filter:none;
+  box-shadow:var(--shadow-sm);
+}
+.auth-form-side .auth-card h1{color:var(--ink)}
+.auth-form-side .auth-card p,.auth-form-side .auth-card small{color:var(--muted)}
+.auth-form-side .auth-card small a{color:var(--teal)}
+.auth-form-side .auth-card .back{color:var(--muted)}
+.auth-form-side .auth-card .auth-or{color:var(--muted)}
+.auth-form-side .auth-card .auth-or::before,.auth-form-side .auth-card .auth-or::after{background:var(--line)}

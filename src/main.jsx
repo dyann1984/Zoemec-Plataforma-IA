@@ -623,7 +623,7 @@ function assistantReply(q, context={}){
   const projectLine = project ? `Proyecto activo: ${project}.` : 'Sin proyecto activo.';
   const apuLine = activeApu ? `APU activo: ${activeApu}.` : 'Genera tu primer APU para activar el gemelo digital.';
   const libraryLine = libraryCount !== null ? `Biblioteca con ${libraryCount} insumos.` : 'No hay biblioteca técnica cargada.';
-  if(/hola|buenas|hey|saludos/.test(t)) return r('Hola. Soy ZOE, tu copiloto técnico senior en costos de construcción.', projectLine, apuLine, libraryLine, 'Te apoyo con APU, validación, presupuesto, biblioteca y entrega de documentos auditable.');
+  if(/hola|buenas|hey|saludos/.test(t)) return r('Hola. Soy ZOE, el asistente inteligente de ingeniería de costos de ZOEMEC.', projectLine, apuLine, libraryLine, 'Te apoyo con APU, validación, presupuesto, biblioteca y entrega de documentos auditable.');
   if(/fsr|salario real|fasar/.test(t)) return r('El FSR (Factor de Salario Real, Art. 191 RLOPSRM) convierte el salario base en salario real: Salario real = base × FSR.', 'Usa Centro Técnico para calcularlo con Tp (días pagados), Tl (días laborados) y Ps (cargas obrero-patronales).');
   if(/apu|precio unitario/.test(t)) return r('Para generar un APU sólido, ve a "APU Inteligente", pega el concepto y ejecuta la generación.', 'Después revisa insumos, unidades, herramienta menor, indirectos de campo/oficina, financiamiento, utilidad y cargos.');
   if(/excel|importar|catalogo|catálogo|precios/.test(t)) return r('Importa tu Excel de precios en Oficina Técnica o desde "Generar con IA".', 'Al generar el APU, uso tus precios reales cuando coinciden con insumos y te indico qué partidas requieren ajuste.');
@@ -713,11 +713,11 @@ function Assistant({ context={}, setModule }){
   };
   const prompts=['Revisa este APU','Detecta riesgos','Explica evidencia','Prepara entregables'];
   return <>
-    <button className={'asst-fab'+(busy?' thinking':'')+(speaking?' speaking':'')} onClick={()=>setOpen(o=>!o)} title="Copiloto ZOE"><img src="/images/zoemic-assistant-web.webp" alt="ZOE copiloto"/></button>
+    <button className={'asst-fab'+(busy?' thinking':'')+(speaking?' speaking':'')} onClick={()=>setOpen(o=>!o)} title="Asistente ZOE"><img src="/images/zoemic-assistant-web.webp" alt="Asistente ZOE"/></button>
     {open && <div className="asst-panel">
       <div className="asst-head">
-        <img className={'asst-avatar'+(busy?' thinking':'')+(speaking?' speaking':'')} src="/images/zoemic-assistant-web.webp" alt="ZOE copiloto"/>
-        <div><b>Copiloto ZOE</b><small><i className={busy?'pulse':''}></i> {busy?'ZOE esta analizando...':'Inteligencia de costos en linea'}</small></div>
+        <img className={'asst-avatar'+(busy?' thinking':'')+(speaking?' speaking':'')} src="/images/zoemic-assistant-web.webp" alt="Asistente ZOE"/>
+        <div><b>Asistente ZOE</b><small><i className={busy?'pulse':''}></i> {busy?'ZOE esta analizando...':'Inteligencia de costos en linea'}</small></div>
         <div className="asst-head-actions">
           {ZOE_SPEECH_SUPPORTED && <button className={'asst-icon-btn'+(speakOn?' active':'')} title={speakOn?'Silenciar respuestas':'Leer respuestas en voz alta'} onClick={()=>{ setSpeakOn(v=>!v); if(speakOn) window.speechSynthesis.cancel(); }} aria-label="Alternar voz"><Icon name={speakOn?'speakerOn':'speakerOff'} size={16}/></button>}
           <button className="asst-icon-btn" title="Historial de conversaciones" onClick={()=>setShowHistory(v=>!v)} aria-label="Historial"><Icon name="history" size={16}/></button>
@@ -741,7 +741,7 @@ function Assistant({ context={}, setModule }){
           {ZOE_VOICE_SUPPORTED && <button className={'asst-icon-btn'+(listening?' active listening':'')} title={listening?'Detener grabación':'Hablar con ZOE'} onClick={toggleListen} aria-label="Entrada por voz"><Icon name={listening?'micStop':'mic'} size={16}/></button>}
           <button onClick={()=>send()} disabled={busy}>{busy?'...':'Enviar'}</button>
         </div>
-        <div className="asst-note">Copiloto visual conectado al flujo tecnico existente.</div>
+        <div className="asst-note">Asistente conectado al flujo tecnico existente.</div>
       </>}
     </div>}
   </>;
@@ -762,15 +762,6 @@ const LANDING_PIPELINE = [
     foot:['Precio unitario integrado', 'Listo para revisión'] },
 ];
 
-const HERO_PARTICLES = Array.from({length:16}, (_,i)=>i);
-/* Solo 4 posiciones: son las unicas zonas del hero (franja superior antes del
-   panel, y el hueco entre el pipeline y la barra de beneficios) donde un chip
-   cabe completo sin recortarse contra el panel o la barra inferior. Verificado
-   visualmente en el preview local; no agregar mas sin volver a verificar. */
-const HERO_VISUALS = [
-  ['plano','Planos'],['bim','Modelos BIM'],['puntos','Nube de puntos'],['dron','Drones']
-];
-
 function Landing({setScreen, login, company}){
   const [step, setStep] = useState(0);
   useEffect(() => {
@@ -781,34 +772,26 @@ function Landing({setScreen, login, company}){
   return <div className="landing">
     <header className="nav-public">
       <div className="brand-mini"><ZoemecBrand variant="header"/></div>
-      <nav><a>Copiloto</a><a>Gemelo Digital</a><a>APU con IA</a><a>Entregables</a></nav>
+      <nav><a>Plataforma</a><a>Gemelo Digital</a><a>APU con IA</a><a>Entregables</a></nav>
       <div className="nav-actions"><button className="ghost" onClick={()=>setScreen('login')}>Iniciar sesión</button><button onClick={()=>setScreen('register')}>Comenzar gratis</button></div>
     </header>
     <section className="hero-build">
-      <div className="hero-atmosphere" aria-hidden="true">
-        <div className="hero-glow"/>
-        <svg className="hero-techlines" viewBox="0 0 1000 600" preserveAspectRatio="none">
-          <path d="M0 80 L340 80 L400 140 L1000 140"/>
-          <path d="M0 260 L220 260 L280 320 L1000 320"/>
-          <path d="M0 440 L460 440 L520 500 L1000 500"/>
-        </svg>
-        <div className="hero-particles">{HERO_PARTICLES.map(i=><span key={i} style={{'--i':i}}/>)}</div>
-      </div>
-      <div className="hero-visual-orbit" aria-hidden="true">
-        {HERO_VISUALS.map(([icon,label],i)=><div className="orbit-chip" key={icon} style={{'--i':i}}><Icon name={icon} size={14}/><span>{label}</span></div>)}
-      </div>
       <div className="hero-copy">
-        <span className="eyebrow">Copiloto de IA para ingeniería de costos en construcción</span>
-        <h1>Construye el modelo de costos antes de verter el concreto.</h1>
-        <p>ZOEMEC convierte conceptos, Excel y evidencia tecnica en APUs trazables, presupuesto y entregables profesionales con una experiencia de copiloto visual para obra digital.</p>
-        <div className="hero-actions"><button onClick={()=>setScreen('register')}>Abrir centro de mando</button><button className="secondary" onClick={()=>setScreen('login')}>Ya tengo cuenta</button></div>
-        <div className="future-proof"><span>Documento</span><i/><span>Conceptos</span><i/><span>Evidencia</span><i/><span>APU</span><i/><span>PDF/XLSX</span></div>
+        <span className="eyebrow">Plataforma integral de ingeniería de costos</span>
+        <h1>De conceptos a costos <span className="hl">confiables.</span><br/>De costos a <span className="hl">decisiones.</span></h1>
+        <p>ZOEMEC transforma catálogos, conceptos y evidencia técnica en APUs trazables, presupuestos y entregables profesionales con el poder de la IA.</p>
+        <div className="hero-capabilities">
+          <div><Icon name="apu" size={22}/><b>APUs trazables</b></div>
+          <div><Icon name="search" size={22}/><b>Inteligencia de precios</b></div>
+          <div><Icon name="presupuestos" size={22}/><b>Presupuestos confiables</b></div>
+          <div><Icon name="reportes" size={22}/><b>Entregables profesionales</b></div>
+        </div>
+        <div className="hero-actions"><button onClick={()=>setScreen('register')}>Comenzar gratis</button><a className="secondary" href="#plataforma-preview">Ver plataforma</a></div>
       </div>
-      <div className="future-stage" aria-label="Modelo digital de construcción">
-        <img className="stage-photo" src="/images/hero/zoemec-hero-web.webp" alt="Obra de construccion con overlays de IA mostrando APU, presupuestos, licitaciones y costos en tiempo real" />
-        <div className="hero-scan" aria-hidden="true"></div>
+      <div className="future-stage" aria-label="Panel de costos de ZOEMEC sobre una obra de construcción">
+        <img className="stage-photo" src="/images/hero/zoemec-hero-web.webp" alt="Obra de construcción; a la derecha, el panel de inteligencia de costos de ZOEMEC con un APU generado por IA" />
         <div className="stage-status">
-          <span>MODELO EN VIVO</span>
+          <span>MODELO DE COSTOS</span>
           <b>Panel de inteligencia de costos</b>
         </div>
         <div className="ai-console" key={step}>
@@ -819,14 +802,14 @@ function Landing({setScreen, login, company}){
           </div>
           <div className="command-total"><span>{p.foot[0]}</span><b>{p.foot[1]}</b></div>
         </div>
-        <div className="stage-tag">Vista ilustrativa del flujo ZOE</div>
+        <div className="stage-tag">Vista ilustrativa del panel de costos</div>
       </div>
-      <div className="hero-benefits">
-        <div><Icon name="apu" size={28}/><b>Motor de APU con IA</b><span>Matrices de costo con revisión</span></div>
-        <div><Icon name="doc" size={28}/><b>Importación de Excel</b><span>Catálogos de construcción multi-hoja</span></div>
-        <div><Icon name="biblioteca" size={28}/><b>Trazabilidad de evidencia</b><span>Rastreo de fuente, hoja y fila</span></div>
-        <div><Icon name="reportes" size={28}/><b>Entregables</b><span>PDF y Excel profesionales</span></div>
-      </div>
+    </section>
+    <section className="trust-strip">
+      <div><Icon name="link" size={22}/><div><b>Datos trazables y auditables</b><span>Transparencia en cada cálculo y decisión.</span></div></div>
+      <div><Icon name="admin" size={22}/><div><b>Autenticación segura</b><span>Acceso controlado por cuenta y por rol.</span></div></div>
+      <div><Icon name="proyectos" size={22}/><div><b>Control del proyecto</b><span>Cada proyecto, presupuesto y APU en un solo lugar.</span></div></div>
+      <div><Icon name="folder" size={22}/><div><b>Privacidad y control</b><span>Tus proyectos permanecen bajo tu cuenta.</span></div></div>
     </section>
     <section className="landing-story">
       <div className="landing-story-head">
@@ -839,7 +822,7 @@ function Landing({setScreen, login, company}){
         <div className="story-step"><b>03</b><h3>Exporta entregables profesionales</h3><p>PDF y Excel auditables con membrete, listos para concurso, licitación u obra — con la fuente de cada insumo trazable.</p></div>
       </div>
     </section>
-    <section className="landing-preview">
+    <section className="landing-preview" id="plataforma-preview">
       <div className="landing-story-head">
         <span className="eyebrow">La plataforma real</span>
         <h2>Así se ve ZOEMEC por dentro.</h2>
@@ -874,7 +857,7 @@ function Auth({mode,setScreen,login,loginWithGoogle,company}){
       <div className="auth-brand-inner">
         <div className="hero-logo light"><ZoemecBrand variant="login"/></div>
         <h2>Ingeniería de costos, precisa y profesional.</h2>
-        <p>Un copiloto tecnico que lee documentos, detecta conceptos, valida evidencia y convierte APUs en entregables listos para concurso y obra.</p>
+        <p>Un asistente técnico que lee documentos, detecta conceptos, valida evidencia y convierte APUs en entregables listos para concurso y obra.</p>
         <div className="auth-points">
           <span><Icon name="apu" size={18}/> ZOE interpreta conceptos y propone matrices APU</span>
           <span><Icon name="tecnico" size={18}/> Modelo visual con evidencia, riesgos y costos</span>
@@ -1100,7 +1083,7 @@ function Dashboard({setModule,apus,clients,budgets,projects,activeProject:active
     apiPost('/api/onedrive', { action:'status' }).then(data=>{ if(alive) setOneDriveStatus(data); }).catch(()=>{ if(alive) setOneDriveStatus(null); });
     return ()=>{ alive=false; };
   }, [user]);
-  return <section className="ai-os"><PageHead kicker="ZOEMEC AI OS" title="Copiloto de costos de construcción" desc="Un centro visual donde documentos, modelos, evidencia y APUs viven en el mismo flujo tecnico." action={<button onClick={()=>setModule('apu')}>Pedir a ZOE que cotice</button>} />
+  return <section className="ai-os"><PageHead kicker="ZOEMEC AI OS" title="Plataforma de ingeniería de costos" desc="Un centro visual donde documentos, modelos, evidencia y APUs viven en el mismo flujo tecnico." action={<button onClick={()=>setModule('apu')}>Pedir a ZOE que cotice</button>} />
     <div className="demo-hero">
       <h2>De un concepto de obra a un APU completo con IA</h2>
       <p>Pega un concepto o importa un catálogo de Excel. ZOEMEC identifica recursos, rendimientos, procedimiento constructivo, seguridad, calidad y criterios de medición para construir un análisis de precio unitario editable y trazable.</p>
@@ -1144,7 +1127,7 @@ function Dashboard({setModule,apus,clients,budgets,projects,activeProject:active
           </div>
           <div className="twin-insights">
             <InfoCard title="Proyecto" value={activeProject?.name || '—'} subtitle={activeProject ? `${activeProject.progress || 0}% avance` : 'Sin proyecto activo'} actionLabel={activeProject ? 'Ver proyecto' : 'Crear proyecto'} onAction={()=>setModule('cartera')}/>
-            <InfoCard title="IA" value={apus.length? 'Activa': 'Inactiva'} subtitle={apus.length? `${apus.length} APUs disponibles` : 'Genera tu primer APU para activar ZOE'} actionLabel="Copiloto" onAction={()=>setModule('apu')}/>
+            <InfoCard title="IA" value={apus.length? 'Activa': 'Inactiva'} subtitle={apus.length? `${apus.length} APUs disponibles` : 'Genera tu primer APU para activar ZOE'} actionLabel="Asistente ZOE" onAction={()=>setModule('apu')}/>
           </div>
         </div>
       </div>
@@ -3636,9 +3619,9 @@ function Library({user, catalog, setCatalog, setModule}){
     </div>
     {syncError && <div className="od-config-warning"><Icon name="alerta" size={18}/><div><b>No se pudo sincronizar con la nube:</b> {syncError} Mientras tanto se muestran los documentos que ya tienes en este dispositivo.</div></div>}
     {!firebaseReady && <div className="panel lib-demo-mode">
-      <div className="admin-panel-head"><h2>Modo demo</h2><small className="hint">Firebase no configurado en este entorno</small></div>
+      <div className="admin-panel-head"><h2>Vista de ejemplo</h2><small className="hint">Firebase no configurado en este entorno</small></div>
       <p className="muted">Estos son documentos de ejemplo para mostrar cómo luce la Biblioteca. No son archivos reales: no se cuentan en tus estadísticas ni se mezclan con tu biblioteca real.</p>
-      <div className="od-file-list">{LIBRARY_DEMO_SEED.map(f=><div className="od-file-row" key={f.name}><div><b>{f.name}</b><small>{f.cat} · {f.family} · {f.size}</small></div><small>Demo</small><button className="soft" disabled>Ejemplo</button></div>)}</div>
+      <div className="od-file-list">{LIBRARY_DEMO_SEED.map(f=><div className="od-file-row" key={f.name}><div><b>{f.name}</b><small>{f.cat} · {f.family} · {f.size}</small></div><small>Ejemplo</small><button className="soft" disabled>Ejemplo</button></div>)}</div>
     </div>}
     <div className="lib-cloud panel">
       {[['1. Subida masiva','Puedes cargar lotes completos desde la plataforma. Para carpetas grandes conviene subir ZIP o seleccionar multiples archivos.'],['2. Nube privada','Los archivos reales deben vivir en Firebase Storage o Vercel Blob. Firestore guarda nombre, categoria, permiso, usuario y fuente.'],['3. Busqueda IA','Despues se indexa el contenido para buscar por insumo, concepto, unidad, precio, rendimiento o norma.']].map(x=><div key={x[0]}><b>{x[0]}</b><p>{x[1]}</p></div>)}

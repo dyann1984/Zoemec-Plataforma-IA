@@ -778,8 +778,8 @@ function Landing({setScreen, login, company}){
     <section className="hero-build">
       <div className="hero-copy">
         <span className="eyebrow">Plataforma integral de ingeniería de costos</span>
-        <h1>De conceptos a costos <span className="hl">confiables.</span><br/>De costos a <span className="hl">decisiones.</span></h1>
-        <p>ZOEMEC transforma catálogos, conceptos y evidencia técnica en APUs trazables, presupuestos y entregables profesionales con el poder de la IA.</p>
+        <h1>Inteligencia aplicada a la<br/><span className="hl">ingeniería de costos.</span></h1>
+        <p>ZOEMEC integra análisis de precios unitarios, presupuestos, inteligencia de precios, evidencia técnica y herramientas digitales para gestionar costos con mayor precisión y trazabilidad.</p>
         <div className="hero-capabilities">
           <div><Icon name="apu" size={22}/><b>APUs trazables</b></div>
           <div><Icon name="search" size={22}/><b>Inteligencia de precios</b></div>

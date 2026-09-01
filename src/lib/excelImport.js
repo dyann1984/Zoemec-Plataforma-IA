@@ -467,14 +467,28 @@ export function extractConceptsFromSheetRows(normalized, sheetName='', debugSink
     const qty = cQty > -1 ? asNumber(row[cQty]) : 0;
     return Boolean(concept && !isNoiseConcept(concept) && unitRe.test(unit) && qty > 0);
   };
-  const looksLikeContinuationRow = (row) => {
+  // pendingConcept (texto YA acumulado del concepto en curso, antes de sumar
+  // esta fila): una fila sin clave/unidad/cantidad es una continuacion real
+  // SOLO si el texto pendiente todavia esta gramaticalmente incompleto (el
+  // wrap de columna de Excel corta a media palabra/frase, nunca justo
+  // despues de un punto final). Si el texto pendiente ya cierra con punto,
+  // signo de cierre o dos puntos, esa oracion ya esta completa -- una fila
+  // sin clave que aparece despues es un encabezado de la SIGUIENTE
+  // subseccion (ver looksLikeSection, mismo criterio de "sin unidad/
+  // cantidad/PU/importe" pero evaluado DESPUES de este descarte), nunca la
+  // cola de la partida anterior. Señal estructural (fin de oracion), no
+  // "esta en mayusculas" -- en este tipo de catalogo tanto las
+  // continuaciones reales como los encabezados de seccion vienen en
+  // mayusculas, asi que MAYUSCULAS por si solas nunca distinguen los dos casos.
+  const looksLikeContinuationRow = (row, pendingConcept) => {
     const code = cCode > -1 ? clean(row[cCode]) : '';
     const concept = cConcept > -1 ? clean(row[cConcept]) : '';
     const unit = cUnit > -1 ? clean(row[cUnit]) : '';
     const qty = cQty > -1 ? asNumber(row[cQty]) : 0;
     const pu = cPU > -1 ? asNumber(row[cPU]) : 0;
     const importe = cImporte > -1 ? asNumber(row[cImporte]) : 0;
-    return Boolean(!code && concept && concept.length > 4 && !unitRe.test(unit) && !qty && !pu && !importe && !isNoiseConcept(concept));
+    const pendingLooksComplete = /[.!?:]\s*$/.test(String(pendingConcept || '').trim());
+    return Boolean(!code && concept && concept.length > 4 && !unitRe.test(unit) && !qty && !pu && !importe && !isNoiseConcept(concept) && !pendingLooksComplete);
   };
   // Encabezados reales casi siempre agregan un calificativo despues de "P.U."
   // o "Unidad" (p. ej. "P.U. PROFORMA", "P.U. VENTA", "PRECIO UNITARIO CON
@@ -538,7 +552,7 @@ export function extractConceptsFromSheetRows(normalized, sheetName='', debugSink
         pending = { code, concept, unit, qty, referencePU:pu, importe, section, rowNumber:i+1 };
         continue;
       }
-      if(pending && looksLikeContinuationRow(row)){
+      if(pending && looksLikeContinuationRow(row, pending.concept)){
         pending.concept = `${pending.concept} ${concept}`;
         continue;
       }

@@ -2420,7 +2420,7 @@ svg.ic{display:block;flex:none}
   font-size:clamp(2.15rem,3.6vw,3.4rem);
   line-height:1.16;
   letter-spacing:-.01em;
-  max-width:15ch;
+  max-width:28ch;
   margin:20px 0 18px;
 }
 .hero-build .hero-copy h1 .hl{color:var(--teal)}

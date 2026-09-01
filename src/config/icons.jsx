@@ -39,5 +39,8 @@ export const ICONS = {
   puntos:<><circle cx="5" cy="6" r="1.4"/><circle cx="12" cy="4" r="1.4"/><circle cx="19" cy="7" r="1.4"/><circle cx="6" cy="13" r="1.4"/><circle cx="13" cy="11" r="1.4"/><circle cx="18" cy="14" r="1.4"/><circle cx="4" cy="20" r="1.4"/><circle cx="11" cy="19" r="1.4"/><circle cx="18" cy="20" r="1.4"/></>,
   dron:<><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9.5 9.5L4 4M14.5 9.5L20 4M9.5 14.5L4 20M14.5 14.5L20 20"/><circle cx="4" cy="4" r="1.6"/><circle cx="20" cy="4" r="1.6"/><circle cx="4" cy="20" r="1.6"/><circle cx="20" cy="20" r="1.6"/></>,
   edificio:<><path d="M6 21V6a1 1 0 011-1h4a1 1 0 011 1v15"/><path d="M14 21V10a1 1 0 011-1h3a1 1 0 011 1v11"/><path d="M9 8h.01M9 11h.01M9 14h.01M9 17h.01"/></>,
-  alerta:<><path d="M10.3 3.6L1.8 18a1.8 1.8 0 001.5 2.7h17.4a1.8 1.8 0 001.5-2.7L13.7 3.6a1.8 1.8 0 00-3.4 0z"/><path d="M12 9v4M12 17h.01"/></>
+  alerta:<><path d="M10.3 3.6L1.8 18a1.8 1.8 0 001.5 2.7h17.4a1.8 1.8 0 001.5-2.7L13.7 3.6a1.8 1.8 0 00-3.4 0z"/><path d="M12 9v4M12 17h.01"/></>,
+  sun:<><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M2 12h2M20 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></>,
+  moon:<><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></>,
+  download:<><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 19h16"/></>
 };

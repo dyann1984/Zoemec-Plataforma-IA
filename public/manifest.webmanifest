@@ -1,0 +1,17 @@
+{
+  "name": "ZOEMEC | Plataforma Integral de Ingenieria de Costos",
+  "short_name": "ZOEMEC",
+  "description": "APU, presupuestos, biblioteca tecnica e inteligencia de precios para ingenieria de costos en construccion.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "lang": "es-MX",
+  "background_color": "#F6F3FA",
+  "theme_color": "#2A1740",
+  "icons": [
+    { "src": "/images/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/images/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

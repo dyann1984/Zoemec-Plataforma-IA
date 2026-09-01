@@ -78,7 +78,20 @@ import {
   defaultCompany, DEMO_MODE, demoCatalog,
   legacySeedClientNames, legacySeedProjectNames, libraryFolders, courses
 } from './config/appConfig.js';
+import { I18nProvider, useI18n } from './i18n/I18nContext.jsx';
+import { ThemeProvider, useTheme } from './theme/ThemeContext.jsx';
+import { useInstallPrompt } from './hooks/useInstallPrompt.js';
 import './style.css';
+
+if('serviceWorker' in navigator){
+  // Registro diferido a 'load': no compite por ancho de banda/CPU con el
+  // primer render de la SPA. Si falla (ej. entorno de desarrollo sin
+  // HTTPS), no rompe la app -- el catch solo evita una promesa rechazada
+  // sin manejar en consola.
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
+}
 
 function CloudBadge({user}){
   const [st,setSt]=useState({status:'ok',message:''});
@@ -654,9 +667,11 @@ const ZOE_SEED_MSG = {me:false,t:'Soy ZOE. Leo conceptos, APUs, costos y evidenc
 const ZOE_VOICE_SUPPORTED = typeof window!=='undefined' && Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
 const ZOE_SPEECH_SUPPORTED = typeof window!=='undefined' && Boolean(window.speechSynthesis);
 function Assistant({ context={}, setModule }){
+  const { t: tr } = useI18n();
   const [open,setOpen]=useState(false);
   const zoeUid = context?.user?.uid;
-  const [msgs,setMsgs]=useLocalState('zoemec-zoe-thread', [ZOE_SEED_MSG], zoeUid);
+  const zoeSeedMsg = {me:false, t:tr('zoe.seedMsg')};
+  const [msgs,setMsgs]=useLocalState('zoemec-zoe-thread', [zoeSeedMsg], zoeUid);
   const [threads,setThreads]=useLocalState('zoemec-zoe-history', [], zoeUid);
   const [showHistory,setShowHistory]=useState(false);
   const [q,setQ]=useState('');
@@ -694,7 +709,7 @@ function Assistant({ context={}, setModule }){
   };
   const startNewConversation=()=>{
     if(msgs.length>1) setThreads(t=>[{id:'ZOE-'+uid(), startedAt:new Date().toLocaleString('es-MX'), msgs}, ...t].slice(0,20));
-    setMsgs([ZOE_SEED_MSG]);
+    setMsgs([zoeSeedMsg]);
     setShowHistory(false);
   };
   const openThread=(thread)=>{ setMsgs(thread.msgs); setShowHistory(false); };
@@ -711,37 +726,42 @@ function Assistant({ context={}, setModule }){
     recognitionRef.current=rec;
     rec.start();
   };
-  const prompts=['Revisa este APU','Detecta riesgos','Explica evidencia','Prepara entregables'];
+  const prompts=tr('zoe.prompts');
   return <>
-    <button className={'asst-fab'+(busy?' thinking':'')+(speaking?' speaking':'')} onClick={()=>setOpen(o=>!o)} title="Asistente ZOE"><img src="/images/zoemic-assistant-web.webp" alt="Asistente ZOE"/></button>
+    <button className={'asst-fab'+(busy?' thinking':'')+(speaking?' speaking':'')} onClick={()=>setOpen(o=>!o)} title={tr('zoe.fabTitle')}>
+      <img src="/images/zoemic-assistant-web.webp" alt={tr('zoe.fabTitle')}/>
+    </button>
     {open && <div className="asst-panel">
       <div className="asst-head">
-        <img className={'asst-avatar'+(busy?' thinking':'')+(speaking?' speaking':'')} src="/images/zoemic-assistant-web.webp" alt="Asistente ZOE"/>
-        <div><b>Asistente ZOE</b><small><i className={busy?'pulse':''}></i> {busy?'ZOE esta analizando...':'Inteligencia de costos en linea'}</small></div>
+        <img className={'asst-avatar'+(busy?' thinking':'')+(speaking?' speaking':'')} src="/images/zoemic-assistant-web.webp" alt={tr('zoe.fabTitle')}/>
+        <div>
+          <b>{tr('zoe.fabTitle')}</b>
+          <small><i className={busy?'pulse':''}></i> {busy?tr('zoe.thinking'):tr('zoe.onlineStatus')}</small>
+        </div>
         <div className="asst-head-actions">
-          {ZOE_SPEECH_SUPPORTED && <button className={'asst-icon-btn'+(speakOn?' active':'')} title={speakOn?'Silenciar respuestas':'Leer respuestas en voz alta'} onClick={()=>{ setSpeakOn(v=>!v); if(speakOn) window.speechSynthesis.cancel(); }} aria-label="Alternar voz"><Icon name={speakOn?'speakerOn':'speakerOff'} size={16}/></button>}
-          <button className="asst-icon-btn" title="Historial de conversaciones" onClick={()=>setShowHistory(v=>!v)} aria-label="Historial"><Icon name="history" size={16}/></button>
-          <button className="asst-x" onClick={()=>setOpen(false)} aria-label="Cerrar chat de ZOE">×</button>
+          {ZOE_SPEECH_SUPPORTED && <button className={'asst-icon-btn'+(speakOn?' active':'')} title={speakOn?tr('zoe.muteResponses'):tr('zoe.readResponses')} onClick={()=>{ setSpeakOn(v=>!v); if(speakOn) window.speechSynthesis.cancel(); }} aria-label={tr('zoe.toggleVoice')}><Icon name={speakOn?'speakerOn':'speakerOff'} size={16}/></button>}
+          <button className="asst-icon-btn" title={tr('zoe.history')} onClick={()=>setShowHistory(v=>!v)} aria-label={tr('zoe.historyAria')}><Icon name="history" size={16}/></button>
+          <button className="asst-x" onClick={()=>setOpen(false)} aria-label={tr('zoe.closeChat')}>×</button>
         </div>
       </div>
-      <div className="asst-strip"><span>Contexto</span><span>APU</span><span>BIM</span><span>Entrega</span></div>
+      <div className="asst-strip"><span>{tr('zoe.stripContext')}</span><span>{tr('zoe.stripApu')}</span><span>{tr('zoe.stripBim')}</span><span>{tr('zoe.stripDeliver')}</span></div>
       {showHistory ? <div className="asst-history">
-        <button className="soft asst-new-thread" onClick={startNewConversation}>+ Nueva conversación</button>
+        <button className="soft asst-new-thread" onClick={startNewConversation}>{tr('zoe.newConversation')}</button>
         {threads.length ? threads.map(th=><button key={th.id} className="asst-thread-item" onClick={()=>openThread(th)}>
-          <b>{th.msgs.find(m=>m.me)?.t?.slice(0,48) || 'Conversación'}</b><small>{th.startedAt} · {th.msgs.length} mensajes</small>
-        </button>) : <p className="asst-history-empty">Aún no tienes conversaciones anteriores guardadas.</p>}
+          <b>{th.msgs.find(m=>m.me)?.t?.slice(0,48) || tr('zoe.untitledConversation')}</b><small>{th.startedAt} · {tr('zoe.messagesCount',{count:th.msgs.length})}</small>
+        </button>) : <p className="asst-history-empty">{tr('zoe.noSavedConversations')}</p>}
       </div> : <>
         <div className="asst-body" ref={bodyRef}>
-          {msgs.map((m,i)=><div key={i} className={'asst-msg'+(m.me?' me':'')}>{m.t}{!m.me && m.source==='local' && <em className="asst-offline-tag">Respuesta local (IA no disponible)</em>}</div>)}
+          {msgs.map((m,i)=><div key={i} className={'asst-msg'+(m.me?' me':'')}>{m.t}{!m.me && m.source==='local' && <em className="asst-offline-tag">{tr('zoe.offlineTag')}</em>}</div>)}
           {busy && <div className="asst-msg asst-thinking-msg"><span className="asst-dots"><i/><i/><i/></span></div>}
         </div>
         <div className="asst-suggestions">{prompts.map(p=><button key={p} onClick={()=>send(p)} disabled={busy}>{p}</button>)}</div>
         <div className="asst-input">
-          <input value={q} placeholder="Pregunta por costos, obra, evidencia..." onChange={e=>setQ(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()}/>
-          {ZOE_VOICE_SUPPORTED && <button className={'asst-icon-btn'+(listening?' active listening':'')} title={listening?'Detener grabación':'Hablar con ZOE'} onClick={toggleListen} aria-label="Entrada por voz"><Icon name={listening?'micStop':'mic'} size={16}/></button>}
-          <button onClick={()=>send()} disabled={busy}>{busy?'...':'Enviar'}</button>
+          <input value={q} placeholder={tr('zoe.inputPlaceholder')} onChange={e=>setQ(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()}/>
+          {ZOE_VOICE_SUPPORTED && <button className={'asst-icon-btn'+(listening?' active listening':'')} title={listening?tr('zoe.stopRecording'):tr('zoe.talkToZoe')} onClick={toggleListen} aria-label={tr('zoe.voiceInputAria')}><Icon name={listening?'micStop':'mic'} size={16}/></button>}
+          <button onClick={()=>send()} disabled={busy}>{busy?tr('zoe.sending'):tr('zoe.send')}</button>
         </div>
-        <div className="asst-note">Asistente conectado al flujo tecnico existente.</div>
+        <div className="asst-note">{tr('zoe.note')}</div>
       </>}
     </div>}
   </>;
@@ -769,30 +789,48 @@ function Landing({setScreen, login, company}){
     return () => clearInterval(t);
   }, []);
   const p = LANDING_PIPELINE[step];
+  // useI18n() ya expone t(); se alias a tr() para no chocar con la variable
+  // local "t" (id del setInterval) del efecto de arriba -- distinta funcion,
+  // mismo nombre corto, mejor no reusarlo y generar confusion al leer.
+  const { t: tr, locale, setLocale } = useI18n();
+  const { theme, toggleTheme } = useTheme();
+  const { canInstall, promptInstall, showIOSHint } = useInstallPrompt();
   return <div className="landing">
     <header className="nav-public">
       <div className="brand-mini"><ZoemecBrand variant="header"/></div>
-      <nav><a>Plataforma</a><a>Gemelo Digital</a><a>APU con IA</a><a>Entregables</a></nav>
-      <div className="nav-actions"><button className="ghost" onClick={()=>setScreen('login')}>Iniciar sesión</button><button onClick={()=>setScreen('register')}>Comenzar gratis</button></div>
+      <nav><a>{tr('nav.plataforma')}</a><a>{tr('nav.gemeloDigital')}</a><a>{tr('nav.apuConIA')}</a><a>{tr('nav.entregables')}</a></nav>
+      <div className="nav-actions">
+        <div className="locale-switch" role="group" aria-label={tr('toggle.langToggleLabel')}>
+          <button className={locale==='es'?'active':''} onClick={()=>setLocale('es')} aria-pressed={locale==='es'}>ES</button>
+          <button className={locale==='en'?'active':''} onClick={()=>setLocale('en')} aria-pressed={locale==='en'}>EN</button>
+        </div>
+        <button className="theme-toggle" onClick={toggleTheme} aria-label={tr('toggle.themeToggleLabel')} title={theme==='light'?tr('toggle.themeDark'):tr('toggle.themeLight')}>
+          <Icon name={theme==='light'?'moon':'sun'} size={18}/>
+        </button>
+        {canInstall && <button className="install-btn" onClick={promptInstall}><Icon name="download" size={16}/><span>{tr('install.button')}</span></button>}
+        {showIOSHint && <span className="ios-install-hint">{tr('install.iosHint')}</span>}
+        <button className="ghost" onClick={()=>setScreen('login')}>{tr('nav.iniciarSesion')}</button>
+        <button onClick={()=>setScreen('register')}>{tr('nav.comenzarGratis')}</button>
+      </div>
     </header>
     <section className="hero-build">
       <div className="hero-copy">
-        <span className="eyebrow">Plataforma integral de ingeniería de costos</span>
-        <h1>Inteligencia aplicada a la<br/><span className="hl">ingeniería de costos.</span></h1>
-        <p>ZOEMEC integra análisis de precios unitarios, presupuestos, inteligencia de precios, evidencia técnica y herramientas digitales para gestionar costos con mayor precisión y trazabilidad.</p>
+        <span className="eyebrow">{tr('hero.eyebrow')}</span>
+        <h1>{tr('hero.headlinePre')}<br/><span className="hl">{tr('hero.headlineHighlight')}</span></h1>
+        <p>{tr('hero.subtitle')}</p>
         <div className="hero-capabilities">
-          <div><Icon name="apu" size={22}/><b>APUs trazables</b></div>
-          <div><Icon name="search" size={22}/><b>Inteligencia de precios</b></div>
-          <div><Icon name="presupuestos" size={22}/><b>Presupuestos confiables</b></div>
-          <div><Icon name="reportes" size={22}/><b>Entregables profesionales</b></div>
+          <div><Icon name="apu" size={22}/><b>{tr('capabilities.apus')}</b></div>
+          <div><Icon name="search" size={22}/><b>{tr('capabilities.precios')}</b></div>
+          <div><Icon name="presupuestos" size={22}/><b>{tr('capabilities.presupuestos')}</b></div>
+          <div><Icon name="reportes" size={22}/><b>{tr('capabilities.entregables')}</b></div>
         </div>
-        <div className="hero-actions"><button onClick={()=>setScreen('register')}>Comenzar gratis</button><a className="secondary" href="#plataforma-preview">Ver plataforma</a></div>
+        <div className="hero-actions"><button onClick={()=>setScreen('register')}>{tr('ctas.comenzarGratis')}</button><a className="secondary" href="#plataforma-preview">{tr('ctas.verPlataforma')}</a></div>
       </div>
-      <div className="future-stage" aria-label="Panel de costos de ZOEMEC sobre una obra de construcción">
-        <img className="stage-photo" src="/images/hero/zoemec-hero-web.webp" alt="Obra de construcción; a la derecha, el panel de inteligencia de costos de ZOEMEC con un APU generado por IA" />
+      <div className="future-stage" aria-label={tr('panel.ariaLabel')}>
+        <img className="stage-photo" src="/images/hero/zoemec-hero-web.webp" alt={tr('panel.heroAlt')} />
         <div className="stage-status">
-          <span>MODELO DE COSTOS</span>
-          <b>Panel de inteligencia de costos</b>
+          <span>{tr('panel.modeloCostos')}</span>
+          <b>{tr('panel.titulo')}</b>
         </div>
         <div className="ai-console" key={step}>
           <div className="command-strip"><span>{p.head}</span><b>{p.metric}</b></div>
@@ -802,34 +840,34 @@ function Landing({setScreen, login, company}){
           </div>
           <div className="command-total"><span>{p.foot[0]}</span><b>{p.foot[1]}</b></div>
         </div>
-        <div className="stage-tag">Vista ilustrativa del panel de costos</div>
+        <div className="stage-tag">{tr('panel.vistaIlustrativa')}</div>
       </div>
     </section>
     <section className="trust-strip">
-      <div><Icon name="link" size={22}/><div><b>Datos trazables y auditables</b><span>Transparencia en cada cálculo y decisión.</span></div></div>
-      <div><Icon name="admin" size={22}/><div><b>Autenticación segura</b><span>Acceso controlado por cuenta y por rol.</span></div></div>
-      <div><Icon name="proyectos" size={22}/><div><b>Control del proyecto</b><span>Cada proyecto, presupuesto y APU en un solo lugar.</span></div></div>
-      <div><Icon name="folder" size={22}/><div><b>Privacidad y control</b><span>Tus proyectos permanecen bajo tu cuenta.</span></div></div>
+      <div><Icon name="link" size={22}/><div><b>{tr('trust.datosTitulo')}</b><span>{tr('trust.datosDesc')}</span></div></div>
+      <div><Icon name="admin" size={22}/><div><b>{tr('trust.authTitulo')}</b><span>{tr('trust.authDesc')}</span></div></div>
+      <div><Icon name="proyectos" size={22}/><div><b>{tr('trust.controlTitulo')}</b><span>{tr('trust.controlDesc')}</span></div></div>
+      <div><Icon name="folder" size={22}/><div><b>{tr('trust.privacidadTitulo')}</b><span>{tr('trust.privacidadDesc')}</span></div></div>
     </section>
     <section className="landing-story">
       <div className="landing-story-head">
-        <span className="eyebrow">Cómo funciona</span>
-        <h2>De un Excel disperso a un presupuesto auditable, en el mismo flujo.</h2>
+        <span className="eyebrow">{tr('story.eyebrow')}</span>
+        <h2>{tr('story.titulo')}</h2>
       </div>
       <div className="story-steps">
-        <div className="story-step"><b>01</b><h3>Importa tu Excel o pega el concepto</h3><p>ZOEMEC lee catálogos completos o un solo concepto y detecta unidad, cantidad y precio de referencia automáticamente.</p></div>
-        <div className="story-step"><b>02</b><h3>ZOE genera la matriz APU</h3><p>Materiales, mano de obra y equipo con la metodología RLOPSRM: FSR, herramienta menor, indirectos, financiamiento y utilidad.</p></div>
-        <div className="story-step"><b>03</b><h3>Exporta entregables profesionales</h3><p>PDF y Excel auditables con membrete, listos para concurso, licitación u obra — con la fuente de cada insumo trazable.</p></div>
+        <div className="story-step"><b>01</b><h3>{tr('story.step1Titulo')}</h3><p>{tr('story.step1Desc')}</p></div>
+        <div className="story-step"><b>02</b><h3>{tr('story.step2Titulo')}</h3><p>{tr('story.step2Desc')}</p></div>
+        <div className="story-step"><b>03</b><h3>{tr('story.step3Titulo')}</h3><p>{tr('story.step3Desc')}</p></div>
       </div>
     </section>
     <section className="landing-preview" id="plataforma-preview">
       <div className="landing-story-head">
-        <span className="eyebrow">La plataforma real</span>
-        <h2>Así se ve ZOEMEC por dentro.</h2>
+        <span className="eyebrow">{tr('preview.eyebrow')}</span>
+        <h2>{tr('preview.titulo')}</h2>
       </div>
       <div className="preview-grid">
-        <figure><img src="/images/dashboard/zoemec-dashboard-web.webp" alt="Dashboard de ZOEMEC con proyectos, presupuesto y actividad reciente"/><figcaption>Centro de costos</figcaption></figure>
-        <figure><img src="/images/screenshots/apu-matrix.png" alt="Matriz APU real generada en ZOEMEC con materiales, mano de obra y equipo"/><figcaption>Matriz APU generada</figcaption></figure>
+        <figure><img src="/images/dashboard/zoemec-dashboard-web.webp" alt={tr('preview.dashboardAlt')}/><figcaption>{tr('preview.dashboardCaption')}</figcaption></figure>
+        <figure><img src="/images/screenshots/apu-matrix.png" alt={tr('preview.apuAlt')}/><figcaption>{tr('preview.apuCaption')}</figcaption></figure>
       </div>
     </section>
   </div>
@@ -917,35 +955,67 @@ function TopSearch({apus=[],clients=[],projects=[],setModule}){
 }
 
 function Shell({children,user,logout,module,setModule,company,apus,clients,projects,activeProject,activeProjectId,setActiveProjectId}){
+  const { theme, toggleTheme } = useTheme();
+  const { t: tr, locale, setLocale } = useI18n();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const hamburgerRef = useRef(null);
+  const drawerCloseRef = useRef(null);
+  useEffect(() => { if(drawerOpen) drawerCloseRef.current?.focus(); }, [drawerOpen]);
   // Comunidad y Planes y acceso se ocultan temporalmente del menu principal
   // (fase de concurso: se mantienen en el codigo, solo no se muestran en la navegacion).
   const menu = [
-    ['inicio','inicio','Inicio'], ['apu','apu','APU Inteligente'], ['presupuestos','presupuestos','Presupuestos'],
-    ['cartera','clientes','Proyectos y clientes','Cartera de obra'],
-    ['biblioteca','biblioteca','Biblioteca','Academia y documentos'],
-    ['visual','render','Visual IA','Foto, plano o render a propuesta'],
-    ['tecnico','tecnico','Oficina técnica','Cálculos y formatos'],
-    ['reportes','reportes','Reportes'],
-    ...(user.isAdmin ? [['admin','admin','Panel Admin','Usuarios, planes y sistema']] : [])
+    ['inicio','inicio',tr('shell.menu.inicio')],
+    ['apu','apu',tr('shell.menu.apu')],
+    ['presupuestos','presupuestos',tr('shell.menu.presupuestos')],
+    ['cartera','clientes',tr('shell.menu.cartera'),tr('shell.menu.carteraDesc')],
+    ['biblioteca','biblioteca',tr('shell.menu.biblioteca'),tr('shell.menu.bibliotecaDesc')],
+    ['visual','render',tr('shell.menu.visual'),tr('shell.menu.visualDesc')],
+    ['tecnico','tecnico',tr('shell.menu.tecnico'),tr('shell.menu.tecnicoDesc')],
+    ['reportes','reportes',tr('shell.menu.reportes')],
+    ...(user.isAdmin ? [['admin','admin',tr('shell.menu.admin'),tr('shell.menu.adminDesc')]] : [])
   ];
-  return <div className="app-layout">
+  const goTo = (m) => { setModule(m); setDrawerOpen(false); };
+  // Escape cierra el drawer desde cualquier punto de la pantalla; el click
+  // afuera lo maneja el overlay (.drawer-backdrop) directo en el DOM, mas
+  // simple y confiable en movil que medir bounding boxes.
+  useEffect(() => {
+    if(!drawerOpen) return;
+    const onKey = (e) => { if(e.key === 'Escape'){ setDrawerOpen(false); hamburgerRef.current?.focus(); } };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [drawerOpen]);
+  return <div className={'app-layout'+(drawerOpen?' drawer-open':'')}>
+    {drawerOpen && <div className="drawer-backdrop" onClick={()=>setDrawerOpen(false)} aria-hidden="true"/>}
     <aside className="sidebar">
-      <div className="brand"><ZoemecBrand variant="sidebar" subtitle="Ingeniería y construcción"/></div>
-      <div className="menu">{menu.map(m=><button key={m[0]} className={module===m[0]?'active':''} onClick={()=>setModule(m[0])}><span className="mi"><Icon name={m[1]}/></span><span className="menu-copy"><b>{m[2]}</b>{m[3] && <small>{m[3]}</small>}</span></button>)}</div>
-      <button className="plan-box" onClick={()=>setModule('planes')}><b>Plan Profesional</b><p>APU, PDF, Excel, IA y biblioteca técnica.</p><div><i style={{width:'68%'}}></i></div><small>Ver permisos y cobro</small></button>
-      <button className="logout-side" onClick={logout}>Salir</button>
+      <div className="sidebar-head">
+        <div className="brand"><ZoemecBrand variant="sidebar" subtitle="Ingeniería y construcción"/></div>
+        <button className="drawer-close" ref={drawerCloseRef} onClick={()=>{ setDrawerOpen(false); hamburgerRef.current?.focus(); }} aria-label={tr('shell.closeDrawer')}>×</button>
+      </div>
+      <div className="menu">{menu.map(m=><button key={m[0]} className={module===m[0]?'active':''} onClick={()=>goTo(m[0])}><span className="mi"><Icon name={m[1]}/></span><span className="menu-copy"><b>{m[2]}</b>{m[3] && <small>{m[3]}</small>}</span></button>)}</div>
+      <button className="plan-box" onClick={()=>goTo('planes')}><b>{tr('shell.planBox.title')}</b><p>{tr('shell.planBox.desc')}</p><div><i style={{width:'68%'}}></i></div><small>{tr('shell.planBox.cta')}</small></button>
+      <button className="logout-side" onClick={logout}>{tr('shell.logout')}</button>
     </aside>
     <main className="main">
       <header className="topbar">
+        <button className="hamburger" ref={hamburgerRef} onClick={()=>setDrawerOpen(v=>!v)} aria-label={tr('shell.hamburger')} aria-expanded={drawerOpen}>
+          <span/><span/><span/>
+        </button>
         <TopSearch apus={apus} clients={clients} projects={projects} setModule={setModule}/>
-        {projects.length>0 && <div className="project-switcher" title="Proyecto activo: los APUs, presupuestos y catálogo que veas y guardes pertenecen solo a este proyecto.">
+        {projects.length>0 && <div className="project-switcher" title={tr('shell.projectSwitcher.title')}>
           <Icon name="proyectos" size={15}/>
-          <select value={activeProjectId||''} onChange={e=>setActiveProjectId(e.target.value)} aria-label="Proyecto activo">
+          <select value={activeProjectId||''} onChange={e=>setActiveProjectId(e.target.value)} aria-label={tr('shell.projectSwitcher.ariaLabel')}>
             {projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
-          <button type="button" className="ghost-up" onClick={()=>setModule('cartera')}>+ Nuevo</button>
+          <button type="button" className="ghost-up" onClick={()=>goTo('cartera')}>{tr('shell.projectSwitcher.new')}</button>
         </div>}
-        <div className="user"><CloudBadge user={user}/><NotificationBell user={user}/><span className="avatar">{user.initials}</span><div><b>{user.name}</b><small>{user.isAdmin ? 'Administrador' : user.plan}</small></div><button onClick={logout}>Salir</button></div>
+        <div className="user">
+          <div className="locale-switch topbar-locale" role="group" aria-label={tr('toggle.langToggleLabel')}>
+            <button className={locale==='es'?'active':''} onClick={()=>setLocale('es')} aria-pressed={locale==='es'}>ES</button>
+            <button className={locale==='en'?'active':''} onClick={()=>setLocale('en')} aria-pressed={locale==='en'}>EN</button>
+          </div>
+          <button className="theme-toggle" onClick={toggleTheme} aria-label={tr('toggle.themeToggleLabel')} title={theme==='light'?tr('toggle.themeDark'):tr('toggle.themeLight')}><Icon name={theme==='light'?'moon':'sun'} size={17}/></button>
+          <CloudBadge user={user}/><NotificationBell user={user}/><span className="avatar">{user.initials}</span><div><b>{user.name}</b><small>{user.isAdmin ? tr('shell.role.admin') : user.plan}</small></div><button onClick={logout}>{tr('shell.logout')}</button>
+        </div>
       </header>
       {children}
     </main>
@@ -1012,6 +1082,7 @@ function DigitalTwin({apu, compact, onOpen}){
 }
 
 function Dashboard({setModule,apus,clients,budgets,projects,activeProject:activeProjectProp,user}){
+  const { t: tr } = useI18n();
   const [remoteStatus,setRemoteStatus] = useState(null);
   const [oneDriveStatus,setOneDriveStatus] = useState(null);
   const [libraryCount,setLibraryCount] = useState(null);
@@ -1035,11 +1106,11 @@ function Dashboard({setModule,apus,clients,budgets,projects,activeProject:active
   if(!budgetCount) missingPieces.push('Presupuesto');
   const healthSummary = missingPieces.length ? `Faltan: ${missingPieces.join(', ')}` : 'Todos los servicios esenciales están operativos.';
   const riskNotes = [];
-  if(!activeProject) riskNotes.push('Agrega un proyecto para alinear costos y entregables.');
-  if(!latestApu) riskNotes.push('Genera tu primer APU para activar el gemelo digital y la evaluación técnica.');
-  if(libraryCount === 0) riskNotes.push('Sube documentos a la biblioteca para mejorar evidencias y búsquedas IA.');
-  if(!openaiOk) riskNotes.push('La IA no responde: revisa la configuración de OpenAI.');
-  if(!firebaseOk) riskNotes.push('Firebase no disponible: sincronización y almacenamiento pueden fallar.');
+  if(!activeProject) riskNotes.push(tr('dash.riskNoProject'));
+  if(!latestApu) riskNotes.push(tr('dash.riskNoApu'));
+  if(libraryCount === 0) riskNotes.push(tr('dash.riskNoLibrary'));
+  if(!openaiOk) riskNotes.push(tr('dash.riskNoAi'));
+  if(!firebaseOk) riskNotes.push(tr('dash.riskNoFirebase'));
   const estados = pr.reduce((m,p)=>{m[p.status]=(m[p.status]||0)+1;return m;},{});
   const palette = ['#9D6FD0','#2A1740','#C7A35C','#B8A4CC','#B54A62'];
   const segs = Object.keys(estados).map((k,i)=>({label:k,value:estados[k],color:palette[i%palette.length]}));
@@ -1083,42 +1154,42 @@ function Dashboard({setModule,apus,clients,budgets,projects,activeProject:active
     apiPost('/api/onedrive', { action:'status' }).then(data=>{ if(alive) setOneDriveStatus(data); }).catch(()=>{ if(alive) setOneDriveStatus(null); });
     return ()=>{ alive=false; };
   }, [user]);
-  return <section className="ai-os"><PageHead kicker="ZOEMEC AI OS" title="Plataforma de ingeniería de costos" desc="Un centro visual donde documentos, modelos, evidencia y APUs viven en el mismo flujo tecnico." action={<button onClick={()=>setModule('apu')}>Pedir a ZOE que cotice</button>} />
+  return <section className="ai-os"><PageHead kicker={tr('modules.dashboard.kicker')} title={tr('modules.dashboard.title')} desc={tr('modules.dashboard.desc')} action={<button onClick={()=>setModule('apu')}>{tr('dash.ctaAskZoe')}</button>} />
     <div className="demo-hero">
-      <h2>De un concepto de obra a un APU completo con IA</h2>
-      <p>Pega un concepto o importa un catálogo de Excel. ZOEMEC identifica recursos, rendimientos, procedimiento constructivo, seguridad, calidad y criterios de medición para construir un análisis de precio unitario editable y trazable.</p>
+      <h2>{tr('dash.heroTitle')}</h2>
+      <p>{tr('dash.heroDesc')}</p>
       <div className="demo-hero-actions">
-        <button onClick={()=>setModule('apu')}><Icon name="apu" size={17}/> Generar APU con IA</button>
-        <button className="ghost-up" onClick={()=>setModule('apu')}><Icon name="presupuestos" size={17}/> Importar catálogo Excel</button>
+        <button onClick={()=>setModule('apu')}><Icon name="apu" size={17}/> {tr('dash.ctaGenerate')}</button>
+        <button className="ghost-up" onClick={()=>setModule('apu')}><Icon name="presupuestos" size={17}/> {tr('dash.ctaImport')}</button>
       </div>
       <div className="demo-hero-steps">
-        <div className="demo-hero-step"><b>1</b><span>Describe</span></div>
-        <div className="demo-hero-step"><b>2</b><span>Analiza</span></div>
-        <div className="demo-hero-step"><b>3</b><span>Calcula</span></div>
-        <div className="demo-hero-step"><b>4</b><span>Valida</span></div>
-        <div className="demo-hero-step"><b>5</b><span>Entrega</span></div>
+        <div className="demo-hero-step"><b>1</b><span>{tr('dash.step1')}</span></div>
+        <div className="demo-hero-step"><b>2</b><span>{tr('dash.step2')}</span></div>
+        <div className="demo-hero-step"><b>3</b><span>{tr('dash.step3')}</span></div>
+        <div className="demo-hero-step"><b>4</b><span>{tr('dash.step4')}</span></div>
+        <div className="demo-hero-step"><b>5</b><span>{tr('dash.step5')}</span></div>
       </div>
     </div>
     <div className="kpi-row">
-      <div className="kpi-tile"><small>Proyectos</small><b>{projectCount}</b><span>{projectCount ? `${projectCount} en cartera` : 'Crea el primero'}</span></div>
-      <div className="kpi-tile"><small>APUs generados</small><b>{apus.length}</b><span>{apus.length ? 'Matrices con IA' : 'Sin APUs aún'}</span></div>
-      <div className="kpi-tile"><small>Presupuestos</small><b>{budgetCount}</b><span>{monto ? money(monto) : 'Sin monto acumulado'}</span></div>
-      <div className="kpi-tile"><small>Documentos</small><b>{libraryCount ?? '—'}</b><span>Biblioteca técnica</span></div>
+      <div className="kpi-tile"><small>{tr('dash.kpiProyectos')}</small><b>{projectCount}</b><span>{projectCount ? tr('dash.kpiProyectosSub',{count:projectCount}) : tr('dash.kpiProyectosEmpty')}</span></div>
+      <div className="kpi-tile"><small>{tr('dash.kpiApus')}</small><b>{apus.length}</b><span>{apus.length ? tr('dash.kpiApusSub') : tr('dash.kpiApusEmpty')}</span></div>
+      <div className="kpi-tile"><small>{tr('dash.kpiPresupuestos')}</small><b>{budgetCount}</b><span>{monto ? money(monto) : tr('dash.kpiPresupuestosEmpty')}</span></div>
+      <div className="kpi-tile"><small>{tr('dash.kpiDocumentos')}</small><b>{libraryCount ?? '—'}</b><span>{tr('dash.kpiDocumentosSub')}</span></div>
     </div>
     <div className="os-grid">
       <div className="os-command">
-        <div className="os-command-head"><span>Inteligencia del proyecto en vivo</span><b>{monto ? money(monto) : 'Sin presupuesto aun'}</b></div>
-        <h2>{activeProject?.name || 'Espacio de trabajo de construcción digital'}</h2>
-        <p>{activeProject?.client || 'Importa un concepto o crea un APU para encender el modelo de costos.'}</p>
-        <p className="os-summary">{projectCount ? `${projectCount} proyectos activos · ${budgetCount} presupuestos disponibles` : 'Activa tu flujo con el primer proyecto, APU y presupuesto.'}</p>
-        <div className="os-prompt"><i>ZOE</i><span>Convierte el siguiente alcance en una matriz APU trazable...</span><button onClick={()=>setModule('apu')}>Iniciar</button></div>
+        <div className="os-command-head"><span>{tr('dash.liveIntel')}</span><b>{monto ? money(monto) : tr('dash.noBudgetYet')}</b></div>
+        <h2>{activeProject?.name || tr('dash.defaultWorkspace')}</h2>
+        <p>{activeProject?.client || tr('dash.defaultClient')}</p>
+        <p className="os-summary">{projectCount ? tr('dash.summaryActive',{projects:projectCount,budgets:budgetCount}) : tr('dash.summaryEmpty')}</p>
+        <div className="os-prompt"><i>ZOE</i><span>{tr('dash.zoePrompt')}</span><button onClick={()=>setModule('apu')}>{tr('dash.zoeStart')}</button></div>
         <div className="os-pipeline">{pipeline.map((p,i)=><button key={p[0]} className={p[2]} onClick={()=>setModule(i<2?'biblioteca':i<5?'apu':'presupuestos')}><b>{p[0]}</b><span>{p[1]}</span></button>)}</div>
       </div>
       <div className="os-bim">
         <div className="twin-central">
-          <h2>GEMELO DIGITAL DEL PROYECTO</h2>
+          <h2>{tr('dash.twinTitle')}</h2>
           <div className="twin-flow" aria-hidden>
-            {['Documento','Extracción','Clasificación','Biblioteca','IA','Validación','Presupuesto','Entregables'].map((s,i)=>(
+            {tr('dash.twinFlow').map((s,i)=>(
               <div key={s} className={`twin-step ${i===0? 'start':''}`}><span>{s}</span>{i<7 && <i className="arrow">→</i>}</div>
             ))}
           </div>
@@ -1126,37 +1197,97 @@ function Dashboard({setModule,apus,clients,budgets,projects,activeProject:active
             <DigitalTwin apu={apus[0]} compact onOpen={()=>setModule('apu')}/>
           </div>
           <div className="twin-insights">
-            <InfoCard title="Proyecto" value={activeProject?.name || '—'} subtitle={activeProject ? `${activeProject.progress || 0}% avance` : 'Sin proyecto activo'} actionLabel={activeProject ? 'Ver proyecto' : 'Crear proyecto'} onAction={()=>setModule('cartera')}/>
-            <InfoCard title="IA" value={apus.length? 'Activa': 'Inactiva'} subtitle={apus.length? `${apus.length} APUs disponibles` : 'Genera tu primer APU para activar ZOE'} actionLabel="Asistente ZOE" onAction={()=>setModule('apu')}/>
+            <InfoCard title={tr('dash.twinProjectTitle')} value={activeProject?.name || '—'} subtitle={activeProject ? `${activeProject.progress || 0}% avance` : tr('dash.twinProjectEmpty')} actionLabel={activeProject ? tr('dash.twinProjectAction') : tr('dash.twinProjectActionCreate')} onAction={()=>setModule('cartera')}/>
+            <InfoCard title={tr('dash.twinAiTitle')} value={apus.length? tr('dash.twinAiActive'): tr('dash.twinAiInactive')} subtitle={apus.length? tr('dash.twinAiSubActive',{count:apus.length}) : tr('dash.twinAiSubEmpty')} actionLabel={tr('dash.twinAiAction')} onAction={()=>setModule('apu')}/>
           </div>
         </div>
       </div>
       <div className="os-side">
         <div className="status-grid">
-          <div className="status-card"><small>Proyecto</small><b>{activeProject?.name || '—'}</b><span>{activeProject ? `${activeProject.client || ''}` : 'Crea o importa un proyecto'}</span></div>
-          <div className="status-card"><small>IA</small><b>{apus.length ? 'Activa' : 'Inactiva'}</b><span>{apus.length ? `Última confianza ${Math.round(apuConfidenceScore(apus[0])*100)/100}%` : 'Genera un APU para activar'}</span></div>
-                  <div className="status-card"><small>Biblioteca</small><b>{libraryCount !== null ? `${libraryCount} documentos` : '—'}</b><span>{libraryCount !== null ? (libraryCount > 0 ? 'Biblioteca técnica detectada' : 'Sin documentos aún: sube tu primera base') : (libraryError || 'Sin datos de biblioteca')}</span></div>
-          <div className="status-card"><small>OneDrive</small><b>{oneDriveOk ? 'Conectado' : 'No conectado'}</b><span>{oneDriveOk ? 'Archivos de proyecto accesibles' : 'Sincroniza documentos y planos'}</span></div>
-          <div className="status-card"><small>Firebase</small><b>{firebaseOk ? 'Listo' : 'No disponible'}</b><span>{firebaseOk ? 'Datos y usuarios sincronizados' : 'Revisa la configuración de plataforma'}</span></div>
-          <div className="status-card"><small>OpenAI</small><b>{openaiOk ? 'Listo' : 'No disponible'}</b><span>{openaiOk ? 'IA preparada para generar APUs y respuestas' : 'La IA no responde en este entorno'}</span></div>
-          <div className="status-card"><small>Salud del tablero</small><b>{healthSummary}</b><span>{projectCount} proyectos · {budgetCount} presupuestos</span></div>
+          <div className="status-card"><small>{tr('dash.statusProyecto')}</small><b>{activeProject?.name || '—'}</b><span>{activeProject ? `${activeProject.client || ''}` : tr('dash.statusProyectoEmpty')}</span></div>
+          <div className="status-card"><small>{tr('dash.statusIa')}</small><b>{apus.length ? tr('dash.twinAiActive') : tr('dash.twinAiInactive')}</b><span>{apus.length ? tr('dash.statusIaSubActive',{pct:Math.round(apuConfidenceScore(apus[0])*100)/100}) : tr('dash.statusIaSubEmpty')}</span></div>
+                  <div className="status-card"><small>{tr('dash.statusBiblioteca')}</small><b>{libraryCount !== null ? tr('dash.statusBibliotecaDocs',{count:libraryCount}) : '—'}</b><span>{libraryCount !== null ? (libraryCount > 0 ? tr('dash.statusBibliotecaSubOk') : tr('dash.statusBibliotecaSubEmpty')) : (libraryError || tr('dash.statusBibliotecaSubNoData'))}</span></div>
+          <div className="status-card"><small>{tr('dash.statusOneDrive')}</small><b>{oneDriveOk ? tr('dash.statusOneDriveOn') : tr('dash.statusOneDriveOff')}</b><span>{oneDriveOk ? tr('dash.statusOneDriveSubOn') : tr('dash.statusOneDriveSubOff')}</span></div>
+          <div className="status-card"><small>{tr('dash.statusFirebase')}</small><b>{firebaseOk ? tr('dash.statusFirebaseOn') : tr('dash.statusFirebaseOff')}</b><span>{firebaseOk ? tr('dash.statusFirebaseSubOn') : tr('dash.statusFirebaseSubOff')}</span></div>
+          <div className="status-card"><small>{tr('dash.statusOpenAI')}</small><b>{openaiOk ? tr('dash.statusOpenAIOn') : tr('dash.statusOpenAIOff')}</b><span>{openaiOk ? tr('dash.statusOpenAISubOn') : tr('dash.statusOpenAISubOff')}</span></div>
+          <div className="status-card"><small>{tr('dash.statusHealth')}</small><b>{missingPieces.length ? tr('dash.statusHealthMissing',{items:missingPieces.join(', ')}) : tr('dash.statusHealthAllOk')}</b><span>{tr('dash.statusHealthSub',{projects:projectCount,budgets:budgetCount})}</span></div>
         </div>
-        {riskNotes.length ? <div className="risk-notes"><small>Atención inmediata</small><ul>{riskNotes.map(note=><li key={note}>{note}</li>)}</ul></div> : null}
+        {riskNotes.length ? <div className="risk-notes"><small>{tr('dash.riskTitle')}</small><ul>{riskNotes.map(note=><li key={note}>{note}</li>)}</ul></div> : null}
       </div>
     </div>
-    <div className="quick os-actions"><button onClick={()=>setModule('apu')}><Icon name="apu"/> Generar APU</button><button onClick={()=>setModule('biblioteca')}><Icon name="biblioteca"/> Abrir evidencia</button><button onClick={()=>setModule('cartera')}><Icon name="clientes"/> Ver proyectos y clientes</button><button onClick={()=>setModule('presupuestos')}><Icon name="presupuestos"/> Exportar entregables</button></div>
+    <div className="quick os-actions"><button onClick={()=>setModule('apu')}><Icon name="apu"/> {tr('dash.quickGenerate')}</button><button onClick={()=>setModule('biblioteca')}><Icon name="biblioteca"/> {tr('dash.quickEvidence')}</button><button onClick={()=>setModule('cartera')}><Icon name="clientes"/> {tr('dash.quickProjects')}</button><button onClick={()=>setModule('presupuestos')}><Icon name="presupuestos"/> {tr('dash.quickDeliverables')}</button></div>
     <div className="dash-charts">
-      <div className="panel future-panel"><h2>Tendencia de costo</h2><Spark points={spark}/><div className="chart-foot"><span>{budgets.length ? 'Datos de presupuesto' : 'Esperando primer presupuesto real'}</span><b>{budgets.length ? 'Sincronizado' : 'Standby'}</b></div></div>
-      <div className="panel chart-donut future-panel"><h2>Mapa de proyecto</h2><Donut segments={segs} center={pr.length || 'IA'} sub="nodos"/><div className="donut-legend">{segs.length ? segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>) : <span><i style={{background:'#C7A35C'}}/>Sin proyectos: crea uno o genera APU</span>}</div></div>
+      <div className="panel future-panel">
+        <h2>{tr('dash.chartCostTrend')}</h2>
+        <Spark points={spark}/>
+        <div className="chart-foot">
+          <span>{budgets.length ? tr('dash.chartCostTrendSubData') : tr('dash.chartCostTrendSubEmpty')}</span>
+          <b>{budgets.length ? tr('dash.chartCostTrendSynced') : tr('dash.chartCostTrendStandby')}</b>
+        </div>
+      </div>
+      <div className="panel chart-donut future-panel">
+        <h2>{tr('dash.chartProjectMap')}</h2>
+        <Donut segments={segs} center={pr.length || 'IA'} sub="nodos"/>
+        <div className="donut-legend">
+          {segs.length ? segs.map(s=>
+            <span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>
+          ) : (
+            <span><i style={{background:'#C7A35C'}}/>{tr('dash.chartProjectMapEmpty')}</span>
+          )}
+        </div>
+      </div>
     </div>
     <div className="grid-3">
-      <div className="panel"><h2>Proyectos recientes</h2>{pr.length ? pr.slice(0,4).map(p=><div className="project-row" key={p.name}><div><b>{p.name}</b><small>{p.client}</small></div><span>{p.progress}%</span><progress value={p.progress} max="100" /></div>) : <EmptyState text="Aún no hay proyectos reales. Crea el primero para alimentar este tablero."/>}</div>
-      <div className="panel"><h2>Últimos APUs</h2>{apus.length ? apus.slice(0,4).map((a,i)=><div className="mini-list-row" key={a.id||i}><Icon name="apu" size={15}/><b>{a.concept || a.clave || `APU ${i+1}`}</b><span>{apuConfidenceScore(a) ? `${Math.round(apuConfidenceScore(a))}%` : '—'}</span></div>) : <EmptyState text="Genera tu primer APU para verlo aquí." actionLabel="Crear APU" onAction={()=>setModule('apu')}/>}</div>
-      <div className="panel"><h2>Últimos presupuestos</h2>{budgets.length ? budgets.slice(0,4).map((b,i)=><div className="mini-list-row" key={b.id||i}><Icon name="presupuestos" size={15}/><b>{b.name || `Presupuesto ${i+1}`}</b><span>{b.total ? money(b.total) : '—'}</span></div>) : <EmptyState text="Guarda un presupuesto para verlo aquí." actionLabel="Ir a presupuestos" onAction={()=>setModule('presupuestos')}/>}</div>
+      <div className="panel">
+        <h2>{tr('dash.recentProjects')}</h2>
+        {pr.length ? pr.slice(0,4).map(p=>
+          <div className="project-row" key={p.name}>
+            <div><b>{p.name}</b><small>{p.client}</small></div>
+            <span>{p.progress}%</span>
+            <progress value={p.progress} max="100" />
+          </div>
+        ) : <EmptyState text={tr('dash.recentProjectsEmpty')}/>}
+      </div>
+      <div className="panel">
+        <h2>{tr('dash.recentApus')}</h2>
+        {apus.length ? apus.slice(0,4).map((a,i)=>
+          <div className="mini-list-row" key={a.id||i}>
+            <Icon name="apu" size={15}/>
+            <b>{a.concept || a.clave || `APU ${i+1}`}</b>
+            <span>{apuConfidenceScore(a) ? `${Math.round(apuConfidenceScore(a))}%` : '—'}</span>
+          </div>
+        ) : <EmptyState text={tr('dash.recentApusEmpty')} actionLabel={tr('dash.recentApusAction')} onAction={()=>setModule('apu')}/>}
+      </div>
+      <div className="panel">
+        <h2>{tr('dash.recentBudgets')}</h2>
+        {budgets.length ? budgets.slice(0,4).map((b,i)=>
+          <div className="mini-list-row" key={b.id||i}>
+            <Icon name="presupuestos" size={15}/>
+            <b>{b.name || `Presupuesto ${i+1}`}</b>
+            <span>{b.total ? money(b.total) : '—'}</span>
+          </div>
+        ) : <EmptyState text={tr('dash.recentBudgetsEmpty')} actionLabel={tr('dash.recentBudgetsAction')} onAction={()=>setModule('presupuestos')}/>}
+      </div>
     </div>
     <div className="grid-2">
-      <div className="panel"><h2>Últimos documentos</h2>{libraryRecent === null ? <EmptyState text={libraryError || 'Sin datos de biblioteca en este momento.'}/> : libraryRecent.length ? libraryRecent.map(f=><div className="mini-list-row" key={f.id}><Icon name="doc" size={15}/><b>{f.name || 'Documento'}</b><span>{f.cat || f.ext || '—'}</span></div>) : <EmptyState text="Sube tu primer documento a la Biblioteca para verlo aquí." actionLabel="Abrir Biblioteca" onAction={()=>setModule('biblioteca')}/>}</div>
-      <div className="panel"><h2>Actividad reciente</h2>{apus.length || budgets.length || (libraryRecent||[]).length ? [...(libraryRecent||[]).slice(0,2).map(f=>`Documento "${f.name}" sincronizado`), ...apus.slice(0,2).map(a=>`APU ${a.clave || a.id || ''} creado`), ...budgets.slice(0,2).map(b=>`Presupuesto ${b.name} guardado`)].map((x,i)=><div className="activity" key={i}><Icon name="doc" size={15}/> {x}</div>) : <EmptyState text="La actividad aparecerá cuando guardes APUs, presupuestos, clientes o documentos."/>}</div>
+      <div className="panel">
+        <h2>{tr('dash.recentDocs')}</h2>
+        {libraryRecent === null ? <EmptyState text={libraryError || tr('dash.recentDocsNoData')}/> : libraryRecent.length ? libraryRecent.map(f=>
+          <div className="mini-list-row" key={f.id}>
+            <Icon name="doc" size={15}/>
+            <b>{f.name || 'Documento'}</b>
+            <span>{f.cat || f.ext || '—'}</span>
+          </div>
+        ) : <EmptyState text={tr('dash.recentDocsEmpty')} actionLabel={tr('dash.recentDocsAction')} onAction={()=>setModule('biblioteca')}/>}
+      </div>
+      <div className="panel">
+        <h2>{tr('dash.recentActivity')}</h2>
+        {apus.length || budgets.length || (libraryRecent||[]).length ? [
+          ...(libraryRecent||[]).slice(0,2).map(f=>tr('dash.activityDocSynced',{name:f.name})),
+          ...apus.slice(0,2).map(a=>tr('dash.activityApuCreated',{ref:a.clave || a.id || ''})),
+          ...budgets.slice(0,2).map(b=>tr('dash.activityBudgetSaved',{name:b.name})),
+        ].map((x,i)=><div className="activity" key={i}><Icon name="doc" size={15}/> {x}</div>) : <EmptyState text={tr('dash.recentActivityEmpty')}/>}
+      </div>
     </div>
   </section>
 }
@@ -1295,6 +1426,7 @@ function ResourceCards({apu}){
 }
 
 function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog,projects,rawApus,linkApuToProject,activeProjectId,activeProject,onNeedProject}){
+  const { t: tr } = useI18n();
   const requireProject=()=>{
     if(activeProjectId) return true;
     if(confirm('Para guardar necesitas un proyecto activo (asi tus APUs quedan asociados a una obra y nunca se mezclan con otra). ¿Crear o seleccionar un proyecto ahora?')) onNeedProject?.();
@@ -2222,8 +2354,8 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       setDoc(doc(db, 'users', user.uid), { apusCreated:nextCount, updatedAt:serverTimestamp() }, { merge:true }).catch(console.error);
     }
   };
-  const save=()=>{ if(!requireApuAccess()) return; if(!requireProject()) return; setApus([apu,...apus.filter(x=>x.id!==apu.id)]); markApuUsed(); alert('APU guardado');};
-  const addBudget=()=>{ if(!requireApuAccess()) return; if(!requireProject()) return; setBudgets([{id:'PRE-'+uid(), name:'Presupuesto desde APU', client:'Cliente por definir', items:[{concept:apu.concept, unit:apu.unit, qty:1, pu:totals.pu}], total:totals.pu, date:new Date().toLocaleDateString('es-MX')},...budgets]); markApuUsed(); alert('Agregado a presupuestos (PU sin IVA)');};
+  const save=()=>{ if(!requireApuAccess()) return; if(!requireProject()) return; setApus([apu,...apus.filter(x=>x.id!==apu.id)]); markApuUsed(); alert(tr('apu.savedApu'));};
+  const addBudget=()=>{ if(!requireApuAccess()) return; if(!requireProject()) return; setBudgets([{id:'PRE-'+uid(), name:'Presupuesto desde APU', client:'Cliente por definir', items:[{concept:apu.concept, unit:apu.unit, qty:1, pu:totals.pu}], total:totals.pu, date:new Date().toLocaleDateString('es-MX')},...budgets]); markApuUsed(); alert(tr('apu.addedToBudget'));};
   // Nota: la exportacion masiva por catalogo (multiples APUs) ya no pasa por
   // aqui -- vive en el panel de revision de duplicados (generateSelectedBatch
   // + los botones propios de "PRESUPUESTO GENERADO"), para que el usuario
@@ -2288,43 +2420,43 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   const hasApuContent = (professionalApu.materials?.length||0) + (professionalApu.labor?.length||0) > 0;
   const apuStepIndex = aiBusy ? 1 : showExecutive ? 3 : hasApuContent ? 2 : concept.trim() ? 1 : 0;
 
-  return <section className="apu-workspace"><PageHead kicker="APU Inteligente" title="Análisis de Precio Unitario" desc="Metodología RLOPSRM: salario real con FSR, herramienta menor sobre mano de obra, indirectos de campo y oficina, financiamiento, utilidad y cargos adicionales." />
+  return <section className="apu-workspace"><PageHead kicker={tr('modules.apu.kicker')} title={tr('modules.apu.title')} desc={tr('modules.apu.desc')} />
     <ApuStepper stepIndex={apuStepIndex}/>
     <div className="apu-project-status">
       {activeProject
         ? <span className="apu-project-pill"><Icon name="proyectos" size={13}/> {activeProject.name}</span>
-        : <span className="apu-project-pill muted">Trabajando sin proyecto · <a onClick={onNeedProject}>crea o selecciona uno para guardar</a></span>}
+        : <span className="apu-project-pill muted">{tr('apu.noProjectPill')} · <a onClick={onNeedProject}>{tr('apu.noProjectLink')}</a></span>}
     </div>
-    {isFree && <div className="trial-banner"><b>Plan gratis activo:</b> tienes {Math.max(0,1-(userUsage.apusCreated||0))} APU disponible. Para exportar y crear mas APUs activa un plan.</div>}
+    {isFree && <div className="trial-banner"><b>{tr('apu.trialBannerLabel')}</b> {tr('apu.trialBannerText',{n:Math.max(0,1-(userUsage.apusCreated||0))})}</div>}
     {resumableJob && (() => { const s = summarizeJob(resumableJob); return <div className="trial-banner resume-banner">
-      <div><b>Lote sin terminar detectado:</b> "{resumableJob.fileName || 'catálogo'}" — {s.done} de {s.total} conceptos procesados antes de recargar la página ({s.terminado} listos, {s.requiere_revision} con observaciones, {s.error} con error, {s.pendiente} pendientes).</div>
+      <div><b>{tr('apu.resumeBannerLabel')}</b> "{resumableJob.fileName || tr('apu.resumeCatalogFallback')}" — {tr('apu.resumeBannerCounts',{done:s.done,total:s.total,terminado:s.terminado,revision:s.requiere_revision,error:s.error,pendiente:s.pendiente})}</div>
       <div className="resume-banner-actions">
-        <button type="button" onClick={resumeActiveJob} disabled={batchBusy}>Reanudar</button>
-        <button type="button" className="soft" onClick={discardResumableJob} disabled={batchBusy}>Descartar</button>
+        <button type="button" onClick={resumeActiveJob} disabled={batchBusy}>{tr('apu.resume')}</button>
+        <button type="button" className="soft" onClick={discardResumableJob} disabled={batchBusy}>{tr('apu.discard')}</button>
       </div>
     </div>; })()}
     {/* H. Generacion: inicio natural del flujo, siempre visible arriba */}
     <div className="panel ai-panel" ref={conceptCardRef}>
-      <div className="ai-panel-head"><HardHat size={36}/><div><b>Generar APU desde un concepto</b><small className="muted">Pega el concepto, alcance o especificación técnica de la partida. También puedes importar tu Excel de precios: usaré tus precios reales donde coincidan los insumos.</small></div></div>
-      <textarea ref={conceptTextareaRef} className="ai-concept" value={concept} onChange={e=>setConcept(e.target.value)} placeholder="Pega aquí el concepto de obra, alcance o especificación técnica…"/>
+      <div className="ai-panel-head"><HardHat size={36}/><div><b>{tr('apu.panelTitle')}</b><small className="muted">{tr('apu.panelDesc')}</small></div></div>
+      <textarea ref={conceptTextareaRef} className="ai-concept" value={concept} onChange={e=>setConcept(e.target.value)} placeholder={tr('apu.conceptPlaceholder')}/>
       <div className="ai-unit-qty-row">
-        <label>Unidad (opcional)<input value={aiUnit} onChange={e=>setAiUnit(e.target.value)} placeholder="ej. m, m², kg, pza"/></label>
-        <label>Cantidad (opcional)<input type="number" min="0" step="any" value={aiQty} onChange={e=>setAiQty(e.target.value)} placeholder="ej. 80"/></label>
-        <small className="muted">Si el concepto trae números propios (medidas, diámetros), captura aquí la unidad y cantidad reales para no confundir al detector automático.</small>
+        <label>{tr('apu.unitLabel')}<input value={aiUnit} onChange={e=>setAiUnit(e.target.value)} placeholder={tr('apu.unitPlaceholder')}/></label>
+        <label>{tr('apu.qtyLabel')}<input type="number" min="0" step="any" value={aiQty} onChange={e=>setAiQty(e.target.value)} placeholder={tr('apu.qtyPlaceholder')}/></label>
+        <small className="muted">{tr('apu.unitQtyHint')}</small>
       </div>
       <div className="ai-panel-primary-action">
-        <button className="ai-btn" onClick={generateAI} disabled={aiBusy} aria-busy={aiBusy}><Icon name="apu" size={17}/> {aiBusy?'Generando APU con IA...':'Generar APU con IA real'}</button>
+        <button className="ai-btn" onClick={generateAI} disabled={aiBusy} aria-busy={aiBusy}><Icon name="apu" size={17}/> {aiBusy?tr('apu.generatingAI'):tr('apu.generateAIBtn')}</button>
       </div>
       <div className="ai-panel-foot">
-        <label className="up-btn ghost-up">Importar catálogo de precios<input ref={priceCatalogInputRef} type="file" accept=".xlsx,.csv" hidden onChange={e=>importExcel(e.target.files[0])}/></label>
-        <label className="up-btn ghost-up">Generar desde Excel completo<input ref={fullExcelInputRef} type="file" accept=".xlsx,.csv" hidden onChange={e=>importFullExcel(e.target.files[0])}/></label>
-        <label className="up-btn ghost-up">Subir catálogo de conceptos<input ref={conceptCatalogInputRef} type="file" accept=".xlsx,.csv" hidden onChange={e=>importConceptCatalog(e.target.files[0])}/></label>
-        {catalog.length>0 && <span className="cat-badge"><Icon name="presupuestos" size={14}/> Catálogo: {catalog.length} insumos</span>}
-        <button className="soft" type="button" onClick={resetAPUForm}>Crear manualmente / Limpiar</button>
-        <button className="soft danger" type="button" onClick={clearWorkspace} title="Restablece por completo el trabajo de este módulo: catálogo, conceptos, selección, duplicados y APUs generados en este lote. NO borra APUs ya guardados del proyecto.">Limpiar trabajo</button>
-        {activeProjectId && <button className="danger-solid" type="button" onClick={emptyActiveProject} title="Elimina PERMANENTEMENTE todos los APUs y conceptos guardados de este proyecto (la Bandeja de revisión técnica completa). No elimina el proyecto, la Biblioteca, el catálogo de precios, los clientes ni otros proyectos.">Vaciar proyecto</button>}
+        <label className="up-btn ghost-up">{tr('apu.importPriceCatalog')}<input ref={priceCatalogInputRef} type="file" accept=".xlsx,.csv" hidden onChange={e=>importExcel(e.target.files[0])}/></label>
+        <label className="up-btn ghost-up">{tr('apu.generateFromExcel')}<input ref={fullExcelInputRef} type="file" accept=".xlsx,.csv" hidden onChange={e=>importFullExcel(e.target.files[0])}/></label>
+        <label className="up-btn ghost-up">{tr('apu.uploadConceptCatalog')}<input ref={conceptCatalogInputRef} type="file" accept=".xlsx,.csv" hidden onChange={e=>importConceptCatalog(e.target.files[0])}/></label>
+        {catalog.length>0 && <span className="cat-badge"><Icon name="presupuestos" size={14}/> {tr('apu.catalogBadge',{count:catalog.length})}</span>}
+        <button className="soft" type="button" onClick={resetAPUForm}>{tr('apu.createManualClear')}</button>
+        <button className="soft danger" type="button" onClick={clearWorkspace} title={tr('apu.clearWorkspaceTitle')}>{tr('apu.clearWorkspace')}</button>
+        {activeProjectId && <button className="danger-solid" type="button" onClick={emptyActiveProject} title={tr('apu.emptyProjectTitle')}>{tr('apu.emptyProject')}</button>}
       </div>
-      <button type="button" className="link-inline" onClick={generate}>¿Prefieres partir de una matriz base sin IA? Generar desarrollo</button>
+      <button type="button" className="link-inline" onClick={generate}>{tr('apu.preferMatrixLink')}</button>
       {aiBusy && <>
         {/* Nota real (no decorativa): aiStatus refleja el paso real que esta
             ejecutando generateAI() en este momento (analizando, buscando
@@ -2338,27 +2470,27 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       </>}
       {aiStatus && !aiBusy && <div className="ai-note"><b>{aiStatus}</b></div>}
       {excelInfo && <div className="excel-preview">
-        <div><small>Archivo</small><b>{excelInfo.fileName}</b></div>
-        <div><small>Concepto detectado</small><b>{excelInfo.concept}</b></div>
-        <div><small>Unidad / cantidad</small><b>{excelInfo.unit} - {num(excelInfo.qty)}</b></div>
-        <div><small>P.U. referencia</small><b>{excelInfo.referencePU ? money(excelInfo.referencePU) : 'No detectado'}</b></div>
+        <div><small>{tr('apu.excelFile')}</small><b>{excelInfo.fileName}</b></div>
+        <div><small>{tr('apu.excelConcept')}</small><b>{excelInfo.concept}</b></div>
+        <div><small>{tr('apu.excelUnitQty')}</small><b>{excelInfo.unit} - {num(excelInfo.qty)}</b></div>
+        <div><small>{tr('apu.excelPU')}</small><b>{excelInfo.referencePU ? money(excelInfo.referencePU) : tr('apu.notDetected')}</b></div>
       </div>}
-      <div className="ai-note">El desarrollo se arma con tus precios importados, matrices base y metodologia ZOEMEC. La IA real se ejecuta en un servidor seguro.</div>
+      <div className="ai-note">{tr('apu.aiFooterNote')}</div>
       {conceptBatch?.concepts?.length>0 && !batchResult && <div className="batch-review">
         <div className="batch-review-head">
-          <b>Catálogo: {conceptBatch.concepts.length} registros → {batchGroups.size} conceptos únicos{batchDuplicateRows>0 ? ` (${batchDuplicateRows} duplicados agrupados)` : ''}</b>
-          <p className="muted">Se preseleccionó automáticamente un renglón por concepto único. Revisa, busca y ajusta antes de generar.</p>
+          <b>{tr('apu.batchHeadLabel',{total:conceptBatch.concepts.length,unique:batchGroups.size,dupSuffix:batchDuplicateRows>0?tr('apu.batchDupSuffix',{count:batchDuplicateRows}):''})}</b>
+          <p className="muted">{tr('apu.batchHeadDesc')}</p>
         </div>
         <div className="batch-review-toolbar">
-          <input className="batch-search" value={batchSearch} onChange={e=>setBatchSearch(e.target.value)} placeholder="Buscar por clave o concepto..."/>
-          <button type="button" className="soft" onClick={selectAllBatchRows}>Seleccionar todos</button>
-          <button type="button" className="soft" onClick={selectUniqueBatchRows}>Solo únicos</button>
-          <button type="button" className="soft" onClick={selectNoBatchRows}>Ninguno</button>
-          <span className="batch-count">{batchSelection?.size || 0} de {conceptBatch.concepts.length} seleccionados</span>
+          <input className="batch-search" value={batchSearch} onChange={e=>setBatchSearch(e.target.value)} placeholder={tr('apu.batchSearchPlaceholder')}/>
+          <button type="button" className="soft" onClick={selectAllBatchRows}>{tr('apu.selectAll')}</button>
+          <button type="button" className="soft" onClick={selectUniqueBatchRows}>{tr('apu.selectUnique')}</button>
+          <button type="button" className="soft" onClick={selectNoBatchRows}>{tr('apu.selectNone')}</button>
+          <span className="batch-count">{tr('apu.selectedCount',{selected:batchSelection?.size||0,total:conceptBatch.concepts.length})}</span>
         </div>
         <div className="batch-review-table">
           <table className="data-table">
-            <thead><tr><th></th><th>Clave</th><th>Concepto</th><th>Unidad</th><th>Cantidad</th><th>P.U. ref.</th></tr></thead>
+            <thead><tr><th></th><th>{tr('apu.colKey')}</th><th>{tr('apu.colConcept')}</th><th>{tr('apu.colUnit')}</th><th>{tr('apu.colQty')}</th><th>{tr('apu.colRefPu')}</th></tr></thead>
             <tbody>{batchFilteredRows.map(({item,index})=>{
               const group = batchGroups.get(duplicateGroupKey(item)) || [];
               const isDuplicate = group.length>1;
@@ -2366,7 +2498,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
               return <tr key={index} className={isDuplicate && !isFirstOfGroup ? 'batch-row-duplicate' : ''}>
                 <td><input type="checkbox" checked={batchSelection?.has(index)||false} onChange={()=>toggleBatchRow(index)}/></td>
                 <td>{item.code || `CON-${index+1}`}</td>
-                <td>{item.concept}{isDuplicate && <span className="dup-badge">{isFirstOfGroup?`${group.length} coincidencias`:'duplicado'}</span>}</td>
+                <td>{item.concept}{isDuplicate && <span className="dup-badge">{isFirstOfGroup?tr('apu.matches',{count:group.length}):tr('apu.duplicate')}</span>}</td>
                 <td>{item.unit||'—'}</td>
                 <td>{num(item.qty||1)}</td>
                 <td>{item.referencePU?money(item.referencePU):'—'}</td>
@@ -2375,46 +2507,46 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
           </table>
         </div>
         <div className="batch-review-actions">
-          <button onClick={generateSelectedBatch} disabled={batchBusy || !batchSelection?.size}>{batchBusy?'Generando APUs con IA...':`Generar ${batchSelection?.size||0} APU(s) con IA y crear presupuesto`}</button>
-          {batchBusy && activeJob && <button type="button" className="soft danger" onClick={cancelActiveJob}>Cancelar lote</button>}
+          <button onClick={generateSelectedBatch} disabled={batchBusy || !batchSelection?.size}>{batchBusy?tr('apu.generatingBatch'):tr('apu.generateBatchBtn',{count:batchSelection?.size||0})}</button>
+          {batchBusy && activeJob && <button type="button" className="soft danger" onClick={cancelActiveJob}>{tr('apu.cancelBatch')}</button>}
         </div>
         {activeJob && <div className="batch-progress">
           {(() => { const s = summarizeJob(activeJob); return <>
-            <b>Progreso: {s.done} de {s.total}</b>
-            <span>{s.terminado} listos · {s.requiere_revision} con observaciones · {s.error} con error{s.enProceso ? ` · ${s.enProceso} procesando` : ''}{s.cancelado ? ` · ${s.cancelado} cancelados` : ''}</span>
+            <b>{tr('apu.progressLabel',{done:s.done,total:s.total})}</b>
+            <span>{tr('apu.progressDetail',{terminado:s.terminado,revision:s.requiere_revision,error:s.error,enProceso:s.enProceso?` · ${s.enProceso} procesando`:'',cancelado:s.cancelado?` · ${s.cancelado} cancelados`:''})}</span>
           </>; })()}
         </div>}
       </div>}
       {batchResult && <div className="batch-result">
-        <b>{batchResult.cancelled ? 'LOTE CANCELADO' : 'PRESUPUESTO GENERADO'}</b>
+        <b>{batchResult.cancelled ? tr('apu.batchCancelled') : tr('apu.batchGenerated')}</b>
         <div className="batch-result-grid">
-          <span>Conceptos: <b>{batchResult.conceptsTotal}</b></span>
-          <span>Seleccionados: <b>{batchResult.selected}</b></span>
-          <span>APUs generados: <b>{batchResult.generated}</b></span>
-          <span>Requieren revisión: <b>{batchResult.review}</b></span>
-          <span>Con error: <b>{batchResult.errors}</b></span>
-          <span>Subtotal: <b>{money(batchResult.budget.items.reduce((s,it)=>s+Number(it.qty)*Number(it.pu),0))}</b></span>
-          <span>Total con IVA: <b>{money(batchResult.budget.total)}</b></span>
+          <span>{tr('apu.resultConcepts')} <b>{batchResult.conceptsTotal}</b></span>
+          <span>{tr('apu.resultSelected')} <b>{batchResult.selected}</b></span>
+          <span>{tr('apu.resultGenerated')} <b>{batchResult.generated}</b></span>
+          <span>{tr('apu.resultReview')} <b>{batchResult.review}</b></span>
+          <span>{tr('apu.resultErrors')} <b>{batchResult.errors}</b></span>
+          <span>{tr('apu.resultSubtotal')} <b>{money(batchResult.budget.items.reduce((s,it)=>s+Number(it.qty)*Number(it.pu),0))}</b></span>
+          <span>{tr('apu.resultTotalIva')} <b>{money(batchResult.budget.total)}</b></span>
         </div>
         {batchResult.excludedConcepts?.length>0 && <div className="batch-review-head" style={{borderColor:'#B54A62'}}>
-          <b>{batchResult.excludedConcepts.length} concepto(s) requieren confirmación -- no se incluyeron en este presupuesto:</b>
+          <b>{tr('apu.excludedHead',{count:batchResult.excludedConcepts.length})}</b>
           <ul>{batchResult.excludedConcepts.map((c,i)=><li key={i}>{c}</li>)}</ul>
-          <p className="muted">Vuelve a la tabla de arriba, marca su casilla y genera de nuevo para incluirlos.</p>
+          <p className="muted">{tr('apu.excludedHint')}</p>
         </div>}
         <div className="batch-result-actions">
-          {batchResult.errors>0 && <button className="soft danger" onClick={retryFailedInActiveJob} disabled={batchBusy}>{batchBusy?'Reintentando...':`Reintentar ${batchResult.errors} fallido(s)`}</button>}
+          {batchResult.errors>0 && <button className="soft danger" onClick={retryFailedInActiveJob} disabled={batchBusy}>{batchBusy?tr('apu.retrying'):tr('apu.retryFailed',{count:batchResult.errors})}</button>}
           {/* Entregable profesional (RESUMEN + CONTROL_REVISION + 1 hoja APU
               completa por concepto -- exportConceptBatch -> exportAPUExcelV2,
               sin tocar): boton principal, primero y sin la clase "soft" que
               lo hacia ver secundario frente al presupuesto de 1 sola hoja. */}
-          {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatch} disabled={batchBusy} title="Exporta el presupuesto completo: resumen, control de revisión y una hoja por cada APU.">{batchBusy?'IA generando hojas...':'Descargar Excel profesional'}</button>}
-          {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatchPDF} disabled={batchBusy} title="Un PDF profesional completo por cada concepto del lote.">PDF profesional por concepto</button>}
-          {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatchPdfMaster} disabled={batchBusy} title="Un solo PDF con portada, resumen general, control de revisión y el desarrollo completo de todos los conceptos.">Descargar PDF maestro</button>}
+          {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatch} disabled={batchBusy} title={tr('apu.downloadProfessionalExcelTitle')}>{batchBusy?tr('apu.generatingSheets'):tr('apu.downloadProfessionalExcel')}</button>}
+          {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatchPDF} disabled={batchBusy} title={tr('apu.pdfPerConceptTitle')}>{tr('apu.pdfPerConcept')}</button>}
+          {conceptBatch?.concepts?.length>0 && <button onClick={exportConceptBatchPdfMaster} disabled={batchBusy} title={tr('apu.downloadMasterPdfTitle')}>{tr('apu.downloadMasterPdf')}</button>}
           {/* Cotizacion rapida de 1 hoja (Concepto/Unidad/Cantidad/P.U./Importe):
               opcion secundaria, nunca el entregable principal de ZOEMEC. */}
-          <button className="soft" onClick={()=>exportBudgetExcel(batchResult.budget.items, batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.total-batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.ivaRate)}>Excel resumen</button>
-          <button className="soft" onClick={()=>exportBudgetPDF(batchResult.budget.items, batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.total-batchResult.budget.total/(1+batchResult.budget.ivaRate/100), company, batchResult.budget.ivaRate)}>PDF resumen</button>
-          <button className="soft" onClick={resetAPUForm}>Cerrar</button>
+          <button className="soft" onClick={()=>exportBudgetExcel(batchResult.budget.items, batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.total-batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.ivaRate)}>{tr('apu.excelSummary')}</button>
+          <button className="soft" onClick={()=>exportBudgetPDF(batchResult.budget.items, batchResult.budget.total/(1+batchResult.budget.ivaRate/100), batchResult.budget.total-batchResult.budget.total/(1+batchResult.budget.ivaRate/100), company, batchResult.budget.ivaRate)}>{tr('apu.pdfSummary')}</button>
+          <button className="soft" onClick={resetAPUForm}>{tr('apu.close')}</button>
         </div>
       </div>}
     </div>
@@ -2437,36 +2569,36 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       {showExecutive
         ? <div className="panel exec-detail">
           <div className="exec-confidence">
-            <b>Confianza del análisis: {formatGlobalConfidence(globalConfidence).fullLabel}</b>
+            <b>{tr('apu.confidenceLabel',{label:formatGlobalConfidence(globalConfidence).fullLabel})}</b>
             <small>{(() => {
               const rows = ['materials','labor','equipment'].flatMap(k => professionalApu[k] || []);
               const needsReview = rows.filter(r => !r.fuente?.proveedor || r.fuente?.estado === 'ESTIMADO_IA' || r.fuente?.estado === 'REQUIERE_VALIDACION').length;
-              return rows.length === 0 ? 'Sin recursos para evaluar.' : needsReview > 0 ? `${needsReview} de ${rows.length} precio(s)/renglones son estimados por IA o sin fuente y requieren validación.` : 'Todos los renglones tienen fuente identificada.';
+              return rows.length === 0 ? tr('apu.noResourcesEval') : needsReview > 0 ? tr('apu.reviewNeeded',{needsReview,total:rows.length}) : tr('apu.allSourced');
             })()}</small>
           </div>
           <div className="exec-validation">
-            <b>Validación técnica</b>
-            <span>{professionalApu.warnings.length === 0 ? 'Sin observaciones detectadas.' : `${professionalApu.warnings.length} verificación(es) requieren revisión.`}</span>
+            <b>{tr('apu.technicalValidation')}</b>
+            <span>{professionalApu.warnings.length === 0 ? tr('apu.noObservations') : tr('apu.verificationsNeeded',{count:professionalApu.warnings.length})}</span>
             {professionalApu.warnings.length > 0 && <ul>{professionalApu.warnings.slice(0,6).map((w,i) => <li key={i}>{w.message}</li>)}</ul>}
           </div>
           <div className="exec-explain">
-            <b>Cómo construyó ZOEMEC este APU</b>
+            <b>{tr('apu.howBuilt')}</b>
             <ul className="exec-checklist">
-              <li>{doneIcon(Boolean(professionalApu.concept))} Interpretó el alcance</li>
-              <li>{doneIcon((professionalApu.labor||[]).length > 0)} Identificó {(professionalApu.labor||[]).length} recurso(s) de mano de obra</li>
-              <li>{doneIcon((professionalApu.materials||[]).length > 0)} Identificó {(professionalApu.materials||[]).length} insumo(s)</li>
-              <li>{doneIcon((professionalApu.equipment||[]).length > 0 || (professionalApu.herramientaMenor?.detalle||[]).length > 0 || Number(professionalApu.herramientaMenor?.porcentaje) > 0)} Determinó herramienta y equipo</li>
-              <li>{doneIcon((professionalApu.labor||[]).some(r => Number(r.rendimiento) > 0))} Calculó rendimiento</li>
-              <li>{doneIcon((professionalApu.seguridad||[]).length > 0)} Analizó seguridad</li>
-              <li>{doneIcon((professionalApu.procedimientoConstructivo||[]).length > 0)} Generó procedimiento constructivo</li>
-              <li>{doneIcon(Boolean(professionalApu.criterioMedicion?.unidadMedicion))} Validó criterio de medición</li>
-              <li>{doneIcon(true)} Calculó precio unitario con Motor APU v2</li>
+              <li>{doneIcon(Boolean(professionalApu.concept))} {tr('apu.stepScope')}</li>
+              <li>{doneIcon((professionalApu.labor||[]).length > 0)} {tr('apu.stepLabor',{count:(professionalApu.labor||[]).length})}</li>
+              <li>{doneIcon((professionalApu.materials||[]).length > 0)} {tr('apu.stepMaterials',{count:(professionalApu.materials||[]).length})}</li>
+              <li>{doneIcon((professionalApu.equipment||[]).length > 0 || (professionalApu.herramientaMenor?.detalle||[]).length > 0 || Number(professionalApu.herramientaMenor?.porcentaje) > 0)} {tr('apu.stepTools')}</li>
+              <li>{doneIcon((professionalApu.labor||[]).some(r => Number(r.rendimiento) > 0))} {tr('apu.stepYield')}</li>
+              <li>{doneIcon((professionalApu.seguridad||[]).length > 0)} {tr('apu.stepSafety')}</li>
+              <li>{doneIcon((professionalApu.procedimientoConstructivo||[]).length > 0)} {tr('apu.stepProcedure')}</li>
+              <li>{doneIcon(Boolean(professionalApu.criterioMedicion?.unidadMedicion))} {tr('apu.stepMeasurement')}</li>
+              <li>{doneIcon(true)} {tr('apu.stepEngine')}</li>
             </ul>
-            {(professionalApu.supuestos||[]).length > 0 && <><b>Supuestos utilizados</b><ul>{professionalApu.supuestos.map((s,i) => <li key={i}>{s.texto || s}</li>)}</ul></>}
+            {(professionalApu.supuestos||[]).length > 0 && <><b>{tr('apu.assumptionsUsed')}</b><ul>{professionalApu.supuestos.map((s,i) => <li key={i}>{s.texto || s}</li>)}</ul></>}
           </div>
-          <button type="button" className="link-inline" onClick={()=>setShowExecutive(false)}>Ocultar detalle técnico ▴</button>
+          <button type="button" className="link-inline" onClick={()=>setShowExecutive(false)}>{tr('apu.hideDetail')}</button>
         </div>
-        : <button type="button" className="link-inline exec-detail-toggle" onClick={()=>setShowExecutive(true)}>Ver confianza, validación y trazabilidad técnica ▾</button>}
+        : <button type="button" className="link-inline exec-detail-toggle" onClick={()=>setShowExecutive(true)}>{tr('apu.showDetail')}</button>}
     </>}
 
     <ProfessionalApuEditor apu={professionalApu} onChange={setApuV2} user={user} onSave={saved=>{
@@ -2481,95 +2613,95 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       if(isNew && !requireApuAccess()) return;
       setApus([saved,...apus.filter(x=>x.id!==saved.id)]);
       if(isNew) markApuUsed();
-    }} onFindPrices={findV2Prices} onExcel={exportExcel} onPdf={exportPDF} exportBlocked={isFree && userUsage.apusCreated>=1} exportBlockedReason="Tu plan gratis ya exportó 1 APU. Activa un plan para exportar más."/>
+    }} onFindPrices={findV2Prices} onExcel={exportExcel} onPdf={exportPDF} exportBlocked={isFree && userUsage.apusCreated>=1} exportBlockedReason={tr('apu.exportBlockedReason')}/>
     <div className="apu-grid legacy-editor-compat">
       <div className="panel">
-        <label>Concepto</label>
+        <label>{tr('apu.conceptLabel')}</label>
         <textarea value={concept} onChange={e=>setConcept(e.target.value)} />
         <div className="inline-tools">
-          <label className="up-btn ghost-up">Subir Excel completo<input ref={mainExcelInputRef} type="file" accept=".xlsx,.csv" hidden onChange={e=>importFullExcel(e.target.files[0])}/></label>
-          <button className="soft" onClick={generate}>Actualizar desarrollo</button>
-          <button className="soft" onClick={generateAI} disabled={aiBusy}>{aiBusy?'Generando...':'IA real'}</button><button className="soft" type="button" onClick={resetAPUForm}>Limpiar</button>
-          {apu.referencePU>0 && <span className="cat-badge">P.U. Excel: {money(apu.referencePU)}</span>}
-          {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatch} disabled={batchBusy} title="Exporta el presupuesto completo: resumen, control de revisión y una hoja por cada APU.">{batchBusy?'IA generando hojas...':'Descargar Excel profesional'}</button>}
-          {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatchPDF} disabled={batchBusy} title="Un PDF profesional completo por cada concepto del lote.">PDF profesional por concepto</button>}
-          {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatchPdfMaster} disabled={batchBusy} title="Un solo PDF con portada, resumen general, control de revisión y el desarrollo completo de todos los conceptos.">Descargar PDF maestro</button>}
+          <label className="up-btn ghost-up">{tr('apu.uploadFullExcel')}<input ref={mainExcelInputRef} type="file" accept=".xlsx,.csv" hidden onChange={e=>importFullExcel(e.target.files[0])}/></label>
+          <button className="soft" onClick={generate}>{tr('apu.updateDevelopment')}</button>
+          <button className="soft" onClick={generateAI} disabled={aiBusy}>{aiBusy?tr('apu.generatingShort'):tr('apu.aiReal')}</button><button className="soft" type="button" onClick={resetAPUForm}>{tr('apu.clear')}</button>
+          {apu.referencePU>0 && <span className="cat-badge">{tr('apu.excelPuBadge',{value:money(apu.referencePU)})}</span>}
+          {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatch} disabled={batchBusy} title={tr('apu.downloadProfessionalExcelTitle')}>{batchBusy?tr('apu.generatingSheets'):tr('apu.downloadProfessionalExcel')}</button>}
+          {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatchPDF} disabled={batchBusy} title={tr('apu.pdfPerConceptTitle')}>{tr('apu.pdfPerConcept')}</button>}
+          {conceptBatch?.concepts?.length>0 && <button className="soft" onClick={exportConceptBatchPdfMaster} disabled={batchBusy} title={tr('apu.downloadMasterPdfTitle')}>{tr('apu.downloadMasterPdf')}</button>}
         </div>
         <div className="apu-detect">
-          <div><small>Familia detectada</small><b>{apu.family || 'APU general'}</b></div>
-          <div><small>Confianza IA</small><b>{formatGlobalConfidence(globalConfidence).scoreLabel}</b></div>
-          <div><small>Clave SAT sugerida</small><b>{apu.sat || '72100000'}</b></div>
-          <div><small>Origen</small><b>{apu.templateFallback ? 'Plantilla tecnica' : apu.aiGenerated ? 'IA real (OpenAI)' : 'Matriz base ZOEMEC'}</b></div>
+          <div><small>{tr('apu.familyDetected')}</small><b>{apu.family || tr('apu.familyGeneric')}</b></div>
+          <div><small>{tr('apu.aiConfidence')}</small><b>{formatGlobalConfidence(globalConfidence).scoreLabel}</b></div>
+          <div><small>{tr('apu.satKeySuggested')}</small><b>{apu.sat || '72100000'}</b></div>
+          <div><small>{tr('apu.origin')}</small><b>{apu.templateFallback ? tr('apu.originTemplate') : apu.aiGenerated ? tr('apu.originAI') : tr('apu.originBase')}</b></div>
         </div>
-        {apu.templateFallback && <div className="fallback-banner"><b>Plantilla tecnica aplicada:</b> el servicio de IA no esta disponible en este momento. Esta matriz usa el catalogo base ZOEMEC editable (no son datos inventados); vuelve a intentar en unos minutos para un desarrollo a la medida del concepto.</div>}
+        {apu.templateFallback && <div className="fallback-banner"><b>{tr('apu.fallbackBannerLabel')}</b> {tr('apu.fallbackBannerText')}</div>}
         {apu.aiNotes?.length>0 && <div className="ai-decisions">{apu.aiNotes.map((n,i)=><span key={i}>{n}</span>)}</div>}
-        <div className="form-row"><input value={apu.clave} onChange={e=>setApu({...apu,clave:e.target.value})} placeholder="Clave"/><input value={apu.unit} onChange={e=>setApu({...apu,unit:e.target.value})} placeholder="Unidad"/></div>
+        <div className="form-row"><input value={apu.clave} onChange={e=>setApu({...apu,clave:e.target.value})} placeholder={tr('apu.clavePlaceholder')}/><input value={apu.unit} onChange={e=>setApu({...apu,unit:e.target.value})} placeholder={tr('apu.unitPlaceholderShort')}/></div>
 
-        <h2>Materiales <small className="hint">(incluye merma % puesto en obra)</small></h2>
+        <h2>{tr('apu.materialsTitle')} <small className="hint">{tr('apu.materialsHint')}</small></h2>
         <MatrixTable kind="materials" rows={apu.materials} updateRow={updateRow} removeRow={removeRow} onMarketPrice={marketPrice} priceBusy={priceBusy}/>
-        <button className="soft" onClick={()=>addRow('materials')}>+ Material</button>
+        <button className="soft" onClick={()=>addRow('materials')}>{tr('apu.addMaterial')}</button>
 
-        <h2>Mano de obra <small className="hint">(salario real = base x FSR - Art. 191)</small></h2>
+        <h2>{tr('apu.laborTitle')} <small className="hint">{tr('apu.laborHint')}</small></h2>
         <MatrixTable kind="labor" rows={apu.labor} updateRow={updateRow} removeRow={removeRow} onMarketPrice={marketPrice} priceBusy={priceBusy}/>
-        <button className="soft" onClick={()=>addRow('labor')}>+ Oficio</button>
+        <button className="soft" onClick={()=>addRow('labor')}>{tr('apu.addLabor')}</button>
 
-        <h2>Equipo / maquinaria <small className="hint">(costo horario × cantidad)</small></h2>
+        <h2>{tr('apu.equipmentTitle')} <small className="hint">{tr('apu.equipmentHint')}</small></h2>
         <MatrixTable kind="equipment" rows={apu.equipment} updateRow={updateRow} removeRow={removeRow} onMarketPrice={marketPrice} priceBusy={priceBusy}/>
-        <button className="soft" onClick={()=>addRow('equipment')}>+ Equipo</button>
+        <button className="soft" onClick={()=>addRow('equipment')}>{tr('apu.addEquipment')}</button>
 
-        <h2>Sobrecostos (%)</h2>
+        <h2>{tr('apu.overcostsTitle')}</h2>
         <div className="params-grid">
-          <Param label="Herramienta menor (% M.O.)" v={apu.herramienta} on={v=>setParam('herramienta',v)}/>
-          <Param label="Indirectos de campo (%)" v={apu.indCampo} on={v=>setParam('indCampo',v)}/>
-          <Param label="Indirectos de oficina (%)" v={apu.indOficina} on={v=>setParam('indOficina',v)}/>
-          <Param label="Financiamiento (%)" v={apu.finance} on={v=>setParam('finance',v)}/>
-          <Param label="Utilidad (%)" v={apu.utility} on={v=>setParam('utility',v)}/>
-          <Param label="Cargos adicionales (%)" v={apu.cargos} on={v=>setParam('cargos',v)}/>
+          <Param label={tr('apu.paramTool')} v={apu.herramienta} on={v=>setParam('herramienta',v)}/>
+          <Param label={tr('apu.paramFieldIndirect')} v={apu.indCampo} on={v=>setParam('indCampo',v)}/>
+          <Param label={tr('apu.paramOfficeIndirect')} v={apu.indOficina} on={v=>setParam('indOficina',v)}/>
+          <Param label={tr('apu.paramFinance')} v={apu.finance} on={v=>setParam('finance',v)}/>
+          <Param label={tr('apu.paramUtility')} v={apu.utility} on={v=>setParam('utility',v)}/>
+          <Param label={tr('apu.paramCargos')} v={apu.cargos} on={v=>setParam('cargos',v)}/>
         </div>
       </div>
 
       <div className="panel sticky">
-        <h2>Integración del precio</h2>
-        <Cost label="Materiales" v={totals.mat}/>
-        <Cost label="Mano de obra (con FSR)" v={totals.mo}/>
-        <Cost label="Equipo / maquinaria" v={totals.equipo}/>
-        <Cost label={`Herramienta menor (${num(apu.herramienta)}% M.O.)`} v={totals.herramienta}/>
-        <div className="cost subtotal"><span>= Costo directo</span><b>{money(totals.direct)}</b></div>
-        <Cost label={`Indirectos (${num(Number(apu.indCampo)+Number(apu.indOficina))}%: campo ${num(apu.indCampo)} + oficina ${num(apu.indOficina)})`} v={totals.indirect}/>
-        <Cost label={`Financiamiento (${num(apu.finance)}%)`} v={totals.finance}/>
-        <Cost label={`Utilidad (${num(apu.utility)}%)`} v={totals.utility}/>
-        <Cost label={`Cargos adicionales (${num(apu.cargos)}%)`} v={totals.cargos}/>
-        <div className="grand"><span>Precio unitario (sin IVA)</span><b>{money(totals.pu)}</b></div>
-        <div className="cost iva-note"><span>IVA {num(apu.iva)}% (informativo)</span><b>{money(totals.iva)}</b></div>
+        <h2>{tr('apu.integrationTitle')}</h2>
+        <Cost label={tr('apu.costMaterials')} v={totals.mat}/>
+        <Cost label={tr('apu.costLabor')} v={totals.mo}/>
+        <Cost label={tr('apu.costEquipment')} v={totals.equipo}/>
+        <Cost label={tr('apu.costTool',{pct:num(apu.herramienta)})} v={totals.herramienta}/>
+        <div className="cost subtotal"><span>{tr('apu.directCost')}</span><b>{money(totals.direct)}</b></div>
+        <Cost label={tr('apu.costIndirect',{total:num(Number(apu.indCampo)+Number(apu.indOficina)),campo:num(apu.indCampo),oficina:num(apu.indOficina)})} v={totals.indirect}/>
+        <Cost label={tr('apu.costFinance',{pct:num(apu.finance)})} v={totals.finance}/>
+        <Cost label={tr('apu.costUtility',{pct:num(apu.utility)})} v={totals.utility}/>
+        <Cost label={tr('apu.costCargos',{pct:num(apu.cargos)})} v={totals.cargos}/>
+        <div className="grand"><span>{tr('apu.unitPrice')}</span><b>{money(totals.pu)}</b></div>
+        <div className="cost iva-note"><span>{tr('apu.ivaNote',{pct:num(apu.iva)})}</span><b>{money(totals.iva)}</b></div>
         <Incidence t={totals}/>
         <div className="actions-col">
-          <button onClick={save}>Guardar</button>
-          <button onClick={addBudget}>Agregar al presupuesto</button>
-          <button onClick={exportPDF} disabled={exportBusy || batchBusy}>{exportBusy ? 'Generando PDF...' : 'Descargar PDF con formato'}</button>
-          <button onClick={exportExcel} disabled={exportBusy || batchBusy}>{exportBusy ? 'Generando Excel...' : 'Descargar Excel'}</button>
+          <button onClick={save}>{tr('apu.btnSave')}</button>
+          <button onClick={addBudget}>{tr('apu.btnAddBudget')}</button>
+          <button onClick={exportPDF} disabled={exportBusy || batchBusy}>{exportBusy ? tr('apu.generatingPdf') : tr('apu.downloadPdfFormatted')}</button>
+          <button onClick={exportExcel} disabled={exportBusy || batchBusy}>{exportBusy ? tr('apu.generatingExcel') : tr('apu.downloadExcel')}</button>
         </div>
       </div>
     </div>
 
     {(rawApus||[]).some(a=>a.projectLinkRequired) && <div className="panel" style={{marginTop:16}}>
-      <h2>APUs sin proyecto vinculado <small className="hint">({(rawApus||[]).filter(a=>a.projectLinkRequired).length})</small></h2>
+      <h2>{tr('apu.unlinkedTitle')} <small className="hint">({(rawApus||[]).filter(a=>a.projectLinkRequired).length})</small></h2>
       <div className="saved-grid">{(rawApus||[]).filter(a=>a.projectLinkRequired).map(a=>{
         let selectedProjectId='';
         return <div className="saved-card" key={a.id}>
           <div className="sc-concept">{a.concept||a.clave||a.id}</div>
           <div className="sc-actions">
             <select onChange={e=>{selectedProjectId=e.target.value;}} defaultValue="">
-              <option value="" disabled>Elegir proyecto...</option>
+              <option value="" disabled>{tr('apu.chooseProject')}</option>
               {(projects||[]).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
-            <button onClick={async ()=>{ if(selectedProjectId) await linkApuToProject(a.id,selectedProjectId); }}>Vincular</button>
+            <button onClick={async ()=>{ if(selectedProjectId) await linkApuToProject(a.id,selectedProjectId); }}>{tr('apu.link')}</button>
           </div>
         </div>;
       })}</div>
     </div>}
 
     {apus.length>0 && <div className="panel" style={{marginTop:16}}>
-      <h2>Mis APU guardados <small className="hint">({apus.length})</small></h2>
+      <h2>{tr('apu.savedTitle')} <small className="hint">({apus.length})</small></h2>
       <div className="saved-grid">{apus.map(a=>{const pu=a.calculated?.pu ?? calcAPU(a).pu;return <div className="saved-card" key={a.id}>
         <div className="sc-clave">{a.clave} - {a.unit} - {a.date}</div>
         <div className="sc-concept">{a.concept}</div>
@@ -2587,37 +2719,39 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
           // guardado (ver stableApuId).
           setStableApuId(a.id);
           setShowExecutive(false);
-        }}>Abrir</button><button className="del" onClick={()=>setApus(apus.filter(x=>x.id!==a.id))}>Borrar</button></div>
+        }}>{tr('apu.open')}</button><button className="del" onClick={()=>setApus(apus.filter(x=>x.id!==a.id))}>{tr('apu.delete')}</button></div>
       </div>;})}</div>
     </div>}
   </section>
 }
 
 function Incidence({t}){
+  const { t: tr } = useI18n();
   const d = t.direct || 1;
-  const segs = [['m','Materiales',t.mat,'#9D6FD0'],['o','Mano de obra',t.mo,'#2A1740'],['e','Equipo',t.equipo,'#B8A4CC'],['h','Herramienta',t.herramienta,'#C7A35C']];
+  const segs = [['m',tr('matrixTable.segMaterials'),t.mat,'#9D6FD0'],['o',tr('matrixTable.segLabor'),t.mo,'#2A1740'],['e',tr('matrixTable.segEquipment'),t.equipo,'#B8A4CC'],['h',tr('matrixTable.segTools'),t.herramienta,'#C7A35C']];
   const pct = v => Math.max(0, v/d*100);
   return <div className="incid">
-    <small className="hint">Incidencia sobre el costo directo</small>
+    <small className="hint">{tr('matrixTable.incidenceHint')}</small>
     <div className="incid-bar">{segs.map(s=><i key={s[0]} className={s[0]} style={{width:pct(s[2])+'%'}}/>)}</div>
     <div className="incid-legend">{segs.map(s=><span key={s[0]}><i style={{background:s[3]}}/>{s[1]} <b className="incid-num">{num(pct(s[2]))}%</b></span>)}</div>
   </div>;
 }
 
 function MatrixTable({kind,rows,updateRow,removeRow,onMarketPrice,priceBusy}){
+  const { t: tr } = useI18n();
   const headers = kind==='materials'
-    ? ['Descripción','Cant.','Unidad','P. base','Merma %','Importe','$','']
+    ? [tr('matrixTable.colDesc'),tr('matrixTable.colQty'),tr('matrixTable.colUnit'),tr('matrixTable.colBasePrice'),tr('matrixTable.colWaste'),tr('matrixTable.colAmount'),'$','']
     : kind==='labor'
-    ? ['Descripción','Jornadas','Unidad','Salario base','FSR','Importe','$','']
-    : ['Descripción','Cant.','Unidad','Costo horario','Importe','$',''];
+    ? [tr('matrixTable.colDesc'),tr('matrixTable.colDays'),tr('matrixTable.colUnit'),tr('matrixTable.colBaseSalary'),tr('matrixTable.colFsr'),tr('matrixTable.colAmount'),'$','']
+    : [tr('matrixTable.colDesc'),tr('matrixTable.colQty'),tr('matrixTable.colUnit'),tr('matrixTable.colHourlyCost'),tr('matrixTable.colAmount'),'$',''];
   const editIdx = kind==='equipment' ? [0,1,2,3] : [0,1,2,3,4];
   return <div className="apu-table-scroll"><table className="data-table apu-table">
     <thead><tr>{headers.map((h,hi)=><th key={hi}>{h}</th>)}</tr></thead>
     <tbody>{rows.map((r,i)=><tr key={i}>
       {editIdx.map(k=><td key={k}><input value={r[k]} onChange={e=>updateRow(kind,i,k,e.target.value)} /></td>)}
       <td className="imp">{money(rowImporte(kind,r))}</td>
-      <td className="del">{onMarketPrice ? <button className="row-del" title="Buscar precio real de mercado (busqueda web con IA)" aria-label="Buscar precio real de mercado" disabled={priceBusy===`${kind}-${i}`} onClick={()=>onMarketPrice(kind,i)}>{priceBusy===`${kind}-${i}` ? '…' : '$'}</button> : null}</td>
-      <td className="del"><button className="row-del" title="Eliminar" aria-label="Eliminar renglon" onClick={()=>removeRow(kind,i)}>×</button></td>
+      <td className="del">{onMarketPrice ? <button className="row-del" title={tr('matrixTable.findMarketPrice')} aria-label={tr('matrixTable.findMarketPriceAria')} disabled={priceBusy===`${kind}-${i}`} onClick={()=>onMarketPrice(kind,i)}>{priceBusy===`${kind}-${i}` ? '…' : '$'}</button> : null}</td>
+      <td className="del"><button className="row-del" title={tr('matrixTable.delete')} aria-label={tr('matrixTable.deleteRowAria')} onClick={()=>removeRow(kind,i)}>×</button></td>
     </tr>)}</tbody>
   </table></div>
 }
@@ -2937,6 +3071,7 @@ async function exportConceptsAPUPdfMasterFile(concepts, catalog, company, prepar
 }
 
 function Budgets({company,budgets,setBudgets,items,setItems,activeProjectId,onNeedProject}){
+  const { t: tr } = useI18n();
   // Antes el 16% estaba repetido como literal en 3 lugares (calculo, export
   // Excel, export PDF) y no leia el campo "iva" de ningun APU. Ahora hay una
   // sola tasa configurable por presupuesto (arranca en DEFAULT_IVA_RATE, la
@@ -2948,9 +3083,9 @@ function Budgets({company,budgets,setBudgets,items,setItems,activeProjectId,onNe
   const iva=total*safeIvaRate/100;
   const update=(i,k,v)=>setItems(items.map((r,idx)=>idx===i?{...r,[k]:v}:r));
   const removeRow=(i)=>setItems(items.filter((_,idx)=>idx!==i));
-  const save=()=>{ if(!activeProjectId){ if(confirm('Para guardar el presupuesto necesitas un proyecto activo. ¿Crear o seleccionar un proyecto ahora?')) onNeedProject?.(); return; } setBudgets([{id:'PRE-'+uid(),name:'Presupuesto ejecutivo',client:'Cliente por definir',items,ivaRate:safeIvaRate,total:total+iva,date:new Date().toLocaleDateString('es-MX')},...budgets]); alert('Presupuesto guardado');};
+  const save=()=>{ if(!activeProjectId){ if(confirm(tr('budget.confirmNeedProject'))) onNeedProject?.(); return; } setBudgets([{id:'PRE-'+uid(),name:'Presupuesto ejecutivo',client:'Cliente por definir',items,ivaRate:safeIvaRate,total:total+iva,date:new Date().toLocaleDateString('es-MX')},...budgets]); alert(tr('budget.savedAlert'));};
   const openSaved=(b)=>{ setItems(b.items||[]); setIvaRate(Number(b.ivaRate ?? DEFAULT_IVA_RATE)); window.scrollTo({top:0,behavior:'smooth'}); };
-  const removeSaved=(id)=>{ if(!confirm('¿Eliminar este presupuesto guardado?')) return; setBudgets(budgets.filter(b=>b.id!==id)); };
+  const removeSaved=(id)=>{ if(!confirm(tr('budget.confirmDelete'))) return; setBudgets(budgets.filter(b=>b.id!==id)); };
   const downloadSaved=(b,kind)=>{
     const bItems=b.items||[];
     const bTotal=bItems.reduce((a,i)=>a+Number(i.qty)*Number(i.pu),0);
@@ -2958,14 +3093,14 @@ function Budgets({company,budgets,setBudgets,items,setItems,activeProjectId,onNe
     const bIva=bTotal*bIvaRate/100;
     kind==='pdf' ? exportBudgetPDF(bItems,bTotal,bIva,company,bIvaRate) : exportBudgetExcel(bItems,bTotal,bIva,bIvaRate);
   };
-  return <section><PageHead kicker="Presupuestos" title="Presupuesto profesional" desc="Captura conceptos con su precio unitario (sin IVA), calcula totales con IVA y exporta con membrete. Las calculadoras del Centro Técnico pueden enviar conceptos directo aquí." action={<button onClick={save}>Guardar presupuesto</button>} />
+  return <section><PageHead kicker={tr('modules.presupuestos.kicker')} title={tr('modules.presupuestos.title')} desc={tr('modules.presupuestos.desc')} action={<button onClick={save}>{tr('budget.save')}</button>} />
     {!activeProjectId && <div className="panel" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap',padding:'14px 18px'}}>
-      <p className="muted" style={{margin:0}}>Aún no tienes un proyecto activo: puedes armar tu presupuesto y exportarlo libremente, pero para guardarlo necesitas crear o seleccionar un proyecto.</p>
-      <button onClick={onNeedProject}>+ Crear proyecto</button>
+      <p className="muted" style={{margin:0}}>{tr('budget.needProjectBanner')}</p>
+      <button onClick={onNeedProject}>{tr('budget.createProject')}</button>
     </div>}
-    <div className="panel"><div className="apu-table-scroll"><table className="budget-table"><thead><tr><th>Concepto</th><th>Unidad</th><th>Cantidad</th><th>P.U. (sin IVA)</th><th>Importe</th><th></th></tr></thead><tbody>{items.map((it,i)=><tr key={i}><td><input value={it.concept} onChange={e=>update(i,'concept',e.target.value)}/></td><td><input value={it.unit} onChange={e=>update(i,'unit',e.target.value)}/></td><td><input type="number" value={it.qty} onChange={e=>update(i,'qty',e.target.value)}/></td><td><input type="number" value={it.pu} onChange={e=>update(i,'pu',e.target.value)}/></td><td>{money(it.qty*it.pu)}</td><td><a className="row-del" title="Eliminar concepto" onClick={()=>removeRow(i)}>✕</a></td></tr>)}</tbody></table></div><button className="soft" onClick={()=>setItems([...items,{concept:'Nuevo concepto',unit:'m²',qty:1,pu:0}])}>+ Agregar concepto</button><div className="totals"><Cost label="Subtotal" v={total}/><div className="iva-rate-row"><label htmlFor="budget-iva-rate">Tasa de IVA (%)</label><input id="budget-iva-rate" type="number" min="0" step="0.5" value={ivaRate} onChange={e=>setIvaRate(e.target.value)}/></div><Cost label={`IVA ${num(safeIvaRate)}%`} v={iva}/><div className="grand"><span>Total</span><b>{money(total+iva)}</b></div></div><div className="export-row"><button onClick={()=>exportBudgetExcel(items,total,iva,safeIvaRate)}>Exportar Excel</button><button onClick={()=>exportBudgetPDF(items,total,iva,company,safeIvaRate)}>Exportar PDF</button></div></div>
+    <div className="panel"><div className="apu-table-scroll"><table className="budget-table"><thead><tr><th>{tr('budget.colConcept')}</th><th>{tr('budget.colUnit')}</th><th>{tr('budget.colQty')}</th><th>{tr('budget.colPu')}</th><th>{tr('budget.colAmount')}</th><th></th></tr></thead><tbody>{items.map((it,i)=><tr key={i}><td><input value={it.concept} onChange={e=>update(i,'concept',e.target.value)}/></td><td><input value={it.unit} onChange={e=>update(i,'unit',e.target.value)}/></td><td><input type="number" value={it.qty} onChange={e=>update(i,'qty',e.target.value)}/></td><td><input type="number" value={it.pu} onChange={e=>update(i,'pu',e.target.value)}/></td><td>{money(it.qty*it.pu)}</td><td><a className="row-del" title={tr('budget.deleteConceptTitle')} onClick={()=>removeRow(i)}>✕</a></td></tr>)}</tbody></table></div><button className="soft" onClick={()=>setItems([...items,{concept:'Nuevo concepto',unit:'m²',qty:1,pu:0}])}>{tr('budget.addConcept')}</button><div className="totals"><Cost label={tr('budget.subtotal')} v={total}/><div className="iva-rate-row"><label htmlFor="budget-iva-rate">{tr('budget.ivaRateLabel')}</label><input id="budget-iva-rate" type="number" min="0" step="0.5" value={ivaRate} onChange={e=>setIvaRate(e.target.value)}/></div><Cost label={tr('budget.ivaLabel',{rate:num(safeIvaRate)})} v={iva}/><div className="grand"><span>{tr('budget.total')}</span><b>{money(total+iva)}</b></div></div><div className="export-row"><button onClick={()=>exportBudgetExcel(items,total,iva,safeIvaRate)}>{tr('budget.exportExcel')}</button><button onClick={()=>exportBudgetPDF(items,total,iva,company,safeIvaRate)}>{tr('budget.exportPdf')}</button></div></div>
     {budgets.length>0 && <div className="panel" style={{marginTop:16}}>
-      <h2>Presupuestos guardados de este proyecto <small className="hint">({budgets.length})</small></h2>
+      <h2>{tr('budget.savedTitle')} <small className="hint">({budgets.length})</small></h2>
       <div className="saved-grid">{budgets.map(b=>{
         const bItems=b.items||[];
         const bTotal=bItems.reduce((a,i)=>a+Number(i.qty)*Number(i.pu),0);
@@ -2973,13 +3108,13 @@ function Budgets({company,budgets,setBudgets,items,setItems,activeProjectId,onNe
         const bWithIva=bTotal*(1+bIvaRate/100);
         return <div className="saved-card" key={b.id}>
           <div className="sc-clave">{b.name||'Presupuesto'} · {b.date}</div>
-          <div className="sc-concept">{bItems.length} concepto(s) · {b.client||'Cliente por definir'}</div>
-          <div className="sc-pu">{money(bWithIva)} <small>con IVA</small></div>
+          <div className="sc-concept">{tr('budget.conceptCount',{count:bItems.length})} · {b.client||'Cliente por definir'}</div>
+          <div className="sc-pu">{money(bWithIva)} <small>{tr('budget.withIva')}</small></div>
           <div className="sc-actions">
-            <button onClick={()=>openSaved(b)}>Abrir</button>
-            <button onClick={()=>downloadSaved(b,'pdf')}>PDF</button>
-            <button onClick={()=>downloadSaved(b,'excel')}>Excel</button>
-            <button className="del" onClick={()=>removeSaved(b.id)}>Borrar</button>
+            <button onClick={()=>openSaved(b)}>{tr('budget.open')}</button>
+            <button onClick={()=>downloadSaved(b,'pdf')}>{tr('budget.pdf')}</button>
+            <button onClick={()=>downloadSaved(b,'excel')}>{tr('budget.excel')}</button>
+            <button className="del" onClick={()=>removeSaved(b.id)}>{tr('budget.delete')}</button>
           </div>
         </div>;
       })}</div>
@@ -2988,7 +3123,8 @@ function Budgets({company,budgets,setBudgets,items,setItems,activeProjectId,onNe
 }
 
 function ClientsProjects({clients,setClients,projects,setProjects,activeProjectId,setActiveProjectId,setModule,onDeleteProjectData}){
-  return <section><PageHead kicker="Centro de costos" title="Clientes y proyectos" desc="Administra clientes, contactos, RFC, obras, avances y presupuestos desde un solo módulo." />
+  const { t: tr } = useI18n();
+  return <section><PageHead kicker={tr('projects.centerKicker')} title={tr('projects.centerTitle')} desc={tr('projects.centerDesc')} />
     <div className="combined-stack">
       <Projects projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={onDeleteProjectData} embedded />
       <Clients clients={clients} setClients={setClients} embedded />
@@ -2997,6 +3133,7 @@ function ClientsProjects({clients,setClients,projects,setProjects,activeProjectI
 }
 
 function Projects({projects,setProjects,activeProjectId,setActiveProjectId,setModule,onDeleteProjectData,embedded=false}){
+  const { t: tr } = useI18n();
   const list = projects || [];
   useEffect(()=>{
     const cleaned=list.filter(p=>!(p?.name==='Nuevo proyecto' && p?.client==='Cliente por definir' && Number(p?.budget||0)===0 && Number(p?.progress||0)===0));
@@ -3053,66 +3190,75 @@ function Projects({projects,setProjects,activeProjectId,setActiveProjectId,setMo
   };
   const remove = (i) => {
     const removed=list[i];
-    if(!confirm(`¿Eliminar "${removed?.name||'este proyecto'}"? También se borrarán sus APUs, presupuestos y catálogo guardados.`)) return;
+    if(!confirm(tr('projects.confirmDelete',{name:removed?.name||tr('projects.defaultProjectName')}))) return;
     setProjects(list.filter((_,idx)=>idx!==i));
     if(removed?.id) onDeleteProjectData?.(removed.id);
     if(removed && removed.id===activeProjectId) setActiveProjectId?.(list.find((p,idx)=>idx!==i)?.id || null);
   };
-  return <section>{!embedded && <PageHead kicker="Proyectos" title="Control de obra y proyectos" desc="Vista ejecutiva de obras, avance, presupuesto, cliente y estado." action={<button onClick={add}>+ Nuevo proyecto</button>} />}
-    {embedded && <div className="module-subhead"><div><small>Proyectos</small><h2>Control de obra y avance</h2></div><button onClick={add}>+ Nuevo proyecto</button></div>}
+  return <section>
+    {!embedded && <PageHead kicker={tr('projects.kicker')} title={tr('projects.title')} desc={tr('projects.desc')} action={<button onClick={add}>{tr('projects.newProject')}</button>} />}
+    {embedded && <div className="module-subhead"><div><small>{tr('projects.kicker')}</small><h2>{tr('projects.subheadTitle')}</h2></div><button onClick={add}>{tr('projects.newProject')}</button></div>}
     {showForm && <div className="record-modal" role="dialog" aria-modal="true">
-    <div className="record-backdrop" onClick={()=>setShowForm(false)}></div>
-    <div className="panel record-form project-form">
-      <div className="record-form-head"><div><span>Alta de proyecto</span><h2>Datos iniciales de obra</h2></div><button type="button" className="secondary" onClick={()=>setShowForm(false)}>Cancelar</button></div>
-      <form onSubmit={save} noValidate>
-      <div className="field-grid">
-        <div className={`nf${formErrors.name?' has-error':''}`}>
-          <label>Nombre del proyecto</label>
-          <input ref={nameInputRef} value={draft.name} onChange={e=>{setDraft({...draft,name:e.target.value}); if(formErrors.name) setFormErrors({...formErrors,name:undefined});}} placeholder="Ej. Remodelacion local comercial" aria-required="true" aria-invalid={!!formErrors.name}/>
-          {formErrors.name && <span className="nf-error-msg">{formErrors.name}</span>}
+      <div className="record-backdrop" onClick={()=>setShowForm(false)}></div>
+      <div className="panel record-form project-form">
+        <div className="record-form-head">
+          <div><span>{tr('projects.formEyebrow')}</span><h2>{tr('projects.formTitle')}</h2></div>
+          <button type="button" className="secondary" onClick={()=>setShowForm(false)}>{tr('projects.cancel')}</button>
         </div>
-        <div className={`nf${formErrors.client?' has-error':''}`}>
-          <label>Cliente</label>
-          <input ref={clientInputRef} value={draft.client} onChange={e=>{setDraft({...draft,client:e.target.value}); if(formErrors.client) setFormErrors({...formErrors,client:undefined});}} placeholder="Nombre del cliente o empresa" aria-required="true" aria-invalid={!!formErrors.client}/>
-          {formErrors.client && <span className="nf-error-msg">{formErrors.client}</span>}
-        </div>
-        <div className="nf"><label>Ubicación</label><input value={draft.ubicacion} onChange={e=>setDraft({...draft,ubicacion:e.target.value})} placeholder="Ciudad, estado"/></div>
-        <div className="nf"><label>Moneda</label><select value={draft.moneda} onChange={e=>setDraft({...draft,moneda:e.target.value})}><option>MXN</option><option>USD</option></select></div>
-        <div className="nf"><label>Presupuesto estimado</label><input type="number" value={draft.budget} onChange={e=>setDraft({...draft,budget:e.target.value})} placeholder="0.00"/></div>
-        <div className="nf"><label>Estado</label><select value={draft.status} onChange={e=>setDraft({...draft,status:e.target.value})}><option>Anteproyecto</option><option>Cotizacion</option><option>En ejecucion</option><option>Pausado</option><option>Cerrado</option></select></div>
-        <div className="nf wide"><label>Avance inicial: {draft.progress}%</label><input type="range" min="0" max="100" value={draft.progress} onChange={e=>setDraft({...draft,progress:e.target.value})}/></div>
+        <form onSubmit={save} noValidate>
+          <div className="field-grid">
+            <div className={`nf${formErrors.name?' has-error':''}`}>
+              <label>{tr('projects.fieldName')}</label>
+              <input ref={nameInputRef} value={draft.name} onChange={e=>{setDraft({...draft,name:e.target.value}); if(formErrors.name) setFormErrors({...formErrors,name:undefined});}} placeholder={tr('projects.fieldNamePlaceholder')} aria-required="true" aria-invalid={!!formErrors.name}/>
+              {formErrors.name && <span className="nf-error-msg">{formErrors.name}</span>}
+            </div>
+            <div className={`nf${formErrors.client?' has-error':''}`}>
+              <label>{tr('projects.fieldClient')}</label>
+              <input ref={clientInputRef} value={draft.client} onChange={e=>{setDraft({...draft,client:e.target.value}); if(formErrors.client) setFormErrors({...formErrors,client:undefined});}} placeholder={tr('projects.fieldClientPlaceholder')} aria-required="true" aria-invalid={!!formErrors.client}/>
+              {formErrors.client && <span className="nf-error-msg">{formErrors.client}</span>}
+            </div>
+            <div className="nf"><label>{tr('projects.fieldLocation')}</label><input value={draft.ubicacion} onChange={e=>setDraft({...draft,ubicacion:e.target.value})} placeholder={tr('projects.fieldLocationPlaceholder')}/></div>
+            <div className="nf"><label>{tr('projects.fieldCurrency')}</label><select value={draft.moneda} onChange={e=>setDraft({...draft,moneda:e.target.value})}><option>MXN</option><option>USD</option></select></div>
+            <div className="nf"><label>{tr('projects.fieldBudget')}</label><input type="number" value={draft.budget} onChange={e=>setDraft({...draft,budget:e.target.value})} placeholder="0.00"/></div>
+            <div className="nf"><label>{tr('projects.fieldStatus')}</label><select value={draft.status} onChange={e=>setDraft({...draft,status:e.target.value})}><option>Anteproyecto</option><option>Cotizacion</option><option>En ejecucion</option><option>Pausado</option><option>Cerrado</option></select></div>
+            <div className="nf wide"><label>{tr('projects.fieldProgress',{pct:draft.progress})}</label><input type="range" min="0" max="100" value={draft.progress} onChange={e=>setDraft({...draft,progress:e.target.value})}/></div>
+          </div>
+          <div className="form-actions"><button type="button" className="secondary" onClick={clearDraft}>{tr('projects.clear')}</button><button type="submit">{tr('projects.createAndStart')}</button></div>
+        </form>
       </div>
-      <div className="form-actions"><button type="button" className="secondary" onClick={clearDraft}>Limpiar</button><button type="submit">Crear y comenzar</button></div>
-      </form>
-    </div></div>}
+    </div>}
     {startPrompt && <div className="record-modal" role="dialog" aria-modal="true">
       <div className="record-backdrop" onClick={()=>setStartPrompt(false)}></div>
       <div className="panel record-form" style={{maxWidth:420,textAlign:'center'}}>
-        <h2>Proyecto creado y activo</h2>
-        <p className="muted">Es un espacio limpio: sin APUs, presupuesto ni catálogo previos. ¿Cómo quieres comenzar?</p>
+        <h2>{tr('projects.createdTitle')}</h2>
+        <p className="muted">{tr('projects.createdDesc')}</p>
         <div className="form-actions" style={{justifyContent:'center'}}>
-          <button onClick={()=>{setStartPrompt(false);setModule?.('apu');}}>Pegar concepto / Generar con IA</button>
-          <button className="secondary" onClick={()=>{setStartPrompt(false);setModule?.('apu');}}>Importar Excel</button>
+          <button onClick={()=>{setStartPrompt(false);setModule?.('apu');}}>{tr('projects.pasteConcept')}</button>
+          <button className="secondary" onClick={()=>{setStartPrompt(false);setModule?.('apu');}}>{tr('projects.importExcel')}</button>
         </div>
       </div>
     </div>}
-    {list.length ? <div className="cards-3">{list.map((p,i)=><div className={`project-card${p.id===activeProjectId?' active':''}`} key={p.id||i}>
-      {p.id===activeProjectId && <span className="project-active-badge">Proyecto activo</span>}
-      <span>{p.status}</span>
-      <h2><input value={p.name} onChange={e=>update(i,'name',e.target.value)} /></h2>
-      <p><input value={p.client} onChange={e=>update(i,'client',e.target.value)} /></p>
-      <b>{money(p.budget)}</b>
-      <progress value={p.progress} max="100"/>
-      <small>{p.progress}% de avance - <a onClick={()=>remove(i)} style={{color:'var(--danger)'}}>eliminar</a></small>
-      {p.id!==activeProjectId && <button className="soft" onClick={()=>setActiveProjectId?.(p.id)}>Usar este proyecto</button>}
-      {p.id===activeProjectId && <div className="sc-actions">
-        <button className="soft" disabled={dossierState?.projectId===p.id && dossierState?.status==='generating'} onClick={()=>generateProjectDossier(p.id,'PDF')}>{dossierState?.projectId===p.id && dossierState?.format==='PDF' && dossierState?.status==='generating' ? 'Generando PDF...' : 'Dossier de Proyecto (PDF)'}</button>
-        <button className="soft" disabled={dossierState?.projectId===p.id && dossierState?.status==='generating'} onClick={()=>generateProjectDossier(p.id,'XLSX')}>{dossierState?.projectId===p.id && dossierState?.format==='XLSX' && dossierState?.status==='generating' ? 'Generando Excel...' : 'Dossier de Proyecto (Excel)'}</button>
-        {dossierState?.projectId===p.id && dossierState?.status==='error' && <small style={{color:'var(--danger)'}}>{dossierState.message}</small>}
-      </div>}
-    </div>)}</div> : <div className="panel"><EmptyState icon="proyectos" title="Tu cartera de proyectos está vacía" text="Crea el primer proyecto para activar el seguimiento de avance y presupuesto." actionLabel="+ Nuevo proyecto" onAction={add}/></div>}</section>
+    {list.length ? <div className="cards-3">{list.map((p,i)=>
+      <div className={`project-card${p.id===activeProjectId?' active':''}`} key={p.id||i}>
+        {p.id===activeProjectId && <span className="project-active-badge">{tr('projects.activeBadge')}</span>}
+        <span>{p.status}</span>
+        <h2><input value={p.name} onChange={e=>update(i,'name',e.target.value)} /></h2>
+        <p><input value={p.client} onChange={e=>update(i,'client',e.target.value)} /></p>
+        <b>{money(p.budget)}</b>
+        <progress value={p.progress} max="100"/>
+        <small>{tr('projects.progressLabel',{pct:p.progress})} - <a onClick={()=>remove(i)} style={{color:'var(--danger)'}}>{tr('projects.delete')}</a></small>
+        {p.id!==activeProjectId && <button className="soft" onClick={()=>setActiveProjectId?.(p.id)}>{tr('projects.useProject')}</button>}
+        {p.id===activeProjectId && <div className="sc-actions">
+          <button className="soft" disabled={dossierState?.projectId===p.id && dossierState?.status==='generating'} onClick={()=>generateProjectDossier(p.id,'PDF')}>{dossierState?.projectId===p.id && dossierState?.format==='PDF' && dossierState?.status==='generating' ? tr('projects.generatingPdf') : tr('projects.dossierPdf')}</button>
+          <button className="soft" disabled={dossierState?.projectId===p.id && dossierState?.status==='generating'} onClick={()=>generateProjectDossier(p.id,'XLSX')}>{dossierState?.projectId===p.id && dossierState?.format==='XLSX' && dossierState?.status==='generating' ? tr('projects.generatingExcel') : tr('projects.dossierExcel')}</button>
+          {dossierState?.projectId===p.id && dossierState?.status==='error' && <small style={{color:'var(--danger)'}}>{dossierState.message}</small>}
+        </div>}
+      </div>
+    )}</div> : <div className="panel"><EmptyState icon="proyectos" title={tr('projects.emptyTitle')} text={tr('projects.emptyText')} actionLabel={tr('projects.newProject')} onAction={add}/></div>}
+  </section>
 }
 function Clients({clients,setClients,embedded=false}){
+  const { t: tr } = useI18n();
   const [q,setQ]=useState('');
   const [showForm,setShowForm]=useState(false);
   const [draft,setDraft]=useState({name:'',type:'Empresa',contact:'',phone:'',email:'',rfc:'',status:'Prospecto'});
@@ -3123,7 +3269,7 @@ function Clients({clients,setClients,embedded=false}){
   const filtered=clients.filter(c=>(c.name||'').toLowerCase().includes(q.toLowerCase()) || (c.contact||'').toLowerCase().includes(q.toLowerCase()) || (c.email||'').toLowerCase().includes(q.toLowerCase()));
   const save=()=>{
     if(!draft.name.trim() || !draft.contact.trim()){
-      alert('Captura nombre del cliente y contacto principal.');
+      alert(tr('clients.requiredFieldsAlert'));
       return;
     }
     const next={id:'CLI-'+uid(),name:draft.name.trim(),type:draft.type,contact:draft.contact.trim(),phone:draft.phone.trim(),email:draft.email.trim(),rfc:draft.rfc.trim().toUpperCase(),projects:0,budgets:0,amount:0,status:draft.status};
@@ -3131,28 +3277,51 @@ function Clients({clients,setClients,embedded=false}){
     setDraft({name:'',type:'Empresa',contact:'',phone:'',email:'',rfc:'',status:'Prospecto'});
     setShowForm(false);
   };
-  return <section>{!embedded && <PageHead kicker="CRM de obra" title="Clientes" desc="Cartera profesional con proyectos, presupuestos, contactos, RFC e historial." action={<button onClick={()=>setShowForm(true)}>+ Nuevo cliente</button>} />}
-    {embedded && <div className="module-subhead"><div><small>Clientes</small><h2>CRM de obra</h2></div><button onClick={()=>setShowForm(true)}>+ Nuevo cliente</button></div>}
+  return <section>
+    {!embedded && <PageHead kicker={tr('clients.kicker')} title={tr('clients.title')} desc={tr('clients.desc')} action={<button onClick={()=>setShowForm(true)}>{tr('clients.newClient')}</button>} />}
+    {embedded && <div className="module-subhead"><div><small>{tr('clients.title')}</small><h2>{tr('clients.kicker')}</h2></div><button onClick={()=>setShowForm(true)}>{tr('clients.newClient')}</button></div>}
     {showForm && <div className="record-modal" role="dialog" aria-modal="true">
-    <div className="record-backdrop" onClick={()=>setShowForm(false)}></div>
-    <div className="panel record-form client-form">
-      <div className="record-form-head"><div><span>Alta de cliente</span><h2>Datos comerciales y contacto</h2></div><button className="secondary" onClick={()=>setShowForm(false)}>Cancelar</button></div>
-      <div className="field-grid">
-        <div className="nf"><label>Cliente o razon social</label><input value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})} placeholder="Ej. Constructora del Centro"/></div>
-        <div className="nf"><label>Tipo</label><select value={draft.type} onChange={e=>setDraft({...draft,type:e.target.value})}><option>Empresa</option><option>Gobierno</option><option>Particular</option><option>Proveedor</option></select></div>
-        <div className="nf"><label>Contacto principal</label><input value={draft.contact} onChange={e=>setDraft({...draft,contact:e.target.value})} placeholder="Nombre del responsable"/></div>
-        <div className="nf"><label>Telefono</label><input value={draft.phone} onChange={e=>setDraft({...draft,phone:e.target.value})} placeholder="55 0000 0000"/></div>
-        <div className="nf"><label>Correo</label><input type="email" value={draft.email} onChange={e=>setDraft({...draft,email:e.target.value})} placeholder="contacto@empresa.com"/></div>
-        <div className="nf"><label>RFC</label><input value={draft.rfc} onChange={e=>setDraft({...draft,rfc:e.target.value})} placeholder="RFC opcional"/></div>
-        <div className="nf"><label>Estado</label><select value={draft.status} onChange={e=>setDraft({...draft,status:e.target.value})}><option>Prospecto</option><option>Activo</option><option>En seguimiento</option><option>Inactivo</option></select></div>
+      <div className="record-backdrop" onClick={()=>setShowForm(false)}></div>
+      <div className="panel record-form client-form">
+        <div className="record-form-head">
+          <div><span>{tr('clients.formEyebrow')}</span><h2>{tr('clients.formTitle')}</h2></div>
+          <button className="secondary" onClick={()=>setShowForm(false)}>{tr('projects.cancel')}</button>
+        </div>
+        <div className="field-grid">
+          <div className="nf"><label>{tr('clients.fieldName')}</label><input value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})} placeholder={tr('clients.fieldNamePlaceholder')}/></div>
+          <div className="nf"><label>{tr('clients.fieldType')}</label><select value={draft.type} onChange={e=>setDraft({...draft,type:e.target.value})}><option>Empresa</option><option>Gobierno</option><option>Particular</option><option>Proveedor</option></select></div>
+          <div className="nf"><label>{tr('clients.fieldContact')}</label><input value={draft.contact} onChange={e=>setDraft({...draft,contact:e.target.value})} placeholder={tr('clients.fieldContactPlaceholder')}/></div>
+          <div className="nf"><label>{tr('clients.fieldPhone')}</label><input value={draft.phone} onChange={e=>setDraft({...draft,phone:e.target.value})} placeholder={tr('clients.fieldPhonePlaceholder')}/></div>
+          <div className="nf"><label>{tr('clients.fieldEmail')}</label><input type="email" value={draft.email} onChange={e=>setDraft({...draft,email:e.target.value})} placeholder={tr('clients.fieldEmailPlaceholder')}/></div>
+          <div className="nf"><label>{tr('clients.fieldRfc')}</label><input value={draft.rfc} onChange={e=>setDraft({...draft,rfc:e.target.value})} placeholder={tr('clients.fieldRfcPlaceholder')}/></div>
+          <div className="nf"><label>{tr('clients.fieldStatus')}</label><select value={draft.status} onChange={e=>setDraft({...draft,status:e.target.value})}><option>Prospecto</option><option>Activo</option><option>En seguimiento</option><option>Inactivo</option></select></div>
+        </div>
+        <div className="form-actions"><button className="secondary" onClick={()=>setDraft({name:'',type:'Empresa',contact:'',phone:'',email:'',rfc:'',status:'Prospecto'})}>{tr('projects.clear')}</button><button onClick={save}>{tr('clients.save')}</button></div>
       </div>
-      <div className="form-actions"><button className="secondary" onClick={()=>setDraft({name:'',type:'Empresa',contact:'',phone:'',email:'',rfc:'',status:'Prospecto'})}>Limpiar</button><button onClick={save}>Guardar cliente</button></div>
-    </div></div>}
-    <div className="panel clients-panel"><input className="search" placeholder="Buscar cliente, contacto o correo..." value={q} onChange={e=>setQ(e.target.value)}/><div className="client-grid">{filtered.map(c=><div className="client-card" key={c.id}><div className="client-avatar">{(c.name||'C')[0]}</div><div><h2>{c.name}</h2><p>{c.type} - {c.contact}</p><small>{c.email || c.phone || 'Sin contacto registrado'}</small><small>RFC: {c.rfc || 'Pendiente'}</small><div className="client-stats"><span>{c.projects} proyectos</span><span>{c.budgets} presupuestos</span><b>{money(c.amount)}</b></div></div><em>{c.status}</em></div>)}</div>{!filtered.length && !clients.length && <EmptyState icon="clientes" title="Aún no tienes clientes en tu Centro de costos" text="Agrega tu primer cliente con datos de contacto y RFC para iniciar la cartera." actionLabel="+ Nuevo cliente" onAction={()=>setShowForm(true)}/>}{!filtered.length && clients.length>0 && <EmptyState text="No hay clientes con ese criterio de búsqueda."/>}</div>
+    </div>}
+    <div className="panel clients-panel">
+      <input className="search" placeholder={tr('clients.searchPlaceholder')} value={q} onChange={e=>setQ(e.target.value)}/>
+      <div className="client-grid">{filtered.map(c=>
+        <div className="client-card" key={c.id}>
+          <div className="client-avatar">{(c.name||'C')[0]}</div>
+          <div>
+            <h2>{c.name}</h2>
+            <p>{c.type} - {c.contact}</p>
+            <small>{c.email || c.phone || tr('clients.noContact')}</small>
+            <small>RFC: {c.rfc || tr('clients.rfcPending')}</small>
+            <div className="client-stats"><span>{tr('clients.statProjects',{count:c.projects})}</span><span>{tr('clients.statBudgets',{count:c.budgets})}</span><b>{money(c.amount)}</b></div>
+          </div>
+          <em>{c.status}</em>
+        </div>
+      )}</div>
+      {!filtered.length && !clients.length && <EmptyState icon="clientes" title={tr('clients.emptyTitle')} text={tr('clients.emptyText')} actionLabel={tr('clients.newClient')} onAction={()=>setShowForm(true)}/>}
+      {!filtered.length && clients.length>0 && <EmptyState text={tr('clients.noSearchResults')}/>}
+    </div>
   </section>
 }
 
 function GoogleDrivePanel({user, onImported}){
+  const { t: tr } = useI18n();
   const [path,setPath]=useState([]); // breadcrumb: [{id,name}]
   const [items,setItems]=useState(null);
   const [loading,setLoading]=useState(false);
@@ -3178,8 +3347,8 @@ function GoogleDrivePanel({user, onImported}){
         setNotConfigured(true);
       }else{
         setNotConfigured(false);
-        setLoadError(friendlyServiceError(err,'No se pudo conectar con Google Drive en este entorno.'));
-        window.zoemecNotify?.(err.message || 'No se pudo listar Google Drive.', 'error');
+        setLoadError(friendlyServiceError(err,tr('gdrive.connectFailMsg')));
+        window.zoemecNotify?.(err.message || tr('gdrive.listFailMsg'), 'error');
       }
     }finally{ setLoading(false); }
   };
@@ -3201,7 +3370,7 @@ function GoogleDrivePanel({user, onImported}){
       onImported?.();
     }catch(err){
       setFileStatus(s=>({...s,[item.id]:'error'}));
-      window.zoemecNotify?.(`${item.name}: ${err.message || 'no se pudo importar'}`, 'error');
+      window.zoemecNotify?.(tr('gdrive.importFailMsg',{name:item.name,reason:err.message || tr('gdrive.importFailFallback')}), 'error');
     }
   };
   const importSelected=async()=>{
@@ -3217,41 +3386,41 @@ function GoogleDrivePanel({user, onImported}){
   const folders=(items||[]).filter(it=>it.isFolder);
   const files=(items||[]).filter(it=>!it.isFolder);
   const doneCount=Object.values(fileStatus).filter(s=>s==='listo').length;
-  const statusLabel={ importando:'Importando', listo:'Listo', referencia:'Referencia externa', error:'Error' };
+  const statusLabel={ importando:tr('gdrive.statusImporting'), listo:tr('gdrive.statusReady'), referencia:tr('gdrive.statusExternalRef'), error:tr('gdrive.statusError') };
 
   return <div className="panel lib-gdrive">
-    <div className="admin-panel-head"><h2>Google Drive</h2><button className="soft" onClick={()=>load(path.length?path[path.length-1].id:null)}>Actualizar</button></div>
+    <div className="admin-panel-head"><h2>Google Drive</h2><button className="soft" onClick={()=>load(path.length?path[path.length-1].id:null)}>{tr('gdrive.refresh')}</button></div>
     {notConfigured && <div className="od-local-ok">
       <Icon name="biblioteca" size={18}/>
-      <div><b>Google Drive no configurado</b><p>Biblioteca local disponible. Pide a un administrador que configure GOOGLE_DRIVE_CLIENT_ID/CLIENT_SECRET/REFRESH_TOKEN y GOOGLE_DRIVE_FOLDER_ID.</p></div>
-      <button className="soft" onClick={()=>window.zoemecNotify?.(user?.isAdmin ? 'Configura Google Drive en las variables de entorno del servidor (Vercel).' : 'Pide a un administrador que active Google Drive.', 'info')}>Configurar Google Drive</button>
+      <div><b>{tr('gdrive.notConfiguredTitle')}</b><p>{tr('gdrive.notConfiguredText')}</p></div>
+      <button className="soft" onClick={()=>window.zoemecNotify?.(user?.isAdmin ? tr('gdrive.configureAdminMsg') : tr('gdrive.configureUserMsg'), 'info')}>{tr('gdrive.configureBtn')}</button>
     </div>}
-    {!notConfigured && loadError && !loading && <EmptyState icon="admin" title="No se pudo conectar con Google Drive" text={loadError}/>}
+    {!notConfigured && loadError && !loading && <EmptyState icon="admin" title={tr('gdrive.connectFailTitle')} text={loadError}/>}
     {!notConfigured && !loadError && <>
       <div className="gdrive-breadcrumb">
-        <button className="soft" onClick={goRoot}>Repositorio técnico</button>
+        <button className="soft" onClick={goRoot}>{tr('gdrive.repoRoot')}</button>
         {path.map((p,i)=><React.Fragment key={p.id}><span>/</span><button className="soft" onClick={()=>goToCrumb(i)}>{p.name}</button></React.Fragment>)}
       </div>
-      {loading ? <div className="ai-note-busy"><span className="asst-dots"><i/><i/><i/></span><b>Cargando Google Drive...</b></div> : <>
+      {loading ? <div className="ai-note-busy"><span className="asst-dots"><i/><i/><i/></span><b>{tr('gdrive.loading')}</b></div> : <>
         <div className="gdrive-toolbar">
-          <span className="muted">{folders.length} carpeta(s) · {files.length} archivo(s){doneCount ? ` · ${doneCount} importado(s)` : ''}</span>
-          <button onClick={importSelected} disabled={!selected.size || importingAll}>{importingAll ? 'Importando...' : `Importar seleccionados (${selected.size})`}</button>
+          <span className="muted">{tr('gdrive.foldersFilesCount',{folders:folders.length,files:files.length})}{doneCount ? tr('gdrive.importedSuffix',{count:doneCount}) : ''}</span>
+          <button onClick={importSelected} disabled={!selected.size || importingAll}>{importingAll ? tr('gdrive.importing') : tr('gdrive.importSelected',{count:selected.size})}</button>
         </div>
         <div className="od-file-list">
           {folders.map(f=><div className="od-file-row gdrive-folder" key={f.id} onClick={()=>openFolder(f)}>
-            <div><b><Icon name="folder" size={15}/> {f.name}</b><small>Carpeta</small></div>
-            <small>Explorar</small>
-            <button className="soft" onClick={(e)=>{e.stopPropagation(); openFolder(f);}}>Abrir</button>
+            <div><b><Icon name="folder" size={15}/> {f.name}</b><small>{tr('gdrive.folder')}</small></div>
+            <small>{tr('gdrive.explore')}</small>
+            <button className="soft" onClick={(e)=>{e.stopPropagation(); openFolder(f);}}>{tr('gdrive.open')}</button>
           </div>)}
           {files.map(f=>{
             const st=fileStatus[f.id];
             return <div className="od-file-row" key={f.id}>
               <label className="gdrive-check" onClick={e=>e.stopPropagation()}><input type="checkbox" checked={selected.has(f.id)} onChange={()=>toggleSelect(f.id)}/><b>{f.name}</b></label>
-              <small className={'gdrive-status '+(st||'pendiente')}>{statusLabel[st] || 'Pendiente'}</small>
-              <button className="soft" disabled={st==='importando'} onClick={()=>importOne(f)}>{st==='listo' ? 'Reimportar' : 'Importar'}</button>
+              <small className={'gdrive-status '+(st||'pendiente')}>{statusLabel[st] || tr('gdrive.statusPending')}</small>
+              <button className="soft" disabled={st==='importando'} onClick={()=>importOne(f)}>{st==='listo' ? tr('gdrive.reimport') : tr('gdrive.import')}</button>
             </div>;
           })}
-          {!folders.length && !files.length && <p className="muted">Esta carpeta está vacía.</p>}
+          {!folders.length && !files.length && <p className="muted">{tr('gdrive.emptyFolder')}</p>}
         </div>
       </>}
     </>}
@@ -3259,6 +3428,7 @@ function GoogleDrivePanel({user, onImported}){
 }
 
 function OneDrivePanel({user, onImported}){
+  const { t: tr } = useI18n();
   const [status,setStatus]=useState(null);
   const [items,setItems]=useState(null);
   const [folderPath,setFolderPath]=useState(null); // null = todavia no se conoce (viene de status)
@@ -3267,7 +3437,7 @@ function OneDrivePanel({user, onImported}){
   const [importingId,setImportingId]=useState(null);
   const refreshStatus=async()=>{
     try{ const data=await apiPost('/api/onedrive',{action:'status'}); setStatus(data); if(folderPath==null) setFolderPath(data.folderPath); }
-    catch(err){ setStatus({error:friendlyServiceError(err,'No se pudo consultar OneDrive.')}); }
+    catch(err){ setStatus({error:friendlyServiceError(err,tr('onedrive.statusFailMsg'))}); }
   };
   useEffect(()=>{ refreshStatus(); },[]);
   // Navegacion de subcarpetas (Prioridad 5, fase de correccion): por
@@ -3283,25 +3453,25 @@ function OneDrivePanel({user, onImported}){
       if(data.notFound){ setFolderNotFound(true); setFolderPath(data.folderPath); setItems([]); return; }
       setFolderPath(data.folderPath);
       setItems(data.items||[]);
-    }catch(err){ window.zoemecNotify?.(err.message || 'No se pudo listar OneDrive.', 'error'); setItems([]); }
+    }catch(err){ window.zoemecNotify?.(err.message || tr('onedrive.listFailMsg'), 'error'); setItems([]); }
     finally{ setLoadingList(false); }
   };
   const createFolder=async()=>{
     setLoadingList(true);
     try{
       const data=await apiPost('/api/onedrive',{action:'ensureFolder', folderPath});
-      window.zoemecNotify?.(`Carpeta "${data.folderPath}" lista en OneDrive.`,'info');
+      window.zoemecNotify?.(tr('onedrive.folderReadyMsg',{path:data.folderPath}),'info');
       await listFiles(data.folderPath);
-    }catch(err){ window.zoemecNotify?.(err.message || 'No se pudo crear la carpeta.', 'error'); }
+    }catch(err){ window.zoemecNotify?.(err.message || tr('onedrive.createFolderFailMsg'), 'error'); }
     finally{ setLoadingList(false); }
   };
   const importFile=async(item)=>{
     setImportingId(item.id);
     try{
       const data=await apiPost('/api/onedrive',{action:'importFile', id:item.id, name:item.name});
-      window.zoemecNotify?.(data.sinCambios ? `"${item.name}" ya estaba sincronizado (sin cambios en OneDrive).` : `"${item.name}" ${data.actualizado?'actualizado en':'importado a'} la Biblioteca.`,'info');
+      window.zoemecNotify?.(data.sinCambios ? tr('onedrive.alreadySyncedMsg',{name:item.name}) : (data.actualizado?tr('onedrive.updatedMsg',{name:item.name}):tr('onedrive.importedMsg',{name:item.name})),'info');
       onImported?.();
-    }catch(err){ window.zoemecNotify?.(err.message || 'No se pudo importar el archivo.', 'error'); }
+    }catch(err){ window.zoemecNotify?.(err.message || tr('onedrive.importFileFailMsg'), 'error'); }
     finally{ setImportingId(null); }
   };
   const connected = Boolean(status?.connected);
@@ -3313,37 +3483,37 @@ function OneDrivePanel({user, onImported}){
      alarmista: la biblioteca local sigue funcionando aunque OneDrive no este
      activado en este entorno. */
   return <div className="panel lib-onedrive">
-    <div className="admin-panel-head"><h2>OneDrive</h2><button className="soft" onClick={refreshStatus}>Actualizar estado</button></div>
+    <div className="admin-panel-head"><h2>OneDrive</h2><button className="soft" onClick={refreshStatus}>{tr('onedrive.refreshStatus')}</button></div>
     {!configured && <div className="od-local-ok">
       <Icon name="biblioteca" size={18}/>
-      <div><b>Biblioteca local disponible</b><p>Tus documentos se guardan y consultan sin problema. La sincronización con OneDrive todavía no está activada en este entorno.</p></div>
-      <button className="soft" onClick={()=>window.zoemecNotify?.(user?.isAdmin ? 'Configura OneDrive desde Panel Admin → OneDrive.' : 'Pide a un administrador que active la sincronización con OneDrive.', 'info')}>Configurar OneDrive</button>
+      <div><b>{tr('onedrive.localAvailableTitle')}</b><p>{tr('onedrive.localAvailableText')}</p></div>
+      <button className="soft" onClick={()=>window.zoemecNotify?.(user?.isAdmin ? tr('onedrive.configureAdminMsg') : tr('onedrive.configureUserMsg'), 'info')}>{tr('onedrive.configureBtn')}</button>
     </div>}
-    {configured && status?.error && <EmptyState icon="admin" title="No se pudo consultar OneDrive" text={status.error}/>}
+    {configured && status?.error && <EmptyState icon="admin" title={tr('onedrive.queryFailTitle')} text={status.error}/>}
     {configured && status && !status.error && <>
-      <p className="muted">{connected ? `Conectado como ${status.account || 'tu cuenta de Microsoft'}.` : 'Conecta tu cuenta de OneDrive para listar e importar documentos reales a la Biblioteca.'}</p>
-      {connected && <p className="muted" style={{fontSize:'.78rem'}}>Carpeta: <b>{folderPath||status.folderPath}</b>{status.lastSyncedAt ? ` · Última sincronización: ${new Date(status.lastSyncedAt._seconds?status.lastSyncedAt._seconds*1000:status.lastSyncedAt).toLocaleString('es-MX')}` : ' · Sin sincronizar todavía'}</p>}
+      <p className="muted">{connected ? tr('onedrive.connectedAs',{account:status.account || tr('onedrive.yourMsAccount')}) : tr('onedrive.connectPrompt')}</p>
+      {connected && <p className="muted" style={{fontSize:'.78rem'}}>{tr('onedrive.folderLabel')} <b>{folderPath||status.folderPath}</b>{status.lastSyncedAt ? tr('onedrive.lastSync',{date:new Date(status.lastSyncedAt._seconds?status.lastSyncedAt._seconds*1000:status.lastSyncedAt).toLocaleString('es-MX')}) : tr('onedrive.neverSynced')}</p>}
       <div className="visual-actions" style={{flexWrap:'wrap',gap:8}}>
         {!connected
-          ? <button onClick={()=>connectOneDrive()}>Conectar OneDrive</button>
+          ? <button onClick={()=>connectOneDrive()}>{tr('onedrive.connect')}</button>
           : <>
-            <button className="soft" onClick={()=>listFiles(folderPath)} disabled={loadingList}>{loadingList?'Listando...':'Listar carpeta ZOEMEC'}</button>
-            <button className="soft" onClick={()=>listFiles('/')} disabled={loadingList}>Ver raíz de OneDrive</button>
-            {folderNotFound && <button onClick={createFolder} disabled={loadingList}>Crear carpeta {folderPath}</button>}
+            <button className="soft" onClick={()=>listFiles(folderPath)} disabled={loadingList}>{loadingList?tr('onedrive.listing'):tr('onedrive.listZoemecFolder')}</button>
+            <button className="soft" onClick={()=>listFiles('/')} disabled={loadingList}>{tr('onedrive.viewRoot')}</button>
+            {folderNotFound && <button onClick={createFolder} disabled={loadingList}>{tr('onedrive.createFolder',{path:folderPath})}</button>}
           </>}
       </div>
     </>}
-    {configured && folderNotFound && <p className="muted">La carpeta {folderPath} todavía no existe en tu OneDrive -- créala para empezar a sincronizar.</p>}
+    {configured && folderNotFound && <p className="muted">{tr('onedrive.folderNotExistText',{path:folderPath})}</p>}
     {configured && items && <>
       {folders.length>0 && <div className="od-file-list">{folders.map(f=><div className="od-file-row" key={f.id}>
           <div><b>📁 {f.name}</b></div>
-          <button className="soft" onClick={()=>listFiles(`${folderPath}/${f.name}`)}>Abrir</button>
+          <button className="soft" onClick={()=>listFiles(`${folderPath}/${f.name}`)}>{tr('onedrive.open')}</button>
         </div>)}</div>}
       {files.length ? <div className="od-file-list">{files.map(it=><div className="od-file-row" key={it.id}>
           <div><b>{it.name}</b><small>{((it.size||0)/1048576).toFixed(2)} MB</small></div>
           <small>OneDrive</small>
-          <button className="soft" disabled={importingId===it.id} onClick={()=>importFile(it)}>{importingId===it.id?'Importando...':'Importar a Biblioteca'}</button>
-        </div>)}</div> : !folderNotFound && <p className="muted">No se encontraron archivos en esta carpeta de OneDrive.</p>}
+          <button className="soft" disabled={importingId===it.id} onClick={()=>importFile(it)}>{importingId===it.id?tr('onedrive.importing'):tr('onedrive.importToLibrary')}</button>
+        </div>)}</div> : !folderNotFound && <p className="muted">{tr('onedrive.noFilesFound')}</p>}
     </>}
   </div>;
 }
@@ -3358,6 +3528,7 @@ const LIBRARY_DEMO_SEED = [
 ];
 
 function Library({user, catalog, setCatalog, setModule}){
+  const { t: tr } = useI18n();
   const fileInputRef=useRef(null);
   const [files,setFiles]=useLocalState('zoemec-biblioteca',[],user?.uid);
   const [uploading,setUploading]=useState(false);
@@ -3469,9 +3640,9 @@ function Library({user, catalog, setCatalog, setModule}){
       }
       if(arr.length){ setFiles([...arr,...files]); setSelected(arr[0]); }
       if(errors.length){
-        alert(`Subi ${arr.length} de ${picked.length} archivo(s). No se pudieron subir:\n${errors.join('\n')}`);
+        alert(tr('library.uploadErrorsMsg',{ok:arr.length,total:picked.length,errors:errors.join('\n')}));
       }else{
-        alert(firebaseReady && user?.uid ? `Subi ${arr.length} archivo(s) a la Biblioteca.` : `Agregue ${arr.length} archivo(s) localmente. Inicia sesion para sincronizarlos en la nube.`);
+        alert(firebaseReady && user?.uid ? tr('library.uploadedCloudMsg',{count:arr.length}) : tr('library.uploadedLocalMsg',{count:arr.length}));
       }
     }finally{
       setUploading(false);
@@ -3490,7 +3661,7 @@ function Library({user, catalog, setCatalog, setModule}){
         await deleteObject(ref(storage, target.storagePath)).catch(()=>{});
       }
     }catch(err){
-      alert(`Se quito de tu lista, pero no se pudo borrar de la nube: ${err?.message || 'revisa permisos.'}`);
+      alert(tr('library.deleteCloudFailMsg',{reason:err?.message || 'revisa permisos.'}));
     }
   };
   /* RC4 -- Biblioteca real: extraccion, busqueda por contenido, matrices
@@ -3504,13 +3675,13 @@ function Library({user, catalog, setCatalog, setModule}){
     setSelected(prev=>prev && prev.docId===docId ? {...prev,...patch} : prev);
   };
   const handleExtractInsumos=async(f)=>{
-    if(!f?.docId){ window.zoemecNotify?.('Este archivo aun no esta sincronizado con la nube.','error'); return; }
-    if(f.refOnly){ window.zoemecNotify?.('Este documento es una referencia externa: no se descargo su contenido, no se puede extraer.','error'); return; }
+    if(!f?.docId){ window.zoemecNotify?.(tr('library.notSyncedMsg'),'error'); return; }
+    if(f.refOnly){ window.zoemecNotify?.(tr('library.externalRefNoExtractMsg'),'error'); return; }
     setBusyAction('extract:'+f.docId);
     try{
       const data=await apiPost('/api/upload-library', { action:'extractInsumos', docId:f.docId });
       patchFileByDocId(f.docId, { contentInsumos:data.contentInsumos||[], insumosReview:data.insumosReview||[], indexed:data.extraction?.status==='done' });
-      window.zoemecNotify?.(data.contentInsumos?.length ? `Se extrajeron ${data.contentInsumos.length} insumo(s) propuestos. Revisalos antes de usarlos en un APU.` : `No se detectaron insumos extraibles (${data.extraction?.error || 'formato no soportado'}).`, data.contentInsumos?.length ? 'info' : 'error');
+      window.zoemecNotify?.(data.contentInsumos?.length ? tr('library.extractedMsg',{count:data.contentInsumos.length}) : tr('library.noInsumosExtractedMsg',{reason:data.extraction?.error || 'formato no soportado'}), data.contentInsumos?.length ? 'info' : 'error');
     }catch(err){
       window.zoemecNotify?.(err.message || 'No se pudo extraer el contenido.', 'error');
     }finally{ setBusyAction(''); }
@@ -3524,7 +3695,7 @@ function Library({user, catalog, setCatalog, setModule}){
       const data=await apiPost('/api/upload-library', { action:'confirmInsumos', docId:f.docId, decisions:[{index,state}] });
       patchFileByDocId(f.docId, { insumosReview:data.insumosReview||[] });
     }catch(err){
-      window.zoemecNotify?.(err.message || 'No se pudo actualizar la revision del insumo.', 'error');
+      window.zoemecNotify?.(err.message || tr('library.reviewUpdateFailMsg'), 'error');
     }finally{ setBusyAction(''); }
   };
   /* Puente Biblioteca -> APU (regla critica): SOLO los insumos en estado
@@ -3541,13 +3712,13 @@ function Library({user, catalog, setCatalog, setModule}){
   const handleUseValidatedInApu=(f)=>{
     const rows=extractValidatedCatalogRows(f);
     if(!rows.length){
-      window.zoemecNotify?.('Aun no hay insumos VALIDADOS en este documento. Revisalos y valida al menos uno antes de usarlos en un APU.', 'error');
+      window.zoemecNotify?.(tr('library.noValidatedInDocMsg'), 'error');
       return;
     }
     const before=(catalog||[]).length;
     const merged=mergeCatalogRows(catalog, rows);
     setCatalog?.(merged);
-    window.zoemecNotify?.(`${merged.length - before} insumo(s) validado(s) de "${f.name}" se agregaron a tu catalogo de precios. Generando APU con esta referencia...`, 'info');
+    window.zoemecNotify?.(tr('library.validatedAddedMsg',{count:merged.length-before,name:f.name}), 'info');
     setModule?.('apu');
   };
   /* Sincroniza TODOS los documentos de Biblioteca visibles (no solo el que
@@ -3557,22 +3728,22 @@ function Library({user, catalog, setCatalog, setModule}){
   const handleSyncAllValidatedToApu=()=>{
     const rows=extractAllValidatedCatalogRows(files);
     if(!rows.length){
-      window.zoemecNotify?.('Aun no hay insumos VALIDADOS en ningun documento de la Biblioteca.', 'error');
+      window.zoemecNotify?.(tr('library.noValidatedAnywhereMsg'), 'error');
       return;
     }
     const before=(catalog||[]).length;
     const merged=mergeCatalogRows(catalog, rows);
     setCatalog?.(merged);
-    window.zoemecNotify?.(`Catalogo sincronizado: ${merged.length - before} insumo(s) nuevo(s)/actualizado(s) de ${files.length} documento(s) de Biblioteca.`, 'info');
+    window.zoemecNotify?.(tr('library.catalogSyncedMsg',{count:merged.length-before,total:files.length}), 'info');
   };
   const handleSimilarMatrices=async(f)=>{
-    if(!f?.docId){ window.zoemecNotify?.('Este archivo aun no esta sincronizado con la nube.','error'); return; }
+    if(!f?.docId){ window.zoemecNotify?.(tr('library.notSyncedMsg'),'error'); return; }
     setBusyAction('similar:'+f.docId);
     try{
       const data=await apiPost('/api/upload-library', { action:'similarMatrices', docId:f.docId });
       setSimilarResults({ forDoc:f.name, results:data.results||[] });
     }catch(err){
-      window.zoemecNotify?.(err.message || 'No se pudo buscar matrices similares.', 'error');
+      window.zoemecNotify?.(err.message || tr('library.similarSearchFailMsg'), 'error');
     }finally{ setBusyAction(''); }
   };
   const handleContentSearch=async()=>{
@@ -3582,7 +3753,7 @@ function Library({user, catalog, setCatalog, setModule}){
       const data=await apiPost('/api/upload-library', { action:'search', query:q });
       setContentSearch({ query:q, results:data.results||[], method:data.method });
     }catch(err){
-      window.zoemecNotify?.(err.message || 'No se pudo completar la busqueda por contenido.', 'error');
+      window.zoemecNotify?.(err.message || tr('library.contentSearchFailMsg'), 'error');
     }finally{ setBusyAction(''); }
   };
   const types=['Todos','Costos','Matrices APU','Mano de obra','Normas','Formatos','Academia','Documentos'];
@@ -3603,68 +3774,69 @@ function Library({user, catalog, setCatalog, setModule}){
     const names=new Set(visible.map(f=>`${f.name}|${f.when}`));
     const next=files.map(f=>names.has(`${f.name}|${f.when}`)?enrichLibraryMeta(f, classify):f);
     setFiles(next);
-    alert(`Indice actualizado para ${visible.length} documento(s). Ya puedes buscar por familia, tags y tipo tecnico.`);
+    alert(tr('library.indexUpdatedMsg',{count:visible.length}));
   };
   const suggestions=['muro block 15','loseta porcelanato','rendimiento albanil','PTR lavabo','tablaroca durock','indirectos oficina'];
   if(!canUse(user,'library')){
-    return <section><PageHead kicker="Biblioteca ZOEMEC" title="Centro inteligente de costos" desc="La biblioteca tecnica es una funcion premium porque permite consultar bases, matrices, documentos y fuentes para IA." />
-      <div className="locked-panel panel"><Icon name="biblioteca" size={42}/><div><h2>Biblioteca bloqueada para plan gratis</h2><p>Tu cuenta gratis incluye 1 APU. Para subir bases, indexar documentos, consultar matrices y usar la biblioteca como fuente de IA necesitas plan Inicial, Profesional o Empresa.</p><button onClick={()=>window.zoemecNotify ? window.zoemecNotify(`Para activar tu plan escribe a ${defaultCompany.email} o contacta a tu administrador ZOEMEC.`, 'info') : alert(`Para activar tu plan escribe a ${defaultCompany.email} o contacta a tu administrador ZOEMEC.`)}>Activar plan</button></div></div>
-      <div className="library-grid">{[['Inicial','Biblioteca limitada, academia y 10 APUs/mes','Para probar'],['Profesional','Biblioteca completa, cursos, IA y exportaciones','Recomendado'],['Empresa','Usuarios, permisos y biblioteca privada','Equipos']].map(f=><div className="folder" key={f[0]}><b>{f[0]}</b><p>{f[1]}</p><span>{f[2]}</span></div>)}</div>
+    const libPlans=[[tr('library.planInicial'),tr('library.planInicialDesc'),tr('library.planInicialTag')],[tr('library.planPro'),tr('library.planProDesc'),tr('library.planProTag')],[tr('library.planEmpresa'),tr('library.planEmpresaDesc'),tr('library.planEmpresaTag')]];
+    return <section><PageHead kicker={tr('library.lockedKicker')} title={tr('library.lockedTitle')} desc={tr('library.lockedDesc')} />
+      <div className="locked-panel panel"><Icon name="biblioteca" size={42}/><div><h2>{tr('library.lockedHeading')}</h2><p>{tr('library.lockedText')}</p><button onClick={()=>{ const msg=tr('library.activatePlanMsg',{email:defaultCompany.email}); window.zoemecNotify ? window.zoemecNotify(msg, 'info') : alert(msg); }}>{tr('library.activatePlan')}</button></div></div>
+      <div className="library-grid">{libPlans.map(f=><div className="folder" key={f[0]}><b>{f[0]}</b><p>{f[1]}</p><span>{f[2]}</span></div>)}</div>
     </section>;
   }
-  return <section><PageHead kicker="Biblioteca ZOEMEC" title="Biblioteca y academia técnica" desc="Organiza costos, matrices, mano de obra, normas, formatos y cursos en un solo centro de conocimiento." />
+  return <section><PageHead kicker={tr('modules.biblioteca.kicker')} title={tr('modules.biblioteca.title')} desc={tr('modules.biblioteca.desc')} />
     <div className="lib-hero panel">
-      <div><small>Base tecnica</small><h2>{files.length ? `${files.length} documentos listos` : 'Tu Workspace documental está vacío'}</h2><p>La biblioteca debe funcionar como buscador tecnico, no como bodega de archivos. Cada documento queda clasificado por uso y listo para IA.</p></div>
-      <div className="lib-hero-actions"><button className="secondary" onClick={()=>{ if(user?.isAdmin) setModule('admin'); else window.zoemecNotify?.('El estado de los servicios en la nube esta disponible para administradores en Panel Admin.', 'info'); }}>Estado de nube</button><label className="up-btn">{uploading?'Subiendo...':'Subir lote'}<input ref={fileInputRef} type="file" multiple onChange={e=>add(e.target.files)} hidden disabled={uploading}/></label></div>
+      <div><small>{tr('library.heroKicker')}</small><h2>{files.length ? tr('library.heroTitleReady',{count:files.length}) : tr('library.heroTitleEmpty')}</h2><p>{tr('library.heroDesc')}</p></div>
+      <div className="lib-hero-actions"><button className="secondary" onClick={()=>{ if(user?.isAdmin) setModule('admin'); else window.zoemecNotify?.(tr('library.cloudStatusMsg'), 'info'); }}>{tr('library.cloudStatus')}</button><label className="up-btn">{uploading?tr('library.uploading'):tr('library.uploadBatch')}<input ref={fileInputRef} type="file" multiple onChange={e=>add(e.target.files)} hidden disabled={uploading}/></label></div>
     </div>
-    {syncError && <div className="od-config-warning"><Icon name="alerta" size={18}/><div><b>No se pudo sincronizar con la nube:</b> {syncError} Mientras tanto se muestran los documentos que ya tienes en este dispositivo.</div></div>}
+    {syncError && <div className="od-config-warning"><Icon name="alerta" size={18}/><div><b>{tr('library.syncErrorLabel')}</b> {syncError} {tr('library.syncErrorSuffix')}</div></div>}
     {!firebaseReady && <div className="panel lib-demo-mode">
-      <div className="admin-panel-head"><h2>Vista de ejemplo</h2><small className="hint">Firebase no configurado en este entorno</small></div>
-      <p className="muted">Estos son documentos de ejemplo para mostrar cómo luce la Biblioteca. No son archivos reales: no se cuentan en tus estadísticas ni se mezclan con tu biblioteca real.</p>
-      <div className="od-file-list">{LIBRARY_DEMO_SEED.map(f=><div className="od-file-row" key={f.name}><div><b>{f.name}</b><small>{f.cat} · {f.family} · {f.size}</small></div><small>Ejemplo</small><button className="soft" disabled>Ejemplo</button></div>)}</div>
+      <div className="admin-panel-head"><h2>{tr('library.demoTitle')}</h2><small className="hint">{tr('library.demoHint')}</small></div>
+      <p className="muted">{tr('library.demoText')}</p>
+      <div className="od-file-list">{LIBRARY_DEMO_SEED.map(f=><div className="od-file-row" key={f.name}><div><b>{f.name}</b><small>{f.cat} · {f.family} · {f.size}</small></div><small>{tr('library.example')}</small><button className="soft" disabled>{tr('library.example')}</button></div>)}</div>
     </div>}
     <div className="lib-cloud panel">
-      {[['1. Subida masiva','Puedes cargar lotes completos desde la plataforma. Para carpetas grandes conviene subir ZIP o seleccionar multiples archivos.'],['2. Nube privada','Los archivos reales deben vivir en Firebase Storage o Vercel Blob. Firestore guarda nombre, categoria, permiso, usuario y fuente.'],['3. Busqueda IA','Despues se indexa el contenido para buscar por insumo, concepto, unidad, precio, rendimiento o norma.']].map(x=><div key={x[0]}><b>{x[0]}</b><p>{x[1]}</p></div>)}
+      {[[tr('library.step1Title'),tr('library.step1Desc')],[tr('library.step2Title'),tr('library.step2Desc')],[tr('library.step3Title'),tr('library.step3Desc')]].map(x=><div key={x[0]}><b>{x[0]}</b><p>{x[1]}</p></div>)}
     </div>
     <GoogleDrivePanel user={user} onImported={()=>setSyncKey(k=>k+1)}/>
     <OneDrivePanel user={user} onImported={()=>setSyncKey(k=>k+1)}/>
-    <div className="library-dashboard"><div className="lib-stat"><small>Documentos</small><b>{files.length}</b><span>{totalMb.toFixed(2)} MB cargados</span></div><div className="lib-stat"><small>Categorias activas</small><b>{counts.filter(x=>x[1]>0).length}</b><span>{type === 'Todos' ? 'Vista global' : type}</span></div><div className="lib-stat"><small>Seleccionados</small><b>{batch.length}</b><span>Lote visible para acciones IA</span></div></div>
+    <div className="library-dashboard"><div className="lib-stat"><small>{tr('library.statDocs')}</small><b>{files.length}</b><span>{tr('library.statDocsSub',{mb:totalMb.toFixed(2)})}</span></div><div className="lib-stat"><small>{tr('library.statCategories')}</small><b>{counts.filter(x=>x[1]>0).length}</b><span>{type === 'Todos' ? tr('library.statCategoriesAllView') : type}</span></div><div className="lib-stat"><small>{tr('library.statSelected')}</small><b>{batch.length}</b><span>{tr('library.statSelectedSub')}</span></div></div>
     <div className="lib-console panel">
-      <div className="lib-searchbar"><input className="search" placeholder="Buscar por concepto, insumo, familia, archivo o fuente..." value={q} onChange={e=>{setQ(e.target.value);setPage(1);setContentSearch(null)}}/><button disabled={busyAction==='search'} onClick={handleContentSearch}>{busyAction==='search'?'Buscando...':'Buscar por contenido'}</button></div>
+      <div className="lib-searchbar"><input className="search" placeholder={tr('library.searchPlaceholder')} value={q} onChange={e=>{setQ(e.target.value);setPage(1);setContentSearch(null)}}/><button disabled={busyAction==='search'} onClick={handleContentSearch}>{busyAction==='search'?tr('library.searching'):tr('library.searchByContent')}</button></div>
       <div className="lib-suggestions">{suggestions.map(s=><button key={s} onClick={()=>{setQ(s);setPage(1);setContentSearch(null)}}>{s}</button>)}</div>
       {contentSearch && <div className="panel lib-content-search">
-        <div className="admin-panel-head"><h2>Busqueda por contenido: "{contentSearch.query}"</h2><small className="hint">Keyword/heuristica sobre nombre, categoria e insumos extraidos -- no es busqueda semantica ni IA.</small></div>
+        <div className="admin-panel-head"><h2>{tr('library.contentSearchTitle',{query:contentSearch.query})}</h2><small className="hint">{tr('library.contentSearchHint')}</small></div>
         {contentSearch.results.length ? <div className="od-file-list">{contentSearch.results.map(r=><div className="od-file-row" key={r.id}>
             <div><b>{r.name}</b><small>{r.cat} · {r.family || 'General'} · {r.status}{r.driveParentPath?.length?` · ${r.driveParentPath.join(' / ')}`:''}</small></div>
-            <small>score {r.score} · coincide: {r.matchedTerms.join(', ') || '—'}{r.matchedInsumos.length?` · ${r.matchedInsumos.length} insumo(s)`:''}</small>
-            <button className="soft" onClick={()=>setSelected(files.find(f=>f.docId===r.id))}>Ver ficha</button>
-          </div>)}</div> : <p className="muted">Sin coincidencias reales de contenido para esta busqueda.</p>}
+            <small>{tr('library.scoreLabel',{score:r.score,terms:r.matchedTerms.join(', ') || '—'})}{r.matchedInsumos.length?tr('library.insumosSuffix',{count:r.matchedInsumos.length}):''}</small>
+            <button className="soft" onClick={()=>setSelected(files.find(f=>f.docId===r.id))}>{tr('library.viewSheet')}</button>
+          </div>)}</div> : <p className="muted">{tr('library.noContentMatches')}</p>}
       </div>}
-      <div className="lib-toolbar pro"><div className="lib-tabs">{types.map(t=><button key={t} className={type===t?'active':''} onClick={()=>setFilterType(t)}>{t}</button>)}</div><div className="seg"><button className={view==='tabla'?'active':''} onClick={()=>setView('tabla')}>Tabla</button><button className={view==='tablero'?'active':''} onClick={()=>setView('tablero')}>Tarjetas</button></div></div>
-      <div className="lib-bulkbar"><b>{visible.length}</b><span>documentos encontrados</span><em>Pagina {safePage} de {pages}</em><label className="soft file-soft">Subida masiva<input type="file" multiple hidden onChange={e=>add(e.target.files)} disabled={uploading}/></label><button className="soft" onClick={indexVisible}>Indexar lote visible</button></div>
+      <div className="lib-toolbar pro"><div className="lib-tabs">{types.map(t=><button key={t} className={type===t?'active':''} onClick={()=>setFilterType(t)}>{t}</button>)}</div><div className="seg"><button className={view==='tabla'?'active':''} onClick={()=>setView('tabla')}>{tr('library.tabTable')}</button><button className={view==='tablero'?'active':''} onClick={()=>setView('tablero')}>{tr('library.tabCards')}</button></div></div>
+      <div className="lib-bulkbar"><b>{visible.length}</b><span>{tr('library.documentsFound')}</span><em>{tr('library.pageLabel',{page:safePage,pages})}</em><label className="soft file-soft">{tr('library.massUpload')}<input type="file" multiple hidden onChange={e=>add(e.target.files)} disabled={uploading}/></label><button className="soft" onClick={indexVisible}>{tr('library.indexVisible')}</button></div>
       <div className="lib-workbench">
         <aside className="lib-folders">{counts.map(([name,count])=><button key={name} onClick={()=>setFilterType(name)} className={type===name?'active':''}><Icon name="folder" size={15}/><span>{name}</span><b>{count}</b></button>)}</aside>
         <div className={view==='tablero'?'lib-board':'lib-table'}>
-          {pageItems.length ? pageItems.map((f)=>{ const i=f.__idx ?? files.indexOf(f); const cat=f.cat||classify(f.name); const isActive=active?.name===f.name && active?.when===f.when; return <div className={'lib-file '+(isActive?'active':'')} key={i} onClick={()=>setSelected(f)}><span className="lib-ext">{f.ext||'DOC'}</span><div className="lib-meta"><b>{f.name}</b><small>{cat} - {f.family || 'General'} - {f.size} - {f.when}</small><em>{(f.tags||[]).length ? (f.tags||[]).slice(0,5).join(' · ') : cat==='Matrices APU'?'Puede alimentar APUs':cat==='Mano de obra'?'Rendimientos y cuadrillas':cat==='Costos'?'Precios y catalogos':'Consulta tecnica'}</em></div><div className="lib-actions"><button className="soft" onClick={(e)=>{e.stopPropagation(); f.downloadURL ? window.open(f.downloadURL,'_blank') : setSelected(f)}}>{f.downloadURL?'Abrir':'Ver'}</button><button className="row-del" onClick={(e)=>{e.stopPropagation();del(i)}}>x</button></div></div>}) : (files.length===0 ? <EmptyState icon="biblioteca" title="Tu Workspace documental está vacío" text="Sube tu primera base técnica para que ZOE pueda consultarla al generar APUs." actionLabel="Subir lote" onAction={()=>fileInputRef.current?.click()}/> : <div className="lib-empty">No hay documentos con ese filtro. Sube archivos o cambia la busqueda.</div>)}
-          {visible.length > pageSize && <div className="lib-pager"><button className="soft" disabled={safePage<=1} onClick={()=>setPage(safePage-1)}>Anterior</button><span>{(safePage-1)*pageSize+1}-{Math.min(safePage*pageSize,visible.length)} de {visible.length}</span><button className="soft" disabled={safePage>=pages} onClick={()=>setPage(safePage+1)}>Siguiente</button></div>}
+          {pageItems.length ? pageItems.map((f)=>{ const i=f.__idx ?? files.indexOf(f); const cat=f.cat||classify(f.name); const isActive=active?.name===f.name && active?.when===f.when; return <div className={'lib-file '+(isActive?'active':'')} key={i} onClick={()=>setSelected(f)}><span className="lib-ext">{f.ext||'DOC'}</span><div className="lib-meta"><b>{f.name}</b><small>{cat} - {f.family || 'General'} - {f.size} - {f.when}</small><em>{(f.tags||[]).length ? (f.tags||[]).slice(0,5).join(' · ') : cat==='Matrices APU'?'Puede alimentar APUs':cat==='Mano de obra'?'Rendimientos y cuadrillas':cat==='Costos'?'Precios y catalogos':'Consulta tecnica'}</em></div><div className="lib-actions"><button className="soft" onClick={(e)=>{e.stopPropagation(); f.downloadURL ? window.open(f.downloadURL,'_blank') : setSelected(f)}}>{f.downloadURL?tr('library.open'):tr('library.view')}</button><button className="row-del" onClick={(e)=>{e.stopPropagation();del(i)}}>x</button></div></div>}) : (files.length===0 ? <EmptyState icon="biblioteca" title={tr('library.emptyTitle')} text={tr('library.emptyText')} actionLabel={tr('library.uploadBatch')} onAction={()=>fileInputRef.current?.click()}/> : <div className="lib-empty">{tr('library.noFilterMatches')}</div>)}
+          {visible.length > pageSize && <div className="lib-pager"><button className="soft" disabled={safePage<=1} onClick={()=>setPage(safePage-1)}>{tr('library.prev')}</button><span>{(safePage-1)*pageSize+1}-{Math.min(safePage*pageSize,visible.length)} de {visible.length}</span><button className="soft" disabled={safePage>=pages} onClick={()=>setPage(safePage+1)}>{tr('library.next')}</button></div>}
         </div>
         <aside className="lib-preview pro">
-          <small>Ficha tecnica</small><h2>{active?.name || 'Sin archivo seleccionado'}</h2>
-          <p>{active ? (active.cat || classify(active.name))+' - '+(active.family || 'General')+' - '+(active.ext || 'DOC')+' - '+active.size : 'Sube documentos para crear una base consultable.'}</p>
-          {active?.refOnly && <p className="muted"><b>REFERENCIA EXTERNA:</b> archivo grande o ZIP registrado por metadata, sin descargar su contenido. No se puede extraer ni indexar; sigue disponible como fuente de referencia.{active.driveWebViewLink && <> <a href={active.driveWebViewLink} target="_blank" rel="noreferrer">Abrir en Drive</a></>}</p>}
-          {active?.driveParentPath?.length ? <p className="muted">Ruta de origen: {active.driveParentPath.join(' / ')}</p> : null}
+          <small>{tr('library.techSheet')}</small><h2>{active?.name || tr('library.noFileSelected')}</h2>
+          <p>{active ? (active.cat || classify(active.name))+' - '+(active.family || 'General')+' - '+(active.ext || 'DOC')+' - '+active.size : tr('library.uploadDocsHint')}</p>
+          {active?.refOnly && <p className="muted"><b>{tr('library.externalRefLabel')}</b> {tr('library.externalRefText')}{active.driveWebViewLink && <> <a href={active.driveWebViewLink} target="_blank" rel="noreferrer">{tr('library.openInDrive')}</a></>}</p>}
+          {active?.driveParentPath?.length ? <p className="muted">{tr('library.sourcePath')} {active.driveParentPath.join(' / ')}</p> : null}
           {active?.tags?.length ? <div className="lib-tags-mini">{active.tags.map(t=><span key={t}>{t}</span>)}</div> : null}
           <div className="lib-ai-card">
-            <b>Acciones reales</b>
-            <button disabled={!active || active.refOnly || busyAction==='extract:'+active?.docId} onClick={()=>handleExtractInsumos(active)}>{busyAction==='extract:'+active?.docId?'Extrayendo...':'Extraer insumos'}</button>
-            <button disabled={!active || busyAction==='similar:'+active?.docId} onClick={()=>handleSimilarMatrices(active)}>{busyAction==='similar:'+active?.docId?'Buscando...':'Buscar matrices similares'}</button>
-            <button disabled={!active || !(active.contentInsumos||[]).length} onClick={()=>handleUseValidatedInApu(active)}>Usar validados en este APU</button>
-            <button disabled={!files?.length} onClick={handleSyncAllValidatedToApu} title="Fusiona los insumos VALIDADOS de todos los documentos de Biblioteca (no solo el abierto) con tu catalogo de precios">Sincronizar toda la biblioteca al catálogo</button>
-            <button onClick={indexVisible}>Crear indice</button>
+            <b>{tr('library.realActions')}</b>
+            <button disabled={!active || active.refOnly || busyAction==='extract:'+active?.docId} onClick={()=>handleExtractInsumos(active)}>{busyAction==='extract:'+active?.docId?tr('library.extracting'):tr('library.extractInsumos')}</button>
+            <button disabled={!active || busyAction==='similar:'+active?.docId} onClick={()=>handleSimilarMatrices(active)}>{busyAction==='similar:'+active?.docId?tr('library.searchingSimilar'):tr('library.searchSimilarMatrices')}</button>
+            <button disabled={!active || !(active.contentInsumos||[]).length} onClick={()=>handleUseValidatedInApu(active)}>{tr('library.useValidatedInApu')}</button>
+            <button disabled={!files?.length} onClick={handleSyncAllValidatedToApu} title={tr('library.syncAllToCatalogTitle')}>{tr('library.syncAllToCatalog')}</button>
+            <button onClick={indexVisible}>{tr('library.createIndex')}</button>
           </div>
           {active?.contentInsumos?.length ? <div className="lib-insumos-review">
-            <b>Insumos propuestos ({active.contentInsumos.length}) -- requieren revision humana</b>
-            <table className="mini-table"><thead><tr><th>Descripcion</th><th>Unidad</th><th>Precio</th><th>Fila</th><th>Confianza</th><th>Estado</th><th></th></tr></thead>
+            <b>{tr('library.proposedInsumos',{count:active.contentInsumos.length})}</b>
+            <table className="mini-table"><thead><tr><th>{tr('library.colDesc')}</th><th>{tr('library.colUnit')}</th><th>{tr('library.colPrice')}</th><th>{tr('library.colRow')}</th><th>{tr('library.colConfidence')}</th><th>{tr('library.colState')}</th><th></th></tr></thead>
               <tbody>{active.contentInsumos.map((ins,idx)=>{
                 const review=(active.insumosReview||[]).find(r=>r.index===idx) || {state:INSUMO_STATES.PROPUESTO};
                 const busy=busyAction===`review:${active.docId}:${idx}`;
@@ -3672,46 +3844,48 @@ function Library({user, catalog, setCatalog, setModule}){
                   <td>{ins.desc}</td><td>{ins.unidad||'—'}</td><td>${Number(ins.precio).toFixed(2)}</td><td>{ins.rowRef ?? idx+1}</td><td>{ins.confidence}%</td>
                   <td><b>{review.state}</b>{review.validatedBy ? <small> · {review.validatedBy}</small> : null}</td>
                   <td>
-                    <button className="soft" disabled={busy} onClick={()=>handleReviewInsumo(active,idx,INSUMO_STATES.VALIDADO)}>Validar</button>
-                    <button className="row-del" disabled={busy} onClick={()=>handleReviewInsumo(active,idx,INSUMO_STATES.RECHAZADO)}>Rechazar</button>
+                    <button className="soft" disabled={busy} onClick={()=>handleReviewInsumo(active,idx,INSUMO_STATES.VALIDADO)}>{tr('library.validate')}</button>
+                    <button className="row-del" disabled={busy} onClick={()=>handleReviewInsumo(active,idx,INSUMO_STATES.RECHAZADO)}>{tr('library.reject')}</button>
                   </td>
                 </tr>;
               })}</tbody>
             </table>
           </div> : null}
           {similarResults && <div className="lib-similar-results">
-            <b>Matrices similares a "{similarResults.forDoc}"</b>
-            {similarResults.results.length ? <ul>{similarResults.results.map(r=><li key={r.id}><b>{r.name}</b> — {r.cat} · score {r.score} · coincide: {r.matchedTerms.join(', ') || '—'}</li>)}</ul> : <p className="muted">Sin matrices similares reales encontradas (categoria Matrices APU/Costos).</p>}
+            <b>{tr('library.similarTo',{name:similarResults.forDoc})}</b>
+            {similarResults.results.length ? <ul>{similarResults.results.map(r=><li key={r.id}><b>{r.name}</b> — {r.cat} · score {r.score} · coincide: {r.matchedTerms.join(', ') || '—'}</li>)}</ul> : <p className="muted">{tr('library.noSimilar')}</p>}
           </div>}
-          <div className="lib-trace"><span>Estado</span><b>{active?.status || 'Pendiente'}</b><span>Permiso</span><b>{user?.isAdmin?'Administrador':'Plan Profesional'}</b><span>Confianza</span><b>{active ? `${active.confidence || 50}%` : 'Sin fuente'}</b></div>
+          <div className="lib-trace"><span>{tr('library.traceState')}</span><b>{active?.status || tr('library.tracePending')}</b><span>{tr('library.tracePermission')}</span><b>{user?.isAdmin?tr('library.traceAdmin'):tr('library.traceProPlan')}</b><span>{tr('library.traceConfidence')}</span><b>{active ? `${active.confidence || 50}%` : tr('library.traceNoSource')}</b></div>
         </aside>
       </div>
     </div>
     <AcademyPanel />
-    <div className="panel"><h2>Flujo recomendado</h2><div className="library-grid">{[['1. Carga masiva','Bases CMIC, matrices, MO, normas y formatos','Entrada'],['2. Clasificacion','Tipo, familia, unidad, fuente, fecha y confianza','Orden'],['3. Indice IA','Busqueda semantica y extraccion de insumos','IA'],['4. APU auditable','Fuente visible en Excel/PDF por cada insumo','Salida']].map(f=><div className="folder" key={f[0]}><b><Icon name="folder" size={17}/> {f[0]}</b><p>{f[1]}</p><span>{f[2]}</span></div>)}</div></div>
+    <div className="panel"><h2>{tr('library.recommendedFlow')}</h2><div className="library-grid">{[[tr('library.flow1Title'),tr('library.flow1Desc'),tr('library.flow1Tag')],[tr('library.flow2Title'),tr('library.flow2Desc'),tr('library.flow2Tag')],[tr('library.flow3Title'),tr('library.flow3Desc'),tr('library.flow3Tag')],[tr('library.flow4Title'),tr('library.flow4Desc'),tr('library.flow4Tag')]].map(f=><div className="folder" key={f[0]}><b><Icon name="folder" size={17}/> {f[0]}</b><p>{f[1]}</p><span>{f[2]}</span></div>)}</div></div>
   </section>
 }
 
 function AcademyPanel(){
+  const { t: tr } = useI18n();
   const [list,setList]=useLocalState('zoemec-cursos', []);
   const [t,setT]=useState(''); const [d,setD]=useState(''); const [link,setLink]=useState('');
   const add=()=>{ if(!t.trim()) return; setList([{t:t.trim(),d:d.trim()||'Curso nuevo',p:0,link:link.trim()},...list]); setT(''); setD(''); setLink(''); };
   const del=(i)=>setList(list.filter((_,idx)=>idx!==i));
   const avg=Math.round(list.reduce((a,c)=>a+(Number(c.p)||0),0)/(list.length||1));
   return <div className="library-academy">
-    <div className="academy-hero panel"><div><small>Academia integrada</small><h2>Capacitación dentro de tu biblioteca</h2><p>Cursos, videos y rutas de aprendizaje viven junto a tus bases, normas y matrices para alimentar el trabajo técnico.</p></div><div className="academy-meter"><b>{avg}%</b><span>avance promedio</span></div></div>
-    <div className="academy-path">{['APU base','FSR y cuadrillas','Matrices e insumos','Presupuesto','IA y auditoria'].map((x,i)=><div key={x} className={i<2?'done':''}><span>{i+1}</span><b>{x}</b></div>)}</div>
-    <div className="panel course-new pro"><div className="cn-fields"><div className="nf"><label>Titulo del curso</label><input value={t} onChange={e=>setT(e.target.value)} placeholder="Ej. Estimaciones y generadores"/></div><div className="nf"><label>Descripcion</label><input value={d} onChange={e=>setD(e.target.value)} placeholder="Que aprenderan"/></div></div><div className="nf"><label>Link del video</label><input value={link} onChange={e=>setLink(e.target.value)} placeholder="https://..."/></div><div className="cn-foot"><label className="up-btn ghost-up">Subir video<input type="file" accept="video/*" hidden onChange={()=>alert('La subida y alojamiento de video se habilita con Storage. Mientras tanto, pega el link del video.')}/></label><button onClick={add}>Crear curso</button></div></div>
-    <div className="cards-3 academy-grid">{list.map((c,i)=><div className="course-card pro" key={i}><div className="thumb"><button className="thumb-play" onClick={()=>c.link ? window.open(c.link,'_blank') : alert('Agrega un link o sube video para reproducirlo.')}><Icon name="play" size={30}/></button></div><div className="cc-body"><small className="course-pill">Modulo {i+1}</small><h2>{c.t}</h2><p>{c.d}</p>{c.link && <a className="cc-link" href={c.link} target="_blank" rel="noreferrer">Ver video</a>}<progress value={c.p} max="100"/><div className="cc-foot"><input type="range" min="0" max="100" value={c.p} onChange={e=>setList(list.map((x,idx)=>idx===i?{...x,p:+e.target.value}:x))}/><small>{c.p}%</small></div><a className="cc-del" onClick={()=>del(i)}>Eliminar</a></div></div>)}</div>
+    <div className="academy-hero panel"><div><small>{tr('academy.kicker')}</small><h2>{tr('academy.title')}</h2><p>{tr('academy.desc')}</p></div><div className="academy-meter"><b>{avg}%</b><span>{tr('academy.avgProgress')}</span></div></div>
+    <div className="academy-path">{[tr('academy.pathStep1'),tr('academy.pathStep2'),tr('academy.pathStep3'),tr('academy.pathStep4'),tr('academy.pathStep5')].map((x,i)=><div key={x} className={i<2?'done':''}><span>{i+1}</span><b>{x}</b></div>)}</div>
+    <div className="panel course-new pro"><div className="cn-fields"><div className="nf"><label>{tr('academy.courseTitle')}</label><input value={t} onChange={e=>setT(e.target.value)} placeholder={tr('academy.courseTitlePlaceholder')}/></div><div className="nf"><label>{tr('academy.courseDesc')}</label><input value={d} onChange={e=>setD(e.target.value)} placeholder={tr('academy.courseDescPlaceholder')}/></div></div><div className="nf"><label>{tr('academy.videoLink')}</label><input value={link} onChange={e=>setLink(e.target.value)} placeholder="https://..."/></div><div className="cn-foot"><label className="up-btn ghost-up">{tr('academy.uploadVideo')}<input type="file" accept="video/*" hidden onChange={()=>alert(tr('academy.uploadVideoMsg'))}/></label><button onClick={add}>{tr('academy.createCourse')}</button></div></div>
+    <div className="cards-3 academy-grid">{list.map((c,i)=><div className="course-card pro" key={i}><div className="thumb"><button className="thumb-play" onClick={()=>c.link ? window.open(c.link,'_blank') : alert(tr('academy.playVideoMsg'))}><Icon name="play" size={30}/></button></div><div className="cc-body"><small className="course-pill">{tr('academy.module',{n:i+1})}</small><h2>{c.t}</h2><p>{c.d}</p>{c.link && <a className="cc-link" href={c.link} target="_blank" rel="noreferrer">{tr('academy.viewVideo')}</a>}<progress value={c.p} max="100"/><div className="cc-foot"><input type="range" min="0" max="100" value={c.p} onChange={e=>setList(list.map((x,idx)=>idx===i?{...x,p:+e.target.value}:x))}/><small>{c.p}%</small></div><a className="cc-del" onClick={()=>del(i)}>{tr('academy.delete')}</a></div></div>)}</div>
   </div>;
 }
 
 function TechnicalOffice({company,setCompany,catalog,setCatalog,needsProject,onCreateProject}){
-  return <section><PageHead kicker="Oficina Técnica" title="Centro técnico y configuración" desc="Calculadoras de obra, membrete, logo, plantillas y catálogo de precios en un solo módulo." />
+  const { t: tr } = useI18n();
+  return <section><PageHead kicker={tr('config.kicker')} title={tr('config.title')} desc={tr('config.desc')} />
     <div className="combined-stack">
       {needsProject && <div className="panel" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap',padding:'14px 18px'}}>
-        <p className="muted" style={{margin:0}}>Aún no tienes un proyecto activo: el catálogo que importes aquí no quedará vinculado a ninguna obra hasta que crees uno.</p>
-        <button onClick={onCreateProject}>+ Crear proyecto</button>
+        <p className="muted" style={{margin:0}}>{tr('config.needProjectBanner')}</p>
+        <button onClick={onCreateProject}>{tr('config.createProject')}</button>
       </div>}
       <Office company={company} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} embedded />
       <TechnicalCenter embedded />
@@ -3720,9 +3894,51 @@ function TechnicalOffice({company,setCompany,catalog,setCatalog,needsProject,onC
 }
 
 function Office({company,setCompany,catalog,setCatalog,embedded=false}){
+  const { t: tr } = useI18n();
   const uploadLogo=(file)=>{if(!file)return;const r=new FileReader();r.onload=()=>setCompany({...company,logo:r.result});r.readAsDataURL(file)};
-  const importExcel=async(file)=>{ if(!file) return; if(/\.xls$/i.test(file.name)){alert('Guarda el archivo como .xlsx o .csv para importarlo.');return;} try{ const cat=await parseExcelToCatalog(file); if(!cat.length){alert('No detecté columnas de descripción y precio. Revisa los encabezados del Excel.');return;} setCatalog(cat); alert(`Catálogo importado: ${cat.length} insumos. El APU usará estos precios al generar.`);}catch(err){ alert(`No pude leer el archivo: ${err?.message || 'formato no compatible'}. Usa .xlsx o .csv.`); } };
-  return <section>{!embedded && <PageHead kicker="Oficina Técnica" title="Empresa, logo y formatos" desc="Configura membretes, datos fiscales, firmas, plantillas y tu Excel de precios." />}{embedded && <div className="module-subhead"><div><small>Oficina técnica</small><h2>Empresa, logo y formatos</h2></div></div>}<div className="grid-2"><div className="panel form"><label>Logo</label><img className="logo-preview" src={company.logo}/><input type="file" accept="image/*" onChange={e=>uploadLogo(e.target.files[0])}/><label>Empresa</label><input value={company.name} onChange={e=>setCompany({...company,name:e.target.value})}/><label>RFC</label><input value={company.rfc} onChange={e=>setCompany({...company,rfc:e.target.value})}/><label>Teléfono</label><input value={company.phone} onChange={e=>setCompany({...company,phone:e.target.value})}/><label>Correo</label><input value={company.email} onChange={e=>setCompany({...company,email:e.target.value})}/></div><div className="panel"><h2>Plantillas</h2>{['Formato ZOEMEC','Formato gobierno','Formato CFE','Formato CONAGUA','Formato personalizado'].map(x=><div className="activity" key={x}><Icon name="doc" size={16}/> {x}</div>)}<h2>Mi Excel de precios</h2><label className="up-btn ghost-up" style={{display:'inline-block',marginTop:4}}>Importar catálogo (.xlsx/.csv)<input type="file" accept=".xlsx,.csv" hidden onChange={e=>importExcel(e.target.files[0])}/></label>{catalog&&catalog.length>0 && <p className="muted" style={{marginTop:10}}>Catálogo cargado: <b>{catalog.length}</b> insumos. Se usan al generar APUs por coincidencia de nombre.</p>}<p className="muted">Detecto columnas de descripción, unidad y precio automáticamente.</p></div></div></section>}
+  const importExcel=async(file)=>{
+    if(!file) return;
+    if(/\.xls$/i.test(file.name)){ alert(tr('config.invalidXlsAlert')); return; }
+    try{
+      const cat=await parseExcelToCatalog(file);
+      if(!cat.length){ alert(tr('config.noColumnsAlert')); return; }
+      setCatalog(cat);
+      alert(tr('config.importedAlert',{count:cat.length}));
+    }catch(err){
+      alert(tr('config.importErrorAlert',{msg:err?.message || tr('config.importErrorDefault')}));
+    }
+  };
+  return <section>
+    {!embedded && <PageHead kicker={tr('config.kicker')} title={tr('config.officeTitle')} desc={tr('config.officeDesc')} />}
+    {embedded && <div className="module-subhead"><div><small>{tr('config.kicker')}</small><h2>{tr('config.officeTitle')}</h2></div></div>}
+    <div className="grid-2">
+      <div className="panel form">
+        <label>{tr('config.logoLabel')}</label>
+        <img className="logo-preview" src={company.logo}/>
+        <input type="file" accept="image/*" onChange={e=>uploadLogo(e.target.files[0])}/>
+        <label>{tr('config.companyLabel')}</label>
+        <input value={company.name} onChange={e=>setCompany({...company,name:e.target.value})}/>
+        <label>{tr('config.rfcLabel')}</label>
+        <input value={company.rfc} onChange={e=>setCompany({...company,rfc:e.target.value})}/>
+        <label>{tr('config.phoneLabel')}</label>
+        <input value={company.phone} onChange={e=>setCompany({...company,phone:e.target.value})}/>
+        <label>{tr('config.emailLabel')}</label>
+        <input value={company.email} onChange={e=>setCompany({...company,email:e.target.value})}/>
+      </div>
+      <div className="panel">
+        <h2>{tr('config.templatesTitle')}</h2>
+        {tr('config.templates').map(x=><div className="activity" key={x}><Icon name="doc" size={16}/> {x}</div>)}
+        <h2>{tr('config.myCatalogTitle')}</h2>
+        <label className="up-btn ghost-up" style={{display:'inline-block',marginTop:4}}>
+          {tr('config.importCatalogBtn')}
+          <input type="file" accept=".xlsx,.csv" hidden onChange={e=>importExcel(e.target.files[0])}/>
+        </label>
+        {catalog&&catalog.length>0 && <p className="muted" style={{marginTop:10}}>{tr('config.catalogLoadedText',{count:catalog.length})}</p>}
+        <p className="muted">{tr('config.autoDetectText')}</p>
+      </div>
+    </div>
+  </section>;
+}
 
 function Community(){
   const legacyForumThreads = ['Que rendimiento usan para muro de block 15 cm?','Proveedor de acero en zona centro','Formato de generadores para obra publica','Comparativo OPUS vs NEODATA'];
@@ -3773,6 +3989,7 @@ function parseVisualReport(text){
 }
 
 function VisualAI({user, setModule}){
+  const { t: tr } = useI18n();
   const [subview,setSubview]=useState('propuesta');
   const [image,setImage]=useState('');
   const [fileName,setFileName]=useState('');
@@ -3834,38 +4051,38 @@ function VisualAI({user, setModule}){
     }
   };
   const tabs=<div className="visual-modes" style={{marginBottom:14}}>
-    <button className={subview==='propuesta'?'active':''} onClick={()=>setSubview('propuesta')}>Propuesta visual</button>
-    <button className={subview==='takeoff'?'active':''} onClick={()=>setSubview('takeoff')}>Takeoff de plano</button>
+    <button className={subview==='propuesta'?'active':''} onClick={()=>setSubview('propuesta')}>{tr('visualAi.tabProposal')}</button>
+    <button className={subview==='takeoff'?'active':''} onClick={()=>setSubview('takeoff')}>{tr('visualAi.tabTakeoff')}</button>
   </div>;
-  if(subview==='takeoff') return <section><PageHead kicker="Visual IA" title="Planos IA / Takeoff asistido" desc="Sube un plano (PDF, JPG o PNG). ZOEMEC propone elementos y cantidades con evidencia y fuente de escala -- tu revisas, corriges y validas antes de que algo llegue a un APU." />{tabs}<PlanoTakeoff user={user} setModule={setModule}/></section>;
-  return <section><PageHead kicker="Visual IA" title="Imagen, fachada y plano a propuesta" desc="Sube una fachada, avance de obra, interior o plano. ZOEMEC prepara un brief visual para generar propuestas, renders y alcances tecnicos." action={<button onClick={generate}>Generar propuesta</button>} />
+  if(subview==='takeoff') return <section><PageHead kicker={tr('modules.takeoff.kicker')} title={tr('modules.takeoff.title')} desc={tr('modules.takeoff.desc')} />{tabs}<PlanoTakeoff user={user} setModule={setModule}/></section>;
+  return <section><PageHead kicker={tr('visualAi.kicker')} title={tr('visualAi.title')} desc={tr('visualAi.desc')} action={<button onClick={generate}>{tr('visualAi.generateProposal')}</button>} />
     {tabs}
     <div className="visual-grid">
       <div className="panel visual-uploader">
         <label className="visual-drop">
-          {image ? <img src={image} alt="Referencia visual"/> : <div><Icon name="play" size={42}/><b>Subir imagen o plano</b><span>JPG, PNG o captura de plano</span></div>}
+          {image ? <img src={image} alt={tr('visualAi.refAlt')}/> : <div><Icon name="play" size={42}/><b>{tr('visualAi.dropLabel')}</b><span>{tr('visualAi.dropHint')}</span></div>}
           <input type="file" accept="image/*" hidden onChange={e=>load(e.target.files[0])}/>
         </label>
-        <div className="visual-meta"><b>{fileName || 'Sin archivo cargado'}</b><span>{image ? 'Vista previa lista para IA' : 'Sube una imagen para analizar fachada, plano u obra'}</span></div>
-        <p className="muted" style={{fontSize:'.78rem',marginTop:'8px'}}>{libraryDocs.length ? `${libraryDocs.length} documento(s) de tu Biblioteca disponibles como evidencia para la IA.` : 'Sin documentos de Biblioteca disponibles todavia como evidencia.'}</p>
+        <div className="visual-meta"><b>{fileName || tr('visualAi.noFileLoaded')}</b><span>{image ? tr('visualAi.previewReady') : tr('visualAi.uploadHint')}</span></div>
+        <p className="muted" style={{fontSize:'.78rem',marginTop:'8px'}}>{libraryDocs.length ? tr('visualAi.libraryDocsAvailable',{count:libraryDocs.length}) : tr('visualAi.noLibraryDocs')}</p>
       </div>
       <div className="panel visual-form">
-        <h2>Que quieres generar</h2>
-        <div className="visual-modes">{[['fachada','Fachada'],['plano','Plano a 3D'],['interior','Interior'],['obra','Revision de obra']].map(x=><button key={x[0]} className={mode===x[0]?'active':''} onClick={()=>setMode(x[0])}>{x[1]}</button>)}</div>
-        <label>Instrucciones para la IA</label>
-        <textarea value={prompt} onChange={e=>setPrompt(e.target.value)} placeholder="Ej. Quiero ver esta fachada mas moderna, con piedra, luz calida y porton negro..." />
-        <div className="visual-actions"><button onClick={generate} disabled={loading}>{loading?'Generando...':'Generar brief visual'}</button></div>
+        <h2>{tr('visualAi.whatToGenerate')}</h2>
+        <div className="visual-modes">{[['fachada',tr('visualAi.modeFacade')],['plano',tr('visualAi.modePlan')],['interior',tr('visualAi.modeInterior')],['obra',tr('visualAi.modeSite')]].map(x=><button key={x[0]} className={mode===x[0]?'active':''} onClick={()=>setMode(x[0])}>{x[1]}</button>)}</div>
+        <label>{tr('visualAi.instructionsLabel')}</label>
+        <textarea value={prompt} onChange={e=>setPrompt(e.target.value)} placeholder={tr('visualAi.instructionsPlaceholder')} />
+        <div className="visual-actions"><button onClick={generate} disabled={loading}>{loading?tr('visualAi.generating'):tr('visualAi.generateBrief')}</button></div>
       </div>
       <div className="panel visual-result">
-        <h2>Salida tecnica</h2>
-        {generatedImage && <img className="visual-generated" src={generatedImage} alt="Propuesta visual generada por ZOEMEC IA"/>}
-        {!result && <p className="muted">Sube una imagen y genera el brief. ZOEMEC devuelve analisis tecnico, propuesta constructiva, materiales, estructura, acabados, riesgos, presupuesto aproximado y recomendaciones.</p>}
+        <h2>{tr('visualAi.technicalOutput')}</h2>
+        {generatedImage && <img className="visual-generated" src={generatedImage} alt={tr('visualAi.generatedAlt')}/>}
+        {!result && <p className="muted">{tr('visualAi.outputHint')}</p>}
       </div>
       {result && (()=>{ const sections=parseVisualReport(result); return sections
         ? <div className="visual-report">{sections.map((s,i)=><div className="vr-card" key={i}><b><i><Icon name={s.icon} size={13}/></i>{s.label}</b><p>{s.text}</p></div>)}</div>
         : <div className="panel visual-result" style={{gridColumn:'1/3'}}><pre>{result}</pre></div>; })()}
     </div>
-    <div className="visual-flow">{['Subir imagen de referencia','Guardar solicitud','IA analiza referencia','Genera render o brief','Usuario aprueba y manda a presupuesto'].map((x,i)=><div key={x}><b>{i+1}</b><span>{x}</span></div>)}</div>
+    <div className="visual-flow">{[tr('visualAi.flow1'),tr('visualAi.flow2'),tr('visualAi.flow3'),tr('visualAi.flow4'),tr('visualAi.flow5')].map((x,i)=><div key={x}><b>{i+1}</b><span>{x}</span></div>)}</div>
   </section>
 }
 
@@ -3875,6 +4092,7 @@ function VisualAI({user, setModule}){
    nuevas. No dibuja overlays ni bounding boxes (el modelo no da coordenadas
    fiables): solo pagina + evidencia textual, tal como se aprobo. */
 function PlanoTakeoff({user, setModule}){
+  const { t: tr } = useI18n();
   const [fileName,setFileName]=useState('');
   const [mimeType,setMimeType]=useState('');
   const [dataBase64,setDataBase64]=useState('');
@@ -3901,7 +4119,7 @@ function PlanoTakeoff({user, setModule}){
   };
 
   const analyze=async()=>{
-    if(!dataBase64){ window.zoemecNotify?.('Sube un plano (PDF, JPG o PNG) primero.','error'); return; }
+    if(!dataBase64){ window.zoemecNotify?.(tr('takeoff.uploadPlanFirstMsg'),'error'); return; }
     setAnalyzing(true);
     try{
       const referenciaUsuario = (refDesc.trim() && refMedida) ? { descripcion:refDesc.trim(), medida:Number(refMedida), unidad:refUnidad } : undefined;
@@ -3910,7 +4128,7 @@ function PlanoTakeoff({user, setModule}){
       setEdits({});
       setSimilarByIndex({});
     }catch(err){
-      window.zoemecNotify?.(friendlyServiceError(err,'No se pudo analizar el plano.'), 'error');
+      window.zoemecNotify?.(friendlyServiceError(err,tr('takeoff.analyzeFailMsg')), 'error');
     }finally{ setAnalyzing(false); }
   };
 
@@ -3935,7 +4153,7 @@ function PlanoTakeoff({user, setModule}){
         return {...prev, elementos};
       });
     }catch(err){
-      window.zoemecNotify?.(friendlyServiceError(err,'No se pudo actualizar la revision de este elemento.'), 'error');
+      window.zoemecNotify?.(friendlyServiceError(err,tr('takeoff.reviewUpdateFailMsg')), 'error');
     }finally{ setBusyIndex(-1); }
   };
 
@@ -3946,54 +4164,54 @@ function PlanoTakeoff({user, setModule}){
       const data=await apiPost('/api/upload-library', { action:'similarMatrices', concept });
       setSimilarByIndex(prev=>({...prev,[index]:{ forDoc:elemento.descripcion, results:data.results||[] }}));
     }catch(err){
-      window.zoemecNotify?.(friendlyServiceError(err,'No se pudo buscar matrices similares.'), 'error');
+      window.zoemecNotify?.(friendlyServiceError(err,tr('takeoff.similarFailMsg')), 'error');
     }finally{ setBusyIndex(-1); }
   };
 
   const handleUseInApu=(elemento)=>{
     const seed=toApuSeed(elemento);
     if(!seed){
-      window.zoemecNotify?.('Este elemento aun no esta VALIDADO_POR_USUARIO o no tiene una cantidad utilizable. Valida primero.', 'error');
+      window.zoemecNotify?.(tr('takeoff.notValidatedMsg'), 'error');
       return;
     }
     try{ localStorage.setItem('zoemec-pending-plano-seed', JSON.stringify(seed)); }catch{}
-    window.zoemecNotify?.(`"${seed.concept}" (${seed.qty} ${seed.unit}) listo para generar APU. Revisalo en APU Inteligente.`, 'info');
+    window.zoemecNotify?.(tr('takeoff.readyForApuMsg',{concept:seed.concept,qty:seed.qty,unit:seed.unit}), 'info');
     setModule?.('apu');
   };
 
-  const estadoLabel={ PROPUESTO_POR_IA:'Propuesto por IA', REQUIERE_REVISION:'Requiere revision', VALIDADO_POR_USUARIO:'Validado', RECHAZADO:'Rechazado' };
+  const estadoLabel={ PROPUESTO_POR_IA:tr('takeoff.stateProposedAI'), REQUIERE_REVISION:tr('takeoff.stateNeedsReview'), VALIDADO_POR_USUARIO:tr('takeoff.stateValidated'), RECHAZADO:tr('takeoff.stateRejected') };
 
   return <div className="plano-takeoff">
     <div className="panel visual-uploader">
       <label className="visual-drop">
-        <div><Icon name="doc" size={42}/><b>{fileName || 'Subir plano'}</b><span>PDF, JPG o PNG -- hasta 10 paginas por analisis</span></div>
+        <div><Icon name="doc" size={42}/><b>{fileName || tr('takeoff.uploadPlan')}</b><span>{tr('takeoff.uploadHint')}</span></div>
         <input type="file" accept="application/pdf,image/jpeg,image/png" hidden onChange={e=>loadFile(e.target.files[0])}/>
       </label>
-      <div className="visual-actions"><button onClick={analyze} disabled={analyzing || !dataBase64}>{analyzing?'Analizando...':'Analizar plano'}</button></div>
+      <div className="visual-actions"><button onClick={analyze} disabled={analyzing || !dataBase64}>{analyzing?tr('takeoff.analyzing'):tr('takeoff.analyzePlan')}</button></div>
       <div className="grid-2" style={{marginTop:12}}>
-        <div><label>Medida de referencia conocida (opcional)</label><input value={refDesc} onChange={e=>setRefDesc(e.target.value)} placeholder="ej. Puerta principal"/></div>
+        <div><label>{tr('takeoff.refMeasureLabel')}</label><input value={refDesc} onChange={e=>setRefDesc(e.target.value)} placeholder={tr('takeoff.refMeasurePlaceholder')}/></div>
         <div style={{display:'flex',gap:8}}>
           <input type="number" step="any" value={refMedida} onChange={e=>setRefMedida(e.target.value)} placeholder="0.90" style={{flex:1}}/>
           <input value={refUnidad} onChange={e=>setRefUnidad(e.target.value)} placeholder="m" style={{width:70}}/>
         </div>
       </div>
-      <p className="muted" style={{fontSize:'.78rem',marginTop:8}}>Si el analisis anterior dejo elementos en "Requiere revision" por falta de escala, captura aqui una medida real conocida y vuelve a analizar: la IA la usara para calibrar el resto.</p>
+      <p className="muted" style={{fontSize:'.78rem',marginTop:8}}>{tr('takeoff.refHint')}</p>
     </div>
 
     {mimeType.startsWith('image/') && dataBase64
       ? <PlanoManualMeasure imageDataUrl={dataBase64} fileName={fileName} mimeType={mimeType} setModule={setModule} takeoffRecords={takeoffRecords} setTakeoffRecords={setTakeoffRecords} user={user}/>
-      : dataBase64 ? <p className="muted" style={{fontSize:'.78rem'}}>La cuantificacion manual (trazo + calibracion de escala) solo esta disponible para planos en JPG/PNG en esta fase -- para PDF usa el analisis por IA de arriba.</p> : null}
+      : dataBase64 ? <p className="muted" style={{fontSize:'.78rem'}}>{tr('takeoff.manualOnlyImageHint')}</p> : null}
 
     {result && <div className="panel">
-      <div className="admin-panel-head"><h2>Resultado del analisis</h2><small className="hint">{result.numPages} pagina(s) · {result.elementos.length} elemento(s) propuesto(s){result.resultadoParcial ? ` · resultado parcial (${result.elementosDescartados} descartado(s) por limite)` : ''}{result.elementosInvalidos?.length ? ` · ${result.elementosInvalidos.length} elemento(s) invalido(s) descartado(s) por el validador` : ''}</small></div>
+      <div className="admin-panel-head"><h2>{tr('takeoff.analysisResult')}</h2><small className="hint">{tr('takeoff.pagesElements',{pages:result.numPages,count:result.elementos.length})}{result.resultadoParcial ? tr('takeoff.partialResult',{count:result.elementosDescartados}) : ''}{result.elementosInvalidos?.length ? tr('takeoff.invalidDiscarded',{count:result.elementosInvalidos.length}) : ''}</small></div>
       <div className="visual-meta" style={{marginBottom:10}}>
         <b>{result.fileName || fileName}</b>
         {result.fileStored && result.downloadURL
-          ? <button className="soft" onClick={()=>window.open(result.downloadURL,'_blank')}>Abrir plano original</button>
-          : <span className="muted" style={{fontSize:'.78rem'}}>{result.storageError ? `Plano original no almacenado: ${result.storageError}` : 'Plano original no almacenado.'}</span>}
+          ? <button className="soft" onClick={()=>window.open(result.downloadURL,'_blank')}>{tr('takeoff.openOriginalPlan')}</button>
+          : <span className="muted" style={{fontSize:'.78rem'}}>{result.storageError ? tr('takeoff.planNotStored',{reason:result.storageError}) : tr('takeoff.planNotStoredPlain')}</span>}
       </div>
       {result.resumenAnalisis && <p className="muted">{result.resumenAnalisis}</p>}
-      <table className="mini-table"><thead><tr><th>Tipo</th><th>Descripcion</th><th>Cantidad</th><th>Unidad</th><th>Pag.</th><th>Confianza IA</th><th>Fuente escala</th><th>Estado</th><th>Evidencia</th><th></th></tr></thead>
+      <table className="mini-table"><thead><tr><th>{tr('takeoff.colType')}</th><th>{tr('takeoff.colDesc')}</th><th>{tr('takeoff.colQty')}</th><th>{tr('takeoff.colUnit')}</th><th>{tr('takeoff.colPage')}</th><th>{tr('takeoff.colAiConfidence')}</th><th>{tr('takeoff.colScaleSource')}</th><th>{tr('takeoff.colState')}</th><th>{tr('takeoff.colEvidence')}</th><th></th></tr></thead>
         <tbody>{result.elementos.map((el,index)=>{
           const busy=busyIndex===index;
           const e=edits[index]||{};
@@ -4002,7 +4220,7 @@ function PlanoTakeoff({user, setModule}){
             <tr className={'plano-el-'+el.estado.toLowerCase()}>
               <td>{el.tipo}</td>
               <td><input value={e.descripcion ?? el.descripcionCorregida ?? el.descripcion} onChange={ev=>setEdit(index,{descripcion:ev.target.value})} disabled={!canEditQty}/></td>
-              <td><input type="number" step="any" style={{width:80}} value={e.cantidad ?? (el.cantidadCorregida ?? el.cantidadPropuesta ?? '')} onChange={ev=>setEdit(index,{cantidad:ev.target.value})} disabled={!canEditQty} placeholder={el.cantidadPropuesta==null?'pendiente':''}/></td>
+              <td><input type="number" step="any" style={{width:80}} value={e.cantidad ?? (el.cantidadCorregida ?? el.cantidadPropuesta ?? '')} onChange={ev=>setEdit(index,{cantidad:ev.target.value})} disabled={!canEditQty} placeholder={el.cantidadPropuesta==null?tr('takeoff.qtyPending'):''}/></td>
               <td><input style={{width:60}} value={e.unidad ?? (el.unidadCorregida || el.unidad)} onChange={ev=>setEdit(index,{unidad:ev.target.value})} disabled={!canEditQty}/></td>
               <td>{el.pagina}</td>
               <td>{el.confianzaIA}%</td>
@@ -4010,16 +4228,16 @@ function PlanoTakeoff({user, setModule}){
               <td><b>{estadoLabel[el.estado]}</b>{el.validatedBy ? <small> · {el.validatedBy}</small> : null}</td>
               <td className="muted" style={{maxWidth:220,fontSize:'.75rem'}}>{el.evidencia}</td>
               <td>
-                <button className="soft" disabled={busy} onClick={()=>reviewElement(index,'VALIDADO_POR_USUARIO')}>Validar</button>
-                <button className="row-del" disabled={busy} onClick={()=>reviewElement(index,'RECHAZADO')}>Rechazar</button>
-                <button className="soft" disabled={busy} onClick={()=>handleSimilar(index,el)}>Matrices similares</button>
-                <button disabled={el.estado!=='VALIDADO_POR_USUARIO'} onClick={()=>handleUseInApu(el)}>Usar en APU</button>
+                <button className="soft" disabled={busy} onClick={()=>reviewElement(index,'VALIDADO_POR_USUARIO')}>{tr('takeoff.validate')}</button>
+                <button className="row-del" disabled={busy} onClick={()=>reviewElement(index,'RECHAZADO')}>{tr('takeoff.reject')}</button>
+                <button className="soft" disabled={busy} onClick={()=>handleSimilar(index,el)}>{tr('takeoff.similarMatrices')}</button>
+                <button disabled={el.estado!=='VALIDADO_POR_USUARIO'} onClick={()=>handleUseInApu(el)}>{tr('takeoff.useInApu')}</button>
               </td>
             </tr>
             {similarByIndex[index] && <tr><td colSpan={10}>
               <div className="lib-similar-results">
-                <b>Matrices similares</b>
-                {similarByIndex[index].results.length ? <ul>{similarByIndex[index].results.map(r=><li key={r.id}><b>{r.name}</b> — {r.cat} · score {r.score} · coincide: {r.matchedTerms.join(', ')||'—'}</li>)}</ul> : <p className="muted">Sin matrices similares reales encontradas.</p>}
+                <b>{tr('takeoff.similarMatricesTitle')}</b>
+                {similarByIndex[index].results.length ? <ul>{similarByIndex[index].results.map(r=><li key={r.id}><b>{r.name}</b> — {r.cat} · score {r.score} · coincide: {r.matchedTerms.join(', ')||'—'}</li>)}</ul> : <p className="muted">{tr('takeoff.noSimilarFound')}</p>}
               </div>
             </td></tr>}
           </React.Fragment>;
@@ -4040,6 +4258,7 @@ function PlanoTakeoff({user, setModule}){
    con el MISMO motor que Planos IA (applyPlanoElementReview/toApuSeed,
    planoReview.js) -- ningun motor nuevo. */
 function PlanoManualMeasure({imageDataUrl, fileName, mimeType, setModule, takeoffRecords, setTakeoffRecords, user}){
+  const { t: tr } = useI18n();
   const canvasRef=useRef(null);
   const imgRef=useRef(null);
   const [mode,setMode]=useState(null); // 'calibrate' | 'area' | 'length'
@@ -4116,7 +4335,7 @@ function PlanoManualMeasure({imageDataUrl, fileName, mimeType, setModule, takeof
       fuenteEscala: existing.medicion?.fuenteEscala, origenMedicion: existing.medicion?.origenMedicion,
       confianzaIA: existing.medicion?.confianzaIA, estado: existing.medicion?.estado
     });
-    window.zoemecNotify?.(`Medicion anterior de "${fileName}" restaurada -- no fue necesario volver a trazarla.`,'info');
+    window.zoemecNotify?.(tr('takeoffManual.restoredMsg',{name:fileName}),'info');
   },[restoreKey,fileName,fileHash,takeoffRecords]);
 
   const redraw=()=>{
@@ -4155,20 +4374,20 @@ function PlanoManualMeasure({imageDataUrl, fileName, mimeType, setModule, takeof
   const startMode=(next)=>{ setMode(next); setPoints([]); if(next==='calibrate') setCalibPoints([]); };
 
   const confirmCalibration=()=>{
-    if(calibPoints.length!==2){ window.zoemecNotify?.('Traza 2 puntos sobre una medida conocida del plano (ej. una cota o una puerta).','error'); return; }
-    if(!(Number(calibDistance)>0)){ window.zoemecNotify?.('Captura la distancia real de esos 2 puntos (mayor a 0).','error'); return; }
+    if(calibPoints.length!==2){ window.zoemecNotify?.(tr('takeoffManual.calibratePointsMsg'),'error'); return; }
+    if(!(Number(calibDistance)>0)){ window.zoemecNotify?.(tr('takeoffManual.calibrateDistanceMsg'),'error'); return; }
     const [[x1,y1],[x2,y2]]=calibPoints;
     const pixelDistance=Math.hypot(x2-x1,y2-y1);
     const s=calibrateScale(pixelDistance,Number(calibDistance));
-    if(!s){ window.zoemecNotify?.('No se pudo calibrar la escala con esos puntos.','error'); return; }
+    if(!s){ window.zoemecNotify?.(tr('takeoffManual.calibrateFailMsg'),'error'); return; }
     setScale(s); setMode(null); setCalibPoints([]);
-    window.zoemecNotify?.(`Escala calibrada: 1 pixel = ${s.toFixed(5)} ${calibUnit}.`,'info');
+    window.zoemecNotify?.(tr('takeoffManual.calibratedMsg',{scale:s.toFixed(5),unit:calibUnit}),'info');
   };
 
   const finishMeasure=()=>{
-    if(!scale){ window.zoemecNotify?.('Calibra la escala primero (boton "Calibrar escala").','error'); return; }
+    if(!scale){ window.zoemecNotify?.(tr('takeoffManual.calibrateFirstMsg'),'error'); return; }
     const need=mode==='area'?3:2;
-    if(points.length<need){ window.zoemecNotify?.(`Traza al menos ${need} puntos antes de terminar.`,'error'); return; }
+    if(points.length<need){ window.zoemecNotify?.(tr('takeoffManual.needPointsMsg',{count:need}),'error'); return; }
     const el=measureElement({points,mode,scaleUnitsPerPixel:scale,unit:calibUnit,tipo,descripcion,fileName});
     setPendingElement(el);
     setCantidadFinal(el.cantidadPropuesta!=null?String(el.cantidadPropuesta):'');
@@ -4195,7 +4414,7 @@ function PlanoManualMeasure({imageDataUrl, fileName, mimeType, setModule, takeof
       descripcionCorregida: descripcion && descripcion!==pendingElement.descripcion?descripcion:undefined
     });
     const seed=toApuSeed(reviewed);
-    if(!seed){ window.zoemecNotify?.('Esta medicion no tiene una cantidad valida (revisa la escala calibrada).','error'); return; }
+    if(!seed){ window.zoemecNotify?.(tr('takeoffManual.noValidQtyMsg'),'error'); return; }
     // Persiste la correccion manteniendo el historial (cantidad ORIGINAL del
     // trazo nunca se pierde -- ver planoTakeoffStore.js#applyManualCorrection).
     if(recordId){
@@ -4206,38 +4425,38 @@ function PlanoManualMeasure({imageDataUrl, fileName, mimeType, setModule, takeof
       })));
     }
     try{ localStorage.setItem('zoemec-pending-plano-seed', JSON.stringify(seed)); }catch{}
-    window.zoemecNotify?.(`"${seed.concept}" (${seed.qty} ${seed.unit}) listo para generar APU. Revisalo en APU Inteligente.`, 'info');
+    window.zoemecNotify?.(tr('takeoffManual.readyForApuMsg',{concept:seed.concept,qty:seed.qty,unit:seed.unit}), 'info');
     setModule?.('apu');
   };
 
   return <div className="panel plano-manual-measure">
-    <div className="admin-panel-head"><h2>Cuantificacion manual sobre el plano</h2><small className="hint">Traza sobre la imagen: calibra una escala real, luego mide un area o longitud. Nunca se propone una cantidad sin escala calibrada.</small></div>
+    <div className="admin-panel-head"><h2>{tr('takeoffManual.title')}</h2><small className="hint">{tr('takeoffManual.hint')}</small></div>
     <div style={{position:'relative',display:'inline-block',maxWidth:'100%'}}>
-      <img ref={imgRef} src={imageDataUrl} alt="Plano cargado" style={{maxWidth:'100%',display:'block'}} onLoad={redraw}/>
+      <img ref={imgRef} src={imageDataUrl} alt={tr('takeoffManual.imgAlt')} style={{maxWidth:'100%',display:'block'}} onLoad={redraw}/>
       <canvas ref={canvasRef} onClick={handleCanvasClick} style={{position:'absolute',inset:0,width:'100%',height:'100%',cursor:mode?'crosshair':'default'}}/>
     </div>
     <div className="visual-actions" style={{marginTop:10,flexWrap:'wrap',gap:8}}>
-      <button className={mode==='calibrate'?'active':'soft'} onClick={()=>startMode('calibrate')}>Calibrar escala</button>
-      <input type="number" step="any" style={{width:90}} value={calibDistance} onChange={e=>setCalibDistance(e.target.value)} placeholder="distancia real" disabled={mode!=='calibrate'}/>
+      <button className={mode==='calibrate'?'active':'soft'} onClick={()=>startMode('calibrate')}>{tr('takeoffManual.calibrateScale')}</button>
+      <input type="number" step="any" style={{width:90}} value={calibDistance} onChange={e=>setCalibDistance(e.target.value)} placeholder={tr('takeoffManual.realDistancePlaceholder')} disabled={mode!=='calibrate'}/>
       <input style={{width:60}} value={calibUnit} onChange={e=>setCalibUnit(e.target.value)} placeholder="m"/>
-      {mode==='calibrate' && <button onClick={confirmCalibration}>Confirmar calibracion ({calibPoints.length}/2 puntos)</button>}
-      <span className="muted" style={{fontSize:'.78rem'}}>{scale ? `Escala activa: 1 px = ${scale.toFixed(5)} ${calibUnit}` : 'Sin escala calibrada'}</span>
+      {mode==='calibrate' && <button onClick={confirmCalibration}>{tr('takeoffManual.confirmCalibration',{count:calibPoints.length})}</button>}
+      <span className="muted" style={{fontSize:'.78rem'}}>{scale ? tr('takeoffManual.activeScale',{scale:scale.toFixed(5),unit:calibUnit}) : tr('takeoffManual.noScale')}</span>
     </div>
     <div className="visual-actions" style={{marginTop:6,flexWrap:'wrap',gap:8}}>
-      <button className={mode==='area'?'active':'soft'} disabled={!scale} onClick={()=>startMode('area')}>Medir área</button>
-      <button className={mode==='length'?'active':'soft'} disabled={!scale} onClick={()=>startMode('length')}>Medir longitud</button>
+      <button className={mode==='area'?'active':'soft'} disabled={!scale} onClick={()=>startMode('area')}>{tr('takeoffManual.measureArea')}</button>
+      <button className={mode==='length'?'active':'soft'} disabled={!scale} onClick={()=>startMode('length')}>{tr('takeoffManual.measureLength')}</button>
       <select value={tipo} onChange={e=>setTipo(e.target.value)}>{['piso','muro','losa','puerta','ventana','columna','trabe','plafon','otro'].map(t=><option key={t} value={t}>{t}</option>)}</select>
-      <input value={descripcion} onChange={e=>setDescripcion(e.target.value)} placeholder="Descripcion del elemento (ej. Piso Local 02)" style={{flex:1,minWidth:180}}/>
-      {(mode==='area'||mode==='length') && <button onClick={finishMeasure}>Terminar trazo ({points.length} puntos)</button>}
+      <input value={descripcion} onChange={e=>setDescripcion(e.target.value)} placeholder={tr('takeoffManual.descPlaceholder')} style={{flex:1,minWidth:180}}/>
+      {(mode==='area'||mode==='length') && <button onClick={finishMeasure}>{tr('takeoffManual.finishTrace',{count:points.length})}</button>}
     </div>
     {pendingElement && <div className="lib-insumos-review" style={{marginTop:10}}>
-      <b>Medicion propuesta</b>
-      <p>{pendingElement.descripcion || '(sin descripcion)'} — trazo original: {pendingElement.cantidadPropuesta != null ? `${pendingElement.cantidadPropuesta} ${pendingElement.unidad}` : 'REQUIERE VALIDACIÓN (sin cantidad: escala no determinada)'}</p>
-      <p className="muted" style={{fontSize:'.78rem'}}>Origen: {pendingElement.origenMedicion} (nunca IA) · Fuente de escala: {pendingElement.fuenteEscala}</p>
+      <b>{tr('takeoffManual.proposedMeasurement')}</b>
+      <p>{pendingElement.descripcion || tr('takeoffManual.noDescription')} — {pendingElement.cantidadPropuesta != null ? tr('takeoffManual.originalTraceLabel',{qty:pendingElement.cantidadPropuesta,unit:pendingElement.unidad}) : tr('takeoffManual.needsValidation')}</p>
+      <p className="muted" style={{fontSize:'.78rem'}}>{tr('takeoffManual.originLabel',{origin:pendingElement.origenMedicion,source:pendingElement.fuenteEscala})}</p>
       {pendingElement.cantidadPropuesta!=null && <div className="grid-2">
-        <div><label>Cantidad final (edita si corresponde una correccion)</label><input type="number" step="any" value={cantidadFinal} onChange={e=>setCantidadFinal(e.target.value)}/></div>
+        <div><label>{tr('takeoffManual.finalQtyLabel')}</label><input type="number" step="any" value={cantidadFinal} onChange={e=>setCantidadFinal(e.target.value)}/></div>
       </div>}
-      <button disabled={pendingElement.cantidadPropuesta==null} onClick={useInApu}>Validar y usar en APU</button>
+      <button disabled={pendingElement.cantidadPropuesta==null} onClick={useInApu}>{tr('takeoffManual.validateAndUse')}</button>
     </div>}
   </div>;
 }
@@ -4324,4 +4543,10 @@ function Reports({clients,apus,budgets}){
   return <section><PageHead kicker="Reportes" title="Tablero ejecutivo" desc="Ventas, presupuestos, clientes, APUs, avances, utilidad y rendimiento de la oficina." action={<button onClick={()=>window.print()}>Exportar reporte</button>} /><div className="report-hero"><div><small>Venta potencial</small><b>{money(total)}</b><span>acumulado</span></div><div><small>Pipeline</small><b>{budgets.length ? 'Activo' : '0%'}</b><span>tasa de cierre</span></div><div><small>Productividad</small><b>{apus.length}</b><span>APU generados</span></div><div><small>Clientes</small><b>{clients.length}</b><span>activos</span></div></div><div className="dash-charts report-grid"><div className="panel"><h2>Cotizacion mensual</h2><Spark points={budgets.length ? budgets.slice(-8).map(b=>Math.max(1,(Number(b.total)||0)/1000)) : [0,0,0,0,0,0,0,0]} h={110}/><div className="chart-foot"><span>{budgets.length ? 'Presupuestos reales' : 'Sin datos reales'}</span><b>{budgets.length ? 'Actualizado' : '0% acumulado'}</b></div></div><div className="panel chart-donut"><h2>Cartera por tipo de obra</h2><Donut segments={segs} center={hasData ? '100%' : '0%'} sub="cartera"/><div className="donut-legend">{segs.length ? segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>) : <EmptyState text="Sin datos para graficar."/>}</div></div></div><div className="report-bottom"><div className="panel"><h2>Resumen mensual</h2>{bars.map(([label,val,color])=><div className="bar-row" key={label}><span>{label}</span><i><b style={{width:val+'%',background:color}}></b></i><em className="bar-val">{val}%</em></div>)}</div><div className="panel"><h2>Alertas ejecutivas</h2>{alerts.length ? alerts.map(a=><div className="activity" key={a}><Icon name="bell" size={15}/> {a}</div>) : <EmptyState text="Sin alertas hasta que existan movimientos reales."/>}</div></div></section>
 }
 
-createRoot(document.getElementById('root')).render(<App />);
+createRoot(document.getElementById('root')).render(
+  <I18nProvider>
+    <ThemeProvider>
+      <App />
+    </ThemeProvider>
+  </I18nProvider>
+);

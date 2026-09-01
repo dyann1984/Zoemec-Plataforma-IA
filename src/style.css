@@ -22,6 +22,33 @@
   --gold-soft:#F4EAD3;
   --danger:#B54A62;
   --ok:#7650A8;
+  /* Superficies claras de la landing (Fase 2/8): antes eran hex sueltos
+     dentro de .hero-build/.nav-public/etc, sin token -- no podian responder
+     a [data-theme="dark"]. Mismos valores de siempre, solo con nombre. */
+  --surface:#FFFFFF;
+  --surface-soft-1:#F9F7FC;
+  --surface-soft-2:#F6F3FA;
+  --surface-soft-3:#F3EFF9;
+  /* Fondo solido con texto blanco (botones, badges, pestanas activas):
+     token DELIBERADAMENTE separado de --teal. Medi contraste real
+     (ver reporte) y confirme matematicamente que ningun morado puede
+     servir a la vez como texto legible sobre --paper oscuro (necesita
+     luminancia alta) Y como fondo solido con texto blanco encima
+     (necesita luminancia baja) -- son requisitos opuestos. --teal se
+     aclara en modo oscuro para seguir siendo texto legible;
+     --accent-solid se queda fijo en el morado original (blanco sobre
+     el = 7.13:1 AAA, verificado) porque es un bloque de color
+     autocontenido, no una superficie a invertir -- mismo criterio que
+     ya se aplico a --petrol/sidebar/franja de marca. */
+  --accent-solid:#6F3FA7;
+  /* Mismo problema y misma solucion que --accent-solid, para error: los
+     3 usos de --danger como fondo solido con texto blanco (boton
+     danger-solid, hover del boton salir, indicador de grabacion de voz
+     activa) necesitan quedarse en el rojo original (blanco encima =
+     5.10:1 AA); --danger como TEXTO se aclara en modo oscuro por
+     separado. Verificado: blanco sobre el candidato aclarado da 3.06:1,
+     reprueba -- confirma que de verdad hacian falta 2 tokens, no uno. */
+  --danger-solid:#B54A62;
   --r:14px; --r-sm:10px;
   --shadow:0 22px 60px rgba(23,16,32,.13);
   --shadow-sm:0 6px 18px rgba(23,16,32,.08);
@@ -30,9 +57,41 @@
   --mono:'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+/* ====================================================================
+   Tema oscuro: redefine SOLO las variables de :root, nunca colores
+   sueltos en reglas individuales. Como casi todo el sistema base (.panel,
+   .data-table, tipografia, landing tras Fase 2/8) ya consume estas
+   variables en vez de hex directos, esta capa se propaga sola a la
+   mayoria de la interfaz sin tocar cada selector. Excepcion deliberada:
+   paneles ya oscuros por diseno (sidebar, panel de marca de login,
+   os-command/os-bim del dashboard, ai-panel, widget de ZOE) NO se tocan
+   aqui -- ya funcionan en cualquier tema, son acentos de marca
+   contenidos, no "superficies" que deban invertirse.
+   Activado por [data-theme="dark"] en <html>, ver src/theme/ThemeContext.jsx. */
+:root[data-theme="dark"]{
+  --ink:#F3EEFB;
+  --ink-text:#E7DFF5;
+  --muted:#B6A9CC;
+  --paper:#150F20;
+  --card:#1E1730;
+  --mint:#2A2140;
+  --line:#3A3050;
+  --line-2:#4A3D66;
+  --surface:#1E1730;
+  --surface-soft-1:#1B1428;
+  --surface-soft-2:#180F22;
+  --surface-soft-3:#150C1E;
+  --teal:#A879E8;
+  --teal-2:#C6A6F2;
+  --danger:#DB7391;
+  --shadow:0 22px 60px rgba(0,0,0,.45);
+  --shadow-sm:0 6px 18px rgba(0,0,0,.32);
+}
+
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
-body{margin:0;font-family:var(--body);background:var(--paper);color:var(--ink-text);-webkit-font-smoothing:antialiased;letter-spacing:.1px}
+body{margin:0;font-family:var(--body);background:var(--paper);color:var(--ink-text);-webkit-font-smoothing:antialiased;letter-spacing:.1px;
+  padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right)}
 h1,h2,h3{font-family:var(--display);letter-spacing:-.02em;margin:0}
 button,input,textarea,select{font:inherit;color:inherit}
 a{cursor:pointer}
@@ -45,7 +104,7 @@ small{color:var(--muted)}
 
 /* ---------- Botones ---------- */
 button{
-  border:0;border-radius:var(--r-sm);background:var(--teal);color:#fff;
+  border:0;border-radius:var(--r-sm);background:var(--accent-solid);color:#fff;
   padding:11px 18px;font-weight:600;font-family:var(--display);cursor:pointer;
   box-shadow:0 8px 18px rgba(111,63,167,.24);transition:.18s transform,.18s box-shadow,.18s filter}
 button:hover{transform:translateY(-1px);box-shadow:0 12px 26px rgba(111,63,167,.34)}
@@ -65,9 +124,9 @@ button.soft.danger:hover{background:#f3d3cc;border-color:var(--danger)}
    forma permanente (ej. "Vaciar proyecto") -- solido, sin el borde punteado
    de .soft.danger, para que se distinga a simple vista de una accion
    destructiva pero reversible/local como "Limpiar trabajo". */
-button.danger-solid{background:var(--danger);color:#fff;box-shadow:0 8px 18px rgba(181,74,98,.35);border:0}
+button.danger-solid{background:var(--danger-solid);color:#fff;box-shadow:0 8px 18px rgba(181,74,98,.35);border:0}
 button.danger-solid:hover{background:#9c3d52;box-shadow:0 12px 26px rgba(181,74,98,.45)}
-button.danger-solid:disabled{background:var(--danger);opacity:.5}
+button.danger-solid:disabled{background:var(--danger-solid);opacity:.5}
 button.google{background:#fff;color:var(--ink);border:1px solid var(--line-2);box-shadow:none}
 a:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
 input,textarea,select{
@@ -247,22 +306,22 @@ label{display:block;font-size:.74rem;font-weight:600;color:var(--muted);text-tra
 .plan-box i{display:block;height:100%;background:linear-gradient(90deg,var(--teal-2),var(--gold))}
 .plan-box small{display:block;margin-top:8px;color:#D8C7EB;font-size:.68rem;font-weight:700;letter-spacing:.04em}
 .logout-side{background:rgba(255,255,255,.06);color:#fff;box-shadow:none;border:1px solid rgba(255,255,255,.1);margin-top:10px}
-.logout-side:hover{background:var(--danger);border-color:var(--danger)}
+.logout-side:hover{background:var(--danger-solid);border-color:var(--danger-solid)}
 
 .main{display:flex;flex-direction:column;min-width:0}
 .topbar{position:sticky;top:0;z-index:8;display:flex;align-items:center;justify-content:space-between;gap:16px;
-  padding:14px 28px;background:rgba(244,247,246,.85);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+  padding:14px 28px;background:var(--surface);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
 .user{display:flex;align-items:center;gap:12px}
 .avatar{width:38px;height:38px;border-radius:11px;background:var(--ink);color:#fff;display:grid;place-items:center;
   font-family:var(--display);font-weight:700;font-size:.9rem}
 .user>div b{font-size:.88rem;display:block;line-height:1.1}
 .user>div small{font-size:.72rem}
 .user button{padding:8px 14px;font-size:.84rem;background:var(--mint);color:var(--petrol);box-shadow:none;border:1px solid var(--line)}
-.user button:hover{background:var(--danger);color:#fff;border-color:var(--danger)}
+.user button:hover{background:var(--danger-solid);color:#fff;border-color:var(--danger-solid)}
 
 /* Búsqueda real de la topbar */
 .top-search{position:relative;flex:1;max-width:440px;display:flex;align-items:center;gap:8px;
-  background:#fff;border:1px solid var(--line);border-radius:30px;padding:9px 16px;color:var(--muted)}
+  background:var(--surface);border:1px solid var(--line);border-radius:30px;padding:9px 16px;color:var(--muted)}
 .top-search input{border:none;outline:none;background:none;flex:1;font-family:var(--body);font-size:.9rem;color:var(--ink)}
 .top-search input::placeholder{color:var(--muted)}
 .top-search-drop{position:absolute;left:0;right:0;top:calc(100% + 8px);background:var(--card);border:1px solid var(--line);
@@ -619,7 +678,7 @@ svg.ic{display:block;flex:none}
 .menu button .mi svg{width:19px;height:19px}
 .feature .fic{width:46px;height:46px;border-radius:12px;background:var(--mint);color:var(--teal);
   display:grid;place-items:center;border:1px solid var(--line)}
-.feature:hover .fic{background:var(--teal);color:#fff;border-color:var(--teal)}
+.feature:hover .fic{background:var(--accent-solid);color:#fff;border-color:var(--teal)}
 .quick button{display:inline-flex;align-items:center;gap:10px}
 .quick button svg{color:var(--teal)}
 .folder b,.activity{display:flex;align-items:center;gap:8px}
@@ -756,7 +815,7 @@ svg.ic{display:block;flex:none}
 .lib-up-drop>svg{color:var(--teal);flex:none}
 .lib-up-drop b{display:block;color:var(--ink)}
 .lib-up-drop small{display:block;max-width:60ch;margin-top:2px}
-.up-btn{margin-left:auto;background:var(--teal);color:#fff;padding:11px 18px;border-radius:var(--r-sm);font-family:var(--display);
+.up-btn{margin-left:auto;background:var(--accent-solid);color:#fff;padding:11px 18px;border-radius:var(--r-sm);font-family:var(--display);
   font-weight:600;cursor:pointer;box-shadow:0 8px 18px rgba(111,63,167,.24)}
 .up-btn:hover{filter:brightness(1.05)}
 .up-btn.ghost-up{background:#fff;color:var(--petrol);border:1px solid var(--line-2);box-shadow:none}
@@ -764,7 +823,7 @@ svg.ic{display:block;flex:none}
 .lib-toolbar.pro{grid-template-columns:1fr auto;align-items:start;margin:10px 0 16px}
 .lib-tabs{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}
 .lib-tabs button{background:#fff;color:var(--petrol);border:1px solid var(--line);box-shadow:none;border-radius:20px;padding:7px 11px;font-size:.78rem}
-.lib-tabs button.active{background:var(--teal);color:#fff;border-color:var(--teal)}
+.lib-tabs button.active{background:var(--accent-solid);color:#fff;border-color:var(--teal)}
 .lib-layout{display:grid;grid-template-columns:230px 1fr;gap:14px;align-items:start}
 .lib-folders{display:flex;flex-direction:column;gap:7px}
 .lib-folders button{display:grid;grid-template-columns:18px 1fr auto;align-items:center;gap:8px;background:#fff;color:var(--ink);border:1px solid var(--line);box-shadow:none;border-radius:10px;padding:9px 10px;text-align:left}
@@ -921,13 +980,13 @@ svg.ic{display:block;flex:none}
 /* Boton flotante mas compacto (64->52px) para tapar menos contenido; el panel
    sube su offset inferior acorde al nuevo tamano. Ver tambien section{padding}
    mas abajo, que reserva aire extra en la esquina inferior derecha. */
-.asst-fab{position:fixed;right:18px;bottom:18px;z-index:50;width:52px;height:52px;border-radius:50%;padding:0;
+.asst-fab{position:fixed;right:calc(18px + env(safe-area-inset-right));bottom:calc(18px + env(safe-area-inset-bottom));z-index:50;width:52px;height:52px;border-radius:50%;padding:0;
   background:linear-gradient(135deg,#fff,var(--mint));display:grid;place-items:center;overflow:hidden;border:2px solid rgba(157,111,208,.55);
   box-shadow:0 14px 30px rgba(23,16,32,.34);animation:fabPulse 3s ease-in-out infinite}
 .asst-fab img{width:100%;height:100%;object-fit:cover}
 .asst-fab:hover{transform:translateY(-3px) scale(1.04)}
 @keyframes fabPulse{0%,100%{box-shadow:0 14px 30px rgba(23,16,32,.34)}50%{box-shadow:0 14px 40px rgba(157,111,208,.55)}}
-.asst-panel{position:fixed;right:18px;bottom:78px;z-index:50;width:390px;max-width:calc(100vw - 32px);height:540px;max-height:76vh;
+.asst-panel{position:fixed;right:calc(18px + env(safe-area-inset-right));bottom:calc(78px + env(safe-area-inset-bottom));z-index:50;width:390px;max-width:calc(100vw - 32px);height:540px;max-height:76vh;
   background:#fff;border:1px solid rgba(202,187,216,.9);border-radius:18px;box-shadow:0 24px 70px rgba(23,16,32,.24);display:flex;flex-direction:column;overflow:hidden}
 .asst-head{display:flex;align-items:center;gap:12px;padding:16px;background:linear-gradient(135deg,#21132F,#4D2877);color:#fff}
 .asst-avatar{width:46px;height:46px;border-radius:14px;object-fit:cover;border:1px solid rgba(255,255,255,.42);box-shadow:0 8px 22px rgba(0,0,0,.22)}
@@ -954,7 +1013,7 @@ svg.ic{display:block;flex:none}
 .asst-icon-btn:hover{background:rgba(255,255,255,.2);transform:none}
 .asst-icon-btn.active{background:var(--gold);border-color:var(--gold);color:var(--ink)}
 .asst-input .asst-icon-btn{background:var(--mint);color:var(--petrol);border:1px solid var(--line);padding:10px 12px}
-.asst-input .asst-icon-btn.active.listening{background:var(--danger);color:#fff;border-color:var(--danger);animation:fabPulse 1.4s infinite}
+.asst-input .asst-icon-btn.active.listening{background:var(--danger-solid);color:#fff;border-color:var(--danger-solid);animation:fabPulse 1.4s infinite}
 
 .asst-offline-tag{display:block;margin-top:6px;font-size:.66rem;font-style:normal;color:var(--muted);letter-spacing:.02em}
 .asst-thinking-msg{background:transparent;border:0;padding:4px 13px;box-shadow:none}
@@ -991,7 +1050,7 @@ svg.ic{display:block;flex:none}
 .forum-tools{display:grid;grid-template-columns:1fr minmax(240px,360px);gap:12px;align-items:center;margin:0 0 14px}
 .forum-tabs{display:flex;gap:8px;flex-wrap:wrap}
 .forum-tabs button{background:#fff;color:var(--petrol);border:1px solid var(--line);box-shadow:none;padding:8px 13px;border-radius:22px}
-.forum-tabs button.active{background:var(--teal);color:#fff;border-color:var(--teal)}
+.forum-tabs button.active{background:var(--accent-solid);color:#fff;border-color:var(--teal)}
 .forum-list{padding:12px}
 .forum-list .forum-item{padding:16px;border:1px solid var(--line);border-radius:14px;margin-bottom:10px;background:#fff}
 .forum-list .forum-item:last-child{margin-bottom:0}
@@ -1058,7 +1117,7 @@ svg.ic{display:block;flex:none}
 .academy-path b{font-size:.86rem;color:var(--ink)}
 .course-card.pro .thumb{height:150px;background:linear-gradient(135deg,var(--petrol),#9D6FD0)}
 .course-card.pro .thumb button{width:58px;height:58px;border-radius:50%;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.55);display:grid;place-items:center;box-shadow:none}
-.course-pill{display:inline-block;color:#fff;background:var(--teal);border-radius:20px;padding:3px 8px;font-family:var(--mono);font-size:.65rem;margin-top:14px}
+.course-pill{display:inline-block;color:#fff;background:var(--accent-solid);border-radius:20px;padding:3px 8px;font-family:var(--mono);font-size:.65rem;margin-top:14px}
 .academy-grid .course-card{min-height:320px}
 
 .report-hero{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
@@ -1080,8 +1139,8 @@ svg.ic{display:block;flex:none}
   .record-form-head button{margin-top:10px}
   .form-actions{flex-direction:column}
   .form-actions button{width:100%}
-  .asst-fab{width:44px;height:44px;right:12px;bottom:12px}
-  .asst-panel{right:12px;bottom:64px;width:calc(100vw - 24px);height:70vh}
+  .asst-fab{width:44px;height:44px;right:calc(12px + env(safe-area-inset-right));bottom:calc(12px + env(safe-area-inset-bottom))}
+  .asst-panel{right:calc(12px + env(safe-area-inset-right));bottom:calc(64px + env(safe-area-inset-bottom));width:calc(100vw - 24px);height:70vh}
   .lib-searchbar,.library-dashboard,.community-hero,.academy-path,.report-hero{grid-template-columns:1fr}
   .academy-hero{align-items:flex-start;flex-direction:column}
 }
@@ -1895,7 +1954,7 @@ svg.ic{display:block;flex:none}
 .visual-form h2,.visual-result h2{font-size:1.15rem}
 .visual-modes{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px}
 .visual-modes button{background:#fff;color:var(--petrol);border:1px solid var(--line);box-shadow:none}
-.visual-modes button.active{background:var(--teal);color:#fff;border-color:var(--teal)}
+.visual-modes button.active{background:var(--accent-solid);color:#fff;border-color:var(--teal)}
 .visual-form textarea{min-height:160px;margin-top:6px}
 .visual-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
 .visual-result{grid-column:1/3;border-top:3px solid var(--teal)}
@@ -2035,7 +2094,7 @@ svg.ic{display:block;flex:none}
    ==================================================================== */
 .admin-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
 .admin-tabs button{background:#fff;color:var(--petrol);border:1px solid var(--line);box-shadow:none;border-radius:20px;padding:8px 14px;font-size:.82rem}
-.admin-tabs button.active{background:var(--teal);color:#fff;border-color:var(--teal)}
+.admin-tabs button.active{background:var(--accent-solid);color:#fff;border-color:var(--teal)}
 .admin-panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
 .admin-panel-head h2{margin:0}
 .admin-table-wrap{overflow-x:auto}
@@ -2095,7 +2154,7 @@ svg.ic{display:block;flex:none}
 .project-switcher button{border-radius:999px;padding:5px 12px;font-size:.78rem}
 .project-card{position:relative}
 .project-card.active{border-color:var(--teal);box-shadow:0 0 0 2px rgba(111,63,167,.18)}
-.project-active-badge{position:absolute;top:12px;right:12px;font-family:var(--mono);font-size:.64rem;text-transform:uppercase;letter-spacing:.06em;background:var(--teal);color:#fff;padding:3px 9px;border-radius:20px}
+.project-active-badge{position:absolute;top:12px;right:12px;font-family:var(--mono);font-size:.64rem;text-transform:uppercase;letter-spacing:.06em;background:var(--accent-solid);color:#fff;padding:3px 9px;border-radius:20px}
 .project-card>button.soft{margin-top:10px}
 /* ---------- Revision de duplicados de catalogo Excel (seccion 3/12 sprint) ---------- */
 .batch-review{margin-top:14px;border-top:1px solid rgba(255,255,255,.18);padding-top:14px;display:flex;flex-direction:column;gap:10px}
@@ -2133,7 +2192,7 @@ svg.ic{display:block;flex:none}
 .apu-step-dot{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:var(--mint);color:var(--muted);font-family:var(--mono);font-size:.72rem;font-weight:700;flex:none}
 .apu-step.current{color:var(--ink)}
 .apu-step.current .apu-step-dot{background:linear-gradient(120deg,var(--teal),var(--gold));color:#fff}
-.apu-step.done .apu-step-dot{background:var(--teal);color:#fff}
+.apu-step.done .apu-step-dot{background:var(--accent-solid);color:#fff}
 .apu-step.done{color:var(--ink-text)}
 @media (max-width:760px){.apu-step-label{display:none}.apu-step:not(:last-child)::after{width:14px;margin:0 4px}}
 
@@ -2243,7 +2302,7 @@ svg.ic{display:block;flex:none}
 .pro-accordion-title{flex:none;font-family:var(--display)}
 .pro-accordion-summary{flex:1;color:var(--muted);font-family:var(--mono);font-size:.8rem;text-align:right;margin-right:6px}
 .pro-accordion-caret{flex:none;width:22px;height:22px;border-radius:50%;background:var(--mint);color:var(--teal);display:grid;place-items:center;font-weight:700}
-.pro-accordion.open .pro-accordion-caret{background:var(--teal);color:#fff}
+.pro-accordion.open .pro-accordion-caret{background:var(--accent-solid);color:#fff}
 .pro-accordion-body{padding:0 16px 16px;border-top:1px solid var(--line)}
 .pro-list-row{display:flex;gap:8px;margin:8px 0}
 .pro-list-row textarea{flex:1}
@@ -2251,7 +2310,7 @@ svg.ic{display:block;flex:none}
 .pro-economy strong{font-size:1.3rem;color:var(--gold);font-family:var(--display)}
 .validation-panel{padding:14px 16px;border:1px solid var(--gold);background:var(--gold-soft);border-radius:var(--r-sm);color:var(--gold-ink)}
 .pro-modal{position:fixed;inset:0;background:rgba(23,16,32,.55);z-index:1000;display:grid;place-items:center}
-.pro-modal>div{background:var(--card);padding:22px;border-radius:var(--r);max-width:900px;max-height:80vh;overflow:auto;box-shadow:var(--shadow)}
+.pro-modal>div{background:var(--card);padding:22px;border-radius:var(--r);max-width:min(900px,calc(100vw - 32px));max-height:80vh;overflow:auto;box-shadow:var(--shadow)}
 .price-state{font-size:.7rem;font-weight:700}
 
 /* Tablas del editor: legibilidad sin estirar la app entera */
@@ -2375,7 +2434,7 @@ svg.ic{display:block;flex:none}
 .landing .nav-public{
   position:relative;
   height:96px;
-  background:#fff;
+  background:var(--surface);
   border-bottom:1px solid var(--line);
   box-shadow:0 2px 14px rgba(23,16,32,.05);
   backdrop-filter:none;
@@ -2385,11 +2444,11 @@ svg.ic{display:block;flex:none}
 .landing .nav-public nav a{color:var(--ink-text);text-transform:none;letter-spacing:0;font-size:.93rem;font-weight:600}
 .landing .nav-public nav a:hover{color:var(--teal)}
 .landing .nav-actions button{border-radius:8px;min-width:132px;box-shadow:none}
-.landing .nav-actions .ghost{background:#fff;color:var(--ink);border:1.5px solid var(--line-2)}
-.landing .nav-actions button:not(.ghost){background:var(--teal);color:#fff;border:1px solid var(--teal)}
+.landing .nav-actions .ghost{background:var(--surface);color:var(--ink);border:1.5px solid var(--line-2)}
+.landing .nav-actions button:not(.ghost){background:var(--accent-solid);color:#fff;border:1px solid var(--teal)}
 
 .hero-build{
-  background:linear-gradient(180deg,#F9F7FC 0%,#F6F3FA 55%,#F3EFF9 100%);
+  background:linear-gradient(180deg,var(--surface-soft-1) 0%,var(--surface-soft-2) 55%,var(--surface-soft-3) 100%);
   padding:72px 4.8vw 64px;
   gap:52px;
   grid-template-columns:minmax(420px,1fr) minmax(400px,.95fr);
@@ -2439,15 +2498,15 @@ svg.ic{display:block;flex:none}
 
 .hero-build .hero-actions{margin-bottom:0}
 .hero-build .hero-actions button{
-  background:var(--teal);
-  border:1px solid var(--teal);
+  background:var(--accent-solid);
+  border:1px solid var(--accent-solid);
   box-shadow:none;
   border-radius:8px;
   min-width:190px;
 }
 .hero-build .hero-actions button::after{display:none}
 .hero-build .hero-actions .secondary{
-  background:#fff;
+  background:var(--surface);
   color:var(--ink);
   border:1.5px solid var(--line-2);
   text-decoration:none;
@@ -2466,7 +2525,7 @@ svg.ic{display:block;flex:none}
   min-height:560px;
   border:1px solid var(--line);
   border-radius:20px;
-  background:#fff;
+  background:var(--surface);
   box-shadow:var(--shadow);
 }
 .future-stage::before{display:none}
@@ -2474,7 +2533,7 @@ svg.ic{display:block;flex:none}
   background:linear-gradient(180deg,rgba(23,16,32,.30) 0%,rgba(23,16,32,.02) 32%,rgba(23,16,32,.04) 60%,rgba(23,16,32,.6) 100%);
 }
 .stage-status{
-  background:rgba(255,255,255,.94);
+  background:var(--surface);
   border:1px solid var(--line);
   backdrop-filter:blur(10px);
   box-shadow:0 8px 24px rgba(23,16,32,.08);
@@ -2482,7 +2541,7 @@ svg.ic{display:block;flex:none}
 .stage-status span{color:var(--teal)}
 .stage-status b{color:var(--ink)}
 .ai-console{
-  background:rgba(255,255,255,.97);
+  background:var(--surface);
   border:1px solid var(--line);
   box-shadow:0 20px 50px rgba(23,16,32,.14);
   backdrop-filter:blur(6px);
@@ -2492,17 +2551,17 @@ svg.ic{display:block;flex:none}
 .command-strip b,.command-total b{color:var(--ink)}
 .command-flow span{background:var(--mint);color:var(--ink);border:1px solid var(--line)}
 .command-flow i{background:var(--line-2)}
-.stage-tag{color:var(--muted);background:#fff;border:1px solid var(--line)}
+.stage-tag{color:var(--muted);background:var(--surface);border:1px solid var(--line)}
 
 .landing-story{background:var(--paper);border-top:1px solid var(--line)}
 .landing-story-head h2{color:var(--ink)}
-.story-step{border:1px solid var(--line);background:#fff;box-shadow:var(--shadow-sm)}
+.story-step{border:1px solid var(--line);background:var(--surface);box-shadow:var(--shadow-sm)}
 .story-step b{color:var(--teal)}
 .story-step h3{color:var(--ink)}
 .story-step p{color:var(--muted)}
 
 .landing-preview{background:var(--paper)}
-.preview-grid figure{border:1px solid var(--line);background:#fff;box-shadow:var(--shadow-sm)}
+.preview-grid figure{border:1px solid var(--line);background:var(--surface);box-shadow:var(--shadow-sm)}
 .preview-grid figcaption{color:var(--muted);border-top:1px solid var(--line)}
 
 .trust-strip{
@@ -2564,7 +2623,7 @@ svg.ic{display:block;flex:none}
 .auth-status{color:rgba(255,255,255,.78)}
 .auth-announcement{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.24)}
 .auth-announcement p{color:#fff}
-.auth-form-side{background:#fff}
+.auth-form-side{background:var(--surface)}
 .auth-form-side .auth-card{
   background:var(--card);
   border:1px solid var(--line);
@@ -2578,3 +2637,201 @@ svg.ic{display:block;flex:none}
 .auth-form-side .auth-card .back{color:var(--muted)}
 .auth-form-side .auth-card .auth-or{color:var(--muted)}
 .auth-form-side .auth-card .auth-or::before,.auth-form-side .auth-card .auth-or::after{background:var(--line)}
+
+/* ====================================================================
+   ZOEMEC · Controles de tema/idioma/instalacion (nueva ronda). Viven en
+   .nav-public de la landing, entre la navegacion y los botones de
+   sesion. Tamano tactil >=40px de alto en los 3 (requisito movil).
+   ==================================================================== */
+.locale-switch{
+  display:inline-flex;
+  border:1.5px solid var(--line-2);
+  border-radius:8px;
+  overflow:hidden;
+  height:40px;
+}
+.locale-switch button{
+  border:0;
+  background:var(--surface);
+  color:var(--muted);
+  font-family:var(--mono);
+  font-size:.78rem;
+  font-weight:700;
+  letter-spacing:.04em;
+  padding:0 12px;
+  min-width:40px;
+  cursor:pointer;
+  box-shadow:none;
+}
+.locale-switch button.active{background:var(--accent-solid);color:#fff}
+.locale-switch button:not(.active):hover{background:var(--mint);color:var(--ink)}
+
+.theme-toggle{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:40px;
+  height:40px;
+  border-radius:8px;
+  border:1.5px solid var(--line-2);
+  background:var(--surface);
+  color:var(--ink);
+  cursor:pointer;
+  box-shadow:none;
+  padding:0;
+}
+.theme-toggle:hover{background:var(--mint)}
+
+.install-btn{
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  height:40px;
+  padding:0 14px;
+  border-radius:8px;
+  border:1.5px solid var(--teal);
+  background:var(--mint);
+  color:var(--teal);
+  font-weight:700;
+  font-size:.86rem;
+  cursor:pointer;
+  box-shadow:none;
+  white-space:nowrap;
+}
+.install-btn:hover{background:var(--accent-solid);color:#fff}
+
+.ios-install-hint{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  font-size:.78rem;
+  color:var(--muted);
+  background:var(--mint);
+  border:1px solid var(--line-2);
+  border-radius:999px;
+  padding:8px 14px;
+}
+
+.landing .nav-actions{gap:10px;align-items:center}
+
+@media (max-width:1100px){
+  .install-btn span{display:none}
+  .install-btn{padding:0;width:40px}
+}
+@media (max-width:720px){
+  .landing .nav-public{padding:12px 4vw}
+  .landing .nav-actions{gap:8px;flex-wrap:wrap;justify-content:flex-end}
+  .locale-switch button{min-width:36px;height:36px}
+  .theme-toggle,.install-btn{height:36px}
+  .ios-install-hint{width:100%;order:10;justify-content:center;margin-top:8px}
+}
+
+/* ====================================================================
+   ZOEMEC · Shell movil: sidebar -> drawer (Prioridad 1, ronda ampliada).
+   Reemplaza el comportamiento anterior de .sidebar en movil (que la
+   aplanaba a una barra horizontal dentro del flujo, empujando el
+   contenido hacia abajo -- ver regla vieja en @media(max-width:760px)
+   mas arriba en el archivo) por un drawer real fuera de pantalla.
+   Activa <=1024px, cubre los 4 breakpoints pedidos (390/430/768/1024).
+   ==================================================================== */
+.hamburger{
+  display:none;
+  flex-direction:column;
+  justify-content:center;
+  align-items:center;
+  gap:4px;
+  width:40px;
+  height:40px;
+  min-width:40px;
+  border:1.5px solid var(--line-2);
+  border-radius:8px;
+  background:var(--surface);
+  cursor:pointer;
+  padding:0;
+  box-shadow:none;
+  flex:none;
+}
+.hamburger span{display:block;width:18px;height:2px;background:var(--ink);border-radius:1px}
+.sidebar-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.drawer-close{display:none;border:0;background:none;font-size:1.7rem;line-height:1;color:#fff;cursor:pointer;padding:6px 10px;box-shadow:none}
+.drawer-backdrop{display:none}
+.topbar-locale{margin-right:2px}
+
+@media (max-width:1024px){
+  .hamburger{display:flex}
+  .drawer-close{display:block}
+  .app-layout{display:block}
+  .sidebar{
+    position:fixed;
+    top:0; left:0; bottom:0;
+    height:100vh;
+    width:300px;
+    max-width:84vw;
+    z-index:70;
+    flex-direction:column;
+    flex-wrap:nowrap;
+    gap:6px;
+    transform:translateX(-100%);
+    transition:transform .25s ease;
+    padding-top:calc(20px + env(safe-area-inset-top));
+    padding-bottom:calc(20px + env(safe-area-inset-bottom));
+    padding-left:calc(14px + env(safe-area-inset-left));
+    box-shadow:none;
+  }
+  .sidebar .brand,.sidebar .plan-box{width:auto}
+  .menu{flex-direction:column;flex-wrap:nowrap}
+  .menu button span{width:20px}
+  .app-layout.drawer-open .sidebar{transform:translateX(0);box-shadow:24px 0 60px rgba(0,0,0,.4)}
+  .drawer-backdrop{
+    display:block;
+    position:fixed;
+    inset:0;
+    z-index:65;
+    background:rgba(8,5,13,.55);
+  }
+  .main{width:100%;max-width:100vw;overflow-x:hidden}
+  .topbar{flex-wrap:wrap;gap:10px;row-gap:8px}
+  .topbar-locale{order:1}
+}
+@media (min-width:1025px){
+  .drawer-backdrop{display:none !important}
+}
+@media (max-width:480px){
+  .sidebar{width:86vw}
+  .topbar{padding:10px 14px}
+  .user{flex-wrap:wrap;justify-content:flex-end;row-gap:6px}
+}
+
+/* ====================================================================
+   ZOEMEC · Tablas globales en movil (Prioridad 2). Cubre CUALQUIER
+   <table> del interior (budget-table, plan-matrix, data-table sueltas
+   fuera de .apu-table-scroll, etc.) sin tener que envolver cada una en
+   JSX: la tabla misma se vuelve el contenedor de scroll horizontal.
+   thead/tbody/tr se reafirman como table/table-row para que el layout
+   de columnas nativo no se rompa. NUNCA se comprimen columnas ni se
+   reduce texto a ilegible -- el usuario desliza, no se pierde dato.
+   ==================================================================== */
+@media (max-width:640px){
+  table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;border-radius:var(--r-sm)}
+  table thead,table tbody{display:table;width:100%}
+  table tr{display:table-row}
+}
+
+/* ====================================================================
+   ZOEMEC · PageHead, toolbars, filtros, modales, alerts, empty states,
+   loaders -- componentes globales reutilizados por todos los modulos
+   (Prioridad 2). Mismo criterio: min. 44px tactil en botones de accion
+   primaria, sin overflow horizontal, apilado vertical cuando no cabe.
+   ==================================================================== */
+@media (max-width:760px){
+  .page-head{flex-direction:column;align-items:flex-start;gap:10px}
+  .page-head>div{width:100%}
+  .page-head>button{width:100%}
+  .record-modal,.pro-modal{padding:12px}
+  .record-form,.pro-modal>div{width:calc(100vw - 24px);max-width:calc(100vw - 24px)}
+  .notice-stack{left:12px;right:12px;top:12px;width:auto}
+}
+@media (max-width:480px){
+  button,.btn,input[type="submit"]{min-height:40px}
+  .toolbar,.filters-row,.lib-searchbar{flex-wrap:wrap}
+}

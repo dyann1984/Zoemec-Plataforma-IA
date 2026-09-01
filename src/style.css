@@ -2389,7 +2389,7 @@ svg.ic{display:block;flex:none}
 .landing .nav-actions button:not(.ghost){background:var(--teal);color:#fff;border:1px solid var(--teal)}
 
 .hero-build{
-  background:linear-gradient(180deg,#F9F6FC 0%,#FBFAFD 55%,#fff 100%);
+  background:linear-gradient(180deg,#F9F7FC 0%,#F6F3FA 55%,#F3EFF9 100%);
   padding:72px 4.8vw 64px;
   gap:52px;
   grid-template-columns:minmax(420px,1fr) minmax(400px,.95fr);
@@ -2501,7 +2501,7 @@ svg.ic{display:block;flex:none}
 .story-step h3{color:var(--ink)}
 .story-step p{color:var(--muted)}
 
-.landing-preview{background:#fff}
+.landing-preview{background:var(--paper)}
 .preview-grid figure{border:1px solid var(--line);background:#fff;box-shadow:var(--shadow-sm)}
 .preview-grid figcaption{color:var(--muted);border-top:1px solid var(--line)}
 

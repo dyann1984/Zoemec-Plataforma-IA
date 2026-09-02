@@ -395,6 +395,32 @@ export function findApuNumericIssuesV2(apu = {}, totals = calcAPUv2(apu)){
   if(laborRows.length > 2){
     issues.push({ code: 'possible_crew_fragmentation', kind: 'labor', message: `${laborRows.length} renglones de mano de obra: verificar que representen oficios realmente distintos y no el mismo ciclo de produccion fragmentado en varias "cuadrillas".` });
   }
+  // Validacion defensiva (auditoria "Cuad.=2 en ambos renglones" -- causa
+  // raiz real: labor[i].cuadrilla debe ser el numero de trabajadores DE ESE
+  // RENGLON/oficio, ver _openaiApuCore.mjs; el motor calcula
+  // cuadrilla/rendimiento POR RENGLON, asi que repetir el total de la
+  // cuadrilla en cada renglon duplica el costo, no es solo una etiqueta
+  // confusa). Heuristica NO auto-corrige nada (no se toca ningun APU
+  // historico ni se fuerza un numero): cuando 2+ renglones comparten el
+  // MISMO rendimiento (misma cuadrilla/ciclo de produccion, tal como pide
+  // el prompt) Y tambien comparten el MISMO cuadrilla>1, es una senal real
+  // de que se repitio el total en vez de declarar 1 trabajador por oficio
+  // -- se reporta como advertencia para revision humana, igual que
+  // possible_crew_fragmentation arriba (nunca CRITICAL: una cuadrilla de
+  // verdad con 2+ integrantes por oficio, ej. "2 albaniles + 2 ayudantes",
+  // es legitima y produciria el mismo patron).
+  if(laborRows.length >= 2){
+    const withCuadrilla = laborRows
+      .map((row, index) => ({ index, cuadrilla: Number(row?.cuadrilla), rendimiento: Number(row?.rendimiento) }))
+      .filter(r => r.cuadrilla > 1 && r.rendimiento > 0);
+    if(withCuadrilla.length >= 2){
+      const sameRendimiento = withCuadrilla.every(r => r.rendimiento === withCuadrilla[0].rendimiento);
+      const sameCuadrilla = withCuadrilla.every(r => r.cuadrilla === withCuadrilla[0].cuadrilla);
+      if(sameRendimiento && sameCuadrilla){
+        issues.push({ code: 'possible_cuadrilla_total_repeated', kind: 'labor', message: `${withCuadrilla.length} renglones de mano de obra comparten el mismo rendimiento (${withCuadrilla[0].rendimiento}) y la misma cuadrilla (${withCuadrilla[0].cuadrilla}): verificar que "cuadrilla" declare los trabajadores de CADA oficio (ej. 1 operador + 1 ayudante = cuadrilla 1 y 1), no el total de la cuadrilla repetido en cada renglon.` });
+      }
+    }
+  }
   laborRows.forEach((row, index) => {
     if(row?.cuadrilla != null && Number(row.cuadrilla) > 0 && (row?.rendimiento == null || Number(row.rendimiento) <= 0)){
       issues.push({ code: 'zero_rendimiento', kind: 'labor', index, message: `Renglon ${index + 1} de mano de obra tiene cuadrilla pero rendimiento ausente o 0: no se puede prorratear el costo por unidad de obra.` });

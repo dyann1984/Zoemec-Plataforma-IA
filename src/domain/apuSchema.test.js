@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { APU_DATA_STATE, makeEmptyAPUv2, migrateLegacyApuToV2, validateApuSchemaV2, normalizeAIApuToV2 } from './apuSchema.js';
+import { APU_DATA_STATE, REQUIERE_VALIDACION_TEXT, makeEmptyAPUv2, migrateLegacyApuToV2, validateApuSchemaV2, normalizeAIApuToV2 } from './apuSchema.js';
 import { calcAPUv2 } from '../lib/apuCalc.js';
 
 test('makeEmptyAPUv2 trae las secciones del esquema profesional, todas vacias', () => {
@@ -279,4 +279,117 @@ test('normalizeAIApuToV2 -> calcAPUv2 produce un costo directo reconstruible a m
   assert.ok(Math.abs(totals.seguridad - segExpected) < 1e-6);
   assert.ok(Math.abs(totals.direct - directExpected) < 1e-6);
   assert.ok(totals.pu > totals.direct); // indirectos/utilidad/financiamiento suman sobre el directo
+});
+
+/* ---------- Auditoria APU-N29HGJ: regresion de los 6 bugs confirmados ---------- */
+
+// TEST 1: referencePU sobrevive parseo -> request -> normalizacion -> APU final.
+test('TEST 1: normalizeAIApuToV2 preserva options.referencePU en el APU final', () => {
+  const v2 = normalizeAIApuToV2(rawAIFixture(), 'fallback', { referencePU: 12.5 });
+  assert.equal(v2.referencePU, 12.5);
+});
+
+test('TEST 1b: sin options.referencePU, el APU final queda en 0 (nunca undefined/NaN)', () => {
+  const v2 = normalizeAIApuToV2(rawAIFixture(), 'fallback');
+  assert.equal(v2.referencePU, 0);
+});
+
+// TEST 2: referencePU NO altera el PU calculado (solo queda disponible para
+// comparacion/desviacion, ver explainApuDifference en apuReview.js).
+test('TEST 2: referencePU no altera el PU calculado por calcAPUv2', () => {
+  const sinReferencia = calcAPUv2(normalizeAIApuToV2(rawAIFixture(), 'fallback'));
+  const conReferenciaBaja = calcAPUv2(normalizeAIApuToV2(rawAIFixture(), 'fallback', { referencePU: 0.01 }));
+  const conReferenciaAlta = calcAPUv2(normalizeAIApuToV2(rawAIFixture(), 'fallback', { referencePU: 999999 }));
+  assert.equal(conReferenciaBaja.pu, sinReferencia.pu);
+  assert.equal(conReferenciaAlta.pu, sinReferencia.pu);
+});
+
+// TEST 3: 1 operador + 1 ayudante -> cuadrilla por renglon = 1 y 1, nunca 2 y 2
+// (bug de semantica: la IA repetia el total de la cuadrilla en cada renglon).
+test('TEST 3: cuadrilla se preserva por renglon (1 y 1), no se suma al total de la cuadrilla', () => {
+  const raw = rawAIFixture({
+    labor: [['Operador de retroexcavadora', 0.04, 'jor', 450, 1.85], ['Ayudante general', 0.04, 'jor', 258, 1.82]],
+    laborDetails: [{ cuadrilla: 1, rendimiento: 20, jornada: 8 }, { cuadrilla: 1, rendimiento: 20, jornada: 8 }]
+  });
+  const v2 = normalizeAIApuToV2(raw, 'fallback');
+  assert.equal(v2.labor[0].cuadrilla, 1);
+  assert.equal(v2.labor[1].cuadrilla, 1);
+  assert.notEqual(v2.labor[0].cuadrilla, 2);
+  assert.notEqual(v2.labor[1].cuadrilla, 2);
+});
+
+// TEST 5/6: criterioMedicion.criterio y .formaPago se conservan tal cual los
+// entrega la IA (antes: el exportador leia claves que nunca existian en el
+// esquema, asi que el PDF mostraba estas secciones siempre vacias).
+test('TEST 5: criterioMedicion.criterio se conserva del JSON crudo', () => {
+  const raw = rawAIFixture({ criterioMedicion: { criterio: 'Se mide por metro cubico de excavacion realmente ejecutado, medido en banco.', formaPago: 'Pago unico al 100% de avance verificado.', incluye: [], excluye: [] } });
+  const v2 = normalizeAIApuToV2(raw, 'fallback');
+  assert.equal(v2.criterioMedicion.criterio, 'Se mide por metro cubico de excavacion realmente ejecutado, medido en banco.');
+});
+
+test('TEST 6: criterioMedicion.formaPago se conserva del JSON crudo', () => {
+  const raw = rawAIFixture({ criterioMedicion: { criterio: 'Se mide por metro cubico de excavacion realmente ejecutado, medido en banco.', formaPago: 'Pago unico al 100% de avance verificado.', incluye: [], excluye: [] } });
+  const v2 = normalizeAIApuToV2(raw, 'fallback');
+  assert.equal(v2.criterioMedicion.formaPago, 'Pago unico al 100% de avance verificado.');
+});
+
+// TEST 7: si la IA no entrega criterio/formaPago, el APU final declara
+// explicitamente REQUIERE VALIDACION -- nunca una cadena vacia silenciosa que
+// el exportador podria confundir con "no aplica".
+test('TEST 7: criterio/formaPago ausentes producen REQUIERE_VALIDACION_TEXT, nunca cadena vacia', () => {
+  const raw = rawAIFixture({ criterioMedicion: { incluye: [], excluye: [] } });
+  const v2 = normalizeAIApuToV2(raw, 'fallback');
+  assert.equal(v2.criterioMedicion.criterio, REQUIERE_VALIDACION_TEXT);
+  assert.equal(v2.criterioMedicion.formaPago, REQUIERE_VALIDACION_TEXT);
+  assert.notEqual(v2.criterioMedicion.criterio, '');
+  assert.notEqual(v2.criterioMedicion.formaPago, '');
+});
+
+// TEST 8: un APU generado por IA obtiene primaryActivity usando el MISMO
+// clasificador que ya usaba la ruta de plantillas (classifyConstructionSystem,
+// constructionSystems.js) -- antes quedaba null incondicionalmente en la
+// ruta de IA, anulando el score global del Confidence Engine sin importar
+// el concepto (ver TEST 9/10 en apuConfidence.test.js).
+test('TEST 8: normalizeAIApuToV2 clasifica primaryActivity con el motor universal existente', () => {
+  const raw = rawAIFixture({ concept: 'Excavación a cielo abierto en material tipo II' });
+  const v2 = normalizeAIApuToV2(raw, 'fallback');
+  assert.equal(v2.primaryActivity, 'excavacion');
+});
+
+test('TEST 8b: un concepto sin disciplina reconocida queda "generico", no se inventa una clasificacion', () => {
+  const raw = rawAIFixture({ concept: 'Fabricacion completamente desconocida de widget cuantico interdimensional' });
+  const v2 = normalizeAIApuToV2(raw, 'fallback');
+  assert.equal(v2.primaryActivity, 'generico');
+});
+
+// TEST 11: el motivo tecnico de un consumible (consumableSources[i].technicalReason)
+// sobrevive a la normalizacion hasta el modelo final que consume el
+// exportador (apuExportV2.js#drawApuSections ya lo imprime por renglon).
+test('TEST 11: technicalReason de un consumible sobrevive a normalizeAIApuToV2', () => {
+  const raw = rawAIFixture({
+    consumables: [['Disco de corte para concreto', 2, 'pza', 85, 0]],
+    consumableSources: [{ especificacion: 'Disco diamantado 14"', technicalReason: 'Se estima 1 disco cada 40 m de corte segun rendimiento de fabricante para concreto simple.' }]
+  });
+  const v2 = normalizeAIApuToV2(raw, 'fallback');
+  assert.equal(v2.consumables.length, 1);
+  assert.equal(v2.consumables[0].technicalReason, 'Se estima 1 disco cada 40 m de corte segun rendimiento de fabricante para concreto simple.');
+});
+
+// TEST 12: regresion multi-concepto -- procesar varios conceptos distintos en
+// "lote" (normalizeAIApuToV2 es una funcion pura sin estado compartido) no
+// mezcla referencePU/primaryActivity/criterioMedicion entre APUs distintos.
+test('TEST 12: lote de conceptos distintos, cada APU conserva sus propios datos sin mezclarse', () => {
+  const lote = [
+    { raw: rawAIFixture({ concept: 'Excavación a cielo abierto en material tipo II' }), referencePU: 12.5, esperadoTipo: 'excavacion' },
+    { raw: rawAIFixture({ concept: 'Suministro y habilitado de acero de refuerzo fy=4200' }), referencePU: 0, esperadoTipo: 'acero' },
+    { raw: rawAIFixture({ concept: 'Fabricacion completamente desconocida de widget cuantico interdimensional' }), referencePU: 45.75, esperadoTipo: 'generico' }
+  ];
+  const resultados = lote.map(item => normalizeAIApuToV2(item.raw, 'fallback', { referencePU: item.referencePU }));
+  resultados.forEach((v2, i) => {
+    assert.equal(v2.referencePU, lote[i].referencePU, `referencePU del APU ${i} no debe mezclarse con otro del lote`);
+    assert.equal(v2.primaryActivity, lote[i].esperadoTipo, `primaryActivity del APU ${i} no debe mezclarse con otro del lote`);
+  });
+  // Ninguno de los 3 IDs generados se repite (cada APU del lote es independiente).
+  const ids = resultados.map(v2 => v2.id);
+  assert.equal(new Set(ids).size, 3);
 });

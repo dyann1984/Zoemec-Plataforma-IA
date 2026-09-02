@@ -13,6 +13,14 @@
 import { APU_DEFAULT_FACTORS } from '../lib/apuCalc.js';
 import { uid } from '../utils/id.js';
 import { RENDIMIENTO_FUENTE } from './apuReview.js';
+import { classifyConstructionSystem } from './constructionSystems.js';
+
+/* Texto que el exportador (apuExportV2.js) y la UI deben mostrar cuando un
+   campo profesional (criterio de medicion, forma de pago) no viene de la
+   IA: NUNCA se rellena con texto inventado, se marca explicito. Un mismo
+   token en todo el pipeline para poder distinguirlo de un texto real con
+   un simple ===, sin heuristicas de "parece vacio". */
+export const REQUIERE_VALIDACION_TEXT = 'REQUIERE VALIDACIÓN -- la IA no proporcionó este dato.';
 
 /* Estado de verificacion de un dato (precio, rendimiento, renglon completo).
    Ningun dato generado por plantilla o IA puede etiquetarse VERIFICADO por
@@ -407,11 +415,32 @@ function clampConfidence(value, fallback){
    estado: APU_DATA_STATE.ESTIMADO_IA de forma incondicional -- ignorando
    cualquier "estado"/"VERIFICADO" que el JSON de la IA intente declarar. Solo
    un usuario puede promover un dato a VERIFICADO despues, nunca la IA misma. */
-export function normalizeAIApuToV2(raw = {}, fallbackConcept = ''){
+export function normalizeAIApuToV2(raw = {}, fallbackConcept = '', options = {}){
   const original = coerceText(fallbackConcept);
   const generated = coerceText(raw.concept, original);
   const concept = generated.length < 18 && original ? original : generated;
   const unit = coerceText(raw.unit || 'pza').replace('m2', 'm²').replace('m3', 'm³');
+  // referencePU (auditoria "$12.50 vs $592.01"): parseConceptText() ya lo
+  // detecta del texto pegado ANTES de llamar a la IA (ver generateAI() en
+  // main.jsx) -- antes se calculaba y se descartaba sin llegar aqui. Se
+  // preserva tal cual, NUNCA se usa para ajustar/forzar el PU calculado
+  // (ese sigue siendo 100% el resultado de calcAPUv2 sobre materiales/mano
+  // de obra/equipo reales) -- solo queda disponible para que
+  // explainApuDifference/buildReviewRow (apuReview.js, ya existian) puedan
+  // comparar y advertir si la desviacion es grande.
+  const referencePU = Number(options.referencePU || 0) || 0;
+  // primaryActivity (auditoria "Rendimientos: N/D" pese a tener 20 m3/jornada):
+  // la ruta de plantillas (makeAPUFromConcept, apuGeneration.js) SIEMPRE
+  // clasifica con este mismo motor; la ruta de IA real nunca lo hacia, asi
+  // que el Confidence Engine (apuConfidence.js) anulaba productividad/
+  // historicalConsistency/score global por "sin disciplina conocida" en
+  // TODO APU generado por IA, sin importar el concepto. Se reusa el MISMO
+  // clasificador (constructionSystems.js) -- nunca se duplica logica de
+  // clasificacion. Si el concepto no coincide con ninguna disciplina
+  // conocida, classifyConstructionSystem regresa 'generico' de todas
+  // formas: el Confidence Engine sigue anulando el score en ese caso, tal
+  // como debe ser (tener un rendimiento no implica alta confianza).
+  const primaryActivity = classifyConstructionSystem(concept.toLowerCase()).tipo || null;
 
   const materialsRaw = Array.isArray(raw.materials) ? raw.materials : [];
   const sourcesRaw = Array.isArray(raw.materialSources) ? raw.materialSources : [];
@@ -551,10 +580,20 @@ export function normalizeAIApuToV2(raw = {}, fallbackConcept = ''){
         .filter(item => item.especificacion || item.criterio)
         .slice(0, 8)
     : [];
+  // criterio/formaPago (auditoria "Criterio:/Forma de pago: vacios en el
+  // PDF"): el esquema anterior nunca definia estas 2 claves -- el
+  // exportador (apuExportV2.js) leia apu.criterioMedicion.criterio/
+  // .formaPago, campos que jamas existieron en ningun lado del pipeline.
+  // Ahora se piden explicitamente a la IA (ver prompt en
+  // _openaiApuCore.mjs) y se preservan aqui; si la IA no las devuelve (o
+  // vienen vacias), se marca REQUIERE_VALIDACION_TEXT -- nunca una cadena
+  // vacia silenciosa ni un texto inventado en el exportador.
   const criterioMedicion = {
+    unidadMedicion: unit,
+    criterio: coerceText(raw.criterioMedicion?.criterio, '') || REQUIERE_VALIDACION_TEXT,
+    formaPago: coerceText(raw.criterioMedicion?.formaPago, '') || REQUIERE_VALIDACION_TEXT,
     incluye: Array.isArray(raw.criterioMedicion?.incluye) ? raw.criterioMedicion.incluye.map(v => coerceText(v)).filter(Boolean) : [],
-    excluye: Array.isArray(raw.criterioMedicion?.excluye) ? raw.criterioMedicion.excluye.map(v => coerceText(v)).filter(Boolean) : [],
-    unidadMedicion: unit
+    excluye: Array.isArray(raw.criterioMedicion?.excluye) ? raw.criterioMedicion.excluye.map(v => coerceText(v)).filter(Boolean) : []
   };
 
   const fallbackConfidence = clampConfidence(raw.confidence, 70);
@@ -573,6 +612,8 @@ export function normalizeAIApuToV2(raw = {}, fallbackConcept = ''){
     concept,
     unit,
     cantidadObra: 0,
+    primaryActivity,
+    referencePU,
     materials,
     labor,
     equipment,

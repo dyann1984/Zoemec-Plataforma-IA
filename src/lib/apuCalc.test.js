@@ -243,6 +243,35 @@ test('calcLaborRow usa "cantidad" explicita cuando no hay rendimiento (equivalen
   assert.ok(close(importe, 540));
 });
 
+// TEST 4 (auditoria APU-N29HGJ, item B): el costo de mano de obra corresponde
+// a la semantica correcta de cuadrilla (integrantes DE ESE renglon, no el
+// total de la cuadrilla repetido en cada renglon) -- 1 operador + 1 ayudante,
+// cada uno con cuadrilla:1, debe costar la suma de sus 2 renglones
+// independientes, NUNCA el doble de un solo renglon (que seria el resultado
+// si "cuadrilla" se hubiera interpretado como el total de trabajadores).
+test('TEST 4: calcAPUv2 usa cuadrilla por renglon (1 y 1), el costo de mano de obra no se duplica', () => {
+  const apuCorrecto = {
+    labor: [
+      { descripcion: 'Operador de retroexcavadora', cuadrilla: 1, rendimiento: 20, salarioBase: 450, fsr: 1.85 },
+      { descripcion: 'Ayudante general', cuadrilla: 1, rendimiento: 20, salarioBase: 258, fsr: 1.82 }
+    ]
+  };
+  const totals = calcAPUv2(apuCorrecto);
+  const operadorEsperado = (1 / 20) * 450 * 1.85;
+  const ayudanteEsperado = (1 / 20) * 258 * 1.82;
+  assert.ok(close(totals.mo, operadorEsperado + ayudanteEsperado));
+  // Si "cuadrilla" se hubiera interpretado (bug) como el total (2) repetido
+  // en cada renglon, el costo de mano de obra habria salido el doble de esto.
+  const apuConBugDeSemantica = {
+    labor: [
+      { descripcion: 'Operador de retroexcavadora', cuadrilla: 2, rendimiento: 20, salarioBase: 450, fsr: 1.85 },
+      { descripcion: 'Ayudante general', cuadrilla: 2, rendimiento: 20, salarioBase: 258, fsr: 1.82 }
+    ]
+  };
+  const totalsBug = calcAPUv2(apuConBugDeSemantica);
+  assert.ok(totalsBug.mo > totals.mo * 1.9, 'el escenario con el bug de semantica (cuadrilla:2 y 2) debe costar visiblemente mas que el correcto (1 y 1)');
+});
+
 test('calcEquipmentRow reproduce rowImporte("equipment", ...) para valores equivalentes', () => {
   const importe = calcEquipmentRow({ cantidad: 0.5, tarifa: 80 });
   assert.ok(close(importe, rowImporte('equipment', ['Eq', 0.5, 'hr', 80])));

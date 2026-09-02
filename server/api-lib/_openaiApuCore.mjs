@@ -176,7 +176,7 @@ Reglas obligatorias:
    que el flujo v1 (generateAPU, el que usa main.jsx hoy en produccion) nunca
    pague el costo/latencia extra de este prompt ampliado. Nada llama a esta
    funcion desde la UI todavia: se conecta en una fase posterior. */
-export async function generateAPUv2({ concept='', catalog=[], preserveOriginal=false, mode='' }){
+export async function generateAPUv2({ concept='', catalog=[], preserveOriginal=false, mode='', referencePU=0 }){
   if(!process.env.OPENAI_API_KEY) throw new Error('Falta OPENAI_API_KEY en Vercel.');
   const cleanConcept = String(concept || '').trim();
   if(!cleanConcept) throw new Error('Escribe un concepto para generar el APU.');
@@ -209,7 +209,7 @@ Devuelve SOLO JSON valido con esta forma:
   "materials": [["descripcion completa", cantidad, "unidad", precioUnitario, mermaPorcentaje]],
   "materialSources": [{ "proveedor": "nombre real solo si viene del catalogo, si no null", "region": "region o null", "integracion": "POR_UNIDAD_OBRA o POR_LOTE" }],
   "labor": [["descripcion completa", jornadas, "jor", salarioBase, fsr]],
-  "laborDetails": [{ "cuadrilla": numeroDeTrabajadores, "rendimiento": unidadesDeConceptoPorJornadaDeTODALaCuadrilla, "jornada": horasPorJornada }],
+  "laborDetails": [{ "cuadrilla": numeroDeTrabajadoresDE_ESTE_RENGLON_UNICAMENTE, "rendimiento": unidadesDeConceptoPorJornadaDeTODALaCuadrillaCompleta, "jornada": horasPorJornada }],
   "equipment": [["descripcion completa", cantidad, "unidad", tarifa]],
   "equipmentDetails": [{ "integracion": "POR_UNIDAD_OBRA|POR_JORNADA|POR_LOTE|AMORTIZABLE", "rendimientoDiario": numeroOnull, "vidaUtilDias": numeroOnull, "factorUso": numeroOnull, "modalidad": "renta_jornada|costo_horario|costo_diario|costo_lote|propio_contratista" }],
   "seguridad": [["EPP o proteccion", cantidad, "unidad", precioUnitario]],
@@ -218,7 +218,7 @@ Devuelve SOLO JSON valido con esta forma:
   "consumableSources": [{ "especificacion": "texto tecnico o null", "proveedor": "nombre real solo si viene del catalogo, si no null", "region": "region o null", "integracion": "POR_UNIDAD_OBRA o POR_LOTE", "technicalReason": "por que este consumible especifico aplica a este procedimiento" }],
   "procedimientoConstructivo": ["paso 1", "paso 2", "..."],
   "controlCalidad": [{ "especificacion": "texto", "criterio": "texto verificable" }],
-  "criterioMedicion": { "incluye": ["que incluye el precio"], "excluye": ["que no incluye"] },
+  "criterioMedicion": { "criterio": "una frase que describe COMO se mide/cuantifica este concepto en obra (ej. se mide el volumen real excavado, medido en banco, verificado por levantamiento topografico antes y despues)", "formaPago": "una frase que describe COMO se paga este concepto (ej. pago por unidad de obra terminada, previa aprobacion de la supervision, con base en el volumen medido)", "incluye": ["que incluye el precio"], "excluye": ["que no incluye"] },
   "technicalJustifications": {
     "materials": "por que estos materiales y estas cantidades para este concepto especifico",
     "labor": "por que esta cuadrilla y este rendimiento para este concepto especifico",
@@ -261,6 +261,7 @@ Reglas obligatorias sobre MANO DE OBRA (obligatorio):
 - Agrupa TODA la mano de obra de un mismo ciclo de produccion en una sola cuadrilla (labor con 1-2 renglones: oficial + ayudante, o un tercero solo si es un oficio realmente distinto como electricista/soldador). El "rendimiento" declarado en laborDetails debe ser el de la cuadrilla completa terminando el ciclo, no el de una sub-tarea aislada.
 - PROHIBIDO fragmentar un mismo ciclo en varias "cuadrillas": para un concepto como "desmantelamiento de tuberia" (corte + traslado + limpieza), NO generes 3 renglones de labor (uno para corte, otro para traslado, otro para limpieza) como si fueran 3 cuadrillas independientes -- son la MISMA cuadrilla trabajando su jornada. Usa como mucho 2 renglones (oficial+ayudante) con UN rendimiento combinado que ya incluya las 3 actividades.
 - Solo usa renglones de labor adicionales cuando se trate de oficios genuinamente distintos con especialidad y salario propios (ej. soldador certificado ademas de albañiles).
+- SEMANTICA CRITICA DE "cuadrilla" EN laborDetails (obligatorio, el motor de calculo depende de esto): "cuadrilla" es el numero de trabajadores DE ESE RENGLON/oficio UNICAMENTE, NUNCA el total de personas de la cuadrilla completa repetido en cada renglon. Ejemplo CORRECTO: cuadrilla de 1 operador de excavadora + 1 ayudante -> renglon "Operador de excavadora" con cuadrilla:1, renglon "Ayudante" con cuadrilla:1 (nunca cuadrilla:2 en ambos). Ejemplo INCORRECTO que debes evitar: poner cuadrilla:2 en cada uno de los 2 renglones porque "la cuadrilla tiene 2 integrantes en total" -- eso duplica el costo de mano de obra en el calculo (jornadas = cuadrilla_del_renglon / rendimiento). El "rendimiento" (unidades de concepto por jornada) SI es el de la cuadrilla completa trabajando junta y SI puede repetirse igual en cada renglon del mismo ciclo -- son dos campos con semantica distinta, no los confundas.
 
 Reglas obligatorias:
 - No cambies el concepto. Si el usuario pide estructura metalica, no generes lavabo, block, concreto ni otro tema.
@@ -274,7 +275,7 @@ Reglas obligatorias:
 - "equipmentDetails" debe tener EXACTAMENTE el mismo numero de elementos que "equipment", y "seguridadDetails" EXACTAMENTE el mismo numero que "seguridad", ambos en el mismo orden.
 - "seguridad" incluye como minimo el EPP basico aplicable a la actividad (casco, guantes, lentes, etc. segun corresponda); puede ir vacio solo si el concepto es puramente administrativo/de oficina.
 - "procedimientoConstructivo" son pasos de ejecucion en orden, especificos del concepto (no genericos de relleno).
-- "criterioMedicion" debe reflejar que unidad se mide y que excluye explicitamente (acabados adicionales, materiales no listados, etc.).
+- "criterioMedicion" debe reflejar que unidad se mide y que excluye explicitamente (acabados adicionales, materiales no listados, etc.). "criterio" y "formaPago" son OBLIGATORIOS y especificos de este concepto (no una frase generica que serviria para cualquier partida): explica como se cuantifica/verifica la cantidad ejecutada y como se factura/paga, con el nivel de detalle de un contrato de obra real.
 - "confidenceBreakdown": nunca declares 100 salvo certeza absoluta; si el concepto es ambiguo o generico, baja "cantidades" y "composicion" en vez de subir el numero artificialmente.
 - Cada descripcion debe ser completa y profesional; evita textos cortados.
 - Materiales: 3 a 8 renglones. Mano de obra: 1 a 5 renglones. Equipo: 1 a 5 renglones. Consumibles: 0 a 5 renglones (0 es valido y esperado cuando no aplica).
@@ -292,7 +293,7 @@ Reglas obligatorias:
   });
   const json = extractJsonObject(content);
   if(!json) throw new Error('La API no devolvio JSON valido.');
-  return normalizeAIApuToV2(json, cleanConcept);
+  return normalizeAIApuToV2(json, cleanConcept, { referencePU });
 }
 
 export async function answerAssistant({ question='', history=[], context={} }){

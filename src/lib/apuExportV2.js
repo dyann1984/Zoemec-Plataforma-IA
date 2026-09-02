@@ -523,6 +523,25 @@ export function drawApuSections(doc,rawApu,opts={}){
     [...(apu.consumables||[]).map(r=>[r.clave,r.descripcion,num(r.consumo),`${num(r.desperdicioPct)}%`,money(r.precioUnitario),money(Number(r.consumo)*(1+Number(r.desperdicioPct)/100)*Number(r.precioUnitario))]),
      ['','Subtotal consumibles','','','',money(t.consumibles)]],
     [0.7,2.9,0.6,0.6,0.9,0.9]);
+  // Trazabilidad por renglon (auditoria "5.00 L diesel / 0.50 L aceite sin
+  // base declarada"): technicalReason/especificacion/fuente/estado YA se
+  // capturan por consumible (apuSchema.js#normalizeAIApuToV2), pero antes
+  // de esto solo se imprimia el parrafo compartido de tj.consumables
+  // (una sola justificacion para TODOS los renglones) -- nunca la razon
+  // individual de CADA consumible ni su estado real (ESTIMADO_IA vs con
+  // fuente). Se lista un renglon por consumible; nunca se inventa texto
+  // aqui -- si el renglon no trae razon propia, se marca explicito.
+  (apu.consumables||[]).forEach(r=>{
+    const reason = String(r.technicalReason||'').trim();
+    const spec = String(r.especificacion||'').trim();
+    const estado = apuDataStateLabel(r.fuente?.estado);
+    const line = `${r.clave} (${r.unidad||'—'}, base: ${spec||'sin especificacion declarada'}) -- ${estado}: ${reason||NO_JUSTIFICATION_TEXT}`;
+    const lines=doc.splitTextToSize(pdfText(line),W-2*M);
+    ensure(lines.length*3.1+2);
+    doc.setFont('helvetica','italic');doc.setFontSize(6.4);doc.setTextColor(reason?70:150);
+    doc.text(lines,M,y+3);y+=lines.length*3.1+1.5;
+    doc.setFont('helvetica','normal');doc.setFontSize(7);doc.setTextColor(30);
+  });
   justBlock(tj.consumables);
 
   table('F. SEGURIDAD Y EPP',[181,38,61],['Clave','Descripcion','Cant.','Precio/adquisicion','Integracion / base','Importe efectivo'],
@@ -545,6 +564,23 @@ export function drawApuSections(doc,rawApu,opts={}){
   ensure(8);doc.setDrawColor(18,63,120);doc.line(M,y,W-M,y);y+=1.5;
   doc.setFillColor(47,125,58);doc.rect(M,y,W-2*M,9,'F');doc.setTextColor(255);doc.setFont('helvetica','bold');doc.setFontSize(9);
   doc.text(pdfText('PRECIO UNITARIO'),M+3,y+6);doc.text(pdfText(money(t.pu)),W-M-3,y+6,{align:'right'});y+=12;doc.setFont('helvetica','normal');doc.setTextColor(30);
+  // PU de referencia (Fase auditoria "$12.50 vs $592.01"): reusa
+  // buildReviewRow/explainApuDifference, la MISMA fuente de verdad que ya
+  // usa la Bandeja de revision y el resumen de lote -- nunca se recalcula
+  // aqui ni se fuerza el PU calculado a coincidir con la referencia. Solo
+  // se imprime si de verdad hay una referencia (referencePU>0): un APU sin
+  // referencia (la mayoria de los generados por concepto suelto) no debe
+  // mostrar una linea de "diferencia" contra un cero inexistente.
+  {
+    const review = buildReviewRow(apu);
+    if(review.puOriginal != null && review.puOriginal > 0){
+      const diffAbs = review.diferenciaPct != null ? Math.abs(review.diferenciaPct) : null;
+      const warn = diffAbs != null && diffAbs > 25;
+      kv('PU de referencia (entrada)', money(review.puOriginal));
+      kv('Diferencia vs. PU calculado', `${money(review.diferenciaAbsoluta)} (${review.diferenciaPct >= 0 ? '+' : ''}${review.diferenciaPct.toFixed(1)}%)`, warn ? [181,38,61] : undefined);
+      if(warn) kv('Estado', 'DESVIACION SIGNIFICATIVA -- REQUIERE REVISION', [181,38,61]);
+    }
+  }
   kv(`IVA (${num(apu.factores?.iva)}%)`,money(t.iva));
   kv(`Importe total (${num(apu.cantidadObra)} ${apu.unit})`,money(t.importeTotal),[213,106,0]);
   y+=3;

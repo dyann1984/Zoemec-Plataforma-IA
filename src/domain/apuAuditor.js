@@ -33,6 +33,7 @@ const SEVERITY_BY_CODE = {
   zero_rendimiento: AUDIT_SEVERITY.CRITICAL,
   rendimiento_sin_cuadrilla: AUDIT_SEVERITY.HIGH,
   possible_crew_fragmentation: AUDIT_SEVERITY.HIGH,
+  possible_cuadrilla_total_repeated: AUDIT_SEVERITY.HIGH,
   missing_integration: AUDIT_SEVERITY.MEDIUM,
   missing_rendimiento_diario: AUDIT_SEVERITY.MEDIUM,
   missing_vida_util: AUDIT_SEVERITY.MEDIUM,

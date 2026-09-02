@@ -1839,7 +1839,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         const res = await fetch(aiServerUrl('/api/generate-apu'), {
           method:'POST',
           headers:await authHeaders(),
-          body:JSON.stringify({concept:parsed.concept,catalog,schema:'v2'}),
+          body:JSON.stringify({concept:parsed.concept,catalog,schema:'v2',referencePU:parsed.referencePU||0}),
           signal:controller.signal
         });
         const data = await res.json().catch(()=>({}));

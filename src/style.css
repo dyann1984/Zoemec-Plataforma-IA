@@ -88,6 +88,34 @@
   --shadow-sm:0 6px 18px rgba(0,0,0,.32);
 }
 
+/* ====================================================================
+   Correccion quirurgica de contraste en oscuro (segundo hallazgo del QA
+   visual real): estos componentes especificos traen su fondo en literales
+   #fff/rgba(255,255,255,..) en vez de un token -- el texto de adentro SI
+   usa --ink/--muted (reactivos, se aclaran en oscuro), asi que quedaba
+   texto claro sobre tarjeta que se quedaba blanca siempre. Confirmados
+   rotos con QA visual real en Dashboard/Biblioteca/Reportes: .info-card
+   (Dashboard, resumen de proyecto/IA), .status-card (Dashboard, columna
+   de estado Proyecto/IA/Biblioteca/OneDrive/Firebase/OpenAI/Salud),
+   .lib-hero y .lib-cloud (Biblioteca, tarjeta "Base tecnica" y las 3
+   tarjetas "1/2/3"), .report-hero (Reportes, KPIs Venta potencial/
+   Pipeline/Productividad/Clientes). NO es un reemplazo masivo de #fff:
+   solo estos 5 selectores, que son los que se verificaron rotos en
+   vivo -- el resto de tarjetas del sistema (.folder/.client-card/etc.)
+   quedan fuera de este cambio hasta que se audite cada una por separado.
+   El mismo patron ya funcionaba en .kpi-tile (usa var(--card)) -- aqui se
+   aplica ese mismo token, sin tocar la regla base (asi el modo claro
+   queda pixel-identico: --card:#FFFFFF en claro es el mismo blanco que
+   ya tenian). */
+:root[data-theme="dark"] .info-card,
+:root[data-theme="dark"] .status-card,
+:root[data-theme="dark"] .lib-hero,
+:root[data-theme="dark"] .lib-cloud,
+:root[data-theme="dark"] .lib-cloud div,
+:root[data-theme="dark"] .report-hero div{
+  background:var(--card);
+}
+
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
 body{margin:0;font-family:var(--body);background:var(--paper);color:var(--ink-text);-webkit-font-smoothing:antialiased;letter-spacing:.1px;

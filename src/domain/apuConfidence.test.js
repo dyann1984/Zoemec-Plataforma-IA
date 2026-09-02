@@ -165,3 +165,46 @@ test('runProjectConfidence: sin APUs devuelve distribucion vacia, nunca inventa 
   const project = runProjectConfidence([]);
   assert.deepEqual(project, { totalAPUs: 0, high: 0, medium: 0, low: 0, insufficientEvidence: 0, averageScore: null, perApu: [] });
 });
+
+/* ---------- Auditoria APU-N29HGJ (items F/H): reconexion primaryActivity <-> Confidence Engine ---------- */
+
+// TEST 9: un rendimiento real presente (20 m3/jornada, misma mano de obra en
+// ambos casos) ya no queda forzado a N/D (INSUFFICIENT_EVIDENCE) SOLO porque
+// la ruta de IA nunca seteaba primaryActivity -- antes de la correccion en
+// normalizeAIApuToV2 (apuSchema.js), todo APU generado por IA perdia esta
+// dimension sin importar el concepto.
+test('TEST 9: con primaryActivity ausente la productividad es N/D; con primaryActivity presente deja de serlo (mismo rendimiento)', () => {
+  const sinClasificar = finalizeProfessionalAPU(idealApuFixture({ primaryActivity: null }));
+  const clasificado = finalizeProfessionalAPU(idealApuFixture());
+  const resultSinClasificar = runApuConfidence(sinClasificar);
+  const resultClasificado = runApuConfidence(clasificado);
+
+  assert.equal(resultSinClasificar.dimensions.productivity.status, CONFIDENCE_STATUS.INSUFFICIENT_EVIDENCE);
+  assert.equal(resultSinClasificar.dimensions.productivity.score, null);
+
+  assert.notEqual(resultClasificado.dimensions.productivity.status, CONFIDENCE_STATUS.INSUFFICIENT_EVIDENCE);
+  assert.ok(resultClasificado.dimensions.productivity.score != null);
+});
+
+// TEST 10: el Confidence Engine NO convierte automaticamente un rendimiento
+// sin evidencia historica real (rendimientoFuente: 'IA', nunca calibrado
+// contra una matriz real) en alta confianza solo porque ahora SI hay
+// primaryActivity clasificado -- "tener un rendimiento no significa
+// automaticamente alta confianza" (spec explicito de la correccion).
+test('TEST 10: primaryActivity presente + rendimiento solo de IA (sin calibrar) sigue distinguiendose de uno calibrado, nunca se cuenta como historico', () => {
+  const rendimientoSoloIA = idealApuFixture();
+  rendimientoSoloIA.labor.forEach(l => { l.rendimientoFuente = 'IA'; });
+  const apu = finalizeProfessionalAPU(rendimientoSoloIA);
+  const result = runApuConfidence(apu);
+
+  // La dimension "historicalConsistency" (la que especificamente mide
+  // procedencia HISTORICO/BIBLIOTECA/VALIDADO) nunca trata un rendimiento
+  // de IA como si fuera calibrado -- score 0, nunca HIGH, aunque el resto
+  // del APU (precios verificados, calculo correcto) sea intachable.
+  assert.equal(result.dimensions.historicalConsistency.score, 0);
+  assert.notEqual(result.dimensions.historicalConsistency.status, CONFIDENCE_STATUS.HIGH);
+
+  const calibrado = runApuConfidence(finalizeProfessionalAPU(idealApuFixture()));
+  assert.equal(calibrado.dimensions.historicalConsistency.score, 100);
+  assert.ok(result.score < calibrado.score, 'un rendimiento sin calibrar debe puntuar menos globalmente que uno respaldado por historico real, aun con la misma disciplina clasificada');
+});

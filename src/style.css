@@ -136,7 +136,7 @@
 }
 :root[data-theme="dark"] .project-switcher,
 :root[data-theme="dark"] .project-switcher select,
-:root[data-theme="dark"] .user button{
+:root[data-theme="dark"] .logout-btn{
   color:var(--ink);
 }
 :root[data-theme="dark"] .cloud-badge{

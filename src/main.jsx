@@ -1001,7 +1001,7 @@ function Shell({children,user,logout,module,setModule,company,apus,clients,proje
             <button className={locale==='en'?'active':''} onClick={()=>setLocale('en')} aria-pressed={locale==='en'}>EN</button>
           </div>
           <button className="theme-toggle" onClick={toggleTheme} aria-label={tr('toggle.themeToggleLabel')} title={theme==='light'?tr('toggle.themeDark'):tr('toggle.themeLight')}><Icon name={theme==='light'?'moon':'sun'} size={17}/></button>
-          <CloudBadge user={user}/><NotificationBell user={user}/><span className="avatar">{user.initials}</span><div><b>{user.name}</b><small>{user.isAdmin ? tr('shell.role.admin') : user.plan}</small></div><button onClick={logout}>{tr('shell.logout')}</button>
+          <CloudBadge user={user}/><NotificationBell user={user}/><span className="avatar">{user.initials}</span><div><b>{user.name}</b><small>{user.isAdmin ? tr('shell.role.admin') : user.plan}</small></div><button className="logout-btn" onClick={logout}>{tr('shell.logout')}</button>
         </div>
       </header>
       {children}

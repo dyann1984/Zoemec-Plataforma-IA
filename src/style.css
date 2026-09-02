@@ -142,6 +142,22 @@
 :root[data-theme="dark"] .cloud-badge{
   background:var(--surface);
 }
+/* Segundo hallazgo de la misma familia, encontrado con QA visual real sobre
+   el Preview ya desplegado (no bastaba con leer el codigo): .theme-toggle y
+   .cloud-badge son <button> dentro de .user, asi que la regla generica
+   ".user button{color:var(--petrol)}" (pensada para el boton Salir antes de
+   que tuviera su propia clase) los alcanza tambien por especificidad, pisando
+   el color propio de cada uno (--ink y --muted, ambos SI se aclaran en
+   oscuro) con --petrol, que se queda fijo en morado oscuro. En claro no se
+   notaba (--petrol tambien es oscuro sobre esos fondos claros); en oscuro
+   quedaba texto/icono casi invisible. Restaura el color propio de cada
+   componente, solo en oscuro. */
+:root[data-theme="dark"] .theme-toggle{
+  color:var(--ink);
+}
+:root[data-theme="dark"] .cloud-badge{
+  color:var(--muted);
+}
 
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}

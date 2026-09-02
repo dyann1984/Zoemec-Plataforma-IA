@@ -28,6 +28,16 @@ export function friendlyServiceError(err, fallback='Servicio temporalmente no di
   if(/API_KEY|ACCESS_TOKEN|SERVICE_ACCOUNT|PRIVATE_KEY|CLIENT_EMAIL|process\.env|\bVercel\b|\.env\b/i.test(msg)){
     return 'Servicio temporalmente no configurado. Intenta mas tarde o contacta a soporte.';
   }
+  /* Un token OAuth expirado/revocado (Google Drive, OneDrive o cualquier
+     integracion futura basada en token) nunca debe mostrarse en el idioma e
+     ID tecnico crudo que devuelve el proveedor (ej. Google: "Token has been
+     expired or revoked.", "invalid_grant"). El llamador (ej. GoogleDrivePanel
+     en main.jsx) decide si ademas ofrece un boton de reconexion segun el rol
+     del usuario; esta funcion solo garantiza que el texto sea profesional y
+     este en espanol en cualquier punto donde se use. */
+  if(/token.*(expired|revoked|invalid)|invalid_grant|expired.*token|revoked.*token/i.test(msg)){
+    return 'La sesion de esta integracion expiro. Vuelve a conectarla para continuar.';
+  }
   /* Red de seguridad: si por alguna otra ruta llega un error crudo de parseo
      (JSON.parse/SyntaxError/fetch), nunca se muestra tal cual al usuario. */
   if(/unexpected (end of|token)|json\.parse|syntaxerror|failed to fetch|networkerror/i.test(msg)){

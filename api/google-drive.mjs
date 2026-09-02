@@ -251,6 +251,6 @@ export default async function handler(req, res){
     if(action === 'import') return await importFile(req, res);
     return await listFolder(req, res);
   }catch(err){
-    res.status(err.status || 400).json({ ok:false, error: err.message || 'No se pudo completar la operacion con Google Drive.' });
+    res.status(err.status || 400).json({ ok:false, error: err.message || 'No se pudo completar la operacion con Google Drive.', code: err.code || undefined });
   }
 }

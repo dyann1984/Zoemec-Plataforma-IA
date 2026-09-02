@@ -3307,7 +3307,7 @@ function Clients({clients,setClients,embedded=false}){
   </section>
 }
 
-function GoogleDrivePanel({user, onImported}){
+function GoogleDrivePanel({user, onImported, setModule}){
   const { t: tr } = useI18n();
   const [path,setPath]=useState([]); // breadcrumb: [{id,name}]
   const [items,setItems]=useState(null);
@@ -3317,6 +3317,15 @@ function GoogleDrivePanel({user, onImported}){
   const [importingAll,setImportingAll]=useState(false);
   const [notConfigured,setNotConfigured]=useState(false);
   const [loadError,setLoadError]=useState('');
+  // gdrive_reauth_required (ver _googleDrive.mjs#getGoogleDriveAccessToken):
+  // el GOOGLE_DRIVE_REFRESH_TOKEN del servidor fue revocado o expiro en
+  // Google. Es una credencial UNICA compartida por toda la plataforma (no es
+  // el inicio de sesion de Google del usuario), asi que ningun usuario puede
+  // "reconectarla" con un clic -- solo un administrador, regenerandola fuera
+  // de la app y actualizando la variable en Vercel. Estado separado de
+  // loadError para mostrar un mensaje calmo y accionable en vez del error
+  // crudo del proveedor.
+  const [reauthRequired,setReauthRequired]=useState(false);
 
   /* Antes, cualquier falla (backend no alcanzable, error de red, etc.) caia en
      el mismo catch que "no configurado" y terminaba mostrando "esta carpeta
@@ -3324,7 +3333,7 @@ function GoogleDrivePanel({user, onImported}){
      distinguen los 3 casos: no configurado, error real (se muestra tal cual,
      sin fingir una carpeta vacia) y exito con 0 elementos. */
   const load=async(folderId)=>{
-    setLoading(true); setItems(null); setLoadError('');
+    setLoading(true); setItems(null); setLoadError(''); setReauthRequired(false);
     try{
       const data=await apiPost('/api/google-drive', folderId ? { action:'list', folderId } : { action:'list' });
       setItems(data.items||[]);
@@ -3332,10 +3341,17 @@ function GoogleDrivePanel({user, onImported}){
     }catch(err){
       if(/no est[aá] configurado/i.test(err.message||'')){
         setNotConfigured(true);
+      }else if(err.code === 'gdrive_reauth_required'){
+        // Estado esperado y ya identificado (credencial del servidor por
+        // renovar): no es ruido de red ni un fallo aleatorio, asi que no se
+        // dispara el toast generico -- el estado persistente de abajo ya lo
+        // explica con claridad.
+        setNotConfigured(false);
+        setReauthRequired(true);
       }else{
         setNotConfigured(false);
         setLoadError(friendlyServiceError(err,tr('gdrive.connectFailMsg')));
-        window.zoemecNotify?.(err.message || tr('gdrive.listFailMsg'), 'error');
+        window.zoemecNotify?.(friendlyServiceError(err, tr('gdrive.listFailMsg')), 'error');
       }
     }finally{ setLoading(false); }
   };
@@ -3382,8 +3398,16 @@ function GoogleDrivePanel({user, onImported}){
       <div><b>{tr('gdrive.notConfiguredTitle')}</b><p>{tr('gdrive.notConfiguredText')}</p></div>
       <button className="soft" onClick={()=>window.zoemecNotify?.(user?.isAdmin ? tr('gdrive.configureAdminMsg') : tr('gdrive.configureUserMsg'), 'info')}>{tr('gdrive.configureBtn')}</button>
     </div>}
-    {!notConfigured && loadError && !loading && <EmptyState icon="admin" title={tr('gdrive.connectFailTitle')} text={loadError}/>}
-    {!notConfigured && !loadError && <>
+    {!notConfigured && reauthRequired && !loading && <EmptyState icon="admin"
+      title="Conexión expirada"
+      text={user?.isAdmin
+        ? 'La sesión de esta integración expiró. Vuelve a conectarla desde Panel Admin → Servicios (requiere generar una nueva autorización en Google).'
+        : 'La sesión de esta integración expiró. Contacta a un administrador de la plataforma para reconectarla.'}
+      actionLabel={user?.isAdmin ? 'Ir a Panel Admin → Servicios' : undefined}
+      onAction={user?.isAdmin ? ()=>setModule?.('admin') : undefined}
+    />}
+    {!notConfigured && !reauthRequired && loadError && !loading && <EmptyState icon="admin" title={tr('gdrive.connectFailTitle')} text={loadError}/>}
+    {!notConfigured && !reauthRequired && !loadError && <>
       <div className="gdrive-breadcrumb">
         <button className="soft" onClick={goRoot}>{tr('gdrive.repoRoot')}</button>
         {path.map((p,i)=><React.Fragment key={p.id}><span>/</span><button className="soft" onClick={()=>goToCrumb(i)}>{p.name}</button></React.Fragment>)}
@@ -3785,7 +3809,7 @@ function Library({user, catalog, setCatalog, setModule}){
     <div className="lib-cloud panel">
       {[[tr('library.step1Title'),tr('library.step1Desc')],[tr('library.step2Title'),tr('library.step2Desc')],[tr('library.step3Title'),tr('library.step3Desc')]].map(x=><div key={x[0]}><b>{x[0]}</b><p>{x[1]}</p></div>)}
     </div>
-    <GoogleDrivePanel user={user} onImported={()=>setSyncKey(k=>k+1)}/>
+    <GoogleDrivePanel user={user} onImported={()=>setSyncKey(k=>k+1)} setModule={setModule}/>
     <OneDrivePanel user={user} onImported={()=>setSyncKey(k=>k+1)}/>
     <div className="library-dashboard"><div className="lib-stat"><small>{tr('library.statDocs')}</small><b>{files.length}</b><span>{tr('library.statDocsSub',{mb:totalMb.toFixed(2)})}</span></div><div className="lib-stat"><small>{tr('library.statCategories')}</small><b>{counts.filter(x=>x[1]>0).length}</b><span>{type === 'Todos' ? tr('library.statCategoriesAllView') : type}</span></div><div className="lib-stat"><small>{tr('library.statSelected')}</small><b>{batch.length}</b><span>{tr('library.statSelectedSub')}</span></div></div>
     <div className="lib-console panel">

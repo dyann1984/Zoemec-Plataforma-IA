@@ -116,6 +116,33 @@
   background:var(--card);
 }
 
+/* Correccion quirurgica de contraste en oscuro (topbar, tercer hallazgo del
+   QA visual real): estos controles combinan un fondo que SI se invierte en
+   oscuro (--mint/--ink) con un texto que se quedaba fijo en un morado oscuro
+   (--petrol) o al reves (fondo fijo en blanco/#fff con texto que SI se
+   aclara), asi que el texto y el fondo terminaban casi del mismo tono.
+   Confirmados rotos con QA visual real en la topbar: el selector de
+   proyecto activo (.project-switcher, "Proyecto General ZOEMEC"), el boton
+   Salir (.user button) y la insignia de sincronizacion (.cloud-badge,
+   "Sincronizacion parcial"). El avatar (.avatar) usa --ink como fondo, que
+   se aclara en oscuro, pero su texto esta fijo en blanco -- se resuelve
+   igual que --accent-solid/--danger-solid ya documentados arriba: un
+   bloque de color solido y autocontenido no debe invertirse con el tema,
+   asi que se fija a --petrol (morado oscuro) en vez de --ink. Ningun valor
+   nuevo: solo tokens que ya existian, reasignados donde el emparejamiento
+   fondo/texto se rompia. Modo claro no se toca (mismos valores de siempre). */
+:root[data-theme="dark"] .avatar{
+  background:var(--petrol);
+}
+:root[data-theme="dark"] .project-switcher,
+:root[data-theme="dark"] .project-switcher select,
+:root[data-theme="dark"] .user button{
+  color:var(--ink);
+}
+:root[data-theme="dark"] .cloud-badge{
+  background:var(--surface);
+}
+
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
 body{margin:0;font-family:var(--body);background:var(--paper);color:var(--ink-text);-webkit-font-smoothing:antialiased;letter-spacing:.1px;

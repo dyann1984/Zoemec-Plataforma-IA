@@ -62,6 +62,15 @@ export async function getGoogleDriveAccessToken(){
   if(!res.ok || !data?.access_token){
     const error = new Error(data?.error_description || 'Google rechazo el refresh token de Drive.');
     error.status = 502;
+    /* invalid_grant (codigo estandar de OAuth2 de Google) significa que el
+       propio GOOGLE_DRIVE_REFRESH_TOKEN fue revocado o expiro -- no hay
+       "refresh token del refresh token": esto NUNCA se resuelve reintentando
+       desde el cliente, requiere que un administrador vuelva a autorizar la
+       app en Google (fuera de esta plataforma) y actualice la variable de
+       entorno en Vercel. Se marca con un codigo estable para que el cliente
+       (GoogleDrivePanel, main.jsx) muestre un estado de reconexion en vez del
+       error crudo de Google, sin depender de adivinar por el texto. */
+    if(data?.error === 'invalid_grant') error.code = 'gdrive_reauth_required';
     throw error;
   }
   cachedToken = { accessToken: data.access_token, expiresAt: Date.now() + (Number(data.expires_in || 3600) * 1000) };

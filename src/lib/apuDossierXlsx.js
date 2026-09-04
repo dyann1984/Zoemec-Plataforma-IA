@@ -10,6 +10,8 @@ import { calcMaterialRow, calcLaborRow, calcEquipmentRow, calcConsumableRow } fr
 import { buildDossierData } from './apuDossierData.js';
 import { shortHash } from '../domain/snapshotHash.js';
 import { apiPost } from '../services/apiClient.js';
+import { COSTO_CAMPO_CATEGORIA_LABEL, calcCostoCampoImporte, calcPresupuestadoVsReal } from '../domain/apuCostosCampo.js';
+import { ESTADO_REVISION_LABEL, NORMATIVA_DISCLAIMER, NORMATIVA_VACIA_TEXTO } from '../domain/apuNormativa.js';
 
 const asCell = (value, style = {}) => xcell(value, style);
 const pad = (row, width) => { const full = [...row]; while(full.length < width) full.push(null); return full; };
@@ -94,6 +96,72 @@ function buildResourceSheet(kind, snapshot){
     ], 8));
   });
   return { sheet: RESOURCE_LABEL[kind], rows: out, widths: [12, 34, 10, 14, 12, 14, 14, 16], stickyRowsCount: 2, orientation: 'landscape' };
+}
+
+/* Costos de Campo / Presupuestado vs Real / Normativa / Riesgos (Parte
+   C/D/E/F, requerimiento de produccion 2026-09-03). Mismo criterio "no
+   crear hoja vacia" (regla 15 del spec original) que el resto de este
+   archivo: cada builder regresa null si no hay datos, `.filter(Boolean)`
+   en exportApuAuditDossierExcel ya descarta los null -- salvo NORMATIVA,
+   que el usuario pidio explicitamente mostrar como texto ("Normativa
+   pendiente de revision") incluso vacia, en vez de desaparecer. */
+function buildCostosCampoSheet(snapshot){
+  const rows = Array.isArray(snapshot.costosCampo) ? snapshot.costosCampo : [];
+  if(!rows.length) return null;
+  const out = [pad([asCell('COSTOS DE CAMPO Y AJUSTES REALES', { columnSpan: 9, ...XLS.title })], 9)];
+  out.push(pad(['Categoria', 'Concepto', 'Descripcion', 'Cantidad', 'Unidad', 'Costo unitario', 'Importe', 'Fecha', 'Proveedor'].map(h => asCell(h, XLS.head)), 9));
+  let total = 0;
+  rows.forEach(r => {
+    const importe = calcCostoCampoImporte(r); total += importe;
+    out.push(pad([asCell(COSTO_CAMPO_CATEGORIA_LABEL[r.categoria] || r.categoria), asCell(r.concepto || '—'), asCell(r.descripcion || '—', { wrap: true }), asCell(Number(r.cantidad || 0), XLS.qty), asCell(r.unidad || '—'), asCell(Number(r.costoUnitario || 0), XLS.money), asCell(importe, XLS.money), asCell(r.fecha || '—'), asCell(r.proveedor || '—')], 9));
+  });
+  out.push(pad([asCell('TOTAL REGISTRADO', { columnSpan: 6, fontWeight: 'bold', align: 'right' }), null, null, null, null, null, asCell(total, { ...XLS.money, fontWeight: 'bold' })], 9));
+  return { sheet: 'COSTOS_CAMPO', rows: out, widths: [20, 20, 34, 12, 10, 14, 14, 14, 20], stickyRowsCount: 2, orientation: 'landscape' };
+}
+
+function buildCostoRealSheet(snapshot){
+  const pvr = calcPresupuestadoVsReal(snapshot);
+  if(!pvr || !pvr.hasRegistros) return null;
+  const rows = [pad([asCell('PRESUPUESTADO VS REAL', { columnSpan: 2, ...XLS.title })], 2)];
+  const kv = (label, value) => rows.push(pad([asCell(label, XLS.label), asCell(value ?? '—', {})], 2));
+  kv('APU presupuestado', money(pvr.presupuestado));
+  kv('Costo directo real', money(pvr.costoDirectoReal));
+  kv('Costos de campo (bruto registrado)', money(pvr.costosCampo));
+  kv('Indirectos', money(pvr.indirectos));
+  kv('Extraordinarios', money(pvr.extraordinarios));
+  kv('Ajustes', money(pvr.ajustes));
+  if(pvr.noImputable > 0) kv('No imputable al APU (informativo)', money(pvr.noImputable));
+  kv('Costo real total', money(pvr.costoRealTotal));
+  kv('Variacion', `${pvr.desviacionMonto >= 0 ? '+' : ''}${money(pvr.desviacionMonto)} (${pvr.desviacionPct == null ? '—' : `${pvr.desviacionPct >= 0 ? '+' : ''}${pvr.desviacionPct.toFixed(2)}%`})`);
+  if(pvr.impactoPU != null) kv('Impacto en precio unitario', `${pvr.impactoPU >= 0 ? '+' : ''}${money(pvr.impactoPU)}`);
+  return { sheet: 'COSTO_REAL', rows, widths: [34, 30], stickyRowsCount: 0, orientation: 'portrait' };
+}
+
+function buildNormativaSheet(snapshot){
+  const rows0 = Array.isArray(snapshot.normativa) ? snapshot.normativa : [];
+  const rows = [pad([asCell('NORMATIVA Y CUMPLIMIENTO', { columnSpan: 7, ...XLS.title })], 7)];
+  rows.push(pad([asCell(NORMATIVA_DISCLAIMER, { columnSpan: 7, wrap: true, color: '#5B6472' })], 7));
+  if(!rows0.length){
+    rows.push(pad([asCell(NORMATIVA_VACIA_TEXTO)], 7));
+    return { sheet: 'NORMATIVA', rows, widths: [26, 14, 22, 18, 14, 20, 40], stickyRowsCount: 0, orientation: 'landscape' };
+  }
+  rows.push(pad(['Nombre', 'Clave', 'Organismo emisor', 'Jurisdiccion', 'Vigencia', 'Estado de revision', 'Requisito'].map(h => asCell(h, XLS.head)), 7));
+  rows0.forEach(n => {
+    rows.push(pad([asCell(n.nombre || '—'), asCell(n.clave || '—'), asCell(n.organismoEmisor || '—'), asCell(n.jurisdiccion || '—'), asCell(n.vigencia || '—'), asCell(ESTADO_REVISION_LABEL[n.estadoRevision] || n.estadoRevision), asCell(n.requisito || '—', { wrap: true })], 7));
+    const flags = [n.requiereMaterial && 'Material', n.requiereEPP && 'EPP', n.requiereProcedimiento && 'Procedimiento', n.requierePrueba && 'Prueba/inspeccion', n.requiereDocumentacion && 'Documentacion'].filter(Boolean).join(', ') || 'Ninguno marcado';
+    rows.push(pad([asCell(`Impacto tecnico: ${n.impactoTecnico || '—'}`, { columnSpan: 3, wrap: true }), null, null, asCell(`Impacto economico: ${n.impactoEconomico || '—'} | Requiere: ${flags}`, { columnSpan: 4, wrap: true })], 7));
+  });
+  return { sheet: 'NORMATIVA', rows, widths: [26, 14, 22, 18, 14, 20, 40], stickyRowsCount: 2, orientation: 'landscape' };
+}
+
+function buildRiesgosSheet(snapshot){
+  const riesgos = snapshot.riesgosNoContemplados;
+  if(!riesgos || !Array.isArray(riesgos.hallazgos) || !riesgos.hallazgos.length) return null;
+  const rows = [pad([asCell('RIESGOS Y COSTOS NO CONTEMPLADOS', { columnSpan: 6, ...XLS.title })], 6)];
+  rows.push(pad([asCell(riesgos.resumen, { columnSpan: 6, wrap: true })], 6));
+  rows.push(pad(['Severidad', 'Hallazgo', 'Impacto potencial', 'Recomendacion', 'Confianza', 'Incluir en APU'].map(h => asCell(h, XLS.head)), 6));
+  riesgos.hallazgos.forEach(h => rows.push(pad([asCell(h.severidad), asCell(h.hallazgo, { wrap: true }), asCell(h.impactoPotencial, { wrap: true }), asCell(h.recomendacion, { wrap: true }), asCell(h.confianza), asCell(h.incluirEnAPU ? 'SI' : 'NO')], 6)));
+  return { sheet: 'RIESGOS', rows, widths: [12, 34, 34, 34, 12, 14], stickyRowsCount: 2, orientation: 'landscape' };
 }
 
 const SEVERITY_ORDER = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'];
@@ -195,6 +263,10 @@ export async function exportApuAuditDossierExcel({ apu, apuId, apuVersionId, pro
     buildResourceSheet('labor', data.snapshot),
     buildResourceSheet('equipment', data.snapshot),
     buildResourceSheet('consumables', data.snapshot),
+    buildCostosCampoSheet(data.snapshot),
+    buildCostoRealSheet(data.snapshot),
+    buildNormativaSheet(data.snapshot),
+    buildRiesgosSheet(data.snapshot),
     buildAuditoriaSheet(data),
     buildChallengeSheet(data),
     buildConfidenceSheet(data),

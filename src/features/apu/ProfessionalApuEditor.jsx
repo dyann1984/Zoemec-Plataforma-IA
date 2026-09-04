@@ -9,6 +9,9 @@ import {ZoemecIntelligencePanel} from './ZoemecIntelligencePanel.jsx';
 import {apiPost,apiGetSafe} from '../../services/apiClient.js';
 import {exportApuAuditDossierPdf} from '../../lib/apuDossierPdf.js';
 import {exportApuAuditDossierExcel} from '../../lib/apuDossierXlsx.js';
+import {COSTO_CAMPO_CATEGORIA_LABEL,COSTO_CAMPO_CATEGORIA_ORDER,makeEmptyCostoCampoRow,calcCostoCampoImporte,calcPresupuestadoVsReal} from '../../domain/apuCostosCampo.js';
+import {ESTADO_REVISION_LABEL,NORMATIVA_DISCLAIMER,NORMATIVA_VACIA_TEXTO,makeEmptyNormativaRow} from '../../domain/apuNormativa.js';
+import {analyzeApuRisks} from '../../domain/apuRiskDetector.js';
 
 const N=new Set(['cantidadObra','tipoCambio','cantidad','consumo','desperdicioPct','precioUnitario','cuadrilla','rendimiento','jornada','salarioBase','fsr','tarifa','valorAdquisicion','depreciacionPct','vidaUtil','factorUso','factorImputable']);
 const SPEC={labor:[['clave','Clave'],['descripcion','Descripción'],['unidad','Unidad'],['cuadrilla','Cuadrilla'],['rendimiento','Rendimiento'],['jornada','Jornada'],['salarioBase','Salario'],['fsr','FSR']],materials:[['clave','Clave'],['descripcion','Descripción'],['unidad','Unidad'],['consumo','Cantidad'],['desperdicioPct','Desperdicio %'],['precioUnitario','Precio']],tools:[['clave','Clave'],['descripcion','Herramienta'],['unidad','Unidad'],['cantidad','Cantidad'],['valorAdquisicion','Valor'],['vidaUtil','Vida útil'],['depreciacionPct','Depreciación %'],['factorUso','Factor uso']],equipment:[['clave','Clave'],['descripcion','Equipo'],['unidad','Unidad'],['cantidad','Cantidad'],['tarifa','Tarifa'],['rendimiento','Rendimiento']],consumables:[['clave','Clave'],['descripcion','Descripción'],['especificacion','Especificación'],['unidad','Unidad'],['consumo','Cantidad'],['desperdicioPct','Desperdicio %'],['precioUnitario','Precio']],seguridad:[['clave','Clave'],['descripcion','EPP'],['unidad','Unidad'],['cantidad','Cantidad'],['vidaUtil','Vida útil'],['factorImputable','Factor'],['precioUnitario','Precio'],['observaciones','Observaciones']]};
@@ -133,6 +136,25 @@ export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindP
  const update=(k,i,f,v)=>{const n=structuredClone(apu),list=k==='tools'?n.herramientaMenor.detalle:n[k],row=list[i],before=row[f],after=N.has(f)?Number(v):v;row[f]=after;if(f===priceKey(k)){row.priceRecord=makePriceRecord({description:row.descripcion,price:Number(v),unit:row.unidad,currency:apu.moneda,sourceType:PRICE_SOURCE_TYPE.USER_PROVIDED,confidence:60});row.fuente={...(row.fuente||{}),estado:'USER PROVIDED',sourceType:'USER PROVIDED'};}onChange(withAudit(n,`${k}.${i}.${f}`,before,after))};
  const add=k=>{const n=structuredClone(apu);if(k==='tools'){n.herramientaMenor.modo='detalle';n.herramientaMenor.detalle=[...(n.herramientaMenor.detalle||[]),structuredClone(BLANK.tools)];}else n[k]=[...n[k],structuredClone(BLANK[k])];onChange(n)};
  const remove=(k,i)=>{const n=structuredClone(apu);(k==='tools'?n.herramientaMenor.detalle:n[k]).splice(i,1);onChange(n)};
+ // Costos de Campo y Ajustes Reales (Parte C): ledger independiente de
+ // materials/labor/equipment -- nunca pasa por `update`/`add`/`remove` de
+ // arriba (esos estan atados a SPEC/BLANK/priceKey, pensados para renglones
+ // que SI alimentan calcAPUv2). Un registro de Costos de Campo JAMAS
+ // modifica final.calculated (ver apuCostosCampo.js) -- por eso vive en su
+ // propio arreglo con sus propios mutadores, nunca mezclado con esos.
+ const costosCampoRows=apu.costosCampo||[];
+ const updateCostoCampo=(i,f,v)=>{const n=structuredClone(apu);if(!Array.isArray(n.costosCampo))n.costosCampo=[];const row=n.costosCampo[i],before=row[f],after=(f==='cantidad'||f==='costoUnitario')?Number(v):v;row[f]=after;onChange(withAudit(n,`costosCampo.${i}.${f}`,before,after))};
+ const addCostoCampo=()=>{const n=structuredClone(apu);if(!Array.isArray(n.costosCampo))n.costosCampo=[];n.costosCampo=[...n.costosCampo,{...makeEmptyCostoCampoRow(),id:'CC-'+Date.now()}];onChange(n)};
+ const removeCostoCampo=i=>{const n=structuredClone(apu);n.costosCampo.splice(i,1);onChange(n)};
+ // Normativa y Cumplimiento (Parte E): captura manual, mismo patron aislado.
+ const normativaRows=apu.normativa||[];
+ const updateNormativa=(i,f,v)=>{const n=structuredClone(apu);if(!Array.isArray(n.normativa))n.normativa=[];const row=n.normativa[i],before=row[f],after=typeof row[f]==='boolean'?Boolean(v):v;row[f]=after;onChange(withAudit(n,`normativa.${i}.${f}`,before,after))};
+ const addNormativa=()=>{const n=structuredClone(apu);if(!Array.isArray(n.normativa))n.normativa=[];n.normativa=[...n.normativa,{...makeEmptyNormativaRow(),id:'NRM-'+Date.now()}];onChange(n)};
+ const removeNormativa=i=>{const n=structuredClone(apu);n.normativa.splice(i,1);onChange(n)};
+ // Riesgos y Costos No Contemplados (Parte F): corre BAJO DEMANDA (decision
+ // explicita del usuario) -- nunca automatico al guardar/recalcular.
+ const analyzeRisks=()=>{onChange({...apu,riesgosNoContemplados:analyzeApuRisks(final)})};
+ const toggleIncluirRiesgo=i=>{const n=structuredClone(apu);n.riesgosNoContemplados.hallazgos[i].incluirEnAPU=!n.riesgosNoContemplados.hallazgos[i].incluirEnAPU;onChange(n)};
  const [versionSaveState,setVersionSaveState]=useState(null); // {status:'saving'|'saved'|'error'|'conflict', message, serverCurrentVersion}
  /* Fase 7: ademas de la version LOCAL instantanea (createApuVersion, sin la
     cual la UI se sentiria lenta -- localStorage/estado de React nunca
@@ -308,6 +330,83 @@ export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindP
   <h3 className="pro-section-title">F. Datos administrativos</h3>
   <Accordion title="Datos del proyecto" summary={apu.proyecto || apu.cliente || 'Sin capturar'}>
    <div className="pro-header-grid">{[['proyecto','Proyecto'],['cliente','Cliente'],['ubicacion','Ubicación'],['pais','País'],['estado','Estado'],['municipio','Municipio'],['fechaBase','Fecha base'],['moneda','Moneda'],['tipoCambio','Tipo cambio'],['partida','Partida'],['clave','Clave'],['concept','Concepto'],['unit','Unidad'],['cantidadObra','Cantidad'],['elaboro','Elaboró'],['reviso','Revisó'],['aprobo','Aprobó'],['version','Versión']].map(([f,l])=><label key={f}>{l}<input value={apu[f]??''} onChange={e=>change(f,e.target.value)}/></label>)}</div>
+  </Accordion>
+  <h3 className="pro-section-title">H. Costos de Campo y Ajustes Reales</h3>
+  <Accordion title="Costos de campo" summary={costosCampoRows.length?`${costosCampoRows.length} registro(s) · ${money(costosCampoRows.reduce((s,r)=>s+calcCostoCampoImporte(r),0))}`:'Sin registros'}>
+   {costosCampoRows.length===0 && <p className="muted">Sin costos de campo registrados. Usa "+ Agregar" para capturar gastos reales de obra (viáticos, alimentos, traslados, maniobras no previstas, etc.) que no están en el costo directo inicial.</p>}
+   {costosCampoRows.length>0 && <div className="apu-table-scroll"><table className="data-table"><thead><tr><th>Concepto</th><th>Categoría</th><th>Descripción</th><th>Cantidad</th><th>Unidad</th><th>Costo unitario</th><th>Importe</th><th>Fecha</th><th>Proveedor</th><th>Comprobante</th><th>Observación</th><th>Justificación</th><th/></tr></thead><tbody>
+    {costosCampoRows.map((r,i)=><tr key={r.id||i}>
+     <td><input value={r.concepto||''} onChange={e=>updateCostoCampo(i,'concepto',e.target.value)}/></td>
+     <td><select value={r.categoria} onChange={e=>updateCostoCampo(i,'categoria',e.target.value)}>{COSTO_CAMPO_CATEGORIA_ORDER.map(c=><option key={c} value={c}>{COSTO_CAMPO_CATEGORIA_LABEL[c]}</option>)}</select></td>
+     <td><input value={r.descripcion||''} onChange={e=>updateCostoCampo(i,'descripcion',e.target.value)}/></td>
+     <td><input type="number" value={r.cantidad??0} onChange={e=>updateCostoCampo(i,'cantidad',e.target.value)}/></td>
+     <td><input value={r.unidad||''} onChange={e=>updateCostoCampo(i,'unidad',e.target.value)}/></td>
+     <td><input type="number" value={r.costoUnitario??0} onChange={e=>updateCostoCampo(i,'costoUnitario',e.target.value)}/></td>
+     <td>{money(calcCostoCampoImporte(r))}</td>
+     <td><input value={r.fecha||''} onChange={e=>updateCostoCampo(i,'fecha',e.target.value)}/></td>
+     <td><input value={r.proveedor||''} onChange={e=>updateCostoCampo(i,'proveedor',e.target.value)}/></td>
+     <td><input value={r.comprobante||''} onChange={e=>updateCostoCampo(i,'comprobante',e.target.value)}/></td>
+     <td><input value={r.observacion||''} onChange={e=>updateCostoCampo(i,'observacion',e.target.value)}/></td>
+     <td><input value={r.justificacion||''} onChange={e=>updateCostoCampo(i,'justificacion',e.target.value)}/></td>
+     <td><button onClick={()=>removeCostoCampo(i)}>×</button></td>
+    </tr>)}
+   </tbody></table></div>}
+   <button onClick={addCostoCampo}>+ Agregar</button>
+  </Accordion>
+  {(()=>{const pvr=calcPresupuestadoVsReal(final);return pvr && pvr.hasRegistros ? <Accordion title="Presupuestado vs Real" summary={`Desviación ${pvr.desviacionMonto>=0?'+':''}${money(pvr.desviacionMonto)} (${pvr.desviacionPct==null?'—':`${pvr.desviacionPct>=0?'+':''}${num(pvr.desviacionPct)}%`})`} defaultOpen>
+   <div className="pro-header-grid">
+    <div><small>APU presupuestado</small><b>{money(pvr.presupuestado)}</b></div>
+    <div><small>Costo directo real</small><b>{money(pvr.costoDirectoReal)}</b></div>
+    <div><small>Costos de campo (bruto registrado)</small><b>{money(pvr.costosCampo)}</b></div>
+    <div><small>Indirectos (B)</small><b>{money(pvr.indirectos)}</b></div>
+    <div><small>Extraordinarios (C)</small><b>{money(pvr.extraordinarios)}</b></div>
+    <div><small>Ajustes (E)</small><b>{money(pvr.ajustes)}</b></div>
+    {pvr.noImputable>0 && <div><small>No imputable al APU (D, informativo)</small><b>{money(pvr.noImputable)}</b></div>}
+    <div><small>Costo real total</small><b>{money(pvr.costoRealTotal)}</b></div>
+    <div><small>Variación</small><b>{pvr.desviacionMonto>=0?'+':''}{money(pvr.desviacionMonto)} ({pvr.desviacionPct==null?'—':`${pvr.desviacionPct>=0?'+':''}${num(pvr.desviacionPct)}%`})</b></div>
+    <div><small>Impacto en precio unitario</small><b>{pvr.impactoPU==null?'—':`${pvr.impactoPU>=0?'+':''}${money(pvr.impactoPU)}`}</b></div>
+   </div>
+  </Accordion> : null;})()}
+  <h3 className="pro-section-title">I. Normativa y Cumplimiento</h3>
+  <Accordion title="Normativa potencialmente aplicable" summary={normativaRows.length?`${normativaRows.length} norma(s) registrada(s)`:'Sin normativa registrada'}>
+   <p className="muted" style={{fontSize:'.78rem'}}>{NORMATIVA_DISCLAIMER}</p>
+   {normativaRows.length===0 && <p className="muted">{NORMATIVA_VACIA_TEXTO}</p>}
+   {normativaRows.map((r,i)=><div className="pro-header-grid" key={r.id||i} style={{borderTop:i?'1px solid var(--border,#333)':'none',paddingTop:i?10:0,marginTop:i?10:0}}>
+    <label>Nombre<input value={r.nombre||''} onChange={e=>updateNormativa(i,'nombre',e.target.value)}/></label>
+    <label>Clave/código<input value={r.clave||''} onChange={e=>updateNormativa(i,'clave',e.target.value)}/></label>
+    <label>Organismo emisor<input value={r.organismoEmisor||''} onChange={e=>updateNormativa(i,'organismoEmisor',e.target.value)}/></label>
+    <label>Jurisdicción<input value={r.jurisdiccion||''} onChange={e=>updateNormativa(i,'jurisdiccion',e.target.value)}/></label>
+    <label>Versión<input value={r.version||''} onChange={e=>updateNormativa(i,'version',e.target.value)}/></label>
+    <label>Fecha de publicación<input value={r.fechaPublicacion||''} onChange={e=>updateNormativa(i,'fechaPublicacion',e.target.value)}/></label>
+    <label>Vigencia<input value={r.vigencia||''} onChange={e=>updateNormativa(i,'vigencia',e.target.value)}/></label>
+    <label>Fuente<input value={r.fuente||''} onChange={e=>updateNormativa(i,'fuente',e.target.value)}/></label>
+    <label>Artículo/sección<input value={r.articulo||''} onChange={e=>updateNormativa(i,'articulo',e.target.value)}/></label>
+    <label>Estado de revisión<select value={r.estadoRevision} onChange={e=>updateNormativa(i,'estadoRevision',e.target.value)}>{Object.entries(ESTADO_REVISION_LABEL).map(([k,l])=><option key={k} value={k}>{l}</option>)}</select></label>
+    <label>Requisito<textarea value={r.requisito||''} onChange={e=>updateNormativa(i,'requisito',e.target.value)}/></label>
+    <label>Impacto técnico<textarea value={r.impactoTecnico||''} onChange={e=>updateNormativa(i,'impactoTecnico',e.target.value)}/></label>
+    <label>Impacto económico<textarea value={r.impactoEconomico||''} onChange={e=>updateNormativa(i,'impactoEconomico',e.target.value)}/></label>
+    <label>Observaciones<textarea value={r.observaciones||''} onChange={e=>updateNormativa(i,'observaciones',e.target.value)}/></label>
+    <div className="pro-header-grid" style={{gridColumn:'1/-1'}}>
+     {[['requiereMaterial','Requiere material adicional'],['requiereEPP','Requiere EPP'],['requiereProcedimiento','Requiere procedimiento'],['requierePrueba','Requiere prueba/inspección'],['requiereDocumentacion','Requiere documentación']].map(([f,l])=><label key={f} style={{display:'flex',gap:6,alignItems:'center'}}><input type="checkbox" checked={!!r[f]} onChange={e=>updateNormativa(i,f,e.target.checked)}/>{l}</label>)}
+    </div>
+    <button onClick={()=>removeNormativa(i)}>× Quitar norma</button>
+   </div>)}
+   <button onClick={addNormativa}>+ Agregar norma</button>
+  </Accordion>
+  <h3 className="pro-section-title">J. Riesgos y Costos No Contemplados</h3>
+  <Accordion title="Detector de costos no contemplados" summary={apu.riesgosNoContemplados?apu.riesgosNoContemplados.resumen:'Sin analizar'} defaultOpen={!!apu.riesgosNoContemplados}>
+   <button onClick={analyzeRisks}>Analizar riesgos</button>
+   {apu.riesgosNoContemplados && <>
+    <p style={{marginTop:8}}><b>{apu.riesgosNoContemplados.resumen}</b> <small className="muted">({new Date(apu.riesgosNoContemplados.analizadoEn).toLocaleString('es-MX')})</small></p>
+    {apu.riesgosNoContemplados.hallazgos.map((h,i)=><div className="pro-price-review-card" key={h.id||i}>
+     <div className="pro-price-review-head"><b>{h.hallazgo}</b><span className="pro-price-review-kind">{h.severidad}</span></div>
+     <p style={{fontSize:'.78rem'}}><b>Evidencia:</b> {h.evidencia}</p>
+     <p style={{fontSize:'.78rem'}}><b>Impacto potencial:</b> {h.impactoPotencial}</p>
+     <p style={{fontSize:'.78rem'}}><b>Recomendación:</b> {h.recomendacion}</p>
+     <p style={{fontSize:'.78rem'}}><b>Confianza:</b> {h.confianza}</p>
+     <label style={{display:'flex',gap:6,alignItems:'center'}}><input type="checkbox" checked={!!h.incluirEnAPU} onChange={()=>toggleIncluirRiesgo(i)}/>Incluir en APU</label>
+    </div>)}
+   </>}
   </Accordion>
   <h3 className="pro-section-title">G. Visualización 3D</h3>
   <Accordion title="Modelo técnico 3D" summary="Geometría paramétrica derivada de datos reales del APU">

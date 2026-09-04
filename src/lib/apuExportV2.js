@@ -8,9 +8,36 @@ import { apuDataStateLabel } from '../domain/apuSchema.js';
 import { buildReviewRow, REVISION_STATUS_LABEL } from '../domain/apuReview.js';
 import { computeConceptStatus, conceptStatusLabel } from '../domain/apuCompletionStatus.js';
 import { xcell, fcell, XLS, exportWorkbookExcel, money, num } from './apuExport.js';
+import { COSTO_CAMPO_CATEGORIA_LABEL, calcCostoCampoImporte, calcPresupuestadoVsReal } from '../domain/apuCostosCampo.js';
+import { ESTADO_REVISION_LABEL, NORMATIVA_DISCLAIMER, NORMATIVA_VACIA_TEXTO } from '../domain/apuNormativa.js';
 
 const COLORS={labor:'#123F78',materials:'#D56A00',tools:'#2F7D3A',equipment:'#1578B7',consumables:'#8C6D1F',safety:'#B5263D',procedure:'#6D2D91',quality:'#D5A900',measure:'#078C88'};
 const NO_JUSTIFICATION_TEXT='Sin justificación técnica registrada -- APU generado antes de esta funcionalidad.';
+
+/* Bug real de produccion (reportado: "Descargar PDF de este APU"/"Dossier
+   PDF" no descargan nada, sin error visible): en el navegador, jsPDF
+   (doc.save) arma un <a download> que NUNCA se agrega al DOM y dispara el
+   click con node.dispatchEvent(new MouseEvent('click')) -- Chrome actual ya
+   no ejecuta la accion de descarga por defecto de un <a> para un click
+   sintetico asi (solo para node.click() nativo o un click real de usuario).
+   El PDF SI se genera (Blob real, tamano correcto, confirmado con
+   URL.createObjectURL) pero nunca llega a Descargas: fallo silencioso,
+   ningun error que capturar. El exportador de Excel (write-excel-file)
+   nunca tuvo este bug porque llama node.click() nativo sobre un <a> si
+   agregado al DOM -- este helper replica exactamente ese patron para PDF.
+   Bajo Node (suite de pruebas, sin `document`) se usa doc.save() tal cual,
+   que ahi si escribe el archivo directo a disco -- comportamiento existente
+   sin cambios, para no romper las pruebas actuales. */
+export function saveJsPdfDoc(doc,fileName){
+  if(typeof document==='undefined'){ doc.save(fileName); return; }
+  const url=URL.createObjectURL(doc.output('blob'));
+  const a=document.createElement('a');
+  a.href=url;a.download=fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url),40000);
+}
 export const safeSheet=value=>String(value||'APU').replace(/[\\/?*\[\]:]/g,'-').slice(0,31);
 const sourceText=row=>row?.fuente?.sourceName||row?.fuente?.proveedor||apuDataStateLabel(row?.fuente?.estado);
 const asCell=(value,style={})=>xcell(value,style);
@@ -130,14 +157,73 @@ export function buildProfessionalAPUSheet(rawApu){
   const pu=add([asCell('PRECIO UNITARIO FINAL',{fontWeight:'bold',color:'#FFFFFF',backgroundColor:'#2F7D3A'}),null,null,null,null,null,null,null,null,formula(`=J${subtotalRow}`,{fontWeight:'bold',color:'#FFFFFF',backgroundColor:'#2F7D3A'}),null,null]);
   add(['IMPORTE TOTAL',null,null,null,null,null,null,null,`${Number(apu.cantidadObra||0)} ${apu.unit}`,formula(`=J${pu}*${Number(apu.cantidadObra||0)}`,{fontWeight:'bold'}),null,null]);add([]);
 
+  // Costos de Campo / Presupuestado vs Real / Normativa / Riesgos (Parte
+  // C/D/E/F, requerimiento de produccion 2026-09-03). Secciones ADITIVAS
+  // dentro de la MISMA hoja por APU (arquitectura existente: un solo sheet
+  // por concepto con secciones internas, nunca 12 pestañas separadas -- ver
+  // reporte de la sesion) -- reusan las mismas funciones de dominio que la
+  // UI y el PDF, cero calculo duplicado. Parte G: nunca se crea una seccion
+  // vacia sin avisar -- si no hay registros, una sola linea lo dice.
+  const costosCampoRows = apu.costosCampo || [];
+  span('16. COSTOS DE CAMPO Y AJUSTES REALES','#8C501E');
+  if(costosCampoRows.length){
+    head(['No.','Categoria','Concepto','Descripcion','Cantidad','Unidad','Costo unitario','','Importe','Fecha','Proveedor','Comprobante']);
+    costosCampoRows.forEach((r,i)=>add([i+1,COSTO_CAMPO_CATEGORIA_LABEL[r.categoria]||r.categoria,r.concepto,r.descripcion,Number(r.cantidad||0),r.unidad,Number(r.costoUnitario||0),null,calcCostoCampoImporte(r),r.fecha,r.proveedor,r.comprobante]));
+    add([null,asCell('TOTAL REGISTRADO',{columnSpan:8,fontWeight:'bold',align:'right'}),...Array(7).fill(null),asCell(costosCampoRows.reduce((s,r)=>s+calcCostoCampoImporte(r),0),{fontWeight:'bold'}),null,null]);
+  } else {
+    add([asCell('Sin costos de campo registrados.',{columnSpan:12,color:'#5B6472'}),...Array(11).fill(null)]);
+  }
+  add([]);
+
+  const pvr = calcPresupuestadoVsReal(apu);
+  if(pvr && pvr.hasRegistros){
+    span('17. PRESUPUESTADO VS REAL','#123F78');
+    const pvrKv=(label,value)=>add([asCell(label,XLS.label),asCell(value??'',{wrap:true})]);
+    pvrKv('APU presupuestado',money(pvr.presupuestado));
+    pvrKv('Costo directo real',money(pvr.costoDirectoReal));
+    pvrKv('Costos de campo (bruto registrado)',money(pvr.costosCampo));
+    pvrKv('Indirectos',money(pvr.indirectos));
+    pvrKv('Extraordinarios',money(pvr.extraordinarios));
+    pvrKv('Ajustes',money(pvr.ajustes));
+    if(pvr.noImputable>0) pvrKv('No imputable al APU (informativo)',money(pvr.noImputable));
+    pvrKv('Costo real total',money(pvr.costoRealTotal));
+    pvrKv('Variacion',`${pvr.desviacionMonto>=0?'+':''}${money(pvr.desviacionMonto)} (${pvr.desviacionPct==null?'—':`${pvr.desviacionPct>=0?'+':''}${pvr.desviacionPct.toFixed(2)}%`})`);
+    if(pvr.impactoPU!=null) pvrKv('Impacto en precio unitario',`${pvr.impactoPU>=0?'+':''}${money(pvr.impactoPU)}`);
+    add([]);
+  }
+
+  const normativaRows = apu.normativa || [];
+  span('18. NORMATIVA Y CUMPLIMIENTO','#D5A900');
+  if(normativaRows.length){
+    add([asCell(NORMATIVA_DISCLAIMER,{columnSpan:12,wrap:true,color:'#5B6472'}),...Array(11).fill(null)]);
+    head(['No.','Nombre','Clave','Organismo emisor','Jurisdiccion','Vigencia','Estado de revision','Requisito','','','','']);
+    normativaRows.forEach((n,i)=>{
+      add([i+1,n.nombre,n.clave,n.organismoEmisor,n.jurisdiccion,n.vigencia,ESTADO_REVISION_LABEL[n.estadoRevision]||n.estadoRevision,asCell(n.requisito,{columnSpan:5,wrap:true}),null,null,null,null]);
+      const flags=[n.requiereMaterial&&'Material',n.requiereEPP&&'EPP',n.requiereProcedimiento&&'Procedimiento',n.requierePrueba&&'Prueba/inspeccion',n.requiereDocumentacion&&'Documentacion'].filter(Boolean).join(', ')||'Ninguno marcado';
+      add([null,asCell(`Impacto tecnico: ${n.impactoTecnico||'—'}`,{columnSpan:4,wrap:true}),...Array(3).fill(null),asCell(`Impacto economico: ${n.impactoEconomico||'—'} | Requiere: ${flags}`,{columnSpan:6,wrap:true}),...Array(5).fill(null)]);
+    });
+  } else {
+    add([asCell(NORMATIVA_VACIA_TEXTO,{columnSpan:12,color:'#5B6472'}),...Array(11).fill(null)]);
+  }
+  add([]);
+
+  const riesgos = apu.riesgosNoContemplados;
+  if(riesgos && Array.isArray(riesgos.hallazgos) && riesgos.hallazgos.length){
+    span('19. RIESGOS Y COSTOS NO CONTEMPLADOS','#B5263D');
+    add([asCell(riesgos.resumen,{columnSpan:12,wrap:true}),...Array(11).fill(null)]);
+    head(['No.','Severidad','Hallazgo','Evidencia','Impacto potencial','Recomendacion','','Confianza','Incluir en APU','','','']);
+    riesgos.hallazgos.forEach((h,i)=>add([i+1,h.severidad,asCell(h.hallazgo,{columnSpan:2,wrap:true}),null,asCell(h.impactoPotencial,{columnSpan:2,wrap:true}),null,asCell(h.recomendacion,{wrap:true}),h.confianza,h.incluirEnAPU?'SI':'NO',null,null,null]));
+    add([]);
+  }
+
   // Gap de trazabilidad reportado: un renglon resuelto por Biblioteca
   // Inteligente (fuente.matchMethod/confidence, ver apuSchema.js#
   // fuenteFromSource) ya no debe verse identico a uno de plantilla en esta
   // tabla -- Proveedor/Fuente muestran el match real (metodo + insumo de
   // catalogo) en vez de quedar en blanco, sin inventar un proveedor.
-  span('16. FUENTES DE PRECIOS',COLORS.measure);head(['Recurso','Clave','Descripcion','Unidad','Precio','Fecha','Proveedor','Tipo','Verificado','Fuente','URL','Confianza']);
+  span('20. FUENTES DE PRECIOS',COLORS.measure);head(['Recurso','Clave','Descripcion','Unidad','Precio','Fecha','Proveedor','Tipo','Verificado','Fuente','URL','Confianza']);
   ['materials','labor','equipment','consumables'].flatMap(k=>(apu[k]||[]).map(r=>[k,r])).forEach(([kind,r])=>add([kind,r.clave,r.descripcion,r.unidad,Number(r.precioUnitario??r.salarioBase??r.tarifa??0),r.fuente?.fecha||'',r.fuente?.proveedor||(r.fuente?.estado==='BIBLIOTECA'||r.fuente?.estado==='VERIFICADO'?'Biblioteca ZOEMEC':''),apuDataStateLabel(r.fuente?.estado),r.fuente?.estado==='VERIFICADO'?'SI':'NO',r.fuente?.sourceName||(r.fuente?.matchMethod?`Biblioteca: ${r.fuente.matchMethod}${r.fuente.catalogItemId?` (${r.fuente.catalogItemId})`:''}`:''),r.fuente?.sourceUrl||'',Number(r.fuente?.confidence||0)]));add([]);
-  span('17-18. SUPUESTOS, CONFIANZA Y FIRMAS');(apu.supuestos||[]).forEach((v,i)=>add([i+1,asCell(v.texto||v,{columnSpan:11,wrap:true}),...Array(10).fill(null)]));
+  span('21-22. SUPUESTOS, CONFIANZA Y FIRMAS');(apu.supuestos||[]).forEach((v,i)=>add([i+1,asCell(v.texto||v,{columnSpan:11,wrap:true}),...Array(10).fill(null)]));
   add([asCell('Confianza',XLS.label),gc.fullLabel,asCell('Precios',XLS.label),dimensionPercentLabel(globalConfidence.dimensions.prices),asCell('Rendimientos',XLS.label),dimensionPercentLabel(globalConfidence.dimensions.productivity),asCell('Riesgos',XLS.label),gc.risk,asCell('Estado',XLS.label),apu.validationStatus,null,null]);
   add([asCell('Elaboro',XLS.label),apu.elaboro||'',null,asCell('Reviso',XLS.label),apu.reviso||'',null,asCell('Aprobo',XLS.label),apu.aprobo||'',null,asCell('Version',XLS.label),apu.version||'V1',null]);
   return {sheet:safeSheet(`${apu.clave}_${String(apu.concept).split(/\s+/).slice(0,2).join('_')}`),rows,widths,stickyRowsCount:4,apu};
@@ -600,24 +686,78 @@ export function drawApuSections(doc,rawApu,opts={}){
   bar('12. EXCLUSIONES',[181,38,61]);
   {const excLines=doc.splitTextToSize(pdfText((apu.criterioMedicion?.excluye||[]).join('; ')||'Sin exclusiones explicitas registradas.'),W-2*M);ensure(excLines.length*3.4+2);doc.text(excLines,M,y+3.4);y+=excLines.length*3.4+3;}
 
+  // ---- Costos de Campo, Presupuestado vs Real, Normativa, Riesgos (Parte
+  // C/D/E/F del requerimiento de produccion 2026-09-03). Secciones ADITIVAS:
+  // nunca alteran costo directo/PU (t.direct/t.pu ya impresos arriba) --
+  // reusan las MISMAS funciones de dominio que la UI (ProfessionalApuEditor)
+  // y el Excel individual, cero logica duplicada. Parte G: nunca se muestra
+  // una seccion vacia sin necesidad -- solo el bar + una linea "sin datos".
+  const costosCampoRows = apu.costosCampo || [];
+  if(costosCampoRows.length){
+    table('13. COSTOS DE CAMPO Y AJUSTES REALES',[140,80,20],['Categoria','Concepto','Descripcion','Cant.','Unidad','Costo unit.','Importe'],
+      [...costosCampoRows.map(r=>[COSTO_CAMPO_CATEGORIA_LABEL[r.categoria]||r.categoria,r.concepto,r.descripcion,num(r.cantidad),r.unidad,money(r.costoUnitario),money(calcCostoCampoImporte(r))]),
+       ['','','Total registrado','','','',money(costosCampoRows.reduce((s,r)=>s+calcCostoCampoImporte(r),0))]],
+      [1.1,1.3,2.2,0.6,0.7,0.9,0.9]);
+  } else {
+    bar('13. COSTOS DE CAMPO Y AJUSTES REALES',[140,80,20]);
+    doc.text(pdfText('Sin costos de campo registrados.'),M,y+3.4);y+=7;
+  }
+
+  const pvr = calcPresupuestadoVsReal(apu);
+  if(pvr && pvr.hasRegistros){
+    bar('14. PRESUPUESTADO VS REAL',[18,63,120]);
+    kv('APU presupuestado',money(pvr.presupuestado));
+    kv('Costo directo real',money(pvr.costoDirectoReal));
+    kv('Costos de campo (bruto registrado)',money(pvr.costosCampo));
+    kv('Indirectos',money(pvr.indirectos));
+    kv('Extraordinarios',money(pvr.extraordinarios));
+    kv('Ajustes',money(pvr.ajustes));
+    if(pvr.noImputable>0) kv('No imputable al APU (informativo)',money(pvr.noImputable));
+    kv('Costo real total',money(pvr.costoRealTotal),[18,63,120]);
+    const desvColor = pvr.desviacionMonto>0?[181,38,61]:pvr.desviacionMonto<0?[30,125,50]:undefined;
+    kv('Variacion',`${pvr.desviacionMonto>=0?'+':''}${money(pvr.desviacionMonto)} (${pvr.desviacionPct==null?'—':`${pvr.desviacionPct>=0?'+':''}${pvr.desviacionPct.toFixed(2)}%`})`,desvColor);
+    if(pvr.impactoPU!=null) kv('Impacto en precio unitario',`${pvr.impactoPU>=0?'+':''}${money(pvr.impactoPU)}`,desvColor);
+  }
+
+  const normativaRows = apu.normativa || [];
+  if(normativaRows.length){
+    bar('15. NORMATIVA Y CUMPLIMIENTO',[213,169,0]);
+    doc.setFont('helvetica','italic');doc.setFontSize(6.6);doc.setTextColor(90);
+    {const dLines=doc.splitTextToSize(pdfText(NORMATIVA_DISCLAIMER),W-2*M);ensure(dLines.length*3+2);doc.text(dLines,M,y+3);y+=dLines.length*3+2;}
+    doc.setFont('helvetica','normal');doc.setFontSize(7);doc.setTextColor(30);
+    table('15. NORMATIVA Y CUMPLIMIENTO (detalle)',[213,169,0],['Nombre','Clave','Organismo','Jurisdiccion','Vigencia','Estado','Requisito'],
+      normativaRows.map(n=>[n.nombre,n.clave,n.organismoEmisor,n.jurisdiccion,n.vigencia,ESTADO_REVISION_LABEL[n.estadoRevision]||n.estadoRevision,n.requisito]),
+      [1.4,0.9,1.3,1.1,1,1.3,2.2]);
+  } else {
+    bar('15. NORMATIVA Y CUMPLIMIENTO',[213,169,0]);
+    doc.text(pdfText(NORMATIVA_VACIA_TEXTO),M,y+3.4);y+=7;
+  }
+
+  const riesgos = apu.riesgosNoContemplados;
+  if(riesgos && Array.isArray(riesgos.hallazgos) && riesgos.hallazgos.length){
+    table('16. RIESGOS Y COSTOS NO CONTEMPLADOS',[181,38,61],['Severidad','Hallazgo','Impacto potencial','Recomendacion','Confianza'],
+      riesgos.hallazgos.map(h=>[h.severidad,h.hallazgo,h.impactoPotencial,h.recomendacion,h.confianza]),
+      [0.7,1.6,1.8,1.8,0.7]);
+  }
+
   // ---- Fuentes, supuestos/notas, trazabilidad, confianza, firmas ----
   // "Método (confianza)" -- gap de trazabilidad reportado: cuando el
   // renglon vino de un match real de Biblioteca (fuente.matchMethod, ver
   // apuSchema.js#fuenteFromSource) el metodo de coincidencia y su confianza
   // quedan visibles/auditables tambien en el PDF, no solo en Excel.
-  table('13. FUENTES DE PRECIOS',[7,140,136],['Recurso','Proveedor/Fuente','Fecha','Estado','Método (confianza)'],
+  table('17. FUENTES DE PRECIOS',[7,140,136],['Recurso','Proveedor/Fuente','Fecha','Estado','Método (confianza)'],
     ['materials','labor','equipment','consumables','seguridad'].flatMap(k=>(apu[k]||[]).map(r=>[r.descripcion,r.fuente?.proveedor||r.fuente?.sourceName||(r.fuente?.estado==='BIBLIOTECA'||r.fuente?.estado==='VERIFICADO'?'Biblioteca ZOEMEC':'Sin proveedor'),r.fuente?.fecha||'',apuDataStateLabel(r.fuente?.estado),r.fuente?.matchMethod?`${r.fuente.matchMethod} (${r.fuente.confidence??0}%)`:''])),
     [2.1,1.4,0.8,0.9,1.1]);
-  table('14. SUPUESTOS, NOTAS Y OBSERVACIONES',[7,140,136],['#','Supuesto / nota'],
+  table('18. SUPUESTOS, NOTAS Y OBSERVACIONES',[7,140,136],['#','Supuesto / nota'],
     (apu.supuestos||[]).map((v,i)=>[i+1,v.texto||v]),[0.3,3.4]);
-  bar('15. TRAZABILIDAD',[109,45,145]);
+  bar('19. TRAZABILIDAD',[109,45,145]);
   kv('ID interno',apu.id||'');
   kv('Clave',apu.clave||'');
   kv('Version',apu.version||'V1');
   kv('Fecha base de precios',apu.fechaBase||'');
   kv('Validado el',apu.validatedAt?new Date(apu.validatedAt).toLocaleString('es-MX'):'');
   y+=2;
-  bar('16. CONFIANZA DEL ANALISIS',[7,140,136]);
+  bar('20. CONFIANZA DEL ANALISIS',[7,140,136]);
   kv('Confianza global',formatGlobalConfidence(globalConfidence).fullLabel);
   kv('Precios',dimensionPercentLabel(globalConfidence.dimensions.prices));
   kv('Rendimientos',dimensionPercentLabel(globalConfidence.dimensions.productivity));
@@ -660,7 +800,7 @@ export function exportAPUPdfV2(rawApu,options={}){
   const doc=new jsPDF('portrait','mm','a4');
   const {apu,layout}=drawApuSections(doc,rawApu,{startY:12,startPage:1});
   stampPageNumbers(doc);
-  if(options.save!==false)doc.save(options.fileName||`${apu.clave}-APU-PROFESIONAL-ZOEMEC.pdf`);
+  if(options.save!==false)saveJsPdfDoc(doc,options.fileName||`${apu.clave}-APU-PROFESIONAL-ZOEMEC.pdf`);
   return {doc,apu,layout};
 }
 

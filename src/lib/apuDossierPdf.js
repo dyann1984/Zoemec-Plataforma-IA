@@ -8,7 +8,7 @@
    calculo. */
 import { jsPDF } from 'jspdf';
 import { money, num } from './apuExport.js';
-import { drawApuSections } from './apuExportV2.js';
+import { drawApuSections, saveJsPdfDoc } from './apuExportV2.js';
 import { buildDossierData } from './apuDossierData.js';
 import { shortHash } from '../domain/snapshotHash.js';
 import { apiPost } from '../services/apiClient.js';
@@ -305,7 +305,7 @@ export async function exportApuAuditDossierPdf({ apu, apuId, apuVersionId, proje
     doc.text(pdfText(`Pagina ${i} de ${total}`), W - M, H - 6, { align: 'right' });
   }
 
-  if(save !== false) doc.save(fileName || `${meta.clave || 'APU'}-DOSSIER-AUDITABLE-ZOEMEC.pdf`);
+  if(save !== false) saveJsPdfDoc(doc, fileName || `${meta.clave || 'APU'}-DOSSIER-AUDITABLE-ZOEMEC.pdf`);
 
   if(data.source === 'SERVER_VERSION'){
     try{

@@ -193,6 +193,15 @@ export function makeEmptyAPUv2(){
     // ESTE concepto especifico. Nace vacia -- SOLO la genera el motor de
     // desarrollo tecnico (IA o plantilla), nunca se fabrica en exportacion.
     technicalJustifications: { materials: '', labor: '', equipment: '', smallTools: '', consumables: '', safety: '' },
+    // Costos de Campo y Ajustes Reales + Normativa y Cumplimiento: captura
+    // 100% MANUAL (ver src/domain/apuCostosCampo.js / apuNormativa.js) --
+    // nunca los llena la IA ni la plantilla, nacen vacios en todo APU nuevo.
+    // riesgosNoContemplados nace null (nunca []): null significa "todavia no
+    // se corrio el analisis" (boton bajo demanda, ver apuRiskDetector.js),
+    // [] significaria "se corrio y no encontro nada" -- son estados distintos.
+    costosCampo: [],
+    normativa: [],
+    riesgosNoContemplados: null,
     // Factores configurables (misma fuente de verdad que v1: APU_DEFAULT_FACTORS)
     factores: {
       indCampo: APU_DEFAULT_FACTORS.indCampo,
@@ -350,6 +359,11 @@ export function migrateLegacyApuToV2(apuV1 = {}){
     technicalJustifications: apuV1.technicalJustifications && typeof apuV1.technicalJustifications === 'object'
       ? { materials: '', labor: '', equipment: '', smallTools: '', consumables: '', safety: '', ...apuV1.technicalJustifications }
       : { materials: '', labor: '', equipment: '', smallTools: '', consumables: '', safety: '' },
+    // Compatibilidad (Parte K): un APU v1/historico nunca tuvo estas
+    // secciones -- default seguro [], nunca se reconstruyen retroactivamente.
+    costosCampo: Array.isArray(apuV1.costosCampo) ? apuV1.costosCampo : [],
+    normativa: Array.isArray(apuV1.normativa) ? apuV1.normativa : [],
+    riesgosNoContemplados: apuV1.riesgosNoContemplados || null,
     factores: {
       indCampo: Number(apuV1.indCampo ?? APU_DEFAULT_FACTORS.indCampo),
       indOficina: Number(apuV1.indOficina ?? APU_DEFAULT_FACTORS.indOficina),
@@ -639,6 +653,12 @@ export function normalizeAIApuToV2(raw = {}, fallbackConcept = '', options = {})
       consumables: coerceText(raw.technicalJustifications?.consumables, ''),
       safety: coerceText(raw.technicalJustifications?.safety, '')
     },
+    // Costos de Campo/Normativa son captura MANUAL unicamente (decision
+    // 2026-09-03): la IA nunca los propone, nacen vacios igual que un APU
+    // nuevo (ver makeEmptyAPUv2).
+    costosCampo: [],
+    normativa: [],
+    riesgosNoContemplados: null,
     factores: {
       indCampo: coerceNumber(raw.indCampo, APU_DEFAULT_FACTORS.indCampo),
       indOficina: coerceNumber(raw.indOficina, APU_DEFAULT_FACTORS.indOficina),

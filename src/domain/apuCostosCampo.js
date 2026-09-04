@@ -85,7 +85,19 @@ export function summarizeCostosCampo(costosCampo){
      - Indirectos          = categoria B
      - Extraordinarios     = categoria C
      - Ajustes             = categoria E (puede ser negativo: una correccion a la baja)
-     - Costo real total    = costo directo real + Indirectos + Extraordinarios + Ajustes (D SIEMPRE excluida)
+     - Costo real total    = costo directo real + Indirectos(originales) + Indirectos(B) +
+                             Extraordinarios(C) + Ajustes(E) (D SIEMPRE excluida)
+   Bug real encontrado en QA de produccion (2026-09-03, ver reporte de la
+   sesion): la primera version comparaba "costo real total" (solo costo
+   directo + deltas de campo) contra "presupuestado" (precio COMPLETO, que
+   ya incluye indirectos/financiamiento/utilidad/cargos) -- eso producia una
+   "desviacion" falsa de hasta -20% con la bitacora de Costos de Campo
+   VACIA, antes de registrar un solo peso real. Correccion: el overhead
+   original (indirectos+financiamiento+utilidad+cargos, YA calculado por
+   calcAPUv2, en pesos absolutos) se agrega sin cambios al costo real total
+   -- asi, con 0 registros, costoRealTotal reconstruye EXACTO el
+   presupuestado (desviacion 0), y con registros, la desviacion refleja
+   UNICAMENTE lo que de verdad se capturo en Costos de Campo.
    Regresa null si el APU no tiene datos de costo (apu.calculated ausente) --
    nunca inventa un presupuestado de $0 que distorsione la variacion %. */
 export function calcPresupuestadoVsReal(apu){
@@ -94,6 +106,7 @@ export function calcPresupuestadoVsReal(apu){
   const cantidadObra = toNumber(apu?.cantidadObra);
   const presupuestado = toNumber(calculated.importeTotal) || toNumber(calculated.pu) * cantidadObra;
   const directoPresupuestadoTotal = toNumber(calculated.direct) * cantidadObra;
+  const overheadOriginalTotal = (toNumber(calculated.indirect) + toNumber(calculated.finance) + toNumber(calculated.utility) + toNumber(calculated.cargos)) * cantidadObra;
 
   const { count, totalRegistrado, byCategoria } = summarizeCostosCampo(apu?.costosCampo);
   const costoDirectoReal = directoPresupuestadoTotal + byCategoria[COSTO_CAMPO_CATEGORIA.COSTO_DIRECTO];
@@ -101,7 +114,7 @@ export function calcPresupuestadoVsReal(apu){
   const extraordinarios = byCategoria[COSTO_CAMPO_CATEGORIA.EXTRAORDINARIO];
   const ajustes = byCategoria[COSTO_CAMPO_CATEGORIA.AJUSTE_MANUAL];
   const noImputable = byCategoria[COSTO_CAMPO_CATEGORIA.NO_IMPUTABLE];
-  const costoRealTotal = costoDirectoReal + indirectos + extraordinarios + ajustes;
+  const costoRealTotal = costoDirectoReal + overheadOriginalTotal + indirectos + extraordinarios + ajustes;
   const desviacionMonto = costoRealTotal - presupuestado;
   const desviacionPct = presupuestado !== 0 ? (desviacionMonto / presupuestado) * 100 : null;
   const impactoPU = cantidadObra > 0 ? desviacionMonto / cantidadObra : null;

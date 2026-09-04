@@ -68,6 +68,37 @@ test('calcPresupuestadoVsReal: sin registros de costos de campo, hasRegistros=fa
   assert.equal(pvr.presupuestado, 1000);
 });
 
+/* Bug real confirmado en QA de produccion (2026-09-03): con la bitacora de
+   Costos de Campo VACIA, "Costo real total" comparaba solo costo directo
+   contra el precio COMPLETO (que ya incluye indirectos/financiamiento/
+   utilidad/cargos), mostrando una "desviacion" falsa de -20%+ sin haber
+   registrado un solo peso. Esta prueba fija ese comportamiento: con 0
+   registros, la desviacion SIEMPRE debe ser 0, sin importar que tan grande
+   sea el overhead (indirectos/financiamiento/utilidad/cargos) del APU. */
+// direct+indirect+finance+utility+cargos = 329.56 = pu, por construccion --
+// asi la identidad "presupuestado = suma exacta de sus componentes" es
+// verificable sin arrastrar el redondeo de una captura de pantalla real.
+const PU_COMPONENTS = { direct: 264.07, indirect: 39.61, finance: 4.06, utility: 20.68, cargos: 1.14 };
+const PU_TOTAL = Object.values(PU_COMPONENTS).reduce((a, b) => a + b, 0);
+
+test('calcPresupuestadoVsReal: con 0 registros, la desviacion es SIEMPRE 0 -- nunca una desviacion falsa por comparar bases distintas (direct vs precio completo)', () => {
+  const calculated = { ...PU_COMPONENTS, pu: PU_TOTAL, importeTotal: PU_TOTAL * 200 };
+  const apu = { cantidadObra: 200, calculated, costosCampo: [] };
+  const pvr = calcPresupuestadoVsReal(apu);
+  assert.equal(pvr.hasRegistros, false);
+  assert.equal(pvr.desviacionMonto, 0, 'sin ningun registro real, el costo real total debe reconstruir EXACTO el presupuestado');
+  assert.equal(pvr.desviacionPct, 0);
+});
+
+test('calcPresupuestadoVsReal: con overhead real (indirectos/financiamiento/utilidad/cargos), la desviacion refleja UNICAMENTE lo registrado en Costos de Campo, nunca el overhead original', () => {
+  const calculated = { ...PU_COMPONENTS, pu: PU_TOTAL, importeTotal: PU_TOTAL * 200 };
+  const apu = { cantidadObra: 200, calculated, costosCampo: [row({ categoria: COSTO_CAMPO_CATEGORIA.INDIRECTO_OBRA, cantidad: 5, costoUnitario: 200 })] };
+  const pvr = calcPresupuestadoVsReal(apu);
+  assert.equal(pvr.hasRegistros, true);
+  assert.equal(pvr.desviacionMonto, 1000, 'la desviacion debe ser EXACTAMENTE el $1,000 registrado, nunca contaminada por el overhead original del APU');
+  assert.ok(Math.abs(pvr.desviacionPct - (1000 / (PU_TOTAL * 200) * 100)) < 1e-9);
+});
+
 test('calcPresupuestadoVsReal: mapeo exacto de las 5 categorias -- A suma a costo directo real, B/C/E quedan aparte, D se excluye del total', () => {
   // cantidadObra=1 para que "por unidad" y "total" coincidan y el calculo sea facil de verificar a mano.
   const apu = {

@@ -54,6 +54,7 @@ import { INSUMO_STATES, applyInsumoReview, extractValidatedCatalogRows, extractA
 import { toApuSeed, applyPlanoElementReview } from './domain/planoReview.js';
 import { calibrateScale, measureElement } from './domain/planoMeasurement.js';
 import { createTakeoffRecord, applyManualCorrection, upsertTakeoffRecord, findLatestTakeoffForFile, hashFileContent } from './domain/planoTakeoffStore.js';
+import { LevantamientoModule } from './features/levantamiento/LevantamientoModule.jsx';
 import {
   emptyApuWorkspaceState, removeBatchApus, describeAmbiguousSingleExport,
   duplicateGroupKey, groupConceptsByDuplicateKey, defaultBatchSelection, isExportableConceptItem,
@@ -303,6 +304,7 @@ function App(){
   const [projects, setProjects] = useAuthoritativeProjects(user, []);
   const [rawCatalog, setRawCatalog] = useCloudState(user, 'zoemec-catalogo', []);
   const [rawBudgetItems, setRawBudgetItems] = useCloudState(user, 'zoemec-budget-items', [{concept:'Muro de block 15 cm',unit:'m²',qty:120,pu:825.39},{concept:'Piso cerámico 30x30 cm',unit:'m²',qty:86,pu:384.51}]);
+  const [rawSurveys, setRawSurveys] = useCloudState(user, 'zoemec-levantamientos', []);
   // activeProjectId: aislamiento real de datos por proyecto (seccion 13/1 del
   // sprint). apus/budgets/catalog/budgetItems que el resto de la app usa son
   // la vista YA filtrada al proyecto activo; el almacenamiento completo (todas
@@ -319,6 +321,7 @@ function App(){
   const [budgets, setBudgets] = useProjectScoped(rawBudgets, setRawBudgets, activeProjectId);
   const [catalog, setCatalog] = useProjectScoped(rawCatalog, setRawCatalog, activeProjectId);
   const [budgetItems, setBudgetItems] = useProjectScoped(rawBudgetItems, setRawBudgetItems, activeProjectId);
+  const [surveys, setSurveys] = useProjectScoped(rawSurveys, setRawSurveys, activeProjectId);
   useEffect(() => {
     const onAdd = (e) => { if(e?.detail) setBudgetItems(list => [...list, e.detail]); };
     window.addEventListener('zoemec-budget-add', onAdd);
@@ -612,9 +615,10 @@ function App(){
   else if(!hasValidSession(user)) content = <Landing setScreen={setScreen} login={login} company={companyView} />;
   else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView} apus={apus} clients={clients} projects={projects} activeProject={activeProject} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId}>
     {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} activeProject={activeProject} user={user} demoMode={DEMO_MODE} demoContext={DEMO_MODE ? createDemoContext() : null} />}
+    {module === 'levantamiento' && <LevantamientoModule surveys={surveys} setSurveys={setSurveys} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} />}
     {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} rawApus={rawApus} linkApuToProject={linkApuToProject} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} />}
     {module === 'presupuestos' && <Budgets company={companyView} budgets={budgets} setBudgets={setBudgets} items={budgetItems} setItems={setBudgetItems} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} />}
-    {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={(pid)=>{ setRawApus(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgets(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawCatalog(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgetItems(l=>l.filter(x=>(x?.projectId??null)!==pid)); }} />}
+    {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={(pid)=>{ setRawApus(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgets(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawCatalog(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgetItems(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawSurveys(l=>l.filter(x=>(x?.projectId??null)!==pid)); }} />}
     {module === 'biblioteca' && <Library user={user} catalog={catalog} setCatalog={setCatalog} setModule={setModule} />}
     {module === 'tecnico' && <TechnicalOffice company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} needsProject={needsProject} onCreateProject={()=>setModule('cartera')} />}
     {module === 'visual' && <VisualAI user={user} setModule={setModule} />}
@@ -952,6 +956,7 @@ function Shell({children,user,logout,module,setModule,company,apus,clients,proje
   // (fase de concurso: se mantienen en el codigo, solo no se muestran en la navegacion).
   const menu = [
     ['inicio','inicio',tr('shell.menu.inicio')],
+    ['levantamiento','bim',tr('shell.menu.levantamiento'),tr('shell.menu.levantamientoDesc')],
     ['apu','apu',tr('shell.menu.apu')],
     ['presupuestos','presupuestos',tr('shell.menu.presupuestos')],
     ['cartera','clientes',tr('shell.menu.cartera'),tr('shell.menu.carteraDesc')],

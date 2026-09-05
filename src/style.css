@@ -116,6 +116,19 @@
   background:var(--card);
 }
 
+/* Mismo hallazgo, misma familia de bug (QA visual real del modulo
+   Levantamiento IA): .empty-state trae su fondo en un gradiente literal
+   (#FBF8FD/#F5EFFB) en vez de un token, asi que el titulo (h3, usa --ink)
+   quedaba casi invisible sobre esa tarjeta que se quedaba clara siempre en
+   oscuro. Afecta a TODOS los modulos que usan el EmptyState compartido
+   (src/components/ui/PageElements.jsx), no solo Levantamiento IA -- se
+   corrige aqui, no dentro de las reglas .survey-* especificas de ese
+   modulo. Mismo criterio que el bloque de arriba: solo el fondo, en el
+   mismo token (--card) que ya usan los demas fixes de esta familia. */
+:root[data-theme="dark"] .empty-state{
+  background:var(--card);
+}
+
 /* Correccion quirurgica de contraste en oscuro (topbar, tercer hallazgo del
    QA visual real): estos controles combinan un fondo que SI se invierte en
    oscuro (--mint/--ink) con un texto que se quedaba fijo en un morado oscuro
@@ -2987,4 +3000,48 @@ svg.ic{display:block;flex:none}
 @media (max-width:480px){
   button,.btn,input[type="submit"]{min-height:40px}
   .toolbar,.filters-row,.lib-searchbar{flex-wrap:wrap}
+}
+
+/* ====================================================================
+   LEVANTAMIENTO IA (Fase 1) — mismas variables/patrones que .project-card,
+   .record-modal, .field-grid y .empty-state; grid con auto-fill para que
+   las tarjetas se apilen solas en movil sin media queries extra. Todos los
+   fondos usan tokens (--card/--surface-soft-1), no literales #fff, para
+   invertirse solos con [data-theme="dark"] sin necesitar overrides propios. */
+.survey-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;align-items:start}
+.survey-card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;box-shadow:0 8px 22px rgba(23,16,32,.06);display:flex;flex-direction:column;gap:10px}
+.survey-status{display:inline-block;align-self:flex-start;font-family:var(--mono);font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:3px 9px;border-radius:999px;background:var(--mint);color:var(--teal)}
+.survey-status.ok{background:rgba(60,163,110,.15);color:#1f7a4d}
+.survey-status.warn{background:rgba(233,162,59,.15);color:#8a5a12}
+.survey-status.danger{background:rgba(233,100,59,.15);color:#912f1e}
+.survey-card h3{margin:0;font-size:1rem;color:var(--ink)}
+.survey-stat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:10px 14px}
+.survey-stat-grid div{display:flex;flex-direction:column;gap:2px}
+.survey-stat-grid small{font-family:var(--mono);font-size:.66rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.survey-stat-grid b{font-size:.98rem;color:var(--ink)}
+.survey-stat-grid-summary{margin-bottom:18px}
+.survey-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:4px}
+.survey-actions button[disabled]{opacity:.45;cursor:not-allowed}
+.survey-actions a{margin-left:auto;font-size:.82rem}
+
+.survey-source-options{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;margin-top:6px}
+.survey-source-option{position:relative;text-align:left;background:var(--card);border:1px solid var(--line);border-radius:var(--r-sm);padding:16px;display:flex;flex-direction:column;gap:6px;box-shadow:var(--shadow-sm)}
+.survey-source-option b{color:var(--ink);font-size:.95rem}
+.survey-source-option span{color:var(--muted);font-size:.82rem;line-height:1.45}
+.survey-source-option:not(.disabled):hover{border-color:var(--teal);cursor:pointer}
+.survey-source-option.disabled{opacity:.6}
+.badge-soon{align-self:flex-start;font-family:var(--mono);font-size:.64rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:2px 8px;border-radius:999px;background:var(--gold-soft);color:var(--gold-ink);font-style:normal}
+
+.survey-form .survey-spaces-list{display:flex;flex-direction:column;gap:14px;margin:16px 0}
+.survey-space-card{border:1px solid var(--line);border-radius:var(--r-sm);padding:14px;background:var(--surface-soft-1)}
+.survey-space-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:4px}
+.survey-elements-block{margin-top:14px}
+.survey-elements-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.survey-elements-head b{font-size:.82rem;color:var(--ink);text-transform:uppercase;letter-spacing:.05em}
+.survey-element-row{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:8px}
+.survey-element-row .nf{flex:1;min-width:100px}
+
+@media (max-width:760px){
+  .survey-grid,.survey-source-options{grid-template-columns:1fr}
+  .survey-actions a{margin-left:0}
 }

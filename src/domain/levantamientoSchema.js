@@ -23,7 +23,13 @@
    Trazabilidad (seccion 9 del sprint original): cada Element referencia su
    Space via spaceId, y cada Space vive dentro de un Survey (array
    survey.spaces). La cadena Element -> Cuantificacion -> Concepto -> APU se
-   construye en Fase 3, reusando planoReview.js. */
+   construye en Fase 3, reusando planoReview.js.
+
+   Separacion de dominio (Fase 1.5): este archivo SOLO define forma de datos.
+   La geometria derivada (muros M-01..M-04, posicion de aberturas dentro de
+   un muro) vive en src/domain/surveyGeometryModel.js -- nunca aqui ni en
+   Plano/Takeoff. Levantamiento -> geometria; Plano/Takeoff -> cuantificacion;
+   Concepto -> APU -> costo. Ningun nivel calcula lo que le corresponde a otro. */
 import { uid } from '../utils/id.js';
 
 export const SURVEY_SOURCE_TYPE = Object.freeze({
@@ -62,11 +68,27 @@ function toNum(v){
   return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
+/* Muros canonicos de un Space rectangular (Fase 1.5): M-01..M-04, en el
+   mismo orden que produce computeSpaceWalls (src/lib/levantamientoCalc.js).
+   wallId de un Element referencia uno de estos ids -- ver mas abajo. */
+export const WALL_IDS = Object.freeze(['M-01', 'M-02', 'M-03', 'M-04']);
+
 /* Elemento constructivo (puerta, ventana, muro individual, etc.) dentro de un
    Space. width/height/length/quantity son entradas crudas del usuario; area
    se recalcula con src/lib/levantamientoCalc.js (computeElementArea), nunca
-   se confia en un area capturada a mano. */
-export function makeEmptyElement({ type = ELEMENT_TYPE.OTHER, width = 0, height = 0, length = 0, quantity = 1, material = '', notes = '' } = {}){
+   se confia en un area capturada a mano.
+
+   wallId/offset/sillHeight (Fase 1.5, seccion 3 del sprint): ubican una
+   puerta/ventana dentro del Space para poder dibujarla en el plano 2D y
+   posicionarla en el modelo 3D. Los tres son OPCIONALES y con default nulo/
+   cero a proposito: un levantamiento guardado antes de Fase 1.5 no los trae,
+   y src/domain/surveyGeometryModel.js#resolveOpening le asigna una posicion
+   razonable (con una advertencia visible en la UI) sin necesidad de migrar
+   datos ni de mutar el elemento guardado -- NUNCA una migracion destructiva.
+   wallId debe ser uno de WALL_IDS (o null); offset es la distancia en metros
+   desde el inicio del muro; sillHeight es la altura en metros desde el piso
+   hasta el borde inferior de la abertura (ventanas; las puertas usan 0). */
+export function makeEmptyElement({ type = ELEMENT_TYPE.OTHER, width = 0, height = 0, length = 0, quantity = 1, material = '', notes = '', wallId = null, offset = 0, sillHeight = 0 } = {}){
   return {
     id: 'ELM-' + uid(),
     type,
@@ -76,7 +98,10 @@ export function makeEmptyElement({ type = ELEMENT_TYPE.OTHER, width = 0, height 
     quantity: toNum(quantity) || 1,
     area: 0,
     material,
-    notes
+    notes,
+    wallId: WALL_IDS.includes(wallId) ? wallId : null,
+    offset: toNum(offset),
+    sillHeight: toNum(sillHeight)
   };
 }
 

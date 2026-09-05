@@ -10,15 +10,29 @@
    se muestra el motivo y un formulario para capturarlas a mano -- NUNCA se
    renderiza una caja con una dimension inventada.
 
+   Fase 1.5 (Levantamiento IA): las piezas GENERICAS de three.js que este
+   componente ya usaba (renderer/camara/OrbitControls/iluminacion/grid/
+   fabrica de cajas/liberacion de memoria) se extrajeron a
+   src/lib/three3dSceneKit.js -- este archivo ahora las importa de ahi en vez
+   de crearlas inline, pero su API publica (props `apu`/`onSelectElement`) y
+   su comportamiento NO cambiaron. Deliberadamente este componente sigue
+   siendo exclusivo de APU: Levantamiento IA tiene su propio
+   src/features/levantamiento/Survey3DViewer.jsx (mismo kit, geometria
+   distinta) en vez de forzar un Space a la forma de un `apu`.
+
    Nota de alcance: el render de three.js en si no tiene cobertura de tests
    automatizados (WebGL no esta disponible en el entorno de pruebas/CI de
    este proyecto) -- la geometria que consume (geometry3d.js) si esta
    probada de forma pura. Verificacion visual en navegador real pendiente. */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TechnicalModelProvider } from '../../lib/visualizationProviders.js';
 import { applyManualDimensions } from '../../domain/geometry3d.js';
+import {
+  createRenderer, createScene, createPerspectiveCamera, createOrbitControls,
+  addStandardLighting, createGridHelper, createBoxMesh, disposeMesh,
+  raycastFirstHit, CAMERA_VIEW_PRESETS
+} from '../../lib/three3dSceneKit.js';
+import * as THREE from 'three';
 
 const PLACEHOLDER_RENDER_THICKNESS = 0.02; // solo para que la malla sea visible; nunca se presenta como medida real
 
@@ -36,9 +50,7 @@ function buildMesh(element){
     depth = d.depth || 1;
     height = d.thickness || PLACEHOLDER_RENDER_THICKNESS;
   }
-  const geometry = new THREE.BoxGeometry(width, height, depth);
-  const material = new THREE.MeshStandardMaterial({ color: COLOR_BY_TYPE[element.type] || 0xaaaaaa });
-  const mesh = new THREE.Mesh(geometry, material);
+  const mesh = createBoxMesh({ width, height, depth, color: COLOR_BY_TYPE[element.type] || 0xaaaaaa });
   // `id` (ej. "floor-1") es el identificador UNICO por elemento dentro de
   // este APU (ver geometry3d.js#deriveGeometryFromApu); `clave` es la clave
   // del APU completo -- varios elementos del MISMO apu comparten la misma
@@ -133,36 +145,16 @@ export function Technical3DViewer({ apu, onSelectElement }){
     const mount = mountRef.current;
     if(!mount || !readyElements.length) return;
     const width = mount.clientWidth || 480, height = 360;
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf2efe9);
-    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
-    camera.position.set(6, 6, 8);
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(width, height);
+    const scene = createScene();
+    const camera = createPerspectiveCamera(width, height, CAMERA_VIEW_PRESETS.isometric);
+    const renderer = createRenderer(width, height);
     mount.innerHTML = '';
     mount.appendChild(renderer.domElement);
-    // touch-action:none evita que el navegador interprete el gesto de
-    // rueda/arrastre sobre el canvas como scroll/gesto de la pagina antes
-    // de que OrbitControls reciba el evento -- el resto de la pagina
-    // conserva su scroll normal (el listener queda acotado al canvas).
-    renderer.domElement.style.touchAction = 'none';
 
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    // Configuracion EXPLICITA (antes dependia de los defaults de la
-    // libreria): zoom y pan habilitados, con limites reales para que la
-    // camara nunca atraviese el modelo ni se aleje al infinito.
-    controls.enableZoom = true;
-    controls.enablePan = true;
-    controls.zoomSpeed = 1;
-    controls.minDistance = 1.5;
-    controls.maxDistance = 50;
+    const controls = createOrbitControls(camera, renderer.domElement);
 
-    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-    const dir = new THREE.DirectionalLight(0xffffff, 0.8);
-    dir.position.set(5, 10, 5);
-    scene.add(dir);
-    scene.add(new THREE.GridHelper(20, 20, 0xbbbbbb, 0xdddddd));
+    addStandardLighting(scene);
+    scene.add(createGridHelper());
 
     const meshes = readyElements.map(buildMesh);
     meshes.forEach(m => scene.add(m));
@@ -170,13 +162,7 @@ export function Technical3DViewer({ apu, onSelectElement }){
 
     const raycaster = new THREE.Raycaster();
     const onClick = (event) => {
-      const rect = renderer.domElement.getBoundingClientRect();
-      const pointer = new THREE.Vector2(
-        ((event.clientX - rect.left) / rect.width) * 2 - 1,
-        -((event.clientY - rect.top) / rect.height) * 2 + 1
-      );
-      raycaster.setFromCamera(pointer, camera);
-      const hit = raycaster.intersectObjects(meshes)[0];
+      const hit = raycastFirstHit(raycaster, camera, event, renderer.domElement, meshes);
       if(hit){
         const data = hit.object.userData;
         setSelectedElementId(data.id);
@@ -194,7 +180,7 @@ export function Technical3DViewer({ apu, onSelectElement }){
       cancelAnimationFrame(frameId);
       renderer.domElement.removeEventListener('click', onClick);
       controls.dispose();
-      meshes.forEach(m => { m.geometry.dispose(); m.material.dispose(); });
+      meshes.forEach(disposeMesh);
       renderer.dispose();
       meshesRef.current = [];
       if(mount) mount.innerHTML = '';

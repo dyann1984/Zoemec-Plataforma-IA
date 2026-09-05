@@ -18,7 +18,13 @@
   --ink-text:#211A29;
   --muted:#655A76;        /* >=5.5:1 sobre --card/--paper, antes #7C7288 (~4.5:1, al limite AA) */
   --gold:#C7A35C;         /* sello metálico: solo P.U. final */
-  --gold-ink:#8A6B2E;     /* texto dorado con contraste AA sobre blanco (--gold puro falla en texto) */
+  /* Auditoria de esta ronda: #8A6B2E sobre --gold-soft (#F4EAD3, su fondo
+     mas comun -- ODConfigWarning, badges "Proximamente", panel de
+     validacion, etc.) media 4.16:1, reprueba por poco el minimo AA de
+     4.5:1 (en claro y oscuro por igual: ninguno de los 3 tokens de esta
+     familia se redefine en oscuro). Oscurecido a #755923: 5.47:1 sobre
+     --gold-soft, 6.54:1 sobre blanco puro. */
+  --gold-ink:#755923;     /* texto dorado con contraste AA sobre blanco (--gold puro falla en texto) */
   --gold-soft:#F4EAD3;
   --danger:#B54A62;
   --ok:#7650A8;
@@ -49,6 +55,15 @@
      separado. Verificado: blanco sobre el candidato aclarado da 3.06:1,
      reprueba -- confirma que de verdad hacian falta 2 tokens, no uno. */
   --danger-solid:#B54A62;
+  /* Tercer caso de la misma familia --accent-solid/--danger-solid: texto
+     oscuro sobre un chip/fondo "soft" que tambien se queda fijo (nunca se
+     invierte con el tema -- ver --zi-danger-soft y el fondo #f6e3df de
+     button.soft.danger). --danger-solid (#B54A62) sirve para blanco-sobre-
+     rojo, pero aqui es al reves: rojo-sobre-rosa-claro, y con ese mismo tono
+     el contraste da 4.08-4.12:1 (reprueba el minimo AA de 4.5:1 para texto
+     normal, confirmado con QA de contraste real). Mismo rojo oscurecido
+     ~12%: 5.24-5.29:1 sobre los dos fondos reales que lo usan, con margen. */
+  --danger-on-soft:#A03D54;
   --r:14px; --r-sm:10px;
   --shadow:0 22px 60px rgba(23,16,32,.13);
   --shadow-sm:0 6px 18px rgba(23,16,32,.08);
@@ -115,6 +130,32 @@
 :root[data-theme="dark"] .report-hero div{
   background:var(--card);
 }
+/* Continuacion del mismo hallazgo (QA visual real de esta ronda): el fix de
+   arriba solo cambio el FONDO de .status-card a oscuro -- sus hijos
+   .status-card small/b/span (ver la regla base mas abajo en el archivo)
+   traen su color en literales oscuros (#1B102A/#6b5a86/#5c5470) pensados
+   para el fondo claro original (rgba(255,255,255,.92)), asi que con el
+   fondo ya oscuro ese texto se volvio casi invisible: quedo texto oscuro
+   sobre fondo oscuro. Mismo problema en el contenedor .status-grid (envuelve
+   las .status-card en el dashboard, dentro de .os-side): hereda el "glass"
+   claro que .os-side>div comparte con .os-command/.os-bim/.future-panel.
+   De esos tres, solo .os-bim tiene su propio fondo oscuro fijo (ver mas
+   abajo); .os-command tambien (gradiente propio) -- pero .status-grid y
+   .future-panel (usado por el widget "Tendencia de costo" y el donut "Mapa
+   de proyecto" del dashboard, confirmado con QA visual real) NO tienen
+   ninguno, y se quedaban como parches claros con texto claro encima
+   (--muted/--ink-text, que SI reaccionan al tema) -- casi ilegibles. */
+:root[data-theme="dark"] .status-card small,
+:root[data-theme="dark"] .status-card span{
+  color:var(--muted);
+}
+:root[data-theme="dark"] .status-card b{
+  color:var(--ink);
+}
+:root[data-theme="dark"] .status-grid,
+:root[data-theme="dark"] .future-panel{
+  background:var(--card);
+}
 
 /* Mismo hallazgo, misma familia de bug (QA visual real del modulo
    Levantamiento IA): .empty-state trae su fondo en un gradiente literal
@@ -172,6 +213,82 @@
   color:var(--muted);
 }
 
+/* Correccion quirurgica de contraste en oscuro (modulo APU/Analisis de
+   Precio Unitario, hallazgo de la auditoria de esta ronda): .pro-section-title
+   (encabezados "A. Datos generales"/"D. Matriz APU"/"G. Acciones", etc. del
+   editor profesional de APU) y .zi-tab.active (pestana activa del panel de
+   Inteligencia ZOE, ej. "Resumen") usan color:var(--petrol) -- igual que los
+   15 pares boton.soft/.chip/etc. ya corregidos arriba en esta misma ronda --
+   pero --petrol nunca se redefine en oscuro (linea ~9), asi que el texto se
+   queda en el mismo morado oscuro fijo sobre una tarjeta que SI se oscurece
+   (--card), quedando pixel a pixel casi invisible (confirmado con QA visual
+   real: captura completamente en negro). Mismo criterio que los demas pares
+   petrol/mint de esta ronda: se reasigna a --teal (SI se aclara en oscuro),
+   sin tocar la regla base para que el modo claro quede identico. */
+:root[data-theme="dark"] .pro-section-title,
+:root[data-theme="dark"] .zi-tab.active{
+  color:var(--teal);
+}
+/* Mismo modulo, hallazgo de estado :hover (auditoria de estados normal/
+   hover/active/disabled/focus pedida en esta ronda): .zi-tab:hover pone un
+   overlay blanco al 50% de opacidad sobre el fondo de .zi-tabs (--mint) para
+   dar un highlight sutil. En claro eso aclara el ya-claro --mint hacia casi
+   blanco y el texto (--muted, oscuro en claro) sigue leyendose bien (5.96:1).
+   En oscuro --mint ya es oscuro (#2A2140) y el mismo overlay blanco al 50%
+   lo vuelve gris claro (~rgb(148,144,159)), pero el texto sigue siendo
+   --muted EN SU VERSION CLARA de oscuro (#B6A9CC) -- texto claro sobre un
+   hover que tambien se volvio claro: 1.41:1, casi invisible al pasar el
+   mouse (confirmado en vivo con :hover real). Se reduce la opacidad del
+   overlay solo en oscuro (mismo blanco, 8% en vez de 50%) para que seguir
+   aclarando ligeramente el fondo sin perder el texto: 5.39:1. */
+:root[data-theme="dark"] .zi-tab:hover{
+  background:rgba(255,255,255,.08);
+}
+/* Misma familia de hallazgo (estado :hover), mismo patron en dos lugares
+   mas: button.soft:hover y .chip:hover ponen un fondo hover FIJO (#dff0ec,
+   un verde-menta muy claro) mientras el texto se queda en var(--teal)
+   (heredado de la regla base, sin redeclarar en :hover) -- en oscuro --teal
+   se aclara a #A879E8 para leerse sobre fondos oscuros, pero sobre este
+   fondo hover que se quedo fijo y claro el contraste cae a 2.71:1
+   (confirmado con QA real: :hover disparado con mouse, no simulado).
+   A diferencia de .zi-tab:hover (arriba), aqui NINGUN overlay blanco sirve:
+   --teal en oscuro (#A879E8) ya esta al limite sobre --mint oscuro (4.72:1
+   sin overlay) y CUALQUIER aclarado adicional lo tira por debajo de 4.5:1
+   (probado: 3% ya reprueba, 4.34:1). En vez de aclarar, se cancela el
+   cambio de fondo en oscuro -- el fondo se queda igual que el estado normal
+   (var(--mint), 4.72:1) y el cambio de border-color a --teal (ya presente
+   en la regla original, no se toca) sigue funcionando como señal visual
+   de hover. */
+:root[data-theme="dark"] button.soft:hover:not(.danger),
+:root[data-theme="dark"] .chip:hover{
+  background:var(--mint);
+}
+/* Hallazgo nuevo de esta ronda (Levantamiento IA, tarjetas de la lista):
+   .survey-status.ok/.warn/.danger ("Procesado", etc.) pintan su fondo con
+   un color solido a 15% de opacidad SOBRE --card (por eso el fondo si se
+   oscurece con el tema -- hereda --card de abajo), pero el texto es un tono
+   oscuro y saturado (#1f7a4d/#8a5a12/#912f1e) pensado para leerse sobre el
+   mismo overlay ya mezclado con --card BLANCO. Sobre --card oscuro el mismo
+   overlay da un fondo oscuro (~rgb(35,44,57) para .ok), y el texto oscuro
+   sobre eso mide 2.65:1 (.ok), 2.22:1 (.warn), 1.78:1 (.danger) -- muy por
+   debajo del minimo AA, confirmado con QA real. En claro los 3 pasan de
+   sobra (4.56/5.30/6.75) porque ahi la mezcla es sobre blanco, por lo que
+   el problema es exclusivo de oscuro. No existe un token ya reactivo para
+   estos 3 colores de estado (--ok es otro color, morado, sin relacion), asi
+   que se fija una version clara de cada tono solo para oscuro -- el warn
+   reusa directamente el mismo rgb base de su overlay (#E9A23B). */
+:root[data-theme="dark"] .survey-status.ok{color:#3CD98A;}
+:root[data-theme="dark"] .survey-status.warn{color:#E9A23B;}
+:root[data-theme="dark"] .survey-status.danger{color:#F07A57;}
+/* NOTA: .zi-badge-critical y button.soft.danger (ambos con fondo fijo que
+   nunca se invierte con el tema) se corrigen en su regla base mas abajo,
+   no aqui -- el problema de contraste (color:var(--danger) sobre esos
+   fondos fijos) es IDENTICO en claro y en oscuro (el fondo fijo no cambia
+   y --danger en claro ya media 4.08-4.12:1, reprobando el minimo AA de
+   4.5:1 desde antes de esta ronda), asi que no es un caso de "se rompe
+   solo en oscuro" -- ver --danger-on-soft (linea ~51) y su uso en las
+   reglas base de .zi-badge-critical/button.soft.danger. */
+
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
 body{margin:0;font-family:var(--body);background:var(--paper);color:var(--ink-text);-webkit-font-smoothing:antialiased;letter-spacing:.1px;
@@ -199,10 +316,15 @@ button:disabled:hover{transform:none;box-shadow:none}
 button.ghost,button.secondary{background:transparent;color:var(--ink);box-shadow:none;border:1px solid var(--line-2)}
 button.ghost:hover,button.secondary:hover{background:var(--mint);border-color:var(--teal)}
 button.ghost:disabled:hover,button.secondary:disabled:hover{background:transparent;border-color:var(--line-2)}
-button.soft{background:var(--mint);color:var(--petrol);box-shadow:none;border:1px dashed var(--line-2);font-weight:600;padding:8px 14px}
+button.soft{background:var(--mint);color:var(--teal);box-shadow:none;border:1px dashed var(--line-2);font-weight:600;padding:8px 14px}
 button.soft:hover{background:#dff0ec;border-color:var(--teal)}
 button.soft:disabled:hover{background:var(--mint);border-color:var(--line-2)}
-button.soft.danger{background:#f6e3df;color:var(--danger);border:1px dashed var(--danger)}
+/* color:var(--danger-on-soft) en vez de var(--danger): el fondo (#f6e3df)
+   es fijo (nunca se invierte con el tema), y --danger sobre el media
+   4.12:1 -- reprueba el minimo AA de 4.5:1, en claro y en oscuro por igual
+   (ver --danger-on-soft, linea ~51). border:var(--danger) se queda -- un
+   borde no necesita el mismo minimo de contraste que texto. */
+button.soft.danger{background:#f6e3df;color:var(--danger-on-soft);border:1px dashed var(--danger)}
 button.soft.danger:hover{background:#f3d3cc;border-color:var(--danger)}
 /* Destructivo "fuerte": reservado a acciones que borran datos guardados de
    forma permanente (ej. "Vaciar proyecto") -- solido, sin el borde punteado
@@ -211,12 +333,30 @@ button.soft.danger:hover{background:#f3d3cc;border-color:var(--danger)}
 button.danger-solid{background:var(--danger-solid);color:#fff;box-shadow:0 8px 18px rgba(181,74,98,.35);border:0}
 button.danger-solid:hover{background:#9c3d52;box-shadow:0 12px 26px rgba(181,74,98,.45)}
 button.danger-solid:disabled{background:var(--danger-solid);opacity:.5}
-button.google{background:#fff;color:var(--ink);border:1px solid var(--line-2);box-shadow:none}
+/* Boton "Continuar con Google": fondo blanco FIJO a proposito (requisito de
+   marca de Google, no debe invertirse con el tema) -- pero el texto usaba
+   var(--ink), que SI se aclara en oscuro, así que se aclaraba sobre ese
+   mismo blanco fijo. Color fijo (no token), a proposito por la misma razon
+   que el fondo: es un bloque de marca externa autocontenido. */
+button.google{background:#fff;color:#3c4043;border:1px solid var(--line-2);box-shadow:none}
 a:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+/* background y color EXPLICITOS (no heredados): en oscuro --card se oscurece
+   y --ink-text se aclara, asi que el par siempre queda leible; antes esta
+   regla fijaba background:#fff literal mientras el texto heredaba --ink-text
+   (que SI se aclara en oscuro) -- texto casi blanco sobre fondo blanco fijo,
+   ilegible en cualquier input/select/textarea del sitio en modo oscuro. */
 input,textarea,select{
-  width:100%;background:#fff;border:1px solid var(--line);border-radius:var(--r-sm);
+  width:100%;background:var(--card);color:var(--ink-text);border:1px solid var(--line);border-radius:var(--r-sm);
   padding:10px 12px;outline:none;transition:.15s border,.15s box-shadow}
 input:focus,textarea:focus{border-color:var(--teal);box-shadow:0 0 0 3px rgba(111,63,167,.14)}
+/* Placeholder generico (auditoria de contraste de esta ronda): sin esta
+   regla, el placeholder cae al gris por defecto del navegador (~rgb(117,
+   117,117), no es un token), que mide 3.73:1 sobre --card en oscuro --
+   reprueba el minimo AA de 4.5:1 (y solo pasa por muy poco en claro,
+   4.61:1). .top-search input::placeholder ya usaba var(--muted) para el
+   buscador superior; se extiende esa misma solucion a TODO input/textarea
+   del sitio: 6.41:1 en claro, 7.81:1 en oscuro. */
+input::placeholder,textarea::placeholder{color:var(--muted);opacity:1}
 textarea{min-height:74px;resize:vertical;font-family:var(--body)}
 label{display:block;font-size:.74rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin:10px 0 5px}
 
@@ -331,7 +471,7 @@ label{display:block;font-size:.74rem;font-weight:600;color:var(--muted);text-tra
   background:#fff;border:1px solid var(--line);border-radius:8px;padding:9px 11px}
 .cost-grid b{color:var(--ink-text)}
 .hero-flow{display:flex;align-items:center;gap:8px;margin:14px 0}
-.hero-flow span{font-family:var(--mono);font-size:.68rem;text-transform:uppercase;letter-spacing:.08em;color:var(--petrol);background:var(--mint);border:1px solid var(--line);border-radius:20px;padding:6px 10px}
+.hero-flow span{font-family:var(--mono);font-size:.68rem;text-transform:uppercase;letter-spacing:.08em;color:var(--teal);background:var(--mint);border:1px solid var(--line);border-radius:20px;padding:6px 10px}
 .hero-flow i{height:1px;flex:1;background:var(--line-2)}
 .total-line{display:flex;justify-content:space-between;align-items:center;
   background:var(--ink);color:#fff;border-radius:var(--r-sm);padding:14px 16px}
@@ -400,7 +540,7 @@ label{display:block;font-size:.74rem;font-weight:600;color:var(--muted);text-tra
   font-family:var(--display);font-weight:700;font-size:.9rem}
 .user>div b{font-size:.88rem;display:block;line-height:1.1}
 .user>div small{font-size:.72rem}
-.user button{padding:8px 14px;font-size:.84rem;background:var(--mint);color:var(--petrol);box-shadow:none;border:1px solid var(--line)}
+.user button{padding:8px 14px;font-size:.84rem;background:var(--mint);color:var(--teal);box-shadow:none;border:1px solid var(--line)}
 .user button:hover{background:var(--danger-solid);color:#fff;border-color:var(--danger-solid)}
 
 /* Búsqueda real de la topbar */
@@ -473,7 +613,7 @@ section{padding:26px 28px 64px}
 .stat-card small{display:block;margin-top:4px;font-size:.76rem}
 
 .quick{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}
-.quick button{background:#fff;color:var(--ink);border:1px solid var(--line);box-shadow:var(--shadow-sm);
+.quick button{background:var(--card);color:var(--ink);border:1px solid var(--line);box-shadow:var(--shadow-sm);
   justify-content:flex-start;font-weight:600;padding:14px 16px}
 .quick button:hover{border-color:var(--teal);color:var(--teal)}
 .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
@@ -486,7 +626,7 @@ section{padding:26px 28px 64px}
   gap:14px;
   margin:0 0 12px;
   padding:14px 16px;
-  background:#fff;
+  background:var(--card);
   border:1px solid var(--line);
   border-radius:var(--r);
   box-shadow:var(--shadow-sm);
@@ -557,7 +697,7 @@ progress::-moz-progress-bar{background:var(--teal)}
 .data-table td{padding:2px 4px;border-bottom:1px solid var(--line)}
 .data-table input{padding:6px 8px;border:1px solid transparent;background:transparent;border-radius:7px}
 .data-table input:hover{border-color:var(--line)}
-.data-table input:focus{background:#fff;border-color:var(--teal)}
+.data-table input:focus{background:var(--card);border-color:var(--teal)}
 .data-table td.imp{text-align:right;font-weight:600;color:var(--ink);white-space:nowrap;padding-right:8px}
 .apu-table th:nth-child(2),.apu-table th:nth-child(3),.apu-table th:nth-child(4),.apu-table th:nth-child(5){width:78px}
 .apu-table td.del{width:30px;text-align:center}
@@ -573,8 +713,19 @@ progress::-moz-progress-bar{background:var(--teal)}
 .cost.subtotal span{color:var(--ink);font-weight:700;font-family:var(--display)}
 .cost.subtotal b{color:var(--ink);font-size:1rem}
 .cost.iva-note{border:0;opacity:.75;font-size:.82rem}
+/* Hallazgo de esta ronda (QA visual real): .grand/.calc-out .o.total/
+   .pro-economy/.zi-panel-head (las 4 usan este mismo gradiente) traian
+   linear-gradient(120deg,var(--petrol),var(--ink)) con color:#fff fijo --
+   son bloques de color solido autocontenidos (mismo criterio que
+   --accent-solid/--danger-solid documentado arriba), nunca deberian
+   invertirse con el tema. --petrol ya esta fijo a proposito, pero --ink SI
+   es reactivo (se aclara en oscuro) -- ahi terminaba el degradado casi
+   blanco, con el texto blanco fijo encima practicamente invisible en ese
+   extremo. Segundo tono fijo (#171020, el mismo valor que --ink ya tenia en
+   claro) en vez del token, para que el bloque se quede oscuro en ambos
+   temas -- pixel-identico en claro, resuelto en oscuro. */
 .grand{display:flex;justify-content:space-between;align-items:center;margin:10px 0 4px;
-  background:linear-gradient(120deg,var(--petrol),var(--ink));color:#fff;border-radius:var(--r-sm);padding:15px 16px;
+  background:linear-gradient(120deg,var(--petrol),#171020);color:#fff;border-radius:var(--r-sm);padding:15px 16px;
   box-shadow:0 12px 26px rgba(23,16,32,.28);position:relative;overflow:hidden}
 .grand::after{content:"";position:absolute;right:-18px;top:-18px;width:60px;height:60px;border-radius:50%;
   background:var(--gold);opacity:.18}
@@ -616,7 +767,7 @@ progress::-moz-progress-bar{background:var(--teal)}
 .budget-table td:last-child{text-align:right;font-weight:600;white-space:nowrap}
 .budget-table input{padding:7px 9px;border:1px solid transparent;background:transparent}
 .budget-table input:hover{border-color:var(--line)}
-.budget-table input:focus{background:#fff;border-color:var(--teal)}
+.budget-table input:focus{background:var(--card);border-color:var(--teal)}
 .totals{max-width:320px;margin-left:auto;margin-top:14px}
 .iva-rate-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;font-size:.84rem;color:var(--muted)}
 .iva-rate-row input{width:64px;padding:5px 7px;border:1px solid var(--line);border-radius:6px;text-align:right;font-family:var(--mono)}
@@ -628,7 +779,7 @@ progress::-moz-progress-bar{background:var(--teal)}
 .cards-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;align-items:start}
 .project-card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;box-shadow:0 8px 22px rgba(23,16,32,.06)}
 .project-card span{display:inline-block;font-family:var(--mono);font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;
-  color:var(--petrol);background:var(--mint);border:1px solid var(--line);padding:4px 9px;border-radius:30px}
+  color:var(--teal);background:var(--mint);border:1px solid var(--line);padding:4px 9px;border-radius:30px}
 .project-card h2{font-family:var(--body);font-size:1rem;font-weight:650;letter-spacing:0;margin:12px 0 4px;color:var(--ink)}
 .project-card p{color:var(--muted);font-size:.82rem;margin:0 0 10px}
 .project-card h2 input,.project-card p input{
@@ -659,7 +810,12 @@ progress::-moz-progress-bar{background:var(--teal)}
   margin:0;
   border-radius:12px;
   border-top:0;
-  background:#fff;
+  /* background:#fff literal + .record-form-head h2{color:var(--ink)} (SI se
+     aclara en oscuro) = titulo casi invisible en oscuro (mismo patron que
+     .module-subhead/.visual-flow div, ya corregidos en esta ronda). var(--card)
+     es #fff en claro -- pixel-identico -- y se oscurece junto con el texto
+     en oscuro. */
+  background:var(--card);
   box-shadow:0 30px 90px rgba(18,12,28,.32);
 }
 .record-form::before{content:"";position:absolute;left:0;right:0;top:0;height:4px;background:linear-gradient(90deg,var(--teal),var(--gold))}
@@ -669,7 +825,13 @@ progress::-moz-progress-bar{background:var(--teal)}
 .record-form-head button{white-space:nowrap}
 .field-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px}
 .field-grid .wide{grid-column:1 / -1}
-.record-form .nf label{font-size:.64rem;letter-spacing:.08em;color:#7E708B;font-weight:600}
+/* color:#7E708B era fijo, pensado para el fondo fijo #fff que tenia
+   .record-form antes de esta ronda -- al volver el fondo reactivo
+   (var(--card), ver arriba) ese gris fijo se quedo huerfano de su fondo:
+   3.75-3.89:1 en oscuro, reprueba AA. Se usa var(--muted) (ya reactivo,
+   mismo token que el resto de labels .nf del sitio): 6.41:1 claro,
+   7.81:1 oscuro. */
+.record-form .nf label{font-size:.64rem;letter-spacing:.08em;color:var(--muted);font-weight:600}
 .record-form .nf input,.record-form .nf select{
   min-height:40px;
   font-family:var(--body);
@@ -679,8 +841,15 @@ progress::-moz-progress-bar{background:var(--teal)}
   padding:9px 11px;
 }
 .record-form .nf input[type="range"]{padding:0;min-height:26px}
-.record-form .nf.has-error input,.record-form .nf.has-error select{border:1px solid #c0392b;box-shadow:0 0 0 1px #c0392b}
-.record-form .nf-error-msg{display:block;color:#c0392b;font-size:.72rem;font-weight:600;margin-top:4px}
+/* #c0392b (rojo fijo) tenia el mismo problema que el label de arriba:
+   pensado para el fondo fijo #fff que .record-form ya no tiene. El texto
+   del error (.nf-error-msg) media 3.16:1 en oscuro sobre el fondo ahora
+   reactivo -- reprueba AA. var(--danger) ya esta diseñado como texto que
+   se aclara en oscuro para este uso exacto: 5.10:1 claro, 5.63:1 oscuro. El
+   borde se deja iterando el mismo token por consistencia (un borde no
+   necesita el mismo minimo, pero no hay razon para que no reaccione). */
+.record-form .nf.has-error input,.record-form .nf.has-error select{border:1px solid var(--danger);box-shadow:0 0 0 1px var(--danger)}
+.record-form .nf-error-msg{display:block;color:var(--danger);font-size:.72rem;font-weight:600;margin-top:4px}
 .form-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}
 
 .search{margin-bottom:16px}
@@ -783,7 +952,16 @@ svg.ic{display:block;flex:none}
 .calc-row:has(.nf:nth-child(3)){grid-template-columns:1fr 1fr 1fr}
 .nf{min-width:0}
 .nf label{margin-top:8px}
-.nf select{width:100%;background:#fff;border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 12px;font-family:var(--mono);font-size:.86rem}
+/* Hallazgo critico de esta ronda (QA en vivo real, confirmado con
+   getComputedStyle): .nf select tiene mas especificidad que la regla base
+   select{background:var(--card)} (una clase le gana a un elemento), asi que
+   esta pisaba el fix con #fff FIJO -- el color SI seguia siendo reactivo
+   (heredado de la regla base, que no compite en esa propiedad), asi que en
+   oscuro quedaba texto casi blanco sobre fondo blanco fijo. Este selector
+   es el que usa el <select> de "Muro" en Levantamiento IA (SpaceCard.jsx,
+   dentro de NField) y cualquier otro campo envuelto en .nf -- el mismo
+   patron .nf select/.nf input se repite en todo el sitio. */
+.nf select{width:100%;background:var(--card);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 12px;font-family:var(--mono);font-size:.86rem}
 .nf input{font-family:var(--mono)}
 .calc-out{margin-top:auto;padding-top:14px}
 .calc-out>div:first-child{margin-top:4px}
@@ -792,7 +970,7 @@ svg.ic{display:block;flex:none}
 .calc-out .o span{color:var(--muted)}
 .calc-out .o b{font-family:var(--mono);font-weight:600;color:var(--ink-text)}
 .calc-out .o.total{margin-top:8px;border:0;border-radius:var(--r-sm);padding:13px 14px;
-  background:linear-gradient(120deg,var(--petrol),var(--ink));color:#fff;box-shadow:0 10px 22px rgba(23,16,32,.24)}
+  background:linear-gradient(120deg,var(--petrol),#171020);color:#fff;box-shadow:0 10px 22px rgba(23,16,32,.24)}
 .calc-out .o.total span{color:rgba(255,255,255,.85);font-family:var(--display);font-weight:600;font-size:.9rem}
 .calc-out .o.total b{color:var(--gold);font-size:1.05rem}
 
@@ -910,7 +1088,7 @@ svg.ic{display:block;flex:none}
 .lib-tabs button.active{background:var(--accent-solid);color:#fff;border-color:var(--teal)}
 .lib-layout{display:grid;grid-template-columns:230px 1fr;gap:14px;align-items:start}
 .lib-folders{display:flex;flex-direction:column;gap:7px}
-.lib-folders button{display:grid;grid-template-columns:18px 1fr auto;align-items:center;gap:8px;background:#fff;color:var(--ink);border:1px solid var(--line);box-shadow:none;border-radius:10px;padding:9px 10px;text-align:left}
+.lib-folders button{display:grid;grid-template-columns:18px 1fr auto;align-items:center;gap:8px;background:var(--card);color:var(--ink);border:1px solid var(--line);box-shadow:none;border-radius:10px;padding:9px 10px;text-align:left}
 .lib-folders button.active{border-color:var(--teal);background:#F1E8F9}
 .lib-folders b{font-family:var(--mono);font-size:.78rem;color:var(--teal)}
 .lib-list{display:flex;flex-direction:column;gap:8px;margin-top:14px}
@@ -961,7 +1139,7 @@ svg.ic{display:block;flex:none}
 .empty-state button{margin-top:4px}
 .lib-pager{display:flex;align-items:center;justify-content:center;gap:12px;padding:12px;color:var(--muted);font-size:.82rem}
 .lib-pager button:disabled{opacity:.45;cursor:not-allowed}
-.lib-empty{border:1px dashed var(--line);border-radius:var(--r);padding:28px;text-align:center;color:var(--muted);background:#fff}
+.lib-empty{border:1px dashed var(--line);border-radius:var(--r);padding:28px;text-align:center;color:var(--muted);background:var(--card)}
 
 /* ====================================================================
    ACADEMIA (crear curso, slider de avance)
@@ -1010,7 +1188,7 @@ svg.ic{display:block;flex:none}
 .ai-concept{min-height:150px;margin-bottom:10px;line-height:1.5;resize:vertical}
 .ai-unit-qty-row{display:flex;flex-wrap:wrap;align-items:flex-end;gap:14px;margin-bottom:10px}
 .ai-panel .ai-unit-qty-row label{display:flex;flex-direction:column;gap:4px;font-size:.76rem;color:#e5d8f2;font-family:var(--mono);text-transform:uppercase;letter-spacing:.05em}
-.ai-unit-qty-row input{min-width:120px;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:#fff;color:var(--ink)}
+.ai-unit-qty-row input{min-width:120px;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
 .ai-panel .ai-unit-qty-row small{flex-basis:100%;color:#e5d8f2}
 .ai-panel-primary-action{margin-bottom:14px}
 .ai-panel-primary-action .ai-btn{padding:14px 26px;font-size:1rem}
@@ -1020,7 +1198,7 @@ svg.ic{display:block;flex:none}
 .ai-panel-foot>button{margin-left:auto}
 .ai-note{font-size:.78rem;color:var(--muted);margin-top:10px;line-height:1.4}
 .ai-panel .ai-note{color:#e5d8f2}
-.ai-note-busy{display:flex;align-items:center;gap:9px;color:var(--petrol);background:var(--mint);border:1px solid var(--line);border-radius:12px;padding:9px 12px}
+.ai-note-busy{display:flex;align-items:center;gap:9px;color:var(--teal);background:var(--mint);border:1px solid var(--line);border-radius:12px;padding:9px 12px}
 .ai-note-busy .asst-dots{padding:0;border:0;background:transparent}
 .inline-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0 16px}
 .inline-tools .up-btn{margin-left:0;padding:9px 13px}
@@ -1071,7 +1249,7 @@ svg.ic{display:block;flex:none}
 .asst-fab:hover{transform:translateY(-3px) scale(1.04)}
 @keyframes fabPulse{0%,100%{box-shadow:0 14px 30px rgba(23,16,32,.34)}50%{box-shadow:0 14px 40px rgba(157,111,208,.55)}}
 .asst-panel{position:fixed;right:calc(18px + env(safe-area-inset-right));bottom:calc(78px + env(safe-area-inset-bottom));z-index:50;width:390px;max-width:calc(100vw - 32px);height:540px;max-height:76vh;
-  background:#fff;border:1px solid rgba(202,187,216,.9);border-radius:18px;box-shadow:0 24px 70px rgba(23,16,32,.24);display:flex;flex-direction:column;overflow:hidden}
+  background:var(--card);border:1px solid rgba(202,187,216,.9);border-radius:18px;box-shadow:0 24px 70px rgba(23,16,32,.24);display:flex;flex-direction:column;overflow:hidden}
 .asst-head{display:flex;align-items:center;gap:12px;padding:16px;background:linear-gradient(135deg,#21132F,#4D2877);color:#fff}
 .asst-avatar{width:46px;height:46px;border-radius:14px;object-fit:cover;border:1px solid rgba(255,255,255,.42);box-shadow:0 8px 22px rgba(0,0,0,.22)}
 .asst-head b{display:block;font-family:var(--display);line-height:1.1;font-size:1.05rem;letter-spacing:0}
@@ -1082,21 +1260,21 @@ svg.ic{display:block;flex:none}
 .asst-strip span{white-space:nowrap;font-family:var(--mono);font-size:.66rem;letter-spacing:.08em;text-transform:uppercase;color:var(--petrol);background:#fff;border:1px solid var(--line);border-radius:20px;padding:5px 8px}
 .asst-body{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px;background:linear-gradient(180deg,#FBF8FD,#F7F3FA)}
 .asst-msg{max-width:88%;font-size:.88rem;line-height:1.48;padding:11px 13px;border-radius:14px;
-  background:#fff;border:1px solid var(--line);color:var(--ink-text);border-bottom-left-radius:5px;box-shadow:0 8px 18px rgba(23,16,32,.06)}
+  background:var(--card);border:1px solid var(--line);color:var(--ink-text);border-bottom-left-radius:5px;box-shadow:0 8px 18px rgba(23,16,32,.06)}
 .asst-msg.me{align-self:flex-end;background:#3E245A;color:#fff;border-color:#3E245A;border-bottom-left-radius:14px;border-bottom-right-radius:5px}
 .asst-suggestions{display:flex;gap:7px;padding:10px 12px 0;background:#fff;border-top:1px solid var(--line);overflow-x:auto}
 .asst-suggestions button{white-space:nowrap;background:#fff;color:var(--petrol);border:1px solid var(--line);box-shadow:none;border-radius:20px;padding:7px 10px;font-family:var(--body);font-size:.78rem}
 .asst-suggestions button:hover{background:var(--mint);transform:none}
-.asst-input{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:8px;padding:10px 12px;border-top:0;background:#fff}
+.asst-input{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:8px;padding:10px 12px;border-top:0;background:var(--card)}
 .asst-input input{padding:10px 12px;font-size:.88rem}
 .asst-input button{padding:10px 14px;min-width:74px}
-.asst-note{text-align:center;font-size:.68rem;color:var(--muted);padding:0 12px 10px;background:#fff}
+.asst-note{text-align:center;font-size:.68rem;color:var(--muted);padding:0 12px 10px;background:var(--card)}
 
 .asst-head-actions{margin-left:auto;display:flex;align-items:center;gap:6px}
 .asst-icon-btn{background:rgba(255,255,255,.12);box-shadow:none;padding:7px 9px;border-radius:8px;color:#fff;border:1px solid rgba(255,255,255,.18);font-size:.9rem;line-height:1;min-width:auto}
 .asst-icon-btn:hover{background:rgba(255,255,255,.2);transform:none}
 .asst-icon-btn.active{background:var(--gold);border-color:var(--gold);color:var(--ink)}
-.asst-input .asst-icon-btn{background:var(--mint);color:var(--petrol);border:1px solid var(--line);padding:10px 12px}
+.asst-input .asst-icon-btn{background:var(--mint);color:var(--teal);border:1px solid var(--line);padding:10px 12px}
 .asst-input .asst-icon-btn.active.listening{background:var(--danger-solid);color:#fff;border-color:var(--danger-solid);animation:fabPulse 1.4s infinite}
 
 .asst-offline-tag{display:block;margin-top:6px;font-size:.66rem;font-style:normal;color:var(--muted);letter-spacing:.02em}
@@ -1114,7 +1292,7 @@ svg.ic{display:block;flex:none}
 
 .asst-history{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;background:linear-gradient(180deg,#FBF8FD,#F7F3FA)}
 .asst-new-thread{width:100%}
-.asst-thread-item{display:flex;flex-direction:column;align-items:flex-start;gap:3px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px;text-align:left;box-shadow:none;color:var(--ink)}
+.asst-thread-item{display:flex;flex-direction:column;align-items:flex-start;gap:3px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;text-align:left;box-shadow:none;color:var(--ink)}
 .asst-thread-item b{font-size:.82rem;font-weight:600;color:var(--ink)}
 .asst-thread-item small{font-size:.68rem;color:var(--muted)}
 .asst-thread-item:hover{background:var(--mint);transform:none}
@@ -1139,7 +1317,7 @@ svg.ic{display:block;flex:none}
 .forum-list .forum-item{padding:16px;border:1px solid var(--line);border-radius:14px;margin-bottom:10px;background:#fff}
 .forum-list .forum-item:last-child{margin-bottom:0}
 .forum-acts{display:flex;gap:8px}
-.chip{background:var(--mint);color:var(--petrol);box-shadow:none;border:1px solid var(--line);padding:6px 11px;
+.chip{background:var(--mint);color:var(--teal);box-shadow:none;border:1px solid var(--line);padding:6px 11px;
   border-radius:20px;font-family:var(--mono);font-size:.78rem;display:inline-flex;align-items:center;gap:5px;font-weight:600}
 .chip:hover{background:#dff0ec;transform:none}
 .forum-replies{margin:2px 0 10px 50px;display:flex;flex-direction:column;gap:6px}
@@ -2080,7 +2258,7 @@ svg.ic{display:block;flex:none}
 .visual-generated{width:100%;max-height:540px;object-fit:contain;border:1px solid var(--line);border-radius:14px;background:#fff;margin-bottom:14px;box-shadow:var(--shadow-sm)}
 .visual-result pre{white-space:pre-wrap;margin:0;background:#120C1C;color:#F7F1FC;border-radius:14px;padding:16px;line-height:1.45;font-size:.88rem;max-height:360px;overflow:auto}
 .visual-flow{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:16px}
-.visual-flow div{background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px;display:flex;align-items:center;gap:10px;box-shadow:var(--shadow-sm)}
+.visual-flow div{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;display:flex;align-items:center;gap:10px;box-shadow:var(--shadow-sm)}
 .visual-flow b{width:30px;height:30px;border-radius:10px;background:linear-gradient(135deg,var(--teal),var(--petrol));color:#fff;display:grid;place-items:center;font-family:var(--mono)}
 .visual-flow span{font-size:.8rem;font-weight:700;color:var(--ink)}
 .plan-matrix{overflow:auto;margin-bottom:18px}
@@ -2150,7 +2328,7 @@ svg.ic{display:block;flex:none}
 .lib-onedrive{background:#fff;border-top:3px solid var(--teal)}
 .lib-onedrive .admin-panel-head{margin-bottom:10px}
 .od-config-warning{display:flex;gap:10px;align-items:flex-start;background:var(--gold-soft);border:1px solid var(--gold);border-radius:12px;padding:12px 14px;color:var(--gold-ink);font-size:.86rem;line-height:1.5}
-.od-local-ok{display:flex;gap:12px;align-items:center;background:var(--mint);border:1px solid var(--line);border-radius:12px;padding:12px 14px;color:var(--petrol)}
+.od-local-ok{display:flex;gap:12px;align-items:center;background:var(--mint);border:1px solid var(--line);border-radius:12px;padding:12px 14px;color:var(--teal)}
 .od-local-ok svg{flex:none;color:var(--teal)}
 .od-local-ok div{flex:1;min-width:0}
 .od-local-ok b{display:block;font-size:.92rem}
@@ -2175,7 +2353,7 @@ svg.ic{display:block;flex:none}
 .gdrive-check{display:flex;align-items:center;gap:8px;min-width:0;cursor:pointer}
 .gdrive-check input{flex:none}
 .gdrive-check b{color:var(--ink);font-size:.88rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.gdrive-status{font-family:var(--mono);font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;padding:3px 8px;border-radius:999px;background:var(--mint);color:var(--petrol);justify-self:start}
+.gdrive-status{font-family:var(--mono);font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;padding:3px 8px;border-radius:999px;background:var(--mint);color:var(--teal);justify-self:start}
 .gdrive-status.importando{background:var(--gold-soft);color:var(--gold-ink)}
 .gdrive-status.listo{background:rgba(89,179,122,.15);color:#2E7D4F}
 .gdrive-status.error{background:rgba(181,74,98,.14);color:var(--danger)}
@@ -2187,7 +2365,7 @@ svg.ic{display:block;flex:none}
 .admin-cost-card{background:linear-gradient(135deg,#fff,#F5EFFB);border:1px solid var(--line);border-radius:14px;padding:16px}
 .admin-cost-card small{display:block;color:var(--muted);font-family:var(--mono);text-transform:uppercase;font-size:.64rem;letter-spacing:.08em}
 .admin-cost-card b{display:block;font-family:var(--display);font-size:1.4rem;color:var(--ink);margin:6px 0 2px}
-.admin-metric-note{margin-top:14px;padding:12px 14px;border-radius:12px;background:var(--mint);color:var(--petrol);font-size:.84rem;line-height:1.5}
+.admin-metric-note{margin-top:14px;padding:12px 14px;border-radius:12px;background:var(--mint);color:var(--teal);font-size:.84rem;line-height:1.5}
 .admin-log-row{display:grid;grid-template-columns:110px 1fr 90px 140px;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);font-size:.84rem}
 .admin-log-row:last-child{border-bottom:0}
 .admin-log-row span{color:var(--muted)}
@@ -2219,7 +2397,7 @@ svg.ic{display:block;flex:none}
 .admin-table-wrap{overflow-x:auto}
 .admin-table{min-width:640px}
 .admin-table th{white-space:nowrap}
-.admin-table select{padding:6px 8px;font-size:.8rem;width:auto;background:#fff}
+.admin-table select{padding:6px 8px;font-size:.8rem;width:auto;background:var(--card)}
 .admin-uid{font-family:var(--mono);font-size:.76rem;color:var(--muted)}
 .admin-status-toggle{padding:6px 12px;font-size:.76rem;border-radius:20px;box-shadow:none;min-width:auto}
 .admin-status-toggle.ok{background:#E6F6EE;color:#1B7A46;border:1px solid #BFE6D2}
@@ -2233,7 +2411,7 @@ svg.ic{display:block;flex:none}
 .admin-health-card{border:1px solid var(--line);border-radius:14px;padding:16px;background:#fff}
 .admin-health-card b{display:block;font-size:.9rem;color:var(--ink);margin-bottom:8px}
 .admin-health-card p{margin:6px 0 0;font-size:.8rem;color:var(--muted);line-height:1.4}
-.admin-health-status{display:inline-block;font-family:var(--mono);font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;padding:4px 10px;border-radius:20px;background:var(--mint);color:var(--petrol)}
+.admin-health-status{display:inline-block;font-family:var(--mono);font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;padding:4px 10px;border-radius:20px;background:var(--mint);color:var(--teal)}
 .admin-health-card.ok .admin-health-status{background:#E6F6EE;color:#1B7A46}
 .admin-health-card.error .admin-health-status{background:#FBE9EC;color:var(--danger)}
 .admin-health-card.not_available .admin-health-status{background:#F1EEF4;color:var(--muted)}
@@ -2241,7 +2419,7 @@ svg.ic{display:block;flex:none}
 /* ---------- Resultado ejecutivo del APU (pantalla limpia antes del editor) ---------- */
 .executive-result{display:flex;flex-direction:column;gap:18px}
 .exec-head{display:flex;flex-direction:column;gap:6px;padding-bottom:14px;border-bottom:1px solid var(--line)}
-.exec-tag{align-self:flex-start;font-family:var(--mono);font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;background:var(--mint);color:var(--petrol);padding:4px 10px;border-radius:20px;font-weight:700}
+.exec-tag{align-self:flex-start;font-family:var(--mono);font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;background:var(--mint);color:var(--teal);padding:4px 10px;border-radius:20px;font-weight:700}
 .exec-head h2{margin:0;font-family:var(--display);font-size:1.4rem;color:var(--ink)}
 .exec-pu{display:flex;align-items:baseline;gap:6px}
 .exec-pu b{font-family:var(--display);font-size:2rem;color:var(--petrol)}
@@ -2267,7 +2445,7 @@ svg.ic{display:block;flex:none}
 .demo-hero-step span{display:block;margin-top:4px;font-size:.82rem;color:#fff}
 @media (max-width:760px){.demo-hero-steps{grid-template-columns:repeat(2,1fr)}}
 /* ---------- Selector de proyecto activo (topbar) y estado en tarjetas ---------- */
-.project-switcher{display:flex;align-items:center;gap:8px;background:var(--mint);border:1px solid var(--line);border-radius:999px;padding:6px 8px 6px 12px;color:var(--petrol)}
+.project-switcher{display:flex;align-items:center;gap:8px;background:var(--mint);border:1px solid var(--line);border-radius:999px;padding:6px 8px 6px 12px;color:var(--teal)}
 .project-switcher select{border:none;background:transparent;font-weight:700;color:var(--petrol);max-width:220px;padding:2px 4px}
 .project-switcher select:focus{outline:2px solid var(--gold);border-radius:6px}
 .project-switcher button{border-radius:999px;padding:5px 12px;font-size:.78rem}
@@ -2282,7 +2460,7 @@ svg.ic{display:block;flex:none}
 .batch-review-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .batch-search{max-width:240px}
 .batch-count{margin-left:auto;font-family:var(--mono);font-size:.76rem;color:#e5d8f2}
-.batch-review-table{max-height:340px;overflow:auto;border-radius:10px;background:#fff;color:var(--ink)}
+.batch-review-table{max-height:340px;overflow:auto;border-radius:10px;background:var(--card);color:var(--ink)}
 .batch-review-table table{width:100%}
 .batch-review-table th{position:sticky;top:0;background:#EAF0F7;z-index:1}
 .batch-row-duplicate{opacity:.6}
@@ -2316,7 +2494,7 @@ svg.ic{display:block;flex:none}
 @media (max-width:760px){.apu-step-label{display:none}.apu-step:not(:last-child)::after{width:14px;margin:0 4px}}
 
 .apu-project-status{margin-bottom:14px}
-.apu-project-pill{display:inline-flex;align-items:center;gap:7px;background:var(--mint);color:var(--petrol);border-radius:999px;padding:7px 14px;font-size:.82rem;font-weight:600}
+.apu-project-pill{display:inline-flex;align-items:center;gap:7px;background:var(--mint);color:var(--teal);border-radius:999px;padding:7px 14px;font-size:.82rem;font-weight:600}
 .apu-project-pill.muted{background:var(--gold-soft);color:var(--gold-ink)}
 .apu-project-pill a{color:var(--gold-ink);text-decoration:underline;font-weight:700;cursor:pointer}
 
@@ -2347,7 +2525,7 @@ svg.ic{display:block;flex:none}
 .apu-exec-origin{display:inline-flex;align-items:center;gap:6px;font-size:.76rem;font-weight:700;padding:4px 11px;border-radius:20px}
 .apu-exec-origin.contingency{background:#FFF8E7;color:#8a5a00;border:1px solid #E4B64D}
 .apu-exec-origin.real{background:#EAF7F0;color:#1f7a4d;border:1px solid #6FBE8F}
-.apu-exec-origin.base{background:var(--mint);color:var(--petrol);border:1px solid var(--line)}
+.apu-exec-origin.base{background:var(--mint);color:var(--teal);border:1px solid var(--line)}
 .apu-exec-concept{margin:0 0 12px;font-family:var(--display);font-size:1.3rem;line-height:1.3;color:var(--ink)}
 .apu-exec-header-meta{display:flex;flex-wrap:wrap;gap:22px}
 .apu-exec-header-meta span{display:flex;flex-direction:column;gap:2px}
@@ -2425,7 +2603,7 @@ svg.ic{display:block;flex:none}
 .pro-accordion-body{padding:0 16px 16px;border-top:1px solid var(--line)}
 .pro-list-row{display:flex;gap:8px;margin:8px 0}
 .pro-list-row textarea{flex:1}
-.pro-economy{display:flex;gap:14px;flex-wrap:wrap;align-items:center;padding:18px 20px;background:linear-gradient(120deg,var(--petrol),var(--ink));color:#fff;border-radius:var(--r)}
+.pro-economy{display:flex;gap:14px;flex-wrap:wrap;align-items:center;padding:18px 20px;background:linear-gradient(120deg,var(--petrol),#171020);color:#fff;border-radius:var(--r)}
 .pro-economy strong{font-size:1.3rem;color:var(--gold);font-family:var(--display)}
 .validation-panel{padding:14px 16px;border:1px solid var(--gold);background:var(--gold-soft);border-radius:var(--r-sm);color:var(--gold-ink)}
 .pro-modal{position:fixed;inset:0;background:rgba(23,16,32,.55);z-index:1000;display:grid;place-items:center}
@@ -2449,12 +2627,17 @@ svg.ic{display:block;flex:none}
    generico que rompa la identidad de marca. Severidad SIEMPRE se
    comunica con texto+icono+color (nunca solo color, accesibilidad). */
 :root{
-  --zi-amber:#B8863D;      /* HIGH -- distinto del --gold reservado al P.U. final */
+  /* --zi-amber original (#B8863D) sobre --zi-amber-soft media 2.69:1 --
+     reprueba el minimo AA de 4.5:1 para texto normal, y lo hace en AMBOS
+     temas por igual (ninguno de los dos tokens se redefine en oscuro, asi
+     que no es un problema de tema, es el par en si). Oscurecido a #7A5420:
+     5.62:1, mismo tono ambar, sin afectar --gold (P.U. final, token aparte). */
+  --zi-amber:#7A5420;      /* HIGH -- distinto del --gold reservado al P.U. final */
   --zi-amber-soft:#F6E9D3;
   --zi-danger-soft:#F6E1E6;
 }
 .zi-panel{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow-sm);margin:0 0 22px;overflow:hidden}
-.zi-panel-head{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line);background:linear-gradient(120deg,var(--petrol),var(--ink));color:#fff}
+.zi-panel-head{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line);background:linear-gradient(120deg,var(--petrol),#171020);color:#fff}
 .zi-panel-head h2{font-size:1rem;margin:0;letter-spacing:.02em}
 .zi-panel-head .zi-subtitle{font-family:var(--mono);font-size:.72rem;color:var(--teal-2);margin-left:auto}
 
@@ -2477,7 +2660,14 @@ svg.ic{display:block;flex:none}
 /* Severidad: texto+icono+color juntos, nunca solo color */
 .zi-badge{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:.68rem;font-weight:700;letter-spacing:.05em;padding:3px 8px;border-radius:20px;white-space:nowrap}
 .zi-badge::before{content:'';width:7px;height:7px;border-radius:50%;flex:none}
-.zi-badge-critical{background:var(--danger-soft,var(--zi-danger-soft));color:var(--danger)}
+/* color:var(--danger-on-soft) en vez de var(--danger): el fondo de este chip
+   (--zi-danger-soft) es fijo (nunca se invierte con el tema, es severidad,
+   no superficie), y --danger sobre el media 4.08:1 -- reprueba el minimo AA
+   de 4.5:1 para texto normal (badge es 10.88px, no califica como "grande"),
+   en claro y en oscuro por igual (ver --danger-on-soft, linea ~51). El
+   circulo (::before) sigue en var(--danger) porque un punto de color no
+   necesita el mismo contraste de texto. */
+.zi-badge-critical{background:var(--danger-soft,var(--zi-danger-soft));color:var(--danger-on-soft)}
 .zi-badge-critical::before{background:var(--danger)}
 .zi-badge-high{background:var(--zi-amber-soft);color:var(--zi-amber)}
 .zi-badge-high::before{background:var(--zi-amber)}
@@ -3041,7 +3231,33 @@ svg.ic{display:block;flex:none}
 .survey-element-row{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:8px}
 .survey-element-row .nf{flex:1;min-width:100px}
 
+/* Fase 1.5: pestanas Datos/Plano 2D/Vista 3D/Cuantificacion dentro de un
+   levantamiento abierto. No se reutiliza .zi-tabs (especifico del panel
+   ZOEMEC INTELLIGENCE de APU) -- misma familia visual que el resto de
+   .survey-*, solo con su propia clase. */
+.survey-tabs{display:flex;flex-wrap:wrap;gap:6px;margin:16px 0 12px;border-bottom:1px solid var(--line)}
+.survey-tab{background:none;border:none;border-bottom:2px solid transparent;padding:9px 4px;margin-right:14px;font-size:.86rem;color:var(--muted);cursor:pointer}
+.survey-tab:hover{color:var(--ink)}
+.survey-tab.active{color:var(--teal);border-bottom-color:var(--teal);font-weight:600}
+
+/* Plano 2D (SpaceFloorPlan2D.jsx): SVG responsive, sin ancho fijo -- el
+   contenedor solo limita el ancho maximo para que no se vea gigante en
+   pantallas anchas, en movil ocupa el 100% disponible. */
+.survey-plan2d{display:flex;flex-direction:column;align-items:center;gap:8px}
+.survey-plan2d-svg{width:100%;max-width:560px;height:auto}
+.survey-plan2d-caption{font-size:.8rem;margin:0}
+.survey-plan2d-warning{align-self:flex-start;color:var(--danger);font-size:.82rem;margin:0 0 4px}
+.survey-opening-warning{color:var(--danger);font-size:.78rem;margin:2px 0 8px}
+.survey-3d-warning{border-color:var(--danger);margin-bottom:10px}
+
+.survey-quant-table{width:100%;border-collapse:collapse}
+.survey-quant-table td{padding:10px 8px;border-bottom:1px solid var(--line);font-size:.88rem;color:var(--ink)}
+.survey-quant-table tr:last-child td{border-bottom:none}
+.survey-quant-table td:last-child{text-align:right}
+
 @media (max-width:760px){
   .survey-grid,.survey-source-options{grid-template-columns:1fr}
   .survey-actions a{margin-left:0}
+  .survey-tabs{gap:2px}
+  .survey-tab{margin-right:10px;padding:8px 2px;font-size:.82rem}
 }

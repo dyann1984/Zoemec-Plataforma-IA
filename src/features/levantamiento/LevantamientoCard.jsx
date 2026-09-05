@@ -20,7 +20,7 @@ const STATUS_I18N_KEY = {
 
 const fmt = (n) => (Number(n) || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-export function LevantamientoCard({ survey, onOpen, onRemove }){
+export function LevantamientoCard({ survey, onOpen, onOpen3d, onRemove }){
   const { t: tr } = useI18n();
   const totals = aggregateSurveyTotals(survey);
   const statusLabel = tr(`levantamiento.${STATUS_I18N_KEY[survey.status] || 'statusDraft'}`);
@@ -37,7 +37,7 @@ export function LevantamientoCard({ survey, onOpen, onRemove }){
     </div>
     <div className="survey-actions">
       <button type="button" className="soft" onClick={onOpen}>{tr('levantamiento.actionOpen')}</button>
-      <button type="button" className="soft" disabled title={tr('levantamiento.action3dHint')}>{tr('levantamiento.action3d')}</button>
+      <button type="button" className="soft" onClick={onOpen3d} title={tr('levantamiento.action3dHint')}>{tr('levantamiento.action3d')}</button>
       <button type="button" className="soft" disabled title={tr('levantamiento.actionQuantifyHint')}>{tr('levantamiento.actionQuantify')}</button>
       <button type="button" className="soft" disabled title={tr('levantamiento.actionConceptsHint')}>{tr('levantamiento.actionConcepts')}</button>
       <a onClick={onRemove} style={{ color: 'var(--danger)', cursor: 'pointer' }}>{tr('levantamiento.actionDelete')}</a>

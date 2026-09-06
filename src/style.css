@@ -3255,9 +3255,37 @@ svg.ic{display:block;flex:none}
 .survey-quant-table tr:last-child td{border-bottom:none}
 .survey-quant-table td:last-child{text-align:right}
 
+/* Fase 2A -- Import3DSurveyForm.jsx: dropzone de subida de archivo 3D.
+   Mismos tokens que .survey-source-option (var(--card)/var(--line)/var(--teal))
+   para que se sienta parte de la misma familia visual, sin introducir
+   colores nuevos. */
+.import3d-dropzone{
+  border:2px dashed var(--line-2);border-radius:var(--r);padding:28px 18px;
+  text-align:center;background:var(--card);cursor:pointer;
+  display:flex;flex-direction:column;align-items:center;gap:8px;
+  transition:.15s border-color,.15s background;
+}
+.import3d-dropzone b{color:var(--ink);font-size:1rem}
+.import3d-dropzone span{color:var(--muted);font-size:.82rem}
+.import3d-dropzone:hover,.import3d-dropzone.dragover{border-color:var(--teal);background:var(--mint)}
+.import3d-dropzone.error{border-color:var(--danger)}
+
+.import3d-progress{display:flex;flex-direction:column;align-items:center;gap:12px;padding:32px 0;color:var(--muted)}
+.import3d-spinner{
+  width:32px;height:32px;border-radius:50%;
+  border:3px solid var(--line);border-top-color:var(--teal);
+  animation:import3dSpin .8s linear infinite;
+}
+@keyframes import3dSpin{to{transform:rotate(360deg)}}
+
+.import3d-meta-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px 16px;margin:10px 0}
+.import3d-meta-grid small{display:block;color:var(--muted);font-size:.68rem;text-transform:uppercase;letter-spacing:.05em}
+.import3d-meta-grid b{color:var(--ink);font-size:.92rem}
+
 @media (max-width:760px){
   .survey-grid,.survey-source-options{grid-template-columns:1fr}
   .survey-actions a{margin-left:0}
   .survey-tabs{gap:2px}
   .survey-tab{margin-right:10px;padding:8px 2px;font-size:.82rem}
+  .import3d-dropzone{padding:20px 12px}
 }

@@ -5,7 +5,7 @@ import { Survey3DViewer } from './Survey3DViewer.jsx';
 import { buildPlanoElementFromConcept } from '../../domain/levantamientoTakeoffBridge.js';
 import { PageHead } from '../../components/ui/PageElements.jsx';
 import { useI18n } from '../../i18n/I18nContext.jsx';
-import { SURVEY_STATUS, makeEmptySpace } from '../../domain/levantamientoSchema.js';
+import { SURVEY_STATUS, SURVEY_SOURCE_TYPE, makeEmptySpace } from '../../domain/levantamientoSchema.js';
 import { aggregateSurveyTotals, recomputeSurvey } from '../../lib/levantamientoCalc.js';
 
 const STATUS_I18N_KEY = {
@@ -17,6 +17,13 @@ const STATUS_I18N_KEY = {
 };
 
 const fmt = (n) => (Number(n) || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function formatBytes(bytes){
+  if(!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
 
 const TABS = ['datos', 'plano2d', 'vista3d', 'cuantificacion'];
 const TAB_I18N_KEY = { datos: 'tabData', plano2d: 'tabPlan2d', vista3d: 'tabView3d', cuantificacion: 'tabQuantification' };
@@ -91,6 +98,19 @@ export function SurveyDetail({ survey, onBack, onChange, onSendToApu, currentUse
         <div className="nf wide"><label>{tr('levantamiento.descriptionPlaceholderShort')}</label><input value={survey.description || ''} onChange={e => setField('description', e.target.value)} placeholder={tr('levantamiento.descriptionPlaceholder')} /></div>
       </div>
 
+      {survey.importMeta && <>
+      <h3>{tr('levantamiento.import3dSavedMetaTitle')}</h3>
+      <div className="import3d-meta-grid">
+        <div><small>{tr('levantamiento.import3dMetaFileNameLabel')}</small><b>{survey.importMeta.fileName}</b></div>
+        <div><small>{tr('levantamiento.import3dMetaFormatLabel')}</small><b>{String(survey.importMeta.sourceFormat || '').toUpperCase()}</b></div>
+        <div><small>{tr('levantamiento.import3dMetaSizeLabel')}</small><b>{formatBytes(survey.importMeta.fileSizeBytes)}</b></div>
+        <div><small>{tr('levantamiento.import3dMetaUnitsLabel')}</small><b>m</b></div>
+        <div><small>{tr('levantamiento.import3dMetaScaleLabel')}</small><b>{(Number(survey.importMeta.scaleFactor) || 1).toFixed(2)}×</b></div>
+        {Number.isFinite(survey.importMeta.meshCount) && <div><small>{tr('levantamiento.import3dMetaMeshCountLabel')}</small><b>{survey.importMeta.meshCount}</b></div>}
+        {Number.isFinite(survey.importMeta.triangleCount) && <div><small>{tr('levantamiento.import3dMetaTriangleCountLabel')}</small><b>{survey.importMeta.triangleCount}</b></div>}
+      </div>
+      </>}
+
       <div className="survey-spaces-list">
         {survey.spaces.map(space => <SpaceCard key={space.id} space={space} onUpdate={next => updateSpace(space.id, next)} onRemove={survey.spaces.length > 1 ? () => removeSpace(space.id) : null} />)}
       </div>
@@ -104,6 +124,8 @@ export function SurveyDetail({ survey, onBack, onChange, onSendToApu, currentUse
           {survey.spaces.map(s => <option key={s.id} value={s.id}>{s.name || s.id}</option>)}
         </select>
       </div>}
+      {activeTab === 'vista3d' && survey.sourceType === SURVEY_SOURCE_TYPE.IMPORT_3D &&
+        <p className="muted" style={{ fontSize: '.82rem', marginBottom: 10 }}>{tr('levantamiento.import3dDerivedViewNotice')}</p>}
       {!activeSpace
         ? <p className="muted">{tr('levantamiento.plan2dNeedsDimsMsg')}</p>
         : activeTab === 'plano2d'

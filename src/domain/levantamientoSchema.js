@@ -133,7 +133,13 @@ export function makeEmptySpace({ name = '', length = 0, width = 0, height = 0 } 
    sigue el mismo patron que apus/budgets/catalog: el objeto lleva su propio
    projectId y useProjectScoped() en main.jsx filtra la vista activa, no hay
    subcoleccion Firestore por proyecto. */
-export function makeEmptySurvey({ projectId = null, name = '', description = '', sourceType = SURVEY_SOURCE_TYPE.MANUAL } = {}){
+/* importMeta (Fase 2A, opcional, default null): metadatos planos y
+   JSON-safe del archivo 3D importado (formato/nombre/tamano/mallas/
+   triangulos/factor de escala/fecha) cuando sourceType es IMPORT_3D --
+   nunca el File ni el THREE.Object3D original, solo lo que
+   buildSurveyImportMeta (src/domain/levantamientoImportConversion.js)
+   produce. null para levantamientos manuales, igual que siempre. */
+export function makeEmptySurvey({ projectId = null, name = '', description = '', sourceType = SURVEY_SOURCE_TYPE.MANUAL, importMeta = null } = {}){
   const now = Date.now();
   return {
     id: 'LEV-' + uid(),
@@ -141,6 +147,7 @@ export function makeEmptySurvey({ projectId = null, name = '', description = '',
     name,
     description,
     sourceType,
+    importMeta,
     status: SURVEY_STATUS.DRAFT,
     spaces: [],
     createdAt: now,

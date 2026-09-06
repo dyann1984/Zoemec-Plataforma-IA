@@ -15,6 +15,18 @@ test('makeEmptySurvey genera un id con prefijo LEV- y estado inicial borrador', 
   assert.deepEqual(survey.spaces, []);
 });
 
+test('makeEmptySurvey sin importMeta lo deja en null (regresion del flujo manual, Fase 2A)', () => {
+  const survey = makeEmptySurvey({ projectId: 'PRO-ABC', name: 'Levantamiento manual' });
+  assert.equal(survey.importMeta, null);
+});
+
+test('makeEmptySurvey conserva importMeta intacto para un levantamiento importado (Fase 2A)', () => {
+  const importMeta = { sourceFormat: 'glb', fileName: 'sala.glb', fileSizeBytes: 12345, meshCount: 3, triangleCount: 8000, scaleFactor: 1, importedAt: 1700000000000 };
+  const survey = makeEmptySurvey({ projectId: 'PRO-ABC', name: 'Levantamiento importado', sourceType: SURVEY_SOURCE_TYPE.IMPORT_3D, importMeta });
+  assert.equal(survey.sourceType, SURVEY_SOURCE_TYPE.IMPORT_3D);
+  assert.deepEqual(survey.importMeta, importMeta);
+});
+
 test('makeEmptySpace genera un id con prefijo SPC- y geometria en cero hasta recalcular', () => {
   const space = makeEmptySpace({ name: 'Local comercial', length: 8, width: 8, height: 3 });
   assert.match(space.id, /^SPC-/);

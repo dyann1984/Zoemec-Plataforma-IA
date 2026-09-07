@@ -1,4 +1,4 @@
-import { getAdminDb, hasAdminCredentials } from '../server/api-lib/_firebaseAdmin.mjs';
+import { getAdminDb, getAdminStorage, hasAdminCredentials } from '../server/api-lib/_firebaseAdmin.mjs';
 import { hasGoogleDriveCredentials } from '../server/api-lib/_googleDrive.mjs';
 
 /* Estado publico y minimo (sin datos sensibles) para que cualquier usuario logueado
@@ -10,6 +10,20 @@ async function checkFirebase(){
     const db = getAdminDb();
     await db.collection('users').limit(1).get();
     return 'ok';
+  }catch{
+    return 'error';
+  }
+}
+
+/* Diagnostico de auditoria (Fase 2B, punto P0): confirma si el bucket real de
+   Storage existe y responde, sin exponer nombre de bucket, rutas ni archivos.
+   Mismo patron try/exists que checkFirebase -- nunca lanza, nunca expone el
+   mensaje de error interno (que si podria incluir el nombre del bucket). */
+async function checkStorage(){
+  if(!hasAdminCredentials()) return 'error';
+  try{
+    const [exists] = await getAdminStorage().exists();
+    return exists ? 'ok' : 'error';
   }catch{
     return 'error';
   }
@@ -46,6 +60,6 @@ export default async function handler(req, res){
     res.status(405).json({ error:'Metodo no permitido.' });
     return;
   }
-  const [firebase, openai, announcement] = await Promise.all([checkFirebase(), checkOpenAI(), readAnnouncement()]);
-  res.status(200).json({ firebase, openai, announcement, googleDriveConfigured: hasGoogleDriveCredentials() });
+  const [firebase, openai, storage, announcement] = await Promise.all([checkFirebase(), checkOpenAI(), checkStorage(), readAnnouncement()]);
+  res.status(200).json({ firebase, openai, storage, announcement, googleDriveConfigured: hasGoogleDriveCredentials() });
 }

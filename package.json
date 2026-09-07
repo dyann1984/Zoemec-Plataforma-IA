@@ -12,6 +12,7 @@
     "test:apu": "node --test src/lib/apuCalc.test.js",
     "test:apu-integration": "node --test test/apuExport.pdf.integration.test.mjs test/apuExport.xlsx.integration.test.mjs",
     "test:rules": "firebase emulators:exec --project zoemec-plataforma-ia --only firestore \"node --test test/firestore.rules.test.mjs\"",
+    "test:storagerules": "firebase emulators:exec --project zoemec-plataforma-ia --only storage \"node --test test/storage.rules.test.mjs\"",
     "test:memory": "firebase emulators:exec --project zoemec-plataforma-ia --only firestore \"node --test test/technicalMemoryFirestoreAdapter.test.mjs\"",
     "test:authguard": "firebase emulators:exec --project zoemec-plataforma-ia --only firestore,auth \"node --test test/authGuard.test.mjs\"",
     "test:decisions": "firebase emulators:exec --project zoemec-plataforma-ia --only firestore,auth \"node --test test/technicalMemoryApi.test.mjs test/challengeDecisionsApi.test.mjs\"",

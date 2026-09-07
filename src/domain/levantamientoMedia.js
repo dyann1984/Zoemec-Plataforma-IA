@@ -27,8 +27,13 @@ export const MAX_SCAN_ITEMS = 20;
    en Fase 2A): permanece false hasta el ultimo commit de la fase, cuando el
    flujo completo ya este probado y verificado en Preview. NewSurveyModal.jsx
    lee esta bandera para decidir si "Escanear con celular" es un boton real o
-   sigue deshabilitado -- nunca se quita `disabled` a mano antes de esto. */
-export const PHONE_SCAN_AVAILABLE = false;
+   sigue deshabilitado -- nunca se quita `disabled` a mano antes de esto.
+
+   true SOLO en esta rama (feature/levantamiento-ia-fase2b), para QA real en
+   Preview con Storage ya aprovisionado (bucket zoemec-plataforma-ia.firebasestorage.app,
+   reglas desplegadas, /api/status confirma storage:"ok"). NO se mergea a main
+   hasta que el QA real en Preview (foto, video, retry, persistencia) pase. */
+export const PHONE_SCAN_AVAILABLE = true;
 
 function toFiniteNumber(v){
   const n = Number(v);

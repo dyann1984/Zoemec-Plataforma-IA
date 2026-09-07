@@ -20,7 +20,13 @@ import { deriveGeometryFromApu } from '../domain/geometry3d.js';
 /* TechnicalModelProvider: unico proveedor real de esta fase. Envuelve
    geometry3d.js sin agregar logica propia -- el "proveedor" existe para que
    el consumidor (Technical3DViewer.jsx) trate ambos tipos de visualizacion
-   con la misma forma de llamada, sin acoplarse a un motor concreto. */
+   con la misma forma de llamada, sin acoplarse a un motor concreto.
+
+   Nota (Fase 1.5 de Levantamiento IA): Levantamiento IA NO usa este
+   proveedor ni forza sus datos a la forma de un `apu` -- tiene su propio
+   visor (src/features/levantamiento/Survey3DViewer.jsx) que consume
+   src/domain/levantamientoGeometry3d.js directamente. Este archivo se deja
+   exactamente como estaba antes de Fase 1.5, exclusivo de APU. */
 export const TechnicalModelProvider = Object.freeze({
   kind: 'MODELO_TECNICO',
   name: 'technical-parametric',

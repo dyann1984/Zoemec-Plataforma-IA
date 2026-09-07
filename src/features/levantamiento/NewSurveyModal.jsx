@@ -1,18 +1,23 @@
 import { useState } from 'react';
 import { ManualSurveyForm } from './ManualSurveyForm.jsx';
 import { Import3DSurveyForm } from './Import3DSurveyForm.jsx';
+import { PhoneScanSurveyForm } from './PhoneScanSurveyForm.jsx';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 import { SURVEY_IMPORT_FORMATS, isImportFormatAvailable } from '../../domain/levantamientoImporters.js';
+import { PHONE_SCAN_AVAILABLE } from '../../domain/levantamientoMedia.js';
 
 export function NewSurveyModal({ projectId, onClose, onCreate }){
   const { t: tr } = useI18n();
-  const [mode, setMode] = useState(null); // null (elegir metodo) | 'manual' | 'import3d'
+  const [mode, setMode] = useState(null); // null (elegir metodo) | 'manual' | 'import3d' | 'phonescan'
 
   if(mode === 'manual'){
     return <ManualSurveyForm projectId={projectId} onCancel={() => setMode(null)} onSave={onCreate} />;
   }
   if(mode === 'import3d'){
     return <Import3DSurveyForm projectId={projectId} onCancel={() => setMode(null)} onSave={onCreate} />;
+  }
+  if(mode === 'phonescan'){
+    return <PhoneScanSurveyForm projectId={projectId} onCancel={() => setMode(null)} onSave={onCreate} />;
   }
 
   const importFormatsLabel = SURVEY_IMPORT_FORMATS.map(f => f.label).join(', ');
@@ -41,11 +46,16 @@ export function NewSurveyModal({ projectId, onClose, onCreate }){
               <span>{tr('levantamiento.import3dOptionDesc', { formats: importFormatsLabel })}</span>
               <em className="badge-soon">{tr('levantamiento.comingSoon')}</em>
             </div>}
-        <div className="survey-source-option disabled" aria-disabled="true">
-          <b>{tr('levantamiento.mobileScanOptionTitle')}</b>
-          <span>{tr('levantamiento.mobileScanOptionDesc')}</span>
-          <em className="badge-soon">{tr('levantamiento.comingSoon')}</em>
-        </div>
+        {PHONE_SCAN_AVAILABLE
+          ? <button type="button" className="survey-source-option" onClick={() => setMode('phonescan')}>
+              <b>{tr('levantamiento.mobileScanOptionTitle')}</b>
+              <span>{tr('levantamiento.mobileScanOptionDesc')}</span>
+            </button>
+          : <div className="survey-source-option disabled" aria-disabled="true">
+              <b>{tr('levantamiento.mobileScanOptionTitle')}</b>
+              <span>{tr('levantamiento.mobileScanOptionDesc')}</span>
+              <em className="badge-soon">{tr('levantamiento.comingSoon')}</em>
+            </div>}
       </div>
     </div>
   </div>;

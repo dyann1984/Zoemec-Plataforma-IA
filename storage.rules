@@ -18,6 +18,24 @@ service firebase.storage {
       allow read, write: if isOwner(uid);
     }
 
+    // Fase 2B (Levantamiento IA -- Escanear con celular): video y foto en
+    // rutas separadas por kind a proposito, para poder aplicar un tope de
+    // tamano distinto a cada una sin inspeccionar el mimeType. Estos
+    // numeros deben coincidir a mano con MAX_SCAN_VIDEO_BYTES/
+    // MAX_SCAN_PHOTO_BYTES de src/domain/levantamientoMedia.js -- son
+    // defensa en profundidad, el limite real de UX ya lo aplica
+    // validateScanMediaFile antes de intentar subir.
+    // `create`/`update` (no `write` a secas) porque request.resource es null
+    // en un delete -- allow delete se separa aparte, sin chequeo de tamano.
+    match /levantamiento-media/{uid}/{surveyId}/video/{fileId}/{fileName} {
+      allow read, delete: if isOwner(uid);
+      allow create, update: if isOwner(uid) && request.resource.size < 200 * 1024 * 1024;
+    }
+    match /levantamiento-media/{uid}/{surveyId}/photo/{fileId}/{fileName} {
+      allow read, delete: if isOwner(uid);
+      allow create, update: if isOwner(uid) && request.resource.size < 10 * 1024 * 1024;
+    }
+
     match /public/{allPaths=**} {
       allow read: if true;
       allow write: if false;

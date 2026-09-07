@@ -138,16 +138,30 @@ export function makeEmptySpace({ name = '', length = 0, width = 0, height = 0 } 
    triangulos/factor de escala/fecha) cuando sourceType es IMPORT_3D --
    nunca el File ni el THREE.Object3D original, solo lo que
    buildSurveyImportMeta (src/domain/levantamientoImportConversion.js)
-   produce. null para levantamientos manuales, igual que siempre. */
-export function makeEmptySurvey({ projectId = null, name = '', description = '', sourceType = SURVEY_SOURCE_TYPE.MANUAL, importMeta = null } = {}){
+   produce. null para levantamientos manuales, igual que siempre.
+
+   scanMedia (Fase 2B, opcional, default []): array plano y JSON-safe de
+   descriptores de video/fotos capturados con la camara cuando sourceType es
+   MOBILE_SCAN -- cada item viene de buildScanMediaItem
+   (src/domain/levantamientoMedia.js), nunca el Blob original ni una
+   downloadURL firmada (esa se regenera al vuelo desde storagePath). []
+   para cualquier otro sourceType.
+
+   id (opcional): normalmente se genera aqui mismo. PhoneScanSurveyForm.jsx
+   es la unica excepcion -- necesita conocer el id del levantamiento ANTES
+   de guardarlo (para subir cada foto/video a Storage en cuanto se captura,
+   bajo esa misma ruta), asi que lo pre-genera con uid() y lo pasa aqui para
+   que el survey final quede con el id que ya usaron las rutas de Storage. */
+export function makeEmptySurvey({ id = null, projectId = null, name = '', description = '', sourceType = SURVEY_SOURCE_TYPE.MANUAL, importMeta = null, scanMedia = [] } = {}){
   const now = Date.now();
   return {
-    id: 'LEV-' + uid(),
+    id: id || ('LEV-' + uid()),
     projectId,
     name,
     description,
     sourceType,
     importMeta,
+    scanMedia,
     status: SURVEY_STATUS.DRAFT,
     spaces: [],
     createdAt: now,

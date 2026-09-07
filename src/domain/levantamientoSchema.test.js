@@ -27,6 +27,23 @@ test('makeEmptySurvey conserva importMeta intacto para un levantamiento importad
   assert.deepEqual(survey.importMeta, importMeta);
 });
 
+test('makeEmptySurvey sin scanMedia lo deja en arreglo vacio (regresion del flujo manual/import3d, Fase 2B)', () => {
+  const survey = makeEmptySurvey({ projectId: 'PRO-ABC', name: 'Levantamiento manual' });
+  assert.deepEqual(survey.scanMedia, []);
+});
+
+test('makeEmptySurvey conserva scanMedia intacto para un levantamiento escaneado con celular (Fase 2B)', () => {
+  const scanMedia = [{ id: 'MED-1', kind: 'video', storagePath: 'levantamiento-media/u1/LEV-X/video/f1/clip.mp4', mimeType: 'video/mp4', sizeBytes: 5000, durationSeconds: 30, hasAudio: false, capturedAt: 1700000000000 }];
+  const survey = makeEmptySurvey({ projectId: 'PRO-ABC', name: 'Levantamiento escaneado', sourceType: SURVEY_SOURCE_TYPE.MOBILE_SCAN, scanMedia });
+  assert.equal(survey.sourceType, SURVEY_SOURCE_TYPE.MOBILE_SCAN);
+  assert.deepEqual(survey.scanMedia, scanMedia);
+});
+
+test('makeEmptySurvey acepta un id pre-generado (necesario para Phone Scan: sube media a Storage antes de guardar el survey)', () => {
+  const survey = makeEmptySurvey({ id: 'LEV-PREGEN', projectId: 'PRO-ABC', name: 'Levantamiento escaneado' });
+  assert.equal(survey.id, 'LEV-PREGEN');
+});
+
 test('makeEmptySpace genera un id con prefijo SPC- y geometria en cero hasta recalcular', () => {
   const space = makeEmptySpace({ name: 'Local comercial', length: 8, width: 8, height: 3 });
   assert.match(space.id, /^SPC-/);

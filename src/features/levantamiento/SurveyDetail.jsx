@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { getDownloadURL, ref } from 'firebase/storage';
 import { SpaceCard } from './SpaceCard.jsx';
 import { SpaceFloorPlan2D } from './SpaceFloorPlan2D.jsx';
 import { Survey3DViewer } from './Survey3DViewer.jsx';
@@ -6,7 +7,9 @@ import { buildPlanoElementFromConcept } from '../../domain/levantamientoTakeoffB
 import { PageHead } from '../../components/ui/PageElements.jsx';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 import { SURVEY_STATUS, SURVEY_SOURCE_TYPE, makeEmptySpace } from '../../domain/levantamientoSchema.js';
+import { SCAN_MEDIA_KIND } from '../../domain/levantamientoMedia.js';
 import { aggregateSurveyTotals, recomputeSurvey } from '../../lib/levantamientoCalc.js';
+import { storage } from '../../firebase.js';
 
 const STATUS_I18N_KEY = {
   [SURVEY_STATUS.DRAFT]: 'statusDraft',
@@ -25,8 +28,16 @@ function formatBytes(bytes){
   return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
-const TABS = ['datos', 'plano2d', 'vista3d', 'cuantificacion'];
-const TAB_I18N_KEY = { datos: 'tabData', plano2d: 'tabPlan2d', vista3d: 'tabView3d', cuantificacion: 'tabQuantification' };
+function formatDuration(seconds){
+  if(!Number.isFinite(seconds)) return '';
+  const s = Math.max(0, Math.round(seconds));
+  const mm = Math.floor(s / 60).toString().padStart(2, '0');
+  const ss = (s % 60).toString().padStart(2, '0');
+  return `${mm}:${ss}`;
+}
+
+const BASE_TABS = ['datos', 'plano2d', 'vista3d', 'cuantificacion'];
+const TAB_I18N_KEY = { datos: 'tabData', plano2d: 'tabPlan2d', vista3d: 'tabView3d', cuantificacion: 'tabQuantification', multimedia: 'phoneScanTabMultimedia' };
 
 /* Vista "Abrir" de un levantamiento ya guardado: permite editar nombre,
    espacios, puertas y ventanas, y persiste con onChange (que en
@@ -42,9 +53,28 @@ export function SurveyDetail({ survey, onBack, onChange, onSendToApu, currentUse
   const { t: tr } = useI18n();
   const [activeTab, setActiveTab] = useState(initialTab);
   const [activeSpaceId, setActiveSpaceId] = useState(survey.spaces[0]?.id || null);
+  const [mediaUrls, setMediaUrls] = useState({});
   const totals = aggregateSurveyTotals(survey);
   const statusLabel = tr(`levantamiento.${STATUS_I18N_KEY[survey.status] || 'statusDraft'}`);
   const activeSpace = survey.spaces.find(s => s.id === activeSpaceId) || survey.spaces[0] || null;
+  const scanMedia = survey.scanMedia || [];
+  const tabs = scanMedia.length ? [...BASE_TABS, 'multimedia'] : BASE_TABS;
+
+  /* La downloadURL nunca se persiste (ver hallazgo del limite de 950KB de
+     saveCloud en el plan de Fase 2B) -- se resuelve al vuelo solo cuando el
+     usuario abre la pestana Multimedia, una vez por item. Si el objeto ya
+     no existe en Storage (borrado externamente), queda sin URL y la tarjeta
+     lo indica en vez de romper el resto de la pestana. */
+  useEffect(() => {
+    if(activeTab !== 'multimedia') return;
+    scanMedia.forEach(item => {
+      if(mediaUrls[item.id] !== undefined) return;
+      getDownloadURL(ref(storage, item.storagePath))
+        .then(url => setMediaUrls(prev => ({ ...prev, [item.id]: url })))
+        .catch(() => setMediaUrls(prev => ({ ...prev, [item.id]: null })));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, survey.id]);
 
   const persist = (next) => onChange(recomputeSurvey({ ...next, status: next.spaces.length ? SURVEY_STATUS.PROCESSED : SURVEY_STATUS.DRAFT, updatedAt: Date.now() }));
 
@@ -89,7 +119,7 @@ export function SurveyDetail({ survey, onBack, onChange, onSendToApu, currentUse
     </div>
 
     <div className="survey-tabs" role="tablist">
-      {TABS.map(t => <button key={t} type="button" role="tab" aria-selected={activeTab === t} className={`survey-tab${activeTab === t ? ' active' : ''}`} onClick={() => setActiveTab(t)}>{tr(`levantamiento.${TAB_I18N_KEY[t]}`)}</button>)}
+      {tabs.map(t => <button key={t} type="button" role="tab" aria-selected={activeTab === t} className={`survey-tab${activeTab === t ? ' active' : ''}`} onClick={() => setActiveTab(t)}>{tr(`levantamiento.${TAB_I18N_KEY[t]}`)}</button>)}
     </div>
 
     {activeTab === 'datos' && <div className="panel survey-form">
@@ -145,6 +175,30 @@ export function SurveyDetail({ survey, onBack, onChange, onSendToApu, currentUse
             </tr>)}
           </tbody>
         </table>}
+    </div>}
+
+    {activeTab === 'multimedia' && <div className="panel">
+      <div className="phonescan-disclaimer">{tr('levantamiento.phoneScanDisclaimer')}</div>
+      {!scanMedia.length
+        ? <p className="muted">{tr('levantamiento.phoneScanNoMediaMsg')}</p>
+        : <div className="phonescan-thumb-grid">
+          {scanMedia.map(item => {
+            const url = mediaUrls[item.id];
+            return <div key={item.id} className="phonescan-thumb">
+              {url === undefined
+                ? <div className="phonescan-thumb-progress" style={{ position: 'static', aspectRatio: '1/1' }}>{tr('levantamiento.phoneScanUploadingMsg')}</div>
+                : url === null
+                  ? <div className="phonescan-thumb-progress" style={{ position: 'static', aspectRatio: '1/1' }}>{tr('levantamiento.phoneScanUploadErrorMsg')}</div>
+                  : item.kind === SCAN_MEDIA_KIND.VIDEO
+                    ? <video className="phonescan-thumb-media" src={url} controls />
+                    : <img className="phonescan-thumb-media" src={url} alt="" />}
+              <div className="phonescan-thumb-meta">
+                <span>{item.kind === SCAN_MEDIA_KIND.VIDEO ? formatDuration(item.durationSeconds) : tr('levantamiento.phoneScanKindPhotoLabel')}</span>
+                <span>{formatBytes(item.sizeBytes)}</span>
+              </div>
+            </div>;
+          })}
+        </div>}
     </div>}
   </section>;
 }

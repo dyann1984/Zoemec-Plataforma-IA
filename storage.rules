@@ -27,13 +27,23 @@ service firebase.storage {
     // validateScanMediaFile antes de intentar subir.
     // `create`/`update` (no `write` a secas) porque request.resource es null
     // en un delete -- allow delete se separa aparte, sin chequeo de tamano.
+    // contentType.matches(...) (hallazgo de auditoria P1): ni el cliente ni
+    // estas reglas validaban antes el tipo de archivo, solo el tamano -- un
+    // usuario autenticado podia subir cualquier tipo de archivo (ej. HTML)
+    // a su propia ruta llamando al SDK/REST de Storage directo, sin pasar
+    // por validateScanMediaFile. Se restringe aqui, en la unica capa que no
+    // se puede saltar desde el cliente.
     match /levantamiento-media/{uid}/{surveyId}/video/{fileId}/{fileName} {
       allow read, delete: if isOwner(uid);
-      allow create, update: if isOwner(uid) && request.resource.size < 200 * 1024 * 1024;
+      allow create, update: if isOwner(uid)
+        && request.resource.size < 200 * 1024 * 1024
+        && request.resource.contentType.matches('video/.*');
     }
     match /levantamiento-media/{uid}/{surveyId}/photo/{fileId}/{fileName} {
       allow read, delete: if isOwner(uid);
-      allow create, update: if isOwner(uid) && request.resource.size < 10 * 1024 * 1024;
+      allow create, update: if isOwner(uid)
+        && request.resource.size < 10 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
     }
 
     match /public/{allPaths=**} {

@@ -74,17 +74,50 @@ export function rowImporte(kind, row){
    sobre el acumulado anterior (nunca todos sobre el costo directo). Extraida
    de calcAPU para que el motor v2 (renglones-objeto, ver calcAPUv2 mas abajo)
    use exactamente la misma formula: una sola cascada, dos formas de sumar el
-   costo directo segun el esquema de renglones (v1 arrays / v2 objetos). */
-export function applyCascade(direct, pcts = {}){
+   costo directo segun el esquema de renglones (v1 arrays / v2 objetos).
+
+   Base porcentual EXACTA que ya usaba el motor (documentado antes de tocar
+   nada, regla 3 del mensaje de la sesion 2026-09-07 -- "primero documenta
+   sobre que base calcula cada porcentaje"):
+     Indirectos         = costoDirecto x (indCampo + indOficina)%
+     Financiamiento     = (costoDirecto + Indirectos) x finance%
+     Utilidad           = (costoDirecto + Indirectos + Financiamiento) x utility%
+     Cargos adicionales = (costoDirecto + Indirectos + Financiamiento + Utilidad) x cargos%
+     Precio unitario (sin IVA) = suma de todo lo anterior
+     IVA (informativo, NO se suma a `total`) = Precio unitario x iva%
+
+   gastosComplementariosIncluidos (P1 autorizado 2026-09-07, ver
+   domain/apuGastosComplementarios.js#cuentaParaPrecio -- el llamador YA
+   filtro ahi lo que no cuenta, aqui solo se recibe el total a incorporar):
+   el UNICO cambio de formula es que la cascada arranca de una "Base de
+   ejecucion" en vez de partir directo del costo directo. El ORDEN y la
+   formula de cada rubro siguen siendo EXACTAMENTE los de arriba, solo que
+   toda mencion a "costoDirecto" en esas formulas pasa a ser "Base de
+   ejecucion":
+     Base de ejecucion = Costo directo + Gastos complementarios (incluidos)
+     Indirectos         = Base de ejecucion x (indCampo + indOficina)%
+     Financiamiento     = (Base de ejecucion + Indirectos) x finance%
+     Utilidad           = (Base de ejecucion + Indirectos + Financiamiento) x utility%
+     Cargos adicionales = (Base de ejecucion + ... + Utilidad) x cargos%
+   baseEjecucion se expone en el resultado para trazabilidad independiente
+   (nunca se pliega en silencio dentro de "direct"): un reporte/export puede
+   mostrar Costo directo, + Gastos complementarios, = Base de ejecucion como
+   3 lineas separadas. Parametro opcional con default 0: un APU v1 (calcAPU,
+   nunca le pasa este argumento) y cualquier APU v2 sin gastosComplementarios
+   dan baseEjecucion === costoDirecto -- exactamente el mismo resultado que
+   antes de este cambio (ver apuCalc.test.js, regresion con APU historico). */
+export function applyCascade(direct, pcts = {}, gastosComplementariosIncluidos = 0){
   const safeDirect = toSafeNonNegativeNumber(direct);
+  const safeGastos = toSafeNonNegativeNumber(gastosComplementariosIncluidos);
+  const baseEjecucion = safeDirect + safeGastos;
   const indPct = toSafeNonNegativeNumber(pcts.indCampo) + toSafeNonNegativeNumber(pcts.indOficina);
-  const indirect = safeDirect * indPct / 100;
-  const finance = (safeDirect + indirect) * toSafeNonNegativeNumber(pcts.finance) / 100;
-  const utility = (safeDirect + indirect + finance) * toSafeNonNegativeNumber(pcts.utility) / 100;
-  const cargos = (safeDirect + indirect + finance + utility) * toSafeNonNegativeNumber(pcts.cargos) / 100;
-  const pu = safeDirect + indirect + finance + utility + cargos;
+  const indirect = baseEjecucion * indPct / 100;
+  const finance = (baseEjecucion + indirect) * toSafeNonNegativeNumber(pcts.finance) / 100;
+  const utility = (baseEjecucion + indirect + finance) * toSafeNonNegativeNumber(pcts.utility) / 100;
+  const cargos = (baseEjecucion + indirect + finance + utility) * toSafeNonNegativeNumber(pcts.cargos) / 100;
+  const pu = baseEjecucion + indirect + finance + utility + cargos;
   const iva = pu * toSafeNonNegativeNumber(pcts.iva) / 100;
-  return { indirect, finance, utility, cargos, pu, iva, total: pu };
+  return { gastosComplementarios: safeGastos, baseEjecucion, indirect, finance, utility, cargos, pu, iva, total: pu };
 }
 
 /* Calculo completo de un APU: materiales, mano de obra, equipo, herramienta
@@ -254,10 +287,39 @@ export function calcSeguridadRow(row = {}, ctx = {}){
   return cantidad * precioUnitario; // POR_UNIDAD_OBRA
 }
 
+/* Gasto complementario de ejecucion (viaticos, alimentacion, transporte,
+   hospedaje, casetas...): importe = cantidad x precioUnitario, formula
+   minima determinista (regla 5 del mensaje de la sesion) -- "frecuencia" es
+   puramente descriptiva, nunca multiplica. Solo cuenta para el precio si
+   cuentaParaPrecio() lo permite: estado==='ACEPTADO' (nunca SUGERIDO/
+   DESCARTADO/JUSTIFICADO -- una sugerencia del detector jamas se suma sola,
+   regla 6) Y incluidoEnIndirectos!==true (ya contemplado en el % de
+   indirectos, se muestra pero no se duplica, regla 4). Definida aqui en vez
+   de importada de domain/apuGastosComplementarios.js para mantener este
+   modulo sin dependencias (mismo criterio ya usado para RESOURCE_INTEGRATION
+   arriba) -- misma logica exacta en ambos lados, ver ese archivo para la
+   version usada por UI/exportadores. */
+function calcGastoComplementarioRow(row = {}){
+  const estado = row?.estado || 'ACEPTADO';
+  if(estado !== 'ACEPTADO') return 0;
+  if(row?.incluidoEnIndirectos === true) return 0;
+  const cantidad = toSafeNonNegativeNumber(row?.cantidad);
+  const precioUnitario = toSafeNonNegativeNumber(row?.precioUnitario);
+  return cantidad * precioUnitario;
+}
+
 /* Calculo completo de un APU en esquema v2: agrega seguridad al costo
    directo (no existia en v1) y soporta herramienta menor por % de mano de
    obra o por detalle de renglones segun apu.herramientaMenor.modo. Cuando hay
-   cantidadObra, agrega importeTotal = precio unitario x cantidad de obra. */
+   cantidadObra, agrega importeTotal = precio unitario x cantidad de obra.
+
+   gastosComplementarios (P1 autorizado 2026-09-07): SI afecta el precio,
+   via applyCascade#baseEjecucion (Costo directo + Gastos complementarios
+   incluidos) -- a diferencia de costosCampo, que nunca se lee aqui.
+   apu.gastosComplementarios ausente/vacio (todo APU existente antes de
+   este cambio, y todo APU nuevo sin registros) da total 0: baseEjecucion
+   === direct, mismo resultado exacto que antes (ver apuCalc.test.js,
+   regresion con un APU historico completo). */
 export function calcAPUv2(apu = {}){
   // Contexto compartido por renglones POR_LOTE: la cantidad contractual total
   // del concepto (no de cada renglon) es lo que reparte un costo fijo.
@@ -272,8 +334,9 @@ export function calcAPUv2(apu = {}){
   const herramienta = hm.modo === 'detalle'
     ? sum(hm.detalle, calcHerramientaDetalleRow)
     : mo * toSafeNonNegativeNumber(hm.porcentaje) / 100;
+  const gastosComplementariosIncluidos = sum(apu.gastosComplementarios, calcGastoComplementarioRow);
   const direct = mat + mo + equipo + herramienta + consumibles + seguridad;
-  const cascade = applyCascade(direct, apu.factores || {});
+  const cascade = applyCascade(direct, apu.factores || {}, gastosComplementariosIncluidos);
   const cantidadObra = toSafeNonNegativeNumber(apu.cantidadObra);
   const importeTotal = cantidadObra > 0 ? cascade.pu * cantidadObra : 0;
   return { mat, mo, equipo, herramienta, consumibles, seguridad, direct, ...cascade, importeTotal };

@@ -201,6 +201,11 @@ export function makeEmptyAPUv2(){
     // [] significaria "se corrio y no encontro nada" -- son estados distintos.
     costosCampo: [],
     normativa: [],
+    // Gastos Complementarios de Ejecucion (P1 autorizado 2026-09-07, ver
+    // src/domain/apuGastosComplementarios.js): a diferencia de costosCampo,
+    // SI afecta el precio (calcAPUv2/apuCalc.js#applyCascade), pero nace
+    // vacio igual que el resto -- 100% captura manual, nunca la IA.
+    gastosComplementarios: [],
     riesgosNoContemplados: null,
     // Factores configurables (misma fuente de verdad que v1: APU_DEFAULT_FACTORS)
     factores: {
@@ -363,6 +368,10 @@ export function migrateLegacyApuToV2(apuV1 = {}){
     // secciones -- default seguro [], nunca se reconstruyen retroactivamente.
     costosCampo: Array.isArray(apuV1.costosCampo) ? apuV1.costosCampo : [],
     normativa: Array.isArray(apuV1.normativa) ? apuV1.normativa : [],
+    // gastosComplementarios ?? [] (regla 2 del mensaje de la sesion): un APU
+    // v1/historico nunca tuvo esta seccion -- default seguro [], calcAPUv2
+    // da baseEjecucion === direct (mismo precio exacto que antes).
+    gastosComplementarios: Array.isArray(apuV1.gastosComplementarios) ? apuV1.gastosComplementarios : [],
     riesgosNoContemplados: apuV1.riesgosNoContemplados || null,
     factores: {
       indCampo: Number(apuV1.indCampo ?? APU_DEFAULT_FACTORS.indCampo),
@@ -658,6 +667,9 @@ export function normalizeAIApuToV2(raw = {}, fallbackConcept = '', options = {})
     // nuevo (ver makeEmptyAPUv2).
     costosCampo: [],
     normativa: [],
+    // gastosComplementarios: misma captura 100% manual, la IA nunca los
+    // propone (ver domain/apuGastosComplementarios.js).
+    gastosComplementarios: [],
     riesgosNoContemplados: null,
     factores: {
       indCampo: coerceNumber(raw.indCampo, APU_DEFAULT_FACTORS.indCampo),

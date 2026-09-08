@@ -36,13 +36,28 @@ function withNormativa(apu){
   return {
     ...apu,
     normativa: [
-      { id: 'NRM-1', nombre: 'NOM-031-STPS', clave: 'NOM-031', organismoEmisor: 'STPS', jurisdiccion: 'Federal', version: '2011', fechaPublicacion: '2011-06-30', vigencia: 'Vigente', fuente: 'DOF', articulo: 'Cap. 5', requisito: 'EPP basico obligatorio en obra', impactoTecnico: 'Requiere casco/botas/lentes', impactoEconomico: 'Bajo', requiereMaterial: false, requiereEPP: true, requiereProcedimiento: false, requierePrueba: false, requiereDocumentacion: false, estadoRevision: 'PENDIENTE', observaciones: '' },
-      { id: 'NRM-2', nombre: 'Reglamento de construccion local', clave: 'RCL-2020', organismoEmisor: 'Municipio', jurisdiccion: 'Local', version: '2020', fechaPublicacion: '2020-01-01', vigencia: 'Por verificar', fuente: 'Gaceta municipal', articulo: 'Art. 12', requisito: 'Aviso de obra menor', impactoTecnico: 'Ninguno', impactoEconomico: 'Costo de tramite', requiereMaterial: false, requiereEPP: false, requiereProcedimiento: false, requierePrueba: false, requiereDocumentacion: true, estadoRevision: 'EN_REVISION', observaciones: 'Verificar con residente' }
+      { id: 'NRM-1', nombre: 'NOM-031-STPS', clave: 'NOM-031', organismoEmisor: 'STPS', jurisdiccion: 'Federal', pais: 'Mexico', estadoGeografico: 'Jalisco', municipio: 'Guadalajara', tipoObra: 'Edificacion', especialidad: 'Seguridad e higiene', version: '2011', fechaPublicacion: '2011-06-30', vigencia: 'Vigente', fuente: 'DOF', articulo: 'Cap. 5', descripcion: 'Condiciones de seguridad e higiene en obras de construccion', estadoValidacion: 'VERIFICADO', requisito: 'EPP basico obligatorio en obra', impactoTecnico: 'Requiere casco/botas/lentes', impactoEconomico: 'Bajo', requiereMaterial: false, requiereEPP: true, requiereProcedimiento: false, requierePrueba: false, requiereDocumentacion: false, estadoRevision: 'PENDIENTE', observaciones: '' },
+      { id: 'NRM-2', nombre: 'Reglamento de construccion local', clave: 'RCL-2020', organismoEmisor: 'Municipio', jurisdiccion: 'Local', pais: '', estadoGeografico: '', municipio: '', tipoObra: '', especialidad: '', version: '2020', fechaPublicacion: '2020-01-01', vigencia: 'Por verificar', fuente: '', articulo: 'Art. 12', descripcion: '', estadoValidacion: 'PENDIENTE_VALIDAR', requisito: 'Aviso de obra menor', impactoTecnico: 'Ninguno', impactoEconomico: 'Costo de tramite', requiereMaterial: false, requiereEPP: false, requiereProcedimiento: false, requierePrueba: false, requiereDocumentacion: true, estadoRevision: 'EN_REVISION', observaciones: 'Verificar con residente' }
+    ]
+  };
+}
+
+// Escenario QA exacto de la sesion (2026-09-07): comida 6 x $150 = $900,
+// casetas 4 x $240 = $960, hospedaje 2 x $850 = $1,700 -> subtotal $3,560.
+// estado:'ACEPTADO' -- solo asi cuenta para el precio (regla 6).
+function withGastosComplementarios(apu){
+  return {
+    ...apu,
+    gastosComplementarios: [
+      { id: 'GC-1', concepto: 'Comida cuadrilla', categoria: 'ALIMENTACION', unidad: 'servicio', cantidad: 6, precioUnitario: 150, frecuencia: 'DIARIO', justificacion: 'Alimentacion de 6 personas por jornada', fuente: 'Cotizacion local', estado: 'ACEPTADO', incluidoEnIndirectos: false },
+      { id: 'GC-2', concepto: 'Casetas de peaje', categoria: 'CASETAS', unidad: 'viaje', cantidad: 4, precioUnitario: 240, frecuencia: 'POR_VIAJE', justificacion: '4 viajes de traslado de material', fuente: 'Tarifario CAPUFE', estado: 'ACEPTADO', incluidoEnIndirectos: false },
+      { id: 'GC-3', concepto: 'Hospedaje cuadrilla', categoria: 'HOSPEDAJE', unidad: 'noche', cantidad: 2, precioUnitario: 850, frecuencia: 'POR_TRABAJADOR', justificacion: '2 trabajadores foraneos', fuente: 'Cotizacion hotel', estado: 'ACEPTADO', incluidoEnIndirectos: false }
     ]
   };
 }
 
 const rawText = doc => Buffer.from(doc.output('arraybuffer')).toString('latin1');
+const close = (a, b, eps = 1e-6) => Math.abs(a - b) < eps;
 
 // ---- PDF individual ----
 
@@ -84,6 +99,45 @@ test('PDF individual: APU sin riesgosNoContemplados (nunca analizado) nunca impr
   assert.ok(!raw.includes('RIESGOS Y COSTOS NO CONTEMPLADOS'), 'la seccion no debe aparecer si el analisis nunca se corrio (bajo demanda)');
 });
 
+test('PDF individual: Gastos Complementarios de Ejecucion aparecen con el concepto, subtotal $3,560 y afectan el precio (Base de ejecucion, no quedan solo informativos)', () => {
+  const sinGastos = goldenApu();
+  const conGastos = withGastosComplementarios(goldenApu());
+  const finalizadoSin = finalizeProfessionalAPU(sinGastos);
+  const finalizadoCon = finalizeProfessionalAPU(conGastos);
+  assert.ok(finalizadoCon.calculated.pu > finalizadoSin.calculated.pu, 'el precio unitario debe subir al incluir gastos complementarios');
+  assert.equal(finalizadoCon.calculated.gastosComplementarios, 3560);
+  assert.ok(close(finalizadoCon.calculated.baseEjecucion, finalizadoCon.calculated.direct + 3560));
+  const { doc } = exportAPUPdfV2(conGastos, { save: false });
+  const raw = rawText(doc);
+  assert.match(raw, /Comida cuadrilla/);
+  assert.match(raw, /Casetas de peaje/);
+  assert.match(raw, /Hospedaje cuadrilla/);
+  assert.match(raw, /3,?560/);
+});
+
+test('PDF individual: sin Gastos Complementarios, muestra el aviso de "sin registros"', () => {
+  const { doc } = exportAPUPdfV2(goldenApu(), { save: false });
+  const raw = rawText(doc);
+  assert.match(raw, /Sin gastos complementarios de ejecuci/);
+});
+
+test('PDF individual: un gasto SUGERIDO (no aceptado) aparece en la tabla para trazabilidad pero no cuenta para el precio', () => {
+  const apu = { ...goldenApu(), gastosComplementarios: [{ id: 'GC-S', concepto: 'Hospedaje potencial detectado', categoria: 'HOSPEDAJE', cantidad: 0, precioUnitario: 0, estado: 'SUGERIDO' }] };
+  const finalizado = finalizeProfessionalAPU(apu);
+  assert.equal(finalizado.calculated.gastosComplementarios, 0);
+  const { doc } = exportAPUPdfV2(apu, { save: false });
+  const raw = rawText(doc);
+  assert.match(raw, /Hospedaje potencial detectado/);
+});
+
+test('PDF individual: Normativa muestra pais/estado/municipio, estado de validacion, y el aviso de REQUIERE VALIDACION NORMATIVA cuando falta fuente', () => {
+  const { doc } = exportAPUPdfV2(withNormativa(goldenApu()), { save: false });
+  const raw = rawText(doc);
+  assert.match(raw, /Jalisco/);
+  assert.match(raw, /Guadalajara/);
+  assert.match(raw, /Requiere validaci.n normativa/);
+});
+
 // ---- Excel individual ----
 
 test('Excel individual: exportAPUExcelV2 sigue generando las hojas reales, con el contenido de Costos de Campo/Normativa presente en la hoja del concepto', async () => {
@@ -97,14 +151,43 @@ test('Excel individual: exportAPUExcelV2 sigue generando las hojas reales, con e
   assert.match(flatText, /NOM-031-STPS/);
 });
 
+test('Excel individual: QA $3,560 -- Gastos Complementarios aparecen en la hoja del concepto con el subtotal correcto', async () => {
+  const apu = withGastosComplementarios(goldenApu());
+  const sheets = await exportAPUExcelV2(apu, { writeXlsxFileImpl: async () => {} });
+  const FIXED_SHEETS = new Set(['PORTADA', 'RESUMEN', 'CONTROL_REVISION', 'PARAMETROS', 'FUENTES_PRECIOS']);
+  const conceptSheet = sheets.find(s => !FIXED_SHEETS.has(s.sheet));
+  const flatText = JSON.stringify(conceptSheet.rows);
+  assert.match(flatText, /Comida cuadrilla/);
+  assert.match(flatText, /Casetas de peaje/);
+  assert.match(flatText, /Hospedaje cuadrilla/);
+  assert.match(flatText, /SUBTOTAL INCLUIDO EN EL PRECIO/);
+  assert.match(flatText, /3,?560/);
+});
+
 // ---- Compatibilidad con APUs antiguos (Parte K) ----
 
-test('Compatibilidad: un APU v1 (legacy) migrado a v2 nunca trae costosCampo/normativa undefined -- defaults seguros []', () => {
+test('Compatibilidad: un APU v1 (legacy) migrado a v2 nunca trae costosCampo/normativa/gastosComplementarios undefined -- defaults seguros []', () => {
   const legacy = { id: 'APU-LEGACY-1', clave: 'APU-LEGACY-1', concept: 'Concepto legacy', unit: 'm²', materials: [], labor: [], equipment: [] };
   const migrated = migrateLegacyApuToV2(legacy);
   assert.deepEqual(migrated.costosCampo, []);
   assert.deepEqual(migrated.normativa, []);
+  assert.deepEqual(migrated.gastosComplementarios, []);
   assert.equal(migrated.riesgosNoContemplados, null);
+});
+
+// Regla 2/12 del mensaje de la sesion: un APU real "anterior" (con recursos,
+// sin gastosComplementarios porque nunca existio el campo) debe calcular
+// EXACTAMENTE el mismo precio antes y despues de este cambio.
+test('REGRESION: un APU historico real (goldenApu, sin gastosComplementarios) calcula el mismo precio que un APU identico con gastosComplementarios:[] explicito', () => {
+  const historico = goldenApu();
+  delete historico.gastosComplementarios;
+  const conArrayVacioExplicito = { ...goldenApu(), gastosComplementarios: [] };
+  const antes = finalizeProfessionalAPU(historico);
+  const despues = finalizeProfessionalAPU(conArrayVacioExplicito);
+  assert.equal(antes.calculated.pu, despues.calculated.pu);
+  assert.equal(antes.calculated.direct, despues.calculated.direct);
+  assert.equal(antes.calculated.baseEjecucion, antes.calculated.direct, 'sin gastos, baseEjecucion === costo directo');
+  assert.equal(antes.calculated.importeTotal, despues.calculated.importeTotal);
 });
 
 test('Compatibilidad: exportAPUPdfV2/exportAPUExcelV2 de un APU legacy migrado (sin los campos nuevos) nunca truenan', async () => {
@@ -115,10 +198,11 @@ test('Compatibilidad: exportAPUPdfV2/exportAPUExcelV2 de un APU legacy migrado (
   await assert.doesNotReject(() => exportAPUExcelV2(migrated, { writeXlsxFileImpl: async () => {} }));
 });
 
-test('Compatibilidad: un APU nuevo (makeEmptyAPUv2) trae costosCampo/normativa=[] y riesgosNoContemplados=null desde el inicio', () => {
+test('Compatibilidad: un APU nuevo (makeEmptyAPUv2) trae costosCampo/normativa/gastosComplementarios=[] y riesgosNoContemplados=null desde el inicio', () => {
   const apu = makeEmptyAPUv2();
   assert.deepEqual(apu.costosCampo, []);
   assert.deepEqual(apu.normativa, []);
+  assert.deepEqual(apu.gastosComplementarios, []);
   assert.equal(apu.riesgosNoContemplados, null);
 });
 
@@ -173,6 +257,31 @@ test('Dossier Excel: sigue exportando correctamente y agrega hojas COSTOS_CAMPO/
   assert.ok(names.includes('COSTOS_CAMPO'));
   assert.ok(names.includes('COSTO_REAL'));
   assert.ok(names.includes('NORMATIVA'));
+});
+
+test('Dossier PDF/Excel: QA $3,560 -- Gastos Complementarios aparecen en ambos entregables del dossier', async () => {
+  const apu = withGastosComplementarios(goldenApu());
+  const pdfResult = await exportApuAuditDossierPdf({ apu, apuId: apu.id, save: false });
+  const rawPdf = rawText(pdfResult.doc);
+  assert.match(rawPdf, /Comida cuadrilla/);
+  assert.match(rawPdf, /3,?560/);
+
+  const { sheets } = await exportApuAuditDossierExcel({ apu, apuId: apu.id, fileName: 'x.xlsx', writeXlsxFileImpl: async () => {} });
+  const names = sheets.map(s => s.sheet);
+  assert.ok(names.includes('GASTOS_COMPLEMENTARIOS'));
+  const gcSheet = sheets.find(s => s.sheet === 'GASTOS_COMPLEMENTARIOS');
+  const flatText = JSON.stringify(gcSheet.rows);
+  assert.match(flatText, /Comida cuadrilla/);
+  assert.match(flatText, /Casetas de peaje/);
+  assert.match(flatText, /Hospedaje cuadrilla/);
+  assert.match(flatText, /3,?560/);
+});
+
+test('Dossier Excel: sin Gastos Complementarios, nunca crea la hoja GASTOS_COMPLEMENTARIOS (regla "no crear hoja vacia")', async () => {
+  const apu = goldenApu();
+  const { sheets } = await exportApuAuditDossierExcel({ apu, apuId: apu.id, fileName: 'x.xlsx', writeXlsxFileImpl: async () => {} });
+  const names = sheets.map(s => s.sheet);
+  assert.ok(!names.includes('GASTOS_COMPLEMENTARIOS'));
 });
 
 test('Dossier Excel: sin Costos de Campo/Riesgos, nunca crea esas hojas (regla "no crear hoja vacia"), pero NORMATIVA si aparece con el texto de pendiente', async () => {

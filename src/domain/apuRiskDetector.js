@@ -78,6 +78,45 @@ const RULES = [
       incluirEnAPU: false, confianza: 'BAJA'
     };
   },
+  // RIESGO NORMATIVO (regla 8 del mensaje de la sesion 2026-09-07): dispara
+  // cuando SI hay registros de normativa pero al menos uno quedo sin fuente
+  // verificable o marcado estadoValidacion:PENDIENTE_VALIDAR -- distinto de
+  // "normativa_ausente" (nada registrado). Diferencia explicita pedida por
+  // la regla 8: esto es SIEMPRE "normativa sugerida por revisar", nunca se
+  // presenta ni se interpreta como "incumplimiento confirmado" -- el motor
+  // de riesgos solo describe ausencia/estado de validacion, jamas dictamina
+  // cumplimiento legal (mismo principio que domain/apuNormativa.js).
+  apu => {
+    const normativaRows = apu.normativa || [];
+    if(normativaRows.length === 0) return null;
+    const pendientes = normativaRows.filter(n => n?.estadoValidacion === 'PENDIENTE_VALIDAR' || !String(n?.fuente || '').trim());
+    if(pendientes.length === 0) return null;
+    return {
+      id: 'riesgo_normativo_pendiente_validar', severidad: RISK_SEVERITY.MEDIUM,
+      hallazgo: `RIESGO NORMATIVO: ${pendientes.length} de ${normativaRows.length} registro(s) de normativa sigue(n) pendiente de validar o sin fuente verificable.`,
+      evidencia: pendientes.slice(0, 5).map(n => n?.nombre || n?.clave || '(sin nombre)').join('; '),
+      impactoPotencial: 'Esto es una normativa sugerida por revisar, NO una confirmación de incumplimiento: sin fuente confirmada no debe tratarse como aplicable con certeza -- podría faltar o sobrar alcance/costo según se confirme.',
+      recomendacion: 'Confirmar fuente y vigencia real de cada norma pendiente (estadoValidacion=VERIFICADO exige una fuente ya capturada), o marcarla como no aplicable si corresponde. Nunca se marca VERIFICADO sin fuente.',
+      incluirEnAPU: false, confianza: 'MEDIA'
+    };
+  },
+  // Gastos Complementarios de Ejecucion (regla 6 del mensaje de la sesion):
+  // mismo patron que costos_campo_ausentes, pero para el arreglo que SI
+  // afecta el precio -- ausencia total es la senal que el usuario puede
+  // convertir en una fila real con "Agregar al APU" (estado inicial
+  // SUGERIDO, ver domain/apuGastosComplementarios.js). El detector NUNCA
+  // agrega el renglon por su cuenta, solo senala la ausencia.
+  apu => {
+    if((apu.gastosComplementarios || []).length > 0) return null;
+    return {
+      id: 'gastos_complementarios_ausentes', severidad: RISK_SEVERITY.LOW,
+      hallazgo: 'No se han registrado Gastos Complementarios de Ejecución (alimentación, viáticos, hospedaje, transporte, fletes, permisos, etc.).',
+      evidencia: 'apu.gastosComplementarios está vacío.',
+      impactoPotencial: 'Gastos reales de ejecución (viáticos, hospedaje, transporte, permisos, pruebas de laboratorio) podrían quedar fuera del precio final.',
+      recomendacion: 'Si corresponde, use "Agregar como gasto sugerido" para crear un registro inicial (estado sugerido) en Gastos Complementarios de Ejecución y complételo con cantidad/precio real antes de aceptarlo.',
+      incluirEnAPU: false, confianza: 'BAJA'
+    };
+  },
   apu => {
     const tieneRecursos = (apu.materials || []).length > 0 || (apu.equipment || []).length > 0;
     if(!tieneRecursos || (apu.consumables || []).length > 0) return null;

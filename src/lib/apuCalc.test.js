@@ -378,3 +378,180 @@ test('findApuNumericIssuesV2 detecta precio unitario final cero o negativo', () 
   const issues = findApuNumericIssuesV2({});
   assert.ok(issues.some(i => i.code === 'zero_or_negative_price'));
 });
+
+/* ---------- gastosComplementarios / Base de ejecucion (P1 autorizado 2026-09-07) ----------
+   Reglas obligatorias de la sesion:
+   2. Compatibilidad absoluta: un APU historico sin gastosComplementarios
+      debe dar EXACTAMENTE el mismo precio que antes de este cambio.
+   3. Trazabilidad independiente: Costo directo + Gastos complementarios =
+      Base de ejecucion, expuesta como campo propio (nunca oculta dentro de
+      "direct"), y la cascada existente corre sobre esa base sin reordenar
+      ni inventar formulas nuevas.
+   4. Nunca doble contabilizacion: incluidoEnIndirectos:true se muestra pero
+      no se suma; la decision es siempre explicita, nunca automatica.
+   5. Formula individual determinista: cantidad x precioUnitario, la
+      frecuencia nunca multiplica sola.
+   6. Una sugerencia (estado SUGERIDO) del detector nunca suma hasta que una
+      accion explicita la vuelve ACEPTADO.
+   11. QA matematico: reconciliacion completa mostrando que $3,560 se
+       incorporan exactamente una vez. */
+
+test('applyCascade expone baseEjecucion = costoDirecto + gastosComplementarios, sin ocultarlo dentro de otro campo', () => {
+  const c = applyCascade(1000, { indCampo: 8, indOficina: 7, finance: 2, utility: 10, cargos: 0.5, iva: 16 }, 500);
+  assert.equal(c.baseEjecucion, 1500);
+  assert.equal(c.gastosComplementarios, 500);
+});
+
+test('applyCascade sin gastosComplementarios (parametro ausente): baseEjecucion === costoDirecto, mismo resultado exacto que antes del cambio', () => {
+  const pcts = { indCampo: 8, indOficina: 7, finance: 2, utility: 10, cargos: 0.5, iva: 16 };
+  const sinArgumento = applyCascade(816.2, pcts);
+  const conCeroExplicito = applyCascade(816.2, pcts, 0);
+  assert.equal(sinArgumento.baseEjecucion, 816.2);
+  assert.equal(sinArgumento.gastosComplementarios, 0);
+  assert.ok(close(sinArgumento.pu, conCeroExplicito.pu));
+  // Mismos numeros ya verificados arriba para el escenario direct=816.2.
+  assert.ok(close(sinArgumento.indirect, 122.43));
+});
+
+test('applyCascade con gastosComplementarios: la base de ejecucion recibe EXACTAMENTE la misma cascada (mismo orden, misma formula) que el costo directo solo -- no se inventa un orden nuevo', () => {
+  const pcts = { indCampo: 8, indOficina: 7, finance: 2, utility: 10, cargos: 0.5, iva: 16 };
+  const conGastos = applyCascade(1000, pcts, 500);
+  const equivalente = applyCascade(1500, pcts, 0); // 1500 = 1000 + 500, cascada corrida directo sobre esa base
+  assert.ok(close(conGastos.indirect, equivalente.indirect));
+  assert.ok(close(conGastos.finance, equivalente.finance));
+  assert.ok(close(conGastos.utility, equivalente.utility));
+  assert.ok(close(conGastos.cargos, equivalente.cargos));
+  assert.ok(close(conGastos.pu, equivalente.pu));
+  assert.ok(close(conGastos.iva, equivalente.iva));
+});
+
+test('applyCascade sanea gastosComplementarios negativo/no finito a 0 (nunca resta del precio)', () => {
+  const pcts = { indCampo: 0, indOficina: 0, finance: 0, utility: 0, cargos: 0, iva: 0 };
+  assert.equal(applyCascade(1000, pcts, -50).gastosComplementarios, 0);
+  assert.equal(applyCascade(1000, pcts, NaN).gastosComplementarios, 0);
+  assert.equal(applyCascade(1000, pcts, Infinity).gastosComplementarios, 0);
+});
+
+test('REGRESION (regla 2 y 12): un APU historico completo (sin el campo gastosComplementarios, tal cual quedo guardado antes de este cambio) calcula EXACTAMENTE el mismo precio que antes', () => {
+  // "APU anterior" realista: materiales + mano de obra + equipo + seguridad +
+  // herramienta menor por %, factores reales, cantidadObra -- sin tocar
+  // absolutamente nada de gastosComplementarios (el campo ni siquiera existe
+  // en el objeto, igual que cualquier APU guardado antes de esta sesion).
+  const apuHistorico = {
+    id: 'APU-HIST-0001', clave: 'APU-HIST-0001', concept: 'Muro de block hueco 15x20x40 asentado con mortero',
+    materials: [{ clave: 'MAT-001', consumo: 12.5, desperdicioPct: 3, precioUnitario: 16.5 }],
+    labor: [{ clave: 'MO-001', cuadrilla: 1, rendimiento: 2.86, salarioBase: 380, fsr: 1.85 }],
+    equipment: [{ clave: 'EQ-001', cantidad: 0.05, tarifa: 120 }],
+    seguridad: [{ clave: 'SP-001', cantidad: 1, precioUnitario: 45 }],
+    herramientaMenor: { modo: 'porcentaje', porcentaje: 3 },
+    factores: { indCampo: 8, indOficina: 7, finance: 2, utility: 10, cargos: 0.5, iva: 16 },
+    cantidadObra: 20
+  };
+  // Valor esperado calculado con la formula ORIGINAL (sin baseEjecucion,
+  // cascada directo sobre "direct"), reproducida aqui de forma independiente
+  // para que la prueba no dependa circularmente del propio applyCascade.
+  const mat = 12.5 * (1 + 3 / 100) * 16.5;
+  const mo = (1 / 2.86) * 380 * 1.85;
+  const equipo = 0.05 * 120;
+  const seguridad = 1 * 45;
+  const herramienta = mo * 3 / 100;
+  const direct = mat + mo + equipo + herramienta + seguridad;
+  const indPct = 8 + 7;
+  const indirect = direct * indPct / 100;
+  const finance = (direct + indirect) * 2 / 100;
+  const utility = (direct + indirect + finance) * 10 / 100;
+  const cargos = (direct + indirect + finance + utility) * 0.5 / 100;
+  const puEsperado = direct + indirect + finance + utility + cargos;
+  const ivaEsperado = puEsperado * 16 / 100;
+  const importeTotalEsperado = puEsperado * 20;
+
+  const resultado = calcAPUv2(apuHistorico);
+  assert.ok(close(resultado.direct, direct));
+  assert.ok(close(resultado.baseEjecucion, direct), 'sin gastosComplementarios, baseEjecucion debe ser identica al costo directo');
+  assert.equal(resultado.gastosComplementarios, 0);
+  assert.ok(close(resultado.pu, puEsperado));
+  assert.ok(close(resultado.iva, ivaEsperado));
+  assert.ok(close(resultado.importeTotal, importeTotalEsperado));
+
+  // "antes = despues": correr el mismo APU con un gastosComplementarios:[]
+  // explicito (equivalente a como quedaria si se abre y regraba con el
+  // editor nuevo, sin tocar nada) da el mismo resultado numerico.
+  const antes = calcAPUv2(apuHistorico);
+  const despues = calcAPUv2({ ...apuHistorico, gastosComplementarios: [] });
+  assert.equal(antes.pu, despues.pu);
+  assert.equal(antes.importeTotal, despues.importeTotal);
+  assert.equal(antes.direct, despues.direct);
+});
+
+test('calcAPUv2: un gasto SUGERIDO (aun no aceptado) nunca se suma al precio -- solo una accion explicita (estado ACEPTADO) lo incorpora', () => {
+  const base = { materials: [{ consumo: 1, desperdicioPct: 0, precioUnitario: 1000 }], factores: { indCampo: 0, indOficina: 0, finance: 0, utility: 0, cargos: 0, iva: 0 } };
+  const conSugerido = calcAPUv2({ ...base, gastosComplementarios: [{ cantidad: 2, precioUnitario: 850, estado: 'SUGERIDO' }] });
+  const conDescartado = calcAPUv2({ ...base, gastosComplementarios: [{ cantidad: 2, precioUnitario: 850, estado: 'DESCARTADO' }] });
+  const conJustificado = calcAPUv2({ ...base, gastosComplementarios: [{ cantidad: 2, precioUnitario: 850, estado: 'JUSTIFICADO' }] });
+  const conAceptado = calcAPUv2({ ...base, gastosComplementarios: [{ cantidad: 2, precioUnitario: 850, estado: 'ACEPTADO' }] });
+  assert.equal(conSugerido.gastosComplementarios, 0);
+  assert.equal(conDescartado.gastosComplementarios, 0);
+  assert.equal(conJustificado.gastosComplementarios, 0);
+  assert.equal(conAceptado.gastosComplementarios, 1700);
+  assert.ok(conAceptado.pu > conSugerido.pu);
+});
+
+test('calcAPUv2: incluidoEnIndirectos:true excluye del precio aunque el renglon este ACEPTADO (evita doble contabilizacion, regla 4)', () => {
+  const base = { materials: [{ consumo: 1, desperdicioPct: 0, precioUnitario: 1000 }], factores: { indCampo: 0, indOficina: 0, finance: 0, utility: 0, cargos: 0, iva: 0 } };
+  const resultado = calcAPUv2({ ...base, gastosComplementarios: [
+    { concepto: 'Vigilancia', cantidad: 30, precioUnitario: 100, estado: 'ACEPTADO', incluidoEnIndirectos: true },
+    { concepto: 'Comida cuadrilla', cantidad: 6, precioUnitario: 150, estado: 'ACEPTADO', incluidoEnIndirectos: false }
+  ]});
+  // Solo la comida (900) cuenta; la vigilancia (3000) se muestra pero no se suma.
+  assert.equal(resultado.gastosComplementarios, 900);
+});
+
+// Escenario QA exacto de la sesion (2026-09-07): comida 6 x $150 = $900,
+// casetas 4 x $240 = $960, hospedaje 2 x $850 = $1,700 -> subtotal $3,560,
+// sumando UNA SOLA VEZ.
+test('QA matematico (regla 11): reconciliacion completa -- precio original, +$3,560, base de ejecucion, indirectos/financiamiento/utilidad/cargos, IVA y precio final', () => {
+  const gastosComplementarios = [
+    { concepto: 'Comida cuadrilla', categoria: 'ALIMENTACION', cantidad: 6, precioUnitario: 150, estado: 'ACEPTADO' },
+    { concepto: 'Casetas de peaje', categoria: 'CASETAS', cantidad: 4, precioUnitario: 240, estado: 'ACEPTADO' },
+    { concepto: 'Hospedaje cuadrilla', categoria: 'HOSPEDAJE', cantidad: 2, precioUnitario: 850, estado: 'ACEPTADO' }
+  ];
+  const subtotalGastos = gastosComplementarios.reduce((a, r) => a + r.cantidad * r.precioUnitario, 0);
+  assert.equal(subtotalGastos, 3560);
+
+  const factores = { indCampo: 8, indOficina: 7, finance: 2, utility: 10, cargos: 0.5, iva: 16 };
+  const apuBase = { materials: [{ consumo: 1, desperdicioPct: 0, precioUnitario: 10000 }], factores, cantidadObra: 1 };
+
+  // 1) Precio original (sin gastos complementarios).
+  const original = calcAPUv2(apuBase);
+  const precioOriginal = original.pu;
+
+  // 2) Con los gastos complementarios aceptados.
+  const conGastos = calcAPUv2({ ...apuBase, gastosComplementarios });
+
+  // Reconciliacion matematica linea por linea:
+  assert.equal(conGastos.direct, original.direct, 'el costo directo de materiales/MO/equipo no cambia');
+  assert.equal(conGastos.gastosComplementarios, 3560, 'los $3,560 se incorporan exactamente una vez');
+  assert.ok(close(conGastos.baseEjecucion, conGastos.direct + 3560), 'Base de ejecucion = Costo directo + Gastos complementarios');
+
+  const baseEjecucion = conGastos.direct + 3560;
+  const indirectoEsperado = baseEjecucion * (8 + 7) / 100;
+  const financiamientoEsperado = (baseEjecucion + indirectoEsperado) * 2 / 100;
+  const utilidadEsperada = (baseEjecucion + indirectoEsperado + financiamientoEsperado) * 10 / 100;
+  const cargosEsperados = (baseEjecucion + indirectoEsperado + financiamientoEsperado + utilidadEsperada) * 0.5 / 100;
+  const precioAntesDeImpuestosEsperado = baseEjecucion + indirectoEsperado + financiamientoEsperado + utilidadEsperada + cargosEsperados;
+  const ivaEsperado = precioAntesDeImpuestosEsperado * 16 / 100;
+  const precioFinalEsperado = precioAntesDeImpuestosEsperado + ivaEsperado;
+
+  assert.ok(close(conGastos.indirect, indirectoEsperado));
+  assert.ok(close(conGastos.finance, financiamientoEsperado));
+  assert.ok(close(conGastos.utility, utilidadEsperada));
+  assert.ok(close(conGastos.cargos, cargosEsperados));
+  assert.ok(close(conGastos.pu, precioAntesDeImpuestosEsperado), 'Precio antes de impuestos = Base de ejecucion + Indirectos + Financiamiento + Utilidad + Cargos');
+  assert.ok(close(conGastos.iva, ivaEsperado));
+  const precioFinalReal = conGastos.pu + conGastos.iva;
+  assert.ok(close(precioFinalReal, precioFinalEsperado), 'Precio final = Precio antes de impuestos + IVA');
+
+  // 3) El precio SI cambio (los gastos afectan realmente el precio, no quedan informativos).
+  assert.ok(conGastos.pu > precioOriginal, 'el precio unitario debe subir al incluir $3,560 de gastos complementarios');
+  assert.ok(close(conGastos.pu - precioOriginal, precioAntesDeImpuestosEsperado - original.pu));
+});

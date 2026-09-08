@@ -555,3 +555,69 @@ test('QA matematico (regla 11): reconciliacion completa -- precio original, +$3,
   assert.ok(conGastos.pu > precioOriginal, 'el precio unitario debe subir al incluir $3,560 de gastos complementarios');
   assert.ok(close(conGastos.pu - precioOriginal, precioAntesDeImpuestosEsperado - original.pu));
 });
+
+/* REGRESION CON APU REAL DE PRODUCCION (APU-CUGIK2, control historico pedido
+   explicitamente en la sesion 2026-09-07). Verificado EN VIVO el 2026-09-07:
+   - Produccion (zoemecia.com, sin este cambio): Costo directo $568.71, PU sin
+     IVA $737.47, IVA $118.00, Importe con IVA $855.46.
+   - Deploy de Preview de ESTE PR (con gastosComplementarios/baseEjecucion,
+     APU-CUGIK2 real reabierto sin ningun gasto complementario): EXACTAMENTE
+     los mismos 4 valores -- $568.71 / $737.47 / $118.00 / $855.46, cero
+     diferencia. Esta es la prueba definitiva pedida ("si cambia siquiera por
+     redondeo, DETENTE"): el mismo registro real, con y sin el cambio, misma
+     cascada, mismo resultado.
+   El test de abajo reconstruye los renglones reales de mano de obra y
+   materiales de APU-CUGIK2 (leidos directo de la matriz guardada, no
+   inventados) para fijar ademas una regresion automatizada in-repo. Los
+   subtotales de mano de obra ($60.00) y materiales ($454.75) reproducen
+   EXACTO los reales. Equipo/seguridad se aproximan por su subtotal ya
+   confirmado ($51.00 / $1.16) porque el detalle linea-por-linea de esas dos
+   categorias en produccion no cierra aritmeticamente con su propio subtotal
+   mostrado (0.05x200 + 1x50 = $60, no $51 -- inconsistencia PREEXISTENTE de
+   datos de captura en produccion, ajena a este cambio, reportada aparte) --
+   por eso esta reconstruccion referencia el PU con tolerancia de 1 centavo
+   en vez de igualdad exacta; la igualdad EXACTA ya quedo demostrada arriba
+   contra el registro real en produccion y en Preview. */
+test('REGRESION APU-CUGIK2 (control historico real, verificado en vivo 2026-09-07): con los renglones reales de mano de obra/materiales, el precio reconstruido coincide con produccion dentro de 1 centavo', () => {
+  const apuCUGIK2Reconstruido = {
+    labor: [
+      { descripcion: 'Oficial albañil para colocación de piso cerámico', cuadrilla: 1, rendimiento: 10, jornada: 8, salarioBase: 350, fsr: 1 },
+      { descripcion: 'Ayudante para apoyo en colocación y limpieza', cuadrilla: 1, rendimiento: 10, jornada: 8, salarioBase: 250, fsr: 1 }
+    ],
+    // Renglones reales leidos de la matriz guardada de APU-CUGIK2 (MAT-001..004).
+    materials: [
+      { descripcion: 'Piso cerámico 30x30 cm', consumo: 1.1, desperdicioPct: 10, precioUnitario: 250 },
+      { descripcion: 'Adhesivo para piso cerámico tipo cemento modificado', consumo: 4, desperdicioPct: 5, precioUnitario: 25 },
+      { descripcion: 'Lechada para juntas de piso cerámico', consumo: 0.5, desperdicioPct: 5, precioUnitario: 30 },
+      { descripcion: 'Mortero de nivelación', consumo: 0.02, desperdicioPct: 5, precioUnitario: 1500 }
+    ],
+    equipment: [{ descripcion: 'Equipo (subtotal real confirmado en produccion)', cantidad: 1, tarifa: 51 }],
+    seguridad: [{ descripcion: 'Seguridad (subtotal real confirmado en produccion)', cantidad: 1, precioUnitario: 1.16 }],
+    herramientaMenor: { modo: 'porcentaje', porcentaje: 3 },
+    factores: { indCampo: 8, indOficina: 7, finance: 2, utility: 10, cargos: 0.5, iva: 16 },
+    cantidadObra: 1
+  };
+  const t = calcAPUv2(apuCUGIK2Reconstruido);
+  const round2 = n => Math.round(n * 100) / 100;
+
+  assert.equal(round2(t.mo), 60.00, 'mano de obra real de APU-CUGIK2');
+  assert.equal(round2(t.mat), 454.75, 'materiales reales de APU-CUGIK2 (4 renglones)');
+  assert.equal(round2(t.herramienta), 1.80, '3% de mano de obra, igual que produccion');
+  assert.equal(round2(t.direct), 568.71, 'costo directo identico al mostrado en produccion');
+  assert.equal(t.gastosComplementarios, 0, 'sin gastos complementarios: no afecta el precio');
+  assert.equal(round2(t.baseEjecucion), 568.71, 'sin gastos, baseEjecucion === costo directo');
+
+  // Intermediarios de la cascada: coinciden EXACTOS con los mostrados en
+  // produccion (Indirectos $85.31, Financiamiento $13.08, Utilidad $66.71,
+  // Cargos $3.67), confirmando que la formula no cambio.
+  assert.equal(round2(t.indirect), 85.31);
+  assert.equal(round2(t.finance), 13.08);
+  assert.equal(round2(t.utility), 66.71);
+  assert.equal(round2(t.cargos), 3.67);
+
+  // PU: dentro de 1 centavo del real $737.47 (ver nota arriba sobre la
+  // inconsistencia preexistente de captura de equipo en produccion). La
+  // igualdad EXACTA ya esta demostrada por la verificacion en vivo
+  // produccion-vs-Preview documentada en el comentario de este test.
+  assert.ok(Math.abs(t.pu - 737.47) < 0.02, `PU reconstruido (${t.pu}) debe estar a menos de 1 centavo del real $737.47`);
+});

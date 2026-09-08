@@ -10,7 +10,8 @@ import {apiPost,apiGetSafe} from '../../services/apiClient.js';
 import {exportApuAuditDossierPdf} from '../../lib/apuDossierPdf.js';
 import {exportApuAuditDossierExcel} from '../../lib/apuDossierXlsx.js';
 import {COSTO_CAMPO_CATEGORIA_LABEL,COSTO_CAMPO_CATEGORIA_ORDER,makeEmptyCostoCampoRow,calcCostoCampoImporte,calcPresupuestadoVsReal} from '../../domain/apuCostosCampo.js';
-import {ESTADO_REVISION_LABEL,NORMATIVA_DISCLAIMER,NORMATIVA_VACIA_TEXTO,makeEmptyNormativaRow} from '../../domain/apuNormativa.js';
+import {ESTADO_REVISION_LABEL,ORIGEN_VALIDACION_LABEL,ORIGEN_VALIDACION,NORMATIVA_DISCLAIMER,NORMATIVA_VACIA_TEXTO,REQUIERE_VALIDACION_NORMATIVA_TEXTO,makeEmptyNormativaRow,tieneFuenteVerificable} from '../../domain/apuNormativa.js';
+import {GASTO_CATEGORIA_LABEL,GASTO_CATEGORIA_ORDER,GASTO_FRECUENCIA_LABEL,GASTO_FRECUENCIA_ORDER,makeEmptyGastoComplementarioRow,calcGastoComplementarioImporte,isPosibleDuplicadoIndirectos,DUPLICADO_INDIRECTOS_TEXTO,summarizeGastosComplementarios} from '../../domain/apuGastosComplementarios.js';
 import {analyzeApuRisks} from '../../domain/apuRiskDetector.js';
 
 const N=new Set(['cantidadObra','tipoCambio','cantidad','consumo','desperdicioPct','precioUnitario','cuadrilla','rendimiento','jornada','salarioBase','fsr','tarifa','valorAdquisicion','depreciacionPct','vidaUtil','factorUso','factorImputable']);
@@ -146,6 +147,15 @@ export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindP
  const updateCostoCampo=(i,f,v)=>{const n=structuredClone(apu);if(!Array.isArray(n.costosCampo))n.costosCampo=[];const row=n.costosCampo[i],before=row[f],after=(f==='cantidad'||f==='costoUnitario')?Number(v):v;row[f]=after;onChange(withAudit(n,`costosCampo.${i}.${f}`,before,after))};
  const addCostoCampo=()=>{const n=structuredClone(apu);if(!Array.isArray(n.costosCampo))n.costosCampo=[];n.costosCampo=[...n.costosCampo,{...makeEmptyCostoCampoRow(),id:'CC-'+Date.now()}];onChange(n)};
  const removeCostoCampo=i=>{const n=structuredClone(apu);n.costosCampo.splice(i,1);onChange(n)};
+ // Gastos Complementarios de Ejecucion (P1 autorizado 2026-09-07): a
+ // diferencia de Costos de Campo, SI alimenta calcAPUv2 (ver apuCalc.js) --
+ // pero como update/add/remove de arriba estan atados a SPEC/BLANK/priceKey
+ // (pensados para materials/labor/equipment/etc.), usa sus propios
+ // mutadores aislados, mismo criterio que costosCampoRows/normativaRows.
+ const gastosComplementariosRows=apu.gastosComplementarios||[];
+ const updateGastoComplementario=(i,f,v)=>{const n=structuredClone(apu);if(!Array.isArray(n.gastosComplementarios))n.gastosComplementarios=[];const row=n.gastosComplementarios[i],before=row[f],after=(f==='cantidad'||f==='precioUnitario')?Number(v):f==='incluido'?Boolean(v):v;row[f]=after;onChange(withAudit(n,`gastosComplementarios.${i}.${f}`,before,after))};
+ const addGastoComplementario=()=>{const n=structuredClone(apu);if(!Array.isArray(n.gastosComplementarios))n.gastosComplementarios=[];n.gastosComplementarios=[...n.gastosComplementarios,{...makeEmptyGastoComplementarioRow(),id:'GC-'+Date.now()}];onChange(n)};
+ const removeGastoComplementario=i=>{const n=structuredClone(apu);n.gastosComplementarios.splice(i,1);onChange(n)};
  // Normativa y Cumplimiento (Parte E): captura manual, mismo patron aislado.
  const normativaRows=apu.normativa||[];
  const updateNormativa=(i,f,v)=>{const n=structuredClone(apu);if(!Array.isArray(n.normativa))n.normativa=[];const row=n.normativa[i],before=row[f],after=typeof row[f]==='boolean'?Boolean(v):v;row[f]=after;onChange(withAudit(n,`normativa.${i}.${f}`,before,after))};
@@ -367,6 +377,29 @@ export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindP
     <div><small>Impacto en precio unitario</small><b>{pvr.impactoPU==null?'—':`${pvr.impactoPU>=0?'+':''}${money(pvr.impactoPU)}`}</b></div>
    </div>
   </Accordion> : null;})()}
+  <h3 className="pro-section-title">H2. Gastos Complementarios de Ejecución</h3>
+  {(()=>{const gcSummary=summarizeGastosComplementarios(gastosComplementariosRows);return <Accordion title="Gastos complementarios" summary={gastosComplementariosRows.length?`${gastosComplementariosRows.length} registro(s) · ${money(gcSummary.totalIncluido)} incluido en el precio`:'Sin registros'} defaultOpen={gastosComplementariosRows.length>0}>
+   <p className="muted" style={{fontSize:'.78rem'}}>Partidas reales de ejecución (alimentación, viáticos, hospedaje, transporte, fletes, permisos, etc.) distintas de materiales/mano de obra/equipo. A diferencia de Costos de Campo, estas SÍ afectan el precio unitario cuando están marcadas "Incluido en precio".</p>
+   {gastosComplementariosRows.length===0 && <p className="muted">Sin gastos complementarios registrados. Usa "+ Agregar" para capturar viáticos, alimentación, hospedaje, transporte u otro gasto real de ejecución.</p>}
+   {gastosComplementariosRows.length>0 && <div className="apu-table-scroll"><table className="data-table"><thead><tr><th>Concepto</th><th>Categoría</th><th>Unidad</th><th>Cantidad</th><th>P.U.</th><th>Importe</th><th>Frecuencia</th><th>Justificación</th><th>Fuente</th><th>Incluido en precio</th><th/></tr></thead><tbody>
+    {gastosComplementariosRows.map((r,i)=><tr key={r.id||i}>
+     <td><input value={r.concepto||''} onChange={e=>updateGastoComplementario(i,'concepto',e.target.value)}/></td>
+     <td><select value={r.categoria} onChange={e=>updateGastoComplementario(i,'categoria',e.target.value)}>{GASTO_CATEGORIA_ORDER.map(c=><option key={c} value={c}>{GASTO_CATEGORIA_LABEL[c]}</option>)}</select>
+      {isPosibleDuplicadoIndirectos(r) && <div className="muted" style={{fontSize:'.7rem',color:'var(--warning,#b45309)'}}>{DUPLICADO_INDIRECTOS_TEXTO}</div>}</td>
+     <td><input value={r.unidad||''} onChange={e=>updateGastoComplementario(i,'unidad',e.target.value)}/></td>
+     <td><input type="number" value={r.cantidad??0} onChange={e=>updateGastoComplementario(i,'cantidad',e.target.value)}/></td>
+     <td><input type="number" value={r.precioUnitario??0} onChange={e=>updateGastoComplementario(i,'precioUnitario',e.target.value)}/></td>
+     <td>{money(calcGastoComplementarioImporte(r))}</td>
+     <td><select value={r.frecuencia} onChange={e=>updateGastoComplementario(i,'frecuencia',e.target.value)}>{GASTO_FRECUENCIA_ORDER.map(f=><option key={f} value={f}>{GASTO_FRECUENCIA_LABEL[f]}</option>)}</select></td>
+     <td><input value={r.justificacion||''} onChange={e=>updateGastoComplementario(i,'justificacion',e.target.value)}/></td>
+     <td><input value={r.fuente||''} onChange={e=>updateGastoComplementario(i,'fuente',e.target.value)}/></td>
+     <td style={{textAlign:'center'}}><input type="checkbox" checked={r.incluido!==false} onChange={e=>updateGastoComplementario(i,'incluido',e.target.checked)}/></td>
+     <td><button onClick={()=>removeGastoComplementario(i)}>×</button></td>
+    </tr>)}
+   </tbody></table></div>}
+   <button onClick={addGastoComplementario}>+ Agregar</button>
+   {gastosComplementariosRows.length>0 && <p style={{marginTop:8,fontSize:'.82rem'}}><b>Subtotal incluido en el precio: {money(gcSummary.totalIncluido)}</b>{gcSummary.totalExcluido>0 && <span className="muted"> · No incluido (informativo): {money(gcSummary.totalExcluido)}</span>}</p>}
+  </Accordion>;})()}
   <h3 className="pro-section-title">I. Normativa y Cumplimiento</h3>
   <Accordion title="Normativa potencialmente aplicable" summary={normativaRows.length?`${normativaRows.length} norma(s) registrada(s)`:'Sin normativa registrada'}>
    <p className="muted" style={{fontSize:'.78rem'}}>{NORMATIVA_DISCLAIMER}</p>
@@ -376,16 +409,24 @@ export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindP
     <label>Clave/código<input value={r.clave||''} onChange={e=>updateNormativa(i,'clave',e.target.value)}/></label>
     <label>Organismo emisor<input value={r.organismoEmisor||''} onChange={e=>updateNormativa(i,'organismoEmisor',e.target.value)}/></label>
     <label>Jurisdicción<input value={r.jurisdiccion||''} onChange={e=>updateNormativa(i,'jurisdiccion',e.target.value)}/></label>
+    <label>País<input value={r.pais||''} onChange={e=>updateNormativa(i,'pais',e.target.value)}/></label>
+    <label>Estado<input value={r.estadoGeografico||''} onChange={e=>updateNormativa(i,'estadoGeografico',e.target.value)}/></label>
+    <label>Municipio<input value={r.municipio||''} onChange={e=>updateNormativa(i,'municipio',e.target.value)}/></label>
+    <label>Tipo de obra<input value={r.tipoObra||''} onChange={e=>updateNormativa(i,'tipoObra',e.target.value)}/></label>
+    <label>Especialidad<input value={r.especialidad||''} onChange={e=>updateNormativa(i,'especialidad',e.target.value)}/></label>
     <label>Versión<input value={r.version||''} onChange={e=>updateNormativa(i,'version',e.target.value)}/></label>
     <label>Fecha de publicación<input value={r.fechaPublicacion||''} onChange={e=>updateNormativa(i,'fechaPublicacion',e.target.value)}/></label>
     <label>Vigencia<input value={r.vigencia||''} onChange={e=>updateNormativa(i,'vigencia',e.target.value)}/></label>
     <label>Fuente<input value={r.fuente||''} onChange={e=>updateNormativa(i,'fuente',e.target.value)}/></label>
     <label>Artículo/sección<input value={r.articulo||''} onChange={e=>updateNormativa(i,'articulo',e.target.value)}/></label>
     <label>Estado de revisión<select value={r.estadoRevision} onChange={e=>updateNormativa(i,'estadoRevision',e.target.value)}>{Object.entries(ESTADO_REVISION_LABEL).map(([k,l])=><option key={k} value={k}>{l}</option>)}</select></label>
+    <label>Origen de validación<select value={r.origenValidacion||ORIGEN_VALIDACION.PENDIENTE_VALIDAR} onChange={e=>updateNormativa(i,'origenValidacion',e.target.value)}>{Object.entries(ORIGEN_VALIDACION_LABEL).map(([k,l])=><option key={k} value={k}>{l}</option>)}</select></label>
+    <label>Descripción<textarea value={r.descripcion||''} onChange={e=>updateNormativa(i,'descripcion',e.target.value)}/></label>
     <label>Requisito<textarea value={r.requisito||''} onChange={e=>updateNormativa(i,'requisito',e.target.value)}/></label>
     <label>Impacto técnico<textarea value={r.impactoTecnico||''} onChange={e=>updateNormativa(i,'impactoTecnico',e.target.value)}/></label>
     <label>Impacto económico<textarea value={r.impactoEconomico||''} onChange={e=>updateNormativa(i,'impactoEconomico',e.target.value)}/></label>
     <label>Observaciones<textarea value={r.observaciones||''} onChange={e=>updateNormativa(i,'observaciones',e.target.value)}/></label>
+    {!tieneFuenteVerificable(r) && <p className="muted" style={{gridColumn:'1/-1',color:'var(--warning,#b45309)',fontSize:'.78rem'}}>{REQUIERE_VALIDACION_NORMATIVA_TEXTO}</p>}
     <div className="pro-header-grid" style={{gridColumn:'1/-1'}}>
      {[['requiereMaterial','Requiere material adicional'],['requiereEPP','Requiere EPP'],['requiereProcedimiento','Requiere procedimiento'],['requierePrueba','Requiere prueba/inspección'],['requiereDocumentacion','Requiere documentación']].map(([f,l])=><label key={f} style={{display:'flex',gap:6,alignItems:'center'}}><input type="checkbox" checked={!!r[f]} onChange={e=>updateNormativa(i,f,e.target.checked)}/>{l}</label>)}
     </div>
@@ -424,7 +465,7 @@ export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindP
      {selectedApuElement.type ? ` (${selectedApuElement.type})` : ''}
    </p>}
   </Accordion>
-  <div className="pro-economy"><b>Costo directo {money(final.calculated.direct)}</b><strong>PRECIO UNITARIO SIN IVA {money(final.calculated.pu)}</strong><span>Cantidad {num(apu.cantidadObra)}</span><b>Importe sin IVA {money(final.calculated.importeTotal)}</b><span>IVA {money(final.calculated.iva*apu.cantidadObra)}</span><b>Importe con IVA {money(final.calculated.importeTotal+final.calculated.iva*apu.cantidadObra)}</b></div>
+  <div className="pro-economy"><b>Costo directo {money(final.calculated.direct)}</b>{final.calculated.gastosComplementarios>0 && <b>Gastos complementarios {money(final.calculated.gastosComplementarios)}</b>}<strong>PRECIO UNITARIO SIN IVA {money(final.calculated.pu)}</strong><span>Cantidad {num(apu.cantidadObra)}</span><b>Importe sin IVA {money(final.calculated.importeTotal)}</b><span>IVA {money(final.calculated.iva*apu.cantidadObra)}</span><b>Importe con IVA {money(final.calculated.importeTotal+final.calculated.iva*apu.cantidadObra)}</b></div>
   {notice&&<div className="validation-panel"><h3>{notice.status}</h3>{(notice.issues||[]).map((x,i)=><p key={i}>{x.message}</p>)}</div>}
   {modal&&<div className="pro-modal"><div><button onClick={()=>setModal('')}>×</button><h2>{modal==='prices'?'Comparador de precios':modal==='history'?'Historial':'Fuentes'}</h2>{modal==='prices'?<><table className="data-table"><thead><tr><th>Recurso</th><th>Actual</th><th>Nuevo</th><th>Diferencia</th><th>Variación</th><th>Proveedor nuevo</th><th>Fecha</th><th>Aplicar</th></tr></thead><tbody>{quotes.map((q,i)=><tr key={i}><td>{q.resource}</td><td>{money(q.current)}</td><td>{money(q.next)}</td><td>{money(q.difference)}</td><td>{q.variationPct==null?'—':`${num(q.variationPct)}%`}</td><td>{q.priceRecord.supplier||'PENDIENTE'}</td><td>{q.priceRecord.priceDate||'Sin fecha'}</td><td><input type="checkbox" checked={q.apply} onChange={e=>setQuotes(quotes.map((x,j)=>j===i?{...x,apply:e.target.checked}:x))}/></td></tr>)}</tbody></table><button onClick={applyPrices}>Aplicar seleccionados</button><button onClick={()=>setModal('')}>Cancelar</button></>:modal==='history'?history.map(v=><p key={v.version}><b>{v.version}</b> · {v.at} · {money(v.unitPrice)} <button onClick={()=>restoreVersion(v)}>Restaurar</button></p>):['materials','labor','equipment','consumables'].flatMap(k=>(apu[k]||[]).map(r=><p key={`${k}-${r.clave}`}><b>{r.descripcion}</b> · {r.fuente?.proveedor||'Sin proveedor'} · {r.fuente?.fecha||'Sin fecha'} · {apuDataStateLabel(r.fuente?.estado)}</p>))}</div></div>}
  </div>;

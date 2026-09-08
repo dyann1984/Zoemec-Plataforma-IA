@@ -11,7 +11,8 @@ import { buildDossierData } from './apuDossierData.js';
 import { shortHash } from '../domain/snapshotHash.js';
 import { apiPost } from '../services/apiClient.js';
 import { COSTO_CAMPO_CATEGORIA_LABEL, calcCostoCampoImporte, calcPresupuestadoVsReal } from '../domain/apuCostosCampo.js';
-import { ESTADO_REVISION_LABEL, NORMATIVA_DISCLAIMER, NORMATIVA_VACIA_TEXTO } from '../domain/apuNormativa.js';
+import { ESTADO_REVISION_LABEL, NORMATIVA_DISCLAIMER, NORMATIVA_VACIA_TEXTO, ORIGEN_VALIDACION_LABEL, REQUIERE_VALIDACION_NORMATIVA_TEXTO, tieneFuenteVerificable } from '../domain/apuNormativa.js';
+import { GASTO_CATEGORIA_LABEL, GASTO_FRECUENCIA_LABEL, calcGastoComplementarioImporte, isGastoIncluido, isPosibleDuplicadoIndirectos, DUPLICADO_INDIRECTOS_TEXTO } from '../domain/apuGastosComplementarios.js';
 
 const asCell = (value, style = {}) => xcell(value, style);
 const pad = (row, width) => { const full = [...row]; while(full.length < width) full.push(null); return full; };
@@ -119,6 +120,25 @@ function buildCostosCampoSheet(snapshot){
   return { sheet: 'COSTOS_CAMPO', rows: out, widths: [20, 20, 34, 12, 10, 14, 14, 14, 20], stickyRowsCount: 2, orientation: 'landscape' };
 }
 
+// Gastos Complementarios de Ejecucion (P1 autorizado 2026-09-07): a
+// diferencia de COSTOS_CAMPO (arriba, informativo), este total ya esta
+// incluido en el Precio Unitario Final del snapshot -- mismo criterio de
+// "no crear hoja vacia" que el resto del dossier.
+function buildGastosComplementariosSheet(snapshot){
+  const rows0 = Array.isArray(snapshot.gastosComplementarios) ? snapshot.gastosComplementarios : [];
+  if(!rows0.length) return null;
+  const out = [pad([asCell('GASTOS COMPLEMENTARIOS DE EJECUCION', { columnSpan: 9, ...XLS.title })], 9)];
+  out.push(pad(['Concepto', 'Categoria', 'Unidad', 'Cantidad', 'P.U.', 'Importe', 'Frecuencia', 'Incluido', 'Aviso'].map(h => asCell(h, XLS.head)), 9));
+  let totalIncluido = 0;
+  rows0.forEach(r => {
+    const importe = calcGastoComplementarioImporte(r);
+    if(isGastoIncluido(r)) totalIncluido += importe;
+    out.push(pad([asCell(r.concepto || '—'), asCell(GASTO_CATEGORIA_LABEL[r.categoria] || r.categoria), asCell(r.unidad || '—'), asCell(Number(r.cantidad || 0), XLS.qty), asCell(Number(r.precioUnitario || 0), XLS.money), asCell(importe, XLS.money), asCell(GASTO_FRECUENCIA_LABEL[r.frecuencia] || r.frecuencia), asCell(isGastoIncluido(r) ? 'SI' : 'NO'), asCell(isPosibleDuplicadoIndirectos(r) ? DUPLICADO_INDIRECTOS_TEXTO : '—', { wrap: true, color: isPosibleDuplicadoIndirectos(r) ? '#B45309' : undefined })], 9));
+  });
+  out.push(pad([asCell('SUBTOTAL INCLUIDO EN EL PRECIO', { columnSpan: 5, fontWeight: 'bold', align: 'right' }), null, null, null, null, asCell(totalIncluido, { ...XLS.money, fontWeight: 'bold' })], 9));
+  return { sheet: 'GASTOS_COMPLEMENTARIOS', rows: out, widths: [26, 20, 12, 12, 14, 14, 16, 10, 40], stickyRowsCount: 2, orientation: 'landscape' };
+}
+
 function buildCostoRealSheet(snapshot){
   const pvr = calcPresupuestadoVsReal(snapshot);
   if(!pvr || !pvr.hasRegistros) return null;
@@ -148,6 +168,10 @@ function buildNormativaSheet(snapshot){
   rows.push(pad(['Nombre', 'Clave', 'Organismo emisor', 'Jurisdiccion', 'Vigencia', 'Estado de revision', 'Requisito'].map(h => asCell(h, XLS.head)), 7));
   rows0.forEach(n => {
     rows.push(pad([asCell(n.nombre || '—'), asCell(n.clave || '—'), asCell(n.organismoEmisor || '—'), asCell(n.jurisdiccion || '—'), asCell(n.vigencia || '—'), asCell(ESTADO_REVISION_LABEL[n.estadoRevision] || n.estadoRevision), asCell(n.requisito || '—', { wrap: true })], 7));
+    const ubicacion = [n.pais, n.estadoGeografico, n.municipio].filter(Boolean).join(' / ') || '—';
+    rows.push(pad([asCell(`Ubicación: ${ubicacion} | Tipo de obra: ${n.tipoObra || '—'} | Especialidad: ${n.especialidad || '—'}`, { columnSpan: 4, wrap: true }), null, null, asCell(`Origen: ${ORIGEN_VALIDACION_LABEL[n.origenValidacion] || '—'} | Artículo: ${n.articulo || '—'}`, { columnSpan: 3, wrap: true })], 7));
+    if(n.descripcion) rows.push(pad([asCell(`Descripción: ${n.descripcion}`, { columnSpan: 7, wrap: true })], 7));
+    if(!tieneFuenteVerificable(n)) rows.push(pad([asCell(REQUIERE_VALIDACION_NORMATIVA_TEXTO, { columnSpan: 7, color: '#B45309', wrap: true })], 7));
     const flags = [n.requiereMaterial && 'Material', n.requiereEPP && 'EPP', n.requiereProcedimiento && 'Procedimiento', n.requierePrueba && 'Prueba/inspeccion', n.requiereDocumentacion && 'Documentacion'].filter(Boolean).join(', ') || 'Ninguno marcado';
     rows.push(pad([asCell(`Impacto tecnico: ${n.impactoTecnico || '—'}`, { columnSpan: 3, wrap: true }), null, null, asCell(`Impacto economico: ${n.impactoEconomico || '—'} | Requiere: ${flags}`, { columnSpan: 4, wrap: true })], 7));
   });
@@ -264,6 +288,7 @@ export async function exportApuAuditDossierExcel({ apu, apuId, apuVersionId, pro
     buildResourceSheet('equipment', data.snapshot),
     buildResourceSheet('consumables', data.snapshot),
     buildCostosCampoSheet(data.snapshot),
+    buildGastosComplementariosSheet(data.snapshot),
     buildCostoRealSheet(data.snapshot),
     buildNormativaSheet(data.snapshot),
     buildRiesgosSheet(data.snapshot),

@@ -9,7 +9,8 @@ import { buildReviewRow, REVISION_STATUS_LABEL } from '../domain/apuReview.js';
 import { computeConceptStatus, conceptStatusLabel } from '../domain/apuCompletionStatus.js';
 import { xcell, fcell, XLS, exportWorkbookExcel, money, num } from './apuExport.js';
 import { COSTO_CAMPO_CATEGORIA_LABEL, calcCostoCampoImporte, calcPresupuestadoVsReal } from '../domain/apuCostosCampo.js';
-import { ESTADO_REVISION_LABEL, NORMATIVA_DISCLAIMER, NORMATIVA_VACIA_TEXTO } from '../domain/apuNormativa.js';
+import { ESTADO_REVISION_LABEL, NORMATIVA_DISCLAIMER, NORMATIVA_VACIA_TEXTO, ORIGEN_VALIDACION_LABEL, REQUIERE_VALIDACION_NORMATIVA_TEXTO, tieneFuenteVerificable } from '../domain/apuNormativa.js';
+import { GASTO_CATEGORIA_LABEL, GASTO_FRECUENCIA_LABEL, calcGastoComplementarioImporte, isGastoIncluido, isPosibleDuplicadoIndirectos, DUPLICADO_INDIRECTOS_TEXTO } from '../domain/apuGastosComplementarios.js';
 
 const COLORS={labor:'#123F78',materials:'#D56A00',tools:'#2F7D3A',equipment:'#1578B7',consumables:'#8C6D1F',safety:'#B5263D',procedure:'#6D2D91',quality:'#D5A900',measure:'#078C88'};
 const NO_JUSTIFICATION_TEXT='Sin justificación técnica registrada -- APU generado antes de esta funcionalidad.';
@@ -175,6 +176,23 @@ export function buildProfessionalAPUSheet(rawApu){
   }
   add([]);
 
+  // Gastos Complementarios de Ejecucion (P1 autorizado 2026-09-07): a
+  // diferencia de Costos de Campo (arriba, 100% informativo), este total SI
+  // ya esta incluido en el Precio Unitario Final (ver seccion de calculo
+  // arriba, calcAPUv2#gastosComplementarios) -- aqui solo se detalla el
+  // desglose por renglon, no se vuelve a sumar al precio.
+  const gastosComplementariosRows = apu.gastosComplementarios || [];
+  span('16B. GASTOS COMPLEMENTARIOS DE EJECUCION','#6D4C1F');
+  if(gastosComplementariosRows.length){
+    head(['No.','Concepto','Categoria','Unidad','Cantidad','P.U.','Importe','Frecuencia','Justificacion','Fuente','Incluido en precio','']);
+    gastosComplementariosRows.forEach((r,i)=>add([i+1,r.concepto,GASTO_CATEGORIA_LABEL[r.categoria]||r.categoria,r.unidad,Number(r.cantidad||0),Number(r.precioUnitario||0),calcGastoComplementarioImporte(r),GASTO_FRECUENCIA_LABEL[r.frecuencia]||r.frecuencia,asCell(r.justificacion||'—',{wrap:true}),r.fuente||'—',isGastoIncluido(r)?'SI':'NO',isPosibleDuplicadoIndirectos(r)?asCell(DUPLICADO_INDIRECTOS_TEXTO,{color:'#B45309',wrap:true}):null]));
+    const totalIncluido = gastosComplementariosRows.filter(isGastoIncluido).reduce((s,r)=>s+calcGastoComplementarioImporte(r),0);
+    add([null,asCell('SUBTOTAL INCLUIDO EN EL PRECIO',{columnSpan:5,fontWeight:'bold',align:'right'}),asCell(totalIncluido,{fontWeight:'bold'}),...Array(5).fill(null)]);
+  } else {
+    add([asCell('Sin gastos complementarios de ejecución registrados.',{columnSpan:12,color:'#5B6472'}),...Array(11).fill(null)]);
+  }
+  add([]);
+
   const pvr = calcPresupuestadoVsReal(apu);
   if(pvr && pvr.hasRegistros){
     span('17. PRESUPUESTADO VS REAL','#123F78');
@@ -199,6 +217,10 @@ export function buildProfessionalAPUSheet(rawApu){
     head(['No.','Nombre','Clave','Organismo emisor','Jurisdiccion','Vigencia','Estado de revision','Requisito','','','','']);
     normativaRows.forEach((n,i)=>{
       add([i+1,n.nombre,n.clave,n.organismoEmisor,n.jurisdiccion,n.vigencia,ESTADO_REVISION_LABEL[n.estadoRevision]||n.estadoRevision,asCell(n.requisito,{columnSpan:5,wrap:true}),null,null,null,null]);
+      const ubicacion=[n.pais,n.estadoGeografico,n.municipio].filter(Boolean).join(' / ')||'—';
+      add([null,asCell(`Ubicación: ${ubicacion} | Tipo de obra: ${n.tipoObra||'—'} | Especialidad: ${n.especialidad||'—'}`,{columnSpan:6,wrap:true}),...Array(5).fill(null),asCell(`Origen: ${ORIGEN_VALIDACION_LABEL[n.origenValidacion]||'—'} | Artículo: ${n.articulo||'—'}`,{columnSpan:5,wrap:true})]);
+      if(n.descripcion) add([null,asCell(`Descripción: ${n.descripcion}`,{columnSpan:11,wrap:true})]);
+      if(!tieneFuenteVerificable(n)) add([null,asCell(REQUIERE_VALIDACION_NORMATIVA_TEXTO,{columnSpan:11,color:'#B45309',wrap:true})]);
       const flags=[n.requiereMaterial&&'Material',n.requiereEPP&&'EPP',n.requiereProcedimiento&&'Procedimiento',n.requierePrueba&&'Prueba/inspeccion',n.requiereDocumentacion&&'Documentacion'].filter(Boolean).join(', ')||'Ninguno marcado';
       add([null,asCell(`Impacto tecnico: ${n.impactoTecnico||'—'}`,{columnSpan:4,wrap:true}),...Array(3).fill(null),asCell(`Impacto economico: ${n.impactoEconomico||'—'} | Requiere: ${flags}`,{columnSpan:6,wrap:true}),...Array(5).fill(null)]);
     });
@@ -703,6 +725,21 @@ export function drawApuSections(doc,rawApu,opts={}){
     doc.text(pdfText('Sin costos de campo registrados.'),M,y+3.4);y+=7;
   }
 
+  // Gastos Complementarios de Ejecucion (P1 autorizado 2026-09-07): total ya
+  // incluido en el Precio Unitario Final impreso arriba -- aqui solo se
+  // detalla el desglose, no se vuelve a sumar.
+  const gastosComplementariosRows = apu.gastosComplementarios || [];
+  if(gastosComplementariosRows.length){
+    const totalGCIncluido = gastosComplementariosRows.filter(isGastoIncluido).reduce((s,r)=>s+calcGastoComplementarioImporte(r),0);
+    table('13B. GASTOS COMPLEMENTARIOS DE EJECUCION',[140,80,20],['Concepto','Categoria','Cant.','P.U.','Importe','Frecuencia','Incluido'],
+      [...gastosComplementariosRows.map(r=>[r.concepto,GASTO_CATEGORIA_LABEL[r.categoria]||r.categoria,num(r.cantidad),money(r.precioUnitario),money(calcGastoComplementarioImporte(r)),GASTO_FRECUENCIA_LABEL[r.frecuencia]||r.frecuencia,isGastoIncluido(r)?'SI':'NO']),
+       ['','','','Subtotal incluido en el precio','',money(totalGCIncluido),'']],
+      [1.6,1.1,0.6,0.9,0.9,1.1,0.7]);
+  } else {
+    bar('13B. GASTOS COMPLEMENTARIOS DE EJECUCION',[140,80,20]);
+    doc.text(pdfText('Sin gastos complementarios de ejecución registrados.'),M,y+3.4);y+=7;
+  }
+
   const pvr = calcPresupuestadoVsReal(apu);
   if(pvr && pvr.hasRegistros){
     bar('14. PRESUPUESTADO VS REAL',[18,63,120]);
@@ -728,6 +765,9 @@ export function drawApuSections(doc,rawApu,opts={}){
     table('15. NORMATIVA Y CUMPLIMIENTO (detalle)',[213,169,0],['Nombre','Clave','Organismo','Jurisdiccion','Vigencia','Estado','Requisito'],
       normativaRows.map(n=>[n.nombre,n.clave,n.organismoEmisor,n.jurisdiccion,n.vigencia,ESTADO_REVISION_LABEL[n.estadoRevision]||n.estadoRevision,n.requisito]),
       [1.4,0.9,1.3,1.1,1,1.3,2.2]);
+    table('15. NORMATIVA Y CUMPLIMIENTO (clasificacion)',[213,169,0],['Nombre','Pais/Estado/Municipio','Tipo de obra','Especialidad','Origen de validacion','Aviso'],
+      normativaRows.map(n=>[n.nombre,[n.pais,n.estadoGeografico,n.municipio].filter(Boolean).join(' / ')||'—',n.tipoObra||'—',n.especialidad||'—',ORIGEN_VALIDACION_LABEL[n.origenValidacion]||'—',tieneFuenteVerificable(n)?'':REQUIERE_VALIDACION_NORMATIVA_TEXTO]),
+      [1.3,1.6,1.1,1.1,1.2,1.7]);
   } else {
     bar('15. NORMATIVA Y CUMPLIMIENTO',[213,169,0]);
     doc.text(pdfText(NORMATIVA_VACIA_TEXTO),M,y+3.4);y+=7;

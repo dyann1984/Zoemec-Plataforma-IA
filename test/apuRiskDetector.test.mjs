@@ -103,10 +103,64 @@ test('analyzeApuRisks: hallazgos siempre ordenados de mas a menos severo (CRITIC
 });
 
 test('analyzeApuRisks: resumen usa el conteo real y singular/plural correcto', () => {
-  const sinHallazgos = analyzeApuRisks(baseApu({ labor: [], costosCampo: [{ categoria: 'INDIRECTO_OBRA', cantidad: 1, costoUnitario: 1 }], normativa: [{ nombre: 'X' }], materials: [], consumables: [] }));
+  const sinHallazgos = analyzeApuRisks(baseApu({
+    labor: [], costosCampo: [{ categoria: 'INDIRECTO_OBRA', cantidad: 1, costoUnitario: 1 }],
+    // fuente presente -> no dispara riesgo_normativo_pendiente_validar (P1 2026-09-07)
+    normativa: [{ nombre: 'X', fuente: 'DOF 2024-01-01', origenValidacion: 'VERIFICADO' }],
+    // registro presente -> no dispara gastos_complementarios_ausentes (P1 2026-09-07)
+    gastosComplementarios: [{ concepto: 'Viáticos', cantidad: 1, precioUnitario: 100 }],
+    materials: [], consumables: []
+  }));
   assert.match(sinHallazgos.resumen, /no detect[oó]/i);
   const conUno = analyzeApuRisks(baseApu({ normativa: [{ nombre: 'X' }], costosCampo: [{ categoria: 'INDIRECTO_OBRA', cantidad: 1, costoUnitario: 1 }] }));
   if(conUno.hallazgos.length === 1) assert.match(conUno.resumen, /1 costo potencial no contemplado\./);
+});
+
+/* ---------- gastosComplementarios / RIESGO NORMATIVO (P1 autorizado 2026-09-07) ---------- */
+
+test('gastos_complementarios_ausentes dispara cuando apu.gastosComplementarios esta vacio/ausente', () => {
+  const sinCampo = analyzeApuRisks({});
+  const conArrayVacio = analyzeApuRisks({ gastosComplementarios: [] });
+  assert.ok(sinCampo.hallazgos.some(h => h.id === 'gastos_complementarios_ausentes'));
+  assert.ok(conArrayVacio.hallazgos.some(h => h.id === 'gastos_complementarios_ausentes'));
+  assert.equal(sinCampo.hallazgos.find(h => h.id === 'gastos_complementarios_ausentes').severidad, RISK_SEVERITY.LOW);
+});
+
+// QA de la sesion (2026-09-07): con el escenario comida/casetas/hospedaje ya
+// registrado (subtotal $3,560), el detector debe reconocerlo y dejar de
+// marcar la ausencia -- "recognized by the detector" del checklist de cierre.
+test('QA: con el escenario comida/casetas/hospedaje registrado, el detector deja de marcar gastos_complementarios_ausentes', () => {
+  const apuConGastos = {
+    gastosComplementarios: [
+      { concepto: 'Comida cuadrilla', categoria: 'ALIMENTACION', cantidad: 6, precioUnitario: 150, incluido: true },
+      { concepto: 'Casetas de peaje', categoria: 'CASETAS', cantidad: 4, precioUnitario: 240, incluido: true },
+      { concepto: 'Hospedaje cuadrilla', categoria: 'HOSPEDAJE', cantidad: 2, precioUnitario: 850, incluido: true }
+    ]
+  };
+  const result = analyzeApuRisks(apuConGastos);
+  assert.ok(!result.hallazgos.some(h => h.id === 'gastos_complementarios_ausentes'));
+});
+
+test('riesgo_normativo_pendiente_validar dispara cuando hay registros sin fuente verificable, nunca cuando normativa esta vacia', () => {
+  const sinNormativa = analyzeApuRisks({});
+  assert.ok(sinNormativa.hallazgos.some(h => h.id === 'normativa_ausente'));
+  assert.ok(!sinNormativa.hallazgos.some(h => h.id === 'riesgo_normativo_pendiente_validar'));
+
+  const conNormativaPendiente = analyzeApuRisks({
+    normativa: [{ nombre: 'NOM-XXX', fuente: '', origenValidacion: 'PENDIENTE_VALIDAR' }]
+  });
+  assert.ok(!conNormativaPendiente.hallazgos.some(h => h.id === 'normativa_ausente'));
+  const riesgo = conNormativaPendiente.hallazgos.find(h => h.id === 'riesgo_normativo_pendiente_validar');
+  assert.ok(riesgo);
+  assert.match(riesgo.hallazgo, /^RIESGO NORMATIVO:/);
+  assert.equal(riesgo.severidad, RISK_SEVERITY.MEDIUM);
+});
+
+test('riesgo_normativo_pendiente_validar no dispara cuando todos los registros tienen fuente verificable', () => {
+  const conNormativaVerificada = analyzeApuRisks({
+    normativa: [{ nombre: 'NOM-XXX', fuente: 'DOF 2024-01-01', origenValidacion: 'VERIFICADO' }]
+  });
+  assert.ok(!conNormativaVerificada.hallazgos.some(h => h.id === 'riesgo_normativo_pendiente_validar'));
 });
 
 test('cada hallazgo trae los 6 campos minimos pedidos: hallazgo, evidencia, impactoPotencial, recomendacion, incluirEnAPU, confianza', () => {

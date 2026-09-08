@@ -378,3 +378,87 @@ test('findApuNumericIssuesV2 detecta precio unitario final cero o negativo', () 
   const issues = findApuNumericIssuesV2({});
   assert.ok(issues.some(i => i.code === 'zero_or_negative_price'));
 });
+
+/* ---------- gastosComplementarios (P1 autorizado 2026-09-07) ---------- */
+
+test('applyCascade sin gastosComplementarios (parametro ausente) da el mismo resultado que antes del cambio', () => {
+  const conGastos = applyCascade(816.2, { indCampo: 8, indOficina: 7, finance: 2, utility: 10, cargos: 0.5, iva: 16 }, 0);
+  const sinArgumento = applyCascade(816.2, { indCampo: 8, indOficina: 7, finance: 2, utility: 10, cargos: 0.5, iva: 16 });
+  assert.ok(close(sinArgumento.pu, conGastos.pu));
+  assert.equal(sinArgumento.gastosComplementarios, 0);
+});
+
+test('applyCascade suma gastosComplementarios al costo directo ANTES de indirectos/financiamiento/utilidad/cargos', () => {
+  const sinGastos = applyCascade(1000, { indCampo: 8, indOficina: 7, finance: 2, utility: 10, cargos: 0.5, iva: 16 });
+  const conGastos = applyCascade(1000, { indCampo: 8, indOficina: 7, finance: 2, utility: 10, cargos: 0.5, iva: 16 }, 500);
+  // Equivalente a correr la cascada completa con base 1500 (no solo sumar 500 al pu final).
+  const esperado = applyCascade(1500, { indCampo: 8, indOficina: 7, finance: 2, utility: 10, cargos: 0.5, iva: 16 });
+  assert.ok(close(conGastos.pu, esperado.pu));
+  assert.ok(conGastos.pu > sinGastos.pu + 500 - 1e-6); // indirectos/utilidad tambien aplican sobre el gasto, no solo se suma plano
+  assert.equal(conGastos.gastosComplementarios, 500);
+});
+
+test('applyCascade sanea gastosComplementarios negativo/no finito a 0', () => {
+  const c = applyCascade(1000, { indCampo: 0, indOficina: 0, finance: 0, utility: 0, cargos: 0, iva: 0 }, -50);
+  assert.equal(c.gastosComplementarios, 0);
+  assert.ok(close(c.pu, 1000));
+  const c2 = applyCascade(1000, { indCampo: 0, indOficina: 0, finance: 0, utility: 0, cargos: 0, iva: 0 }, NaN);
+  assert.equal(c2.gastosComplementarios, 0);
+});
+
+test('calcAPUv2 sin gastosComplementarios (ausente o array vacio) da total 0 -- compatibilidad con APUs existentes', () => {
+  const sinCampo = calcAPUv2({ materials: [{ consumo: 1, desperdicioPct: 0, precioUnitario: 100 }], factores: { indCampo: 0, indOficina: 0, finance: 0, utility: 0, cargos: 0, iva: 0 } });
+  const conArrayVacio = calcAPUv2({ materials: [{ consumo: 1, desperdicioPct: 0, precioUnitario: 100 }], gastosComplementarios: [], factores: { indCampo: 0, indOficina: 0, finance: 0, utility: 0, cargos: 0, iva: 0 } });
+  assert.equal(sinCampo.gastosComplementarios, 0);
+  assert.equal(conArrayVacio.gastosComplementarios, 0);
+  assert.ok(close(sinCampo.pu, 100));
+  assert.ok(close(conArrayVacio.pu, 100));
+});
+
+test('calcAPUv2 excluye renglones con incluido:false del subtotal de gastosComplementarios', () => {
+  const t = calcAPUv2({
+    materials: [{ consumo: 1, desperdicioPct: 0, precioUnitario: 100 }],
+    gastosComplementarios: [
+      { cantidad: 2, precioUnitario: 50, incluido: true },   // 100, incluido
+      { cantidad: 3, precioUnitario: 999, incluido: false }  // excluido, no debe sumar
+    ],
+    factores: { indCampo: 0, indOficina: 0, finance: 0, utility: 0, cargos: 0, iva: 0 }
+  });
+  assert.equal(t.gastosComplementarios, 100);
+  assert.ok(close(t.pu, 200)); // 100 (material) + 100 (gasto incluido)
+});
+
+// Escenario QA exacto de la sesion (2026-09-07): comida 6 x $150 = $900,
+// casetas 4 x $240 = $960, hospedaje 2 x $850 = $1,700 -> subtotal $3,560.
+// Debe sumar una sola vez y afectar realmente el precio final (no quedar
+// solo informativo, a diferencia de Costos de Campo).
+test('QA: escenario comida/casetas/hospedaje suma exactamente $3,560 y afecta el precio final', () => {
+  const gastosComplementarios = [
+    { concepto: 'Comida cuadrilla', categoria: 'ALIMENTACION', cantidad: 6, precioUnitario: 150, incluido: true },
+    { concepto: 'Casetas de peaje', categoria: 'CASETAS', cantidad: 4, precioUnitario: 240, incluido: true },
+    { concepto: 'Hospedaje cuadrilla', categoria: 'HOSPEDAJE', cantidad: 2, precioUnitario: 850, incluido: true }
+  ];
+  const subtotal = gastosComplementarios.reduce((a, r) => a + r.cantidad * r.precioUnitario, 0);
+  assert.equal(subtotal, 3560);
+
+  const apuSinGastos = {
+    materials: [{ consumo: 1, desperdicioPct: 0, precioUnitario: 10000 }],
+    factores: { indCampo: 8, indOficina: 7, finance: 2, utility: 10, cargos: 0.5, iva: 16 },
+    cantidadObra: 1
+  };
+  const apuConGastos = { ...apuSinGastos, gastosComplementarios };
+
+  const sinGastos = calcAPUv2(apuSinGastos);
+  const conGastos = calcAPUv2(apuConGastos);
+
+  assert.equal(conGastos.gastosComplementarios, 3560);
+  assert.equal(sinGastos.gastosComplementarios, 0);
+  // El precio unitario y el importe total SI cambian (afectacion real del precio,
+  // no una linea meramente informativa como Costos de Campo).
+  assert.ok(conGastos.pu > sinGastos.pu);
+  assert.ok(conGastos.importeTotal > sinGastos.importeTotal);
+  // Verificacion cruzada: el resultado con gastos equivale a correr la cascada
+  // con base = direct + 3560 directamente.
+  const esperado = applyCascade(sinGastos.direct, apuSinGastos.factores, 3560);
+  assert.ok(close(conGastos.pu, esperado.pu));
+});

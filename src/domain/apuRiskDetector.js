@@ -78,6 +78,41 @@ const RULES = [
       incluirEnAPU: false, confianza: 'BAJA'
     };
   },
+  // RIESGO NORMATIVO (P1 autorizado 2026-09-07): a diferencia de la regla
+  // anterior (normativa completamente vacia), esta dispara cuando SI hay
+  // registros pero al menos uno quedo sin fuente verificable/pendiente de
+  // validar -- una norma capturada pero sin confirmar es un riesgo real
+  // distinto de "no se registro nada". Nunca evalua el contenido de la
+  // norma (nunca "esta norma esta mal"), solo su estado de validacion.
+  apu => {
+    const normativaRows = apu.normativa || [];
+    if(normativaRows.length === 0) return null;
+    const pendientes = normativaRows.filter(n => n?.origenValidacion === 'PENDIENTE_VALIDAR' || !String(n?.fuente || '').trim());
+    if(pendientes.length === 0) return null;
+    return {
+      id: 'riesgo_normativo_pendiente_validar', severidad: RISK_SEVERITY.MEDIUM,
+      hallazgo: `RIESGO NORMATIVO: ${pendientes.length} de ${normativaRows.length} registro(s) de normativa sigue(n) pendiente de validar o sin fuente verificable.`,
+      evidencia: pendientes.slice(0, 5).map(n => n?.nombre || n?.clave || '(sin nombre)').join('; '),
+      impactoPotencial: 'Una norma sin fuente confirmada no debe tratarse como aplicable con certeza -- podría faltar o sobrar alcance/costo según se confirme.',
+      recomendacion: 'Confirmar fuente y vigencia real de cada norma pendiente, o marcarla como no aplicable si corresponde.',
+      incluirEnAPU: false, confianza: 'MEDIA'
+    };
+  },
+  // Gastos Complementarios de Ejecucion (P1 autorizado 2026-09-07): mismo
+  // patron que costos_campo_ausentes, pero para el nuevo arreglo que SI
+  // afecta el precio -- ausencia total es una senal de que el concepto
+  // podria no reflejar viaticos/hospedaje/transporte/etc. reales de obra.
+  apu => {
+    if((apu.gastosComplementarios || []).length > 0) return null;
+    return {
+      id: 'gastos_complementarios_ausentes', severidad: RISK_SEVERITY.LOW,
+      hallazgo: 'No se han registrado Gastos Complementarios de Ejecución (alimentación, viáticos, hospedaje, transporte, fletes, permisos, etc.).',
+      evidencia: 'apu.gastosComplementarios está vacío.',
+      impactoPotencial: 'Gastos reales de ejecución (viáticos, hospedaje, transporte, permisos, pruebas de laboratorio) podrían quedar fuera del precio final.',
+      recomendacion: 'Revisar si el concepto amerita registrar Gastos Complementarios de Ejecución en la sección correspondiente.',
+      incluirEnAPU: false, confianza: 'BAJA'
+    };
+  },
   apu => {
     const tieneRecursos = (apu.materials || []).length > 0 || (apu.equipment || []).length > 0;
     if(!tieneRecursos || (apu.consumables || []).length > 0) return null;

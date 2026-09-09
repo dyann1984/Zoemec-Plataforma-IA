@@ -60,7 +60,7 @@ import {
   emptyApuWorkspaceState, removeBatchApus, describeAmbiguousSingleExport,
   duplicateGroupKey, groupConceptsByDuplicateKey, defaultBatchSelection, isExportableConceptItem,
   conceptNeedsReviewFlag, resolveBatchSelection, scopedListView, mergeScopedUpdate,
-  resolveBatchExportApus, assertExpectedExportCount
+  resolveBatchExportApus, assertExpectedExportCount, shouldReleaseStableApuIdentity
 } from './domain/apuWorkspace.js';
 import {
   ITEM_STATUS, createBatchJob, fingerprintCatalog, selectNextBatch,
@@ -1815,6 +1815,16 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     if(aiUnit.trim()) parsed.unit=aiUnit.trim();
     if(Number(aiQty)>0) parsed.qty=Number(aiQty);
     const next=standardAPUForConcept({concept:parsed.concept, unit:parsed.unit, qty:parsed.qty, referencePU:parsed.referencePU, variables:conceptVariablesFromParsed(parsed)}, catalog, 0, 'Texto pegado');
+    // FIX QA-remediacion BUG-01 (2026-09-09, hallazgo de regresion en vivo):
+    // sin esto, generar un concepto DISTINTO al que ya esta cargado (sin
+    // pasar por "Limpiar"/"Abrir" antes -- ej. el usuario solo reescribe el
+    // texto y vuelve a generar) reutilizaba el stableApuId viejo: "Guardar
+    // version" escribia el concepto nuevo ENCIMA del historial del concepto
+    // anterior (misma identidad, contenido irreconocible), en vez de crear
+    // su propio documento. Comparar contra apu.concept (la identidad HOY
+    // cargada) preserva el comportamiento intencional de que regenerar el
+    // MISMO concepto repetidas veces siga apuntando al mismo documento.
+    if(shouldReleaseStableApuIdentity(apu.concept, parsed.concept)) setStableApuId(next.id);
     setConcept(parsed.concept);
     setApu(next);
     setExcelInfo(parsed.referencePU ? {fileName:'Texto pegado',concept:parsed.concept,unit:next.unit,qty:parsed.qty,referencePU:parsed.referencePU,catalog:[]} : null);
@@ -1931,6 +1941,21 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       const shim = legacyShimFromV2(v2, parsed.concept, 'OpenAI API');
       setAiStatus('Validando resultado...');
       skipMigrateIdRef.current = shim.id;
+      // FIX QA-remediacion BUG-01 (2026-09-09, hallazgo de regresion en vivo
+      // durante la regresion de 3 APUs con IA real): skipMigrateIdRef hace
+      // que el efecto de arriba SIEMPRE se salte la adopcion de identidad
+      // para generaciones con IA -- necesario para que regenerar el MISMO
+      // concepto repetidas veces no cree un documento nuevo cada vez, pero
+      // eso tambien dejaba stableApuId pegado al APU anterior si el usuario
+      // generaba un concepto DISTINTO sin pasar por "Limpiar"/"Abrir" antes.
+      // Confirmado en vivo: "Guardar version" del concepto nuevo escribia
+      // ENCIMA del historial del concepto anterior (mismo documento,
+      // contenido irreconocible) mientras la clave visible mostraba la del
+      // concepto nuevo -- perdida silenciosa del APU anterior. Adoptar la
+      // identidad aqui mismo (nunca esperar al efecto, que esta vez SI se va
+      // a saltar) en cuanto el concepto cambia soluciona el hallazgo sin
+      // tocar el comportamiento intencional de regenerar el mismo concepto.
+      if(shouldReleaseStableApuIdentity(apu.concept, parsed.concept)) setStableApuId(shim.id);
       setConcept(v2.concept || shim.concept);
       setApu(shim);
       setApuV2({ ...v2, id: shim.id });
@@ -1943,6 +1968,9 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       if(requestId !== aiRequestSeqRef.current) return;
       const reason = err?.name==='AbortError' ? 'la IA tardo demasiado en responder' : friendlyServiceError(err,'servidor no disponible');
       const next = templateFallbackAPU({concept:parsed.concept, unit:parsed.unit, qty:parsed.qty, referencePU:parsed.referencePU, variables:conceptVariablesFromParsed(parsed)}, catalog, 0, 'Plantilla tecnica ZOEMEC', reason);
+      // Mismo fix de identidad que en el camino feliz de arriba (ver BUG-01):
+      // este fallback tambien puede seguir a un concepto distinto ya cargado.
+      if(shouldReleaseStableApuIdentity(apu.concept, parsed.concept)) setStableApuId(next.id);
       setConcept(next.concept);
       setApu(next);
       setExcelInfo({fileName:'Plantilla tecnica ZOEMEC',concept:next.concept,unit:next.unit,qty:parsed.qty,referencePU:parsed.referencePU,catalog});

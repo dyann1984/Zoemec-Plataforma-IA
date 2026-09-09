@@ -41,6 +41,24 @@ export function removeBatchApus(apus, batchApuIds){
   return list.filter(a => !ids.has(a?.id));
 }
 
+/* BUG-01 QA-remediacion (2026-09-09, hallazgo de regresion en vivo durante
+   la regresion de 3 APUs con IA real): stableApuId (main.jsx) existe para
+   que "Guardar version" siga apuntando al MISMO documento si el usuario
+   regenera el desarrollo repetidas veces sobre el MISMO concepto -- pero sin
+   este chequeo, generar un concepto DISTINTO sin pasar por "Limpiar"/"Abrir"
+   antes (ej. el usuario solo reescribe el texto y vuelve a generar) tambien
+   reusaba esa identidad: "Guardar version" del concepto nuevo escribia
+   ENCIMA del historial de version del concepto anterior (mismo documento,
+   contenido irreconocible), mientras la clave visible mostraba la del
+   concepto nuevo -- perdida silenciosa del APU anterior. Confirmado en vivo
+   contra el backend real (Historial mostro V1/V2 del concepto viejo + V3 del
+   nuevo bajo una sola clave). Pura para poder probarla sin renderizar
+   main.jsx (este proyecto no usa jsdom/@testing-library) -- main.jsx solo
+   llama esto antes de adoptar un id de una generacion nueva. */
+export function shouldReleaseStableApuIdentity(loadedConcept, newConcept){
+  return Boolean(loadedConcept) && loadedConcept !== newConcept;
+}
+
 /* DEFECTO REAL (reportado con evidencia medida: catalogo de 25 conceptos ->
    Excel exportado con RESUMEN + CONTROL_REVISION + 1 SOLA hoja APU): la
    pagina de APU Inteligente muestra, sobre el MISMO concepto previsualizado

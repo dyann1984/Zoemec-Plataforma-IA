@@ -47,6 +47,62 @@ test('computeElementArea de una ventana es ancho x alto x cantidad', () => {
   assert.ok(close(computeElementArea(win), 2.4));
 });
 
+/* QA-remediacion (2026-09-09): hallazgo en vivo durante regresion de
+   Levantamiento -- cantidad=0 escrita a proposito por el usuario se
+   calculaba identica a cantidad=1 (toSafeNonNegativeNumber(0) || 1 daba 1,
+   0 es falsy en JS). Prueba cada valor del caso reportado por separado. */
+test('computeElementArea: cantidad=0 excluye el elemento del area (NO se trata como 1)', () => {
+  const door = makeEmptyElement({ type: ELEMENT_TYPE.DOOR, width: 0.9, height: 2.1, quantity: 0 });
+  assert.equal(computeElementArea(door), 0);
+});
+
+test('computeElementArea: cantidad=-1 (invalida/fuera de dominio) sanea a 1, mismo criterio ya establecido para cantidad negativa/no numerica (ver levantamientoSchema.test.js) -- NUNCA se confunde con el 0 explicito', () => {
+  const door = makeEmptyElement({ type: ELEMENT_TYPE.DOOR, width: 0.9, height: 2.1, quantity: -1 });
+  assert.ok(close(computeElementArea(door), 1.89));
+});
+
+test('computeElementArea: cantidad=0.01 se aplica tal cual (valor valido, no es el caso "sin definir")', () => {
+  const door = makeEmptyElement({ type: ELEMENT_TYPE.DOOR, width: 0.9, height: 2.1, quantity: 0.01 });
+  assert.ok(close(computeElementArea(door), 0.9 * 2.1 * 0.01));
+});
+
+test('computeElementArea: cantidad=1 y cantidad=2 siguen funcionando exactos (no regresion)', () => {
+  const door1 = makeEmptyElement({ type: ELEMENT_TYPE.DOOR, width: 0.9, height: 2.1, quantity: 1 });
+  const door2 = makeEmptyElement({ type: ELEMENT_TYPE.DOOR, width: 0.9, height: 2.1, quantity: 2 });
+  assert.ok(close(computeElementArea(door1), 1.89));
+  assert.ok(close(computeElementArea(door2), 3.78));
+});
+
+test('computeElementArea: cantidad vacia/invalida ("", null explicito en el objeto) se clampea a 0, solo undefined/null (nunca definida) sigue defaulteando a 1', () => {
+  const doorEmptyString = { ...makeEmptyElement({ type: ELEMENT_TYPE.DOOR, width: 0.9, height: 2.1 }), quantity: '' };
+  const doorExplicitNull = { ...makeEmptyElement({ type: ELEMENT_TYPE.DOOR, width: 0.9, height: 2.1 }), quantity: null };
+  const doorNeverSet = { id: 'ELM-X', type: ELEMENT_TYPE.DOOR, width: 0.9, height: 2.1 }; // sin campo quantity, como un registro legado
+  assert.equal(computeElementArea(doorEmptyString), 0);
+  assert.ok(close(computeElementArea(doorExplicitNull), 1.89));
+  assert.ok(close(computeElementArea(doorNeverSet), 1.89));
+});
+
+test('computeSpaceGeometry: puerta con cantidad=0 no resta nada del muro neto (regresion del caso reportado: 84.00 - 0 - ventana, nunca 84.00 - 1x puerta - ventana)', () => {
+  const door = makeEmptyElement({ type: ELEMENT_TYPE.DOOR, width: 0.9, height: 2.1, quantity: 0 });
+  const win = makeEmptyElement({ type: ELEMENT_TYPE.WINDOW, width: 1.5, height: 1.2, quantity: 1 });
+  const space = { ...makeEmptySpace({ length: 10, width: 4, height: 3 }), elements: [door, win] };
+  const g = computeSpaceGeometry(space);
+  assert.ok(close(g.wallGrossArea, 84));
+  assert.ok(close(g.doorsArea, 0));
+  assert.ok(close(g.windowsArea, 1.8));
+  assert.ok(close(g.wallNetArea, 82.2), `esperado 82.2 (84 - 0 - 1.8), obtenido ${g.wallNetArea}`);
+});
+
+test('aggregateSurveyTotals: puerta/ventana con cantidad=0 no se cuentan en doorsCount/windowsCount', () => {
+  const doorZero = makeEmptyElement({ type: ELEMENT_TYPE.DOOR, width: 0.9, height: 2.1, quantity: 0 });
+  const winOne = makeEmptyElement({ type: ELEMENT_TYPE.WINDOW, width: 1.2, height: 1.2, quantity: 1 });
+  const survey = makeEmptySurvey({ projectId: 'PRO-1', name: 'Levantamiento QA cantidad cero' });
+  survey.spaces = [{ ...makeEmptySpace({ length: 8, width: 8, height: 3 }), elements: [doorZero, winOne] }];
+  const totals = aggregateSurveyTotals(survey);
+  assert.equal(totals.doorsCount, 0);
+  assert.equal(totals.windowsCount, 1);
+});
+
 test('computeSpaceGeometry descuenta puertas del area bruta de muros', () => {
   const door = makeEmptyElement({ type: ELEMENT_TYPE.DOOR, width: 0.9, height: 2.1 });
   const space = { ...makeEmptySpace({ length: 8, width: 8, height: 3 }), elements: [door] };

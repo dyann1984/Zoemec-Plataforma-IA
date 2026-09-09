@@ -12,6 +12,22 @@ function toSafeNonNegativeNumber(v){
   return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
+/* QA-remediacion (2026-09-09, hallazgo en vivo durante regresion de
+   Levantamiento): quantity=0 escrito a proposito por el usuario (ej. "esta
+   puerta no existe realmente, la deje capturada por referencia") se
+   calculaba identico a quantity=1 -- toSafeNonNegativeNumber(0) || 1 da 1,
+   porque 0 es falsy en JS. El fallback a 1 sigue siendo el saneo correcto
+   para cantidad invalida/negativa/sin definir (comportamiento YA cubierto
+   por una prueba existente en levantamientoSchema.test.js -- no se toca);
+   el defecto real es que ESE MISMO fallback tambien pisaba un 0 explicito,
+   que es un valor perfectamente valido dentro del dominio (>=0). Aqui solo
+   se distingue "0 explicito" del resto de los casos invalidos. */
+function resolveElementQuantity(v){
+  if(v == null) return 1;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : 1;
+}
+
 /* Area de un elemento individual (puerta/ventana/abertura: ancho x alto x
    cantidad; muro/viga capturado por longitud: largo x alto). Elementos sin
    dimensiones utiles regresan area 0 en vez de lanzar, igual que
@@ -21,7 +37,7 @@ export function computeElementArea(element){
   const width = toSafeNonNegativeNumber(element.width);
   const height = toSafeNonNegativeNumber(element.height);
   const length = toSafeNonNegativeNumber(element.length);
-  const quantity = toSafeNonNegativeNumber(element.quantity) || 1;
+  const quantity = resolveElementQuantity(element.quantity);
   if(element.type === ELEMENT_TYPE.WALL || element.type === ELEMENT_TYPE.BEAM){
     return length * height * quantity;
   }
@@ -86,8 +102,8 @@ export function aggregateSurveyTotals(survey){
     acc.wallGrossArea += space.wallGrossArea;
     acc.wallNetArea += space.wallNetArea;
     (space.elements || []).forEach(el => {
-      if(el.type === ELEMENT_TYPE.DOOR) acc.doorsCount += toSafeNonNegativeNumber(el.quantity) || 1;
-      if(el.type === ELEMENT_TYPE.WINDOW) acc.windowsCount += toSafeNonNegativeNumber(el.quantity) || 1;
+      if(el.type === ELEMENT_TYPE.DOOR) acc.doorsCount += resolveElementQuantity(el.quantity);
+      if(el.type === ELEMENT_TYPE.WINDOW) acc.windowsCount += resolveElementQuantity(el.quantity);
     });
     return acc;
   }, { floorArea: 0, ceilingArea: 0, wallGrossArea: 0, wallNetArea: 0, doorsCount: 0, windowsCount: 0 });

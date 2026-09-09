@@ -2580,6 +2580,10 @@ svg.ic{display:block;flex:none}
 .pro-toolbar-group-label{font-family:var(--mono);font-size:.68rem;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin-left:8px;padding-left:8px;border-left:1px solid var(--line-2)}
 .pro-toolbar-status{font-size:.72rem;color:var(--muted);font-style:italic}
 .pro-toolbar-status-error{color:var(--danger);font-style:normal}
+.pro-toolbar-status-warning{color:#9A6600;font-style:normal;font-weight:600}
+/* FIX QA-remediacion BUG-06 (2026-09-09, ronda 2): aviso visible de valor
+   negativo rechazado en un renglon de Presupuestos (ver main.jsx#Budgets). */
+.budget-negative-warning{color:var(--danger);font-size:.72rem;margin-top:2px;font-weight:600}
 .pro-section-title{font-family:var(--display);font-size:.92rem;font-weight:700;color:var(--petrol);margin:22px 0 10px;padding-top:14px;border-top:1px solid var(--line)}
 .pro-section-title-first{margin-top:0;padding-top:0;border-top:0}
 .pro-price-review{margin-bottom:22px;padding:14px;background:var(--gold-soft,#FFF8E6);border:1px solid var(--gold,#D9A441);border-radius:var(--r-sm)}

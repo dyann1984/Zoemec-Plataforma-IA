@@ -25,6 +25,31 @@ test('toSafeNonNegativeNumber sanea negativos, NaN e Infinity a 0', () => {
   assert.equal(toSafeNonNegativeNumber(null), 0);
 });
 
+// --- QA-remediacion BUG-06 (2026-09-09): Presupuestos aceptaba Cantidad < 0
+// sin ningun aviso y producia Importe/Subtotal/Total negativos en silencio.
+// La correccion en main.jsx#Budgets reusa exactamente esta misma funcion
+// (toSafeNonNegativeNumber, ya probada arriba) como punto unico de saneo,
+// tanto en el handler de edicion (update) como en el calculo de totales --
+// estas pruebas fijan los valores exactos pedidos en la auditoria. ---
+test('toSafeNonNegativeNumber: casos exactos de la auditoria QA (BUG-06) -- -1, -10, -0.01 se sanean a 0, positivos y cero se preservan', () => {
+  assert.equal(toSafeNonNegativeNumber(-1), 0);
+  assert.equal(toSafeNonNegativeNumber(-10), 0);
+  assert.equal(toSafeNonNegativeNumber(-0.01), 0);
+  assert.equal(toSafeNonNegativeNumber('-1'), 0, 'entrada como string (igual que value de un <input type="number">)');
+  assert.equal(toSafeNonNegativeNumber('-10'), 0);
+  assert.equal(toSafeNonNegativeNumber('-0.01'), 0);
+  assert.equal(toSafeNonNegativeNumber(0), 0, 'cero SI es valido -- solo se rechaza negativo, nunca cero');
+  assert.equal(toSafeNonNegativeNumber(12.5), 12.5);
+});
+
+test('Importe de un renglon de presupuesto (qty x pu, mismo patron que main.jsx#Budgets) nunca es negativo aunque qty o pu lo sean', () => {
+  const importe = (qty, pu) => toSafeNonNegativeNumber(qty) * toSafeNonNegativeNumber(pu);
+  assert.equal(importe(-10, 442.75), 0, 'cantidad negativa -> importe 0, nunca negativo');
+  assert.equal(importe(50, -442.75), 0, 'precio unitario negativo -> importe 0, nunca negativo');
+  assert.equal(importe(-1, -1), 0, 'ambos negativos tampoco "se cancelan" a un importe positivo falso');
+  assert.ok(close(importe(50, 442.75), 22137.5), 'caso positivo real (auditoria QA: 50 x $442.75) sigue calculando correcto');
+});
+
 test('rowImporte de materiales aplica cantidad x precio x (1 + merma%)', () => {
   const importe = rowImporte('materials', ['Mat A', 2, 'pza', 100, 10]);
   assert.ok(close(importe, 220));

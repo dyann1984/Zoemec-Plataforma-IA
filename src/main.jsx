@@ -9,6 +9,7 @@ import { useCloudState } from './cloud.js';
 import { consumeOneDriveRedirect, isOneDriveConfigured } from './lib/onedrive.js';
 import { createDemoContext } from './lib/apuFlow.js';
 import { APU_DEFAULT_FACTORS, DEFAULT_IVA_RATE, calcAPU, rowImporte, toSafeNonNegativeNumber } from './lib/apuCalc.js';
+import { confirmLeaveIfUnsavedApuWork } from './features/apu/unsavedWorkGuard.js';
 import { migrateLegacyApuToV2 } from './domain/apuSchema.js';
 import { finalizeProfessionalAPU, makePriceRecord } from './domain/apuProfessional.js';
 import { runApuConfidence, formatGlobalConfidence } from './domain/apuConfidence.js';
@@ -275,7 +276,16 @@ function useProjectScoped(list, setList, activeProjectId){
 
 function App(){
   const [screen, setScreen] = useState('landing');
-  const [module, setModule] = useState('inicio');
+  const [module, setModuleRaw] = useState('inicio');
+  // FIX QA-remediacion BUG-04 (2026-09-09, ronda 2): TODA navegacion entre
+  // modulos pasa por este UNICO punto (useState de arriba) -- envolverlo
+  // aqui, en vez de tocar cada uno de los ~30 sitios que llaman setModule
+  // (menu, CTAs del dashboard, tarjetas vacias, etc.), evita un refactor
+  // general y de todos modos cubre TODOS esos sitios: todos referencian el
+  // mismo nombre `setModule` de este closure. Confirma con el usuario antes
+  // de abandonar un APU con trabajo real sin guardar (ver
+  // features/apu/unsavedWorkGuard.js).
+  const setModule = (next) => { if(!confirmLeaveIfUnsavedApuWork()) return; setModuleRaw(next); };
   /* Modo Build Week / Demo: Panel Admin ya no aparece en el menu lateral, pero
      sigue existiendo intacto. Un administrador puede llegar directo agregando
      #admin a la URL (ej. localhost:5173/#admin); si el usuario no es admin,
@@ -1434,17 +1444,27 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   const [aiQty,setAiQty]=useState('');
   const [apu,setApu]=useState(()=>makeEmptyAPU());
   const [apuV2,setApuV2]=useState(()=>finalizeProfessionalAPU(migrateLegacyApuToV2(makeEmptyAPU())));
-  // stableApuId (Fase 8 Parte 2, fix de identidad): apuV2.id cambia cada vez
-  // que se regenera el desarrollo (generate()/generateAI() minan un id
-  // fresco cada vez -- ver apuGeneration.js#makeAPUFromConcept -- eso es
-  // intencional para esos flujos y NO se toca). Pero para la persistencia
-  // autoritativa (Fase 7: saveVersion/dossier) esa inestabilidad causaba un
-  // 404 real: la segunda vez que se guardaba tras "Actualizar desarrollo",
-  // el id ya no era el mismo que el servidor conocia. stableApuId es una
-  // identidad SEPARADA que solo cambia cuando de verdad es otra APU (Limpiar,
-  // o "Abrir" un guardado distinto) -- se estampa sobre professionalApu mas
-  // abajo, sin tocar generate()/generateAI() ni el efecto de migracion v1->v2.
-  const [stableApuId,setStableApuId]=useState(()=>apuV2.id);
+  // stableApuId (Fase 8 Parte 2, fix de identidad; corregido QA-remediacion
+  // BUG-01/02/03 2026-09-09): identidad SEPARADA de apuV2.id que solo cambia
+  // cuando de verdad es otra APU (Limpiar, o "Abrir" un guardado distinto),
+  // para que regenerar el desarrollo repetidas veces (generate()/generateAI()
+  // minan un id fresco cada vez -- intencional, no se toca) siga apuntando al
+  // MISMO documento al guardar.
+  //
+  // BUG real encontrado en auditoria QA: se inicializaba con apuV2.id de un
+  // APU EN BLANCO (makeEmptyAPU() -> id aleatorio sin relacion con ningun
+  // concepto) y el efecto de abajo NUNCA lo actualizaba en una generacion
+  // real -- solo resetAPUForm/"Abrir" lo hacian. Resultado: la PRIMERA vez
+  // que se generaba y guardaba un concepto en una sesion/montaje, se
+  // persistia bajo ese id aleatorio y desconectado de la "clave" mostrada en
+  // pantalla; recargar la pagina reiniciaba stableApuId a OTRO aleatorio, y
+  // "Guardar version" volvia a crear un documento distinto para el MISMO
+  // concepto (Bandeja de revision seguia mostrando el primero, "Guardar
+  // version" ya escribia en el segundo). Fix: null hasta que exista una
+  // identidad real, y se adopta el id de la PRIMERA generacion real de esta
+  // sesion de edicion (nunca de un APU vacio) -- generaciones posteriores del
+  // mismo "Actualizar desarrollo" siguen sin tocarlo, igual que antes.
+  const [stableApuId,setStableApuId]=useState(null);
   // skipMigrateIdRef: cuando generateAI ya construyo un apuV2 rico (procedimiento,
   // calidad, seguridad, fuentes, confianza real desde el esquema v2), este efecto
   // NO debe pisarlo con la migracion vacia de apuV1->v2 solo porque apu.id cambio.
@@ -1452,6 +1472,10 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   useEffect(()=>{
     if(skipMigrateIdRef.current === apu.id){ skipMigrateIdRef.current = null; return; }
     setApuV2(finalizeProfessionalAPU(migrateLegacyApuToV2(apu)));
+    // Adopta apu.id como identidad estable SOLO si todavia no hay una
+    // establecida en esta sesion de edicion (ver comentario arriba) -- nunca
+    // pisa una identidad ya fijada por una generacion/Abrir anterior.
+    setStableApuId(current => current == null ? apu.id : current);
   },[apu.id]);
   const [showExecutive,setShowExecutive]=useState(false);
   const [aiOpen,setAiOpen]=useState(false);
@@ -1527,6 +1551,10 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   const conceptTextareaRef = useRef(null);
   const clearFileInputs = () => [priceCatalogInputRef, fullExcelInputRef, conceptCatalogInputRef, mainExcelInputRef].forEach(ref => { if(ref.current) ref.current.value = ''; });
   const resetAPUForm = () => {
+    // FIX QA-remediacion BUG-04 (2026-09-09, ronda 2): "Limpiar"/"Crear
+    // manualmente" tambien abandona el APU en curso sin pasar por
+    // setModule -- mismo guard, mismo criterio.
+    if(!confirmLeaveIfUnsavedApuWork()) return;
     clearFileInputs();
     const empty = emptyApuWorkspaceState();
     setConcept(empty.concept);
@@ -1536,7 +1564,10 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     setApu(freshApu);
     // Limpiar/Crear manualmente es el unico momento (junto con "Abrir" otro
     // guardado) en que de verdad es OTRA identidad -- ver stableApuId arriba.
-    setStableApuId(freshApu.id);
+    // null (no freshApu.id): freshApu es un APU EN BLANCO sin concepto, su id
+    // no debe adoptarse como identidad real -- se libera la identidad actual
+    // y la siguiente generacion real (generate()/generateAI()) la establece.
+    setStableApuId(null);
     setAiOpen(empty.aiOpen);
     setExcelInfo(empty.excelInfo);
     setConceptBatch(empty.conceptBatch);
@@ -1700,7 +1731,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   // tocan), pero lo que la persistencia ve es siempre stableApuId. Igual
   // con projectId: nunca se rellena despues, nace ya con el proyecto activo
   // si existe uno (activeProjectId, ya trackeado mas arriba).
-  const professionalApu=useMemo(()=>finalizeProfessionalAPU({...apuV2,id:stableApuId,projectId:apuV2.projectId||activeProjectId||null,cantidadObra:Number(apuV2.cantidadObra||excelInfo?.qty||apu.sourceQty||1)}),[apuV2,stableApuId,activeProjectId,excelInfo?.qty,apu.sourceQty]);
+  const professionalApu=useMemo(()=>finalizeProfessionalAPU({...apuV2,id:stableApuId||apuV2.id,projectId:apuV2.projectId||activeProjectId||null,cantidadObra:Number(apuV2.cantidadObra||excelInfo?.qty||apu.sourceQty||1)}),[apuV2,stableApuId,activeProjectId,excelInfo?.qty,apu.sourceQty]);
   // Fuente unica de verdad del Confidence global (ver src/domain/apuConfidence.js
   // #runApuConfidence -- auditoria JUDGE READY): se calcula UNA vez por render
   // aqui y se comparte entre ExecutiveSummaryCards, "Confianza del analisis" y
@@ -2699,6 +2730,10 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         <div className="sc-concept">{a.concept}</div>
         <div className="sc-pu">{money(pu)} <small>/ {a.unit}</small></div>
         <div className="sc-actions"><button onClick={()=>{
+          // FIX QA-remediacion BUG-04 (2026-09-09, ronda 2): "Abrir" otro
+          // APU guardado tambien abandona el que esta en curso, sin pasar
+          // por setModule (mismo modulo 'apu') -- mismo guard.
+          if(!confirmLeaveIfUnsavedApuWork()) return;
           if(a.schemaVersion===2){
             const shim={...legacyShimFromV2(a,a.concept,a.sourceFile||'Guardado'),id:a.id,aiGenerated:Boolean(a.aiGenerated),templateFallback:Boolean(a.templateFallback),family:a.family||'APU generado con IA'};
             skipMigrateIdRef.current=shim.id;
@@ -3070,17 +3105,45 @@ function Budgets({company,budgets,setBudgets,items,setItems,activeProjectId,onNe
   // misma fuente unica que usa el motor APU) y se guarda con el presupuesto
   // para que quede fija en su historial aunque el default cambie despues.
   const [ivaRate,setIvaRate]=useState(DEFAULT_IVA_RATE);
-  const total=items.reduce((a,i)=>a+Number(i.qty)*Number(i.pu),0);
+  // toSafeNonNegativeNumber (no solo Number()) tambien cubre renglones
+  // guardados ANTES de este fix (ver BUG-06) que pudieran traer qty/pu
+  // negativo persistido -- nunca produce un total negativo en pantalla.
+  const total=items.reduce((a,i)=>a+toSafeNonNegativeNumber(i.qty)*toSafeNonNegativeNumber(i.pu),0);
   const safeIvaRate=toSafeNonNegativeNumber(ivaRate);
   const iva=total*safeIvaRate/100;
-  const update=(i,k,v)=>setItems(items.map((r,idx)=>idx===i?{...r,[k]:v}:r));
-  const removeRow=(i)=>setItems(items.filter((_,idx)=>idx!==i));
+  // FIX QA-remediacion BUG-06 (2026-09-09): 'qty'/'pu' negativos se aceptaban
+  // sin ningun aviso y producian Importe/Subtotal/Total negativos en
+  // silencio (persistidos igual por el autosave). Unico punto de entrada de
+  // edicion de renglon -> saneado aqui con el mismo toSafeNonNegativeNumber
+  // ya usado para ivaRate, antes de que setItems dispare la persistencia --
+  // el valor invalido en si NUNCA llega a setItems/autosave.
+  //
+  // Ronda 2 (feedback QA): un saneo silencioso a 0 no basta -- el usuario
+  // debe VER por que su "-10" se convirtio en "0". rowWarnings guarda, solo
+  // en memoria de este componente (nunca se persiste), que celda disparo un
+  // valor negativo la ultima vez que se edito, para mostrar un mensaje
+  // inline junto al campo hasta que el usuario lo corrija.
+  const [rowWarnings,setRowWarnings]=useState({});
+  const update=(i,k,v)=>{
+   if(k==='qty'||k==='pu'){
+    const raw=Number(v);
+    const isNegative = v!=='' && Number.isFinite(raw) && raw<0;
+    setRowWarnings(w=>{ const next={...w}; const key=`${i}-${k}`; if(isNegative) next[key]=true; else delete next[key]; return next; });
+    setItems(items.map((r,idx)=>idx===i?{...r,[k]:toSafeNonNegativeNumber(v)}:r));
+    return;
+   }
+   setItems(items.map((r,idx)=>idx===i?{...r,[k]:v}:r));
+  };
+  // Los indices de fila cambian al quitar un renglon -- se limpian los
+  // avisos en vez de arrastrarlos a una fila equivocada (nunca es un dato
+  // persistido, solo un aviso visual de esta sesion).
+  const removeRow=(i)=>{ setItems(items.filter((_,idx)=>idx!==i)); setRowWarnings({}); };
   const save=()=>{ if(!activeProjectId){ if(confirm(tr('budget.confirmNeedProject'))) onNeedProject?.(); return; } setBudgets([{id:'PRE-'+uid(),name:'Presupuesto ejecutivo',client:'Cliente por definir',items,ivaRate:safeIvaRate,total:total+iva,date:new Date().toLocaleDateString('es-MX')},...budgets]); alert(tr('budget.savedAlert'));};
   const openSaved=(b)=>{ setItems(b.items||[]); setIvaRate(Number(b.ivaRate ?? DEFAULT_IVA_RATE)); window.scrollTo({top:0,behavior:'smooth'}); };
   const removeSaved=(id)=>{ if(!confirm(tr('budget.confirmDelete'))) return; setBudgets(budgets.filter(b=>b.id!==id)); };
   const downloadSaved=(b,kind)=>{
     const bItems=b.items||[];
-    const bTotal=bItems.reduce((a,i)=>a+Number(i.qty)*Number(i.pu),0);
+    const bTotal=bItems.reduce((a,i)=>a+toSafeNonNegativeNumber(i.qty)*toSafeNonNegativeNumber(i.pu),0);
     const bIvaRate=toSafeNonNegativeNumber(b.ivaRate ?? DEFAULT_IVA_RATE);
     const bIva=bTotal*bIvaRate/100;
     kind==='pdf' ? exportBudgetPDF(bItems,bTotal,bIva,company,bIvaRate) : exportBudgetExcel(bItems,bTotal,bIva,bIvaRate);
@@ -3090,12 +3153,12 @@ function Budgets({company,budgets,setBudgets,items,setItems,activeProjectId,onNe
       <p className="muted" style={{margin:0}}>{tr('budget.needProjectBanner')}</p>
       <button onClick={onNeedProject}>{tr('budget.createProject')}</button>
     </div>}
-    <div className="panel"><div className="apu-table-scroll"><table className="budget-table"><thead><tr><th>{tr('budget.colConcept')}</th><th>{tr('budget.colUnit')}</th><th>{tr('budget.colQty')}</th><th>{tr('budget.colPu')}</th><th>{tr('budget.colAmount')}</th><th></th></tr></thead><tbody>{items.map((it,i)=><tr key={i}><td><input value={it.concept} onChange={e=>update(i,'concept',e.target.value)}/></td><td><input value={it.unit} onChange={e=>update(i,'unit',e.target.value)}/></td><td><input type="number" value={it.qty} onChange={e=>update(i,'qty',e.target.value)}/></td><td><input type="number" value={it.pu} onChange={e=>update(i,'pu',e.target.value)}/></td><td>{money(it.qty*it.pu)}</td><td><a className="row-del" title={tr('budget.deleteConceptTitle')} onClick={()=>removeRow(i)}>✕</a></td></tr>)}</tbody></table></div><button className="soft" onClick={()=>setItems([...items,{concept:'Nuevo concepto',unit:'m²',qty:1,pu:0}])}>{tr('budget.addConcept')}</button><div className="totals"><Cost label={tr('budget.subtotal')} v={total}/><div className="iva-rate-row"><label htmlFor="budget-iva-rate">{tr('budget.ivaRateLabel')}</label><input id="budget-iva-rate" type="number" min="0" step="0.5" value={ivaRate} onChange={e=>setIvaRate(e.target.value)}/></div><Cost label={tr('budget.ivaLabel',{rate:num(safeIvaRate)})} v={iva}/><div className="grand"><span>{tr('budget.total')}</span><b>{money(total+iva)}</b></div></div><div className="export-row"><button onClick={()=>exportBudgetExcel(items,total,iva,safeIvaRate)}>{tr('budget.exportExcel')}</button><button onClick={()=>exportBudgetPDF(items,total,iva,company,safeIvaRate)}>{tr('budget.exportPdf')}</button></div></div>
+    <div className="panel"><div className="apu-table-scroll"><table className="budget-table"><thead><tr><th>{tr('budget.colConcept')}</th><th>{tr('budget.colUnit')}</th><th>{tr('budget.colQty')}</th><th>{tr('budget.colPu')}</th><th>{tr('budget.colAmount')}</th><th></th></tr></thead><tbody>{items.map((it,i)=><tr key={i}><td><input value={it.concept} onChange={e=>update(i,'concept',e.target.value)}/></td><td><input value={it.unit} onChange={e=>update(i,'unit',e.target.value)}/></td><td><input type="number" min="0" aria-invalid={rowWarnings[`${i}-qty`]?'true':undefined} value={it.qty} onChange={e=>update(i,'qty',e.target.value)}/>{rowWarnings[`${i}-qty`] && <div className="budget-negative-warning" role="alert">La cantidad no puede ser negativa -- se ajustó a 0.</div>}</td><td><input type="number" min="0" aria-invalid={rowWarnings[`${i}-pu`]?'true':undefined} value={it.pu} onChange={e=>update(i,'pu',e.target.value)}/>{rowWarnings[`${i}-pu`] && <div className="budget-negative-warning" role="alert">El precio unitario no puede ser negativo -- se ajustó a 0.</div>}</td><td>{money(toSafeNonNegativeNumber(it.qty)*toSafeNonNegativeNumber(it.pu))}</td><td><a className="row-del" title={tr('budget.deleteConceptTitle')} onClick={()=>removeRow(i)}>✕</a></td></tr>)}</tbody></table></div><button className="soft" onClick={()=>setItems([...items,{concept:'Nuevo concepto',unit:'m²',qty:1,pu:0}])}>{tr('budget.addConcept')}</button><div className="totals"><Cost label={tr('budget.subtotal')} v={total}/><div className="iva-rate-row"><label htmlFor="budget-iva-rate">{tr('budget.ivaRateLabel')}</label><input id="budget-iva-rate" type="number" min="0" step="0.5" value={ivaRate} onChange={e=>setIvaRate(e.target.value)}/></div><Cost label={tr('budget.ivaLabel',{rate:num(safeIvaRate)})} v={iva}/><div className="grand"><span>{tr('budget.total')}</span><b>{money(total+iva)}</b></div></div><div className="export-row"><button onClick={()=>exportBudgetExcel(items,total,iva,safeIvaRate)}>{tr('budget.exportExcel')}</button><button onClick={()=>exportBudgetPDF(items,total,iva,company,safeIvaRate)}>{tr('budget.exportPdf')}</button></div></div>
     {budgets.length>0 && <div className="panel" style={{marginTop:16}}>
       <h2>{tr('budget.savedTitle')} <small className="hint">({budgets.length})</small></h2>
       <div className="saved-grid">{budgets.map(b=>{
         const bItems=b.items||[];
-        const bTotal=bItems.reduce((a,i)=>a+Number(i.qty)*Number(i.pu),0);
+        const bTotal=bItems.reduce((a,i)=>a+toSafeNonNegativeNumber(i.qty)*toSafeNonNegativeNumber(i.pu),0);
         const bIvaRate=toSafeNonNegativeNumber(b.ivaRate ?? DEFAULT_IVA_RATE);
         const bWithIva=bTotal*(1+bIvaRate/100);
         return <div className="saved-card" key={b.id}>

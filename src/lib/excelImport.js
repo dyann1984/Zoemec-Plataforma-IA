@@ -810,10 +810,28 @@ export function parseConceptText(input){
   // Proporciones (1:4), dimensiones (15 x 20 x 40) y medidas tecnicas
   // (15 cm, 3/4 in) describen el concepto: nunca son cantidad ni P.U. Se
   // conserva tambien el texto original de cada coincidencia (dimensions).
+  //
+  // FIX QA-remediacion BUG-05 (2026-09-09): calibres, cedulas, numero de
+  // varilla y fracciones de pulgada con una palabra de enlace ("3/4 DE
+  // PULGADA", no solo "3/4 in" pegado) se colaban como cantidad de obra y/o
+  // P.U. de referencia -- terminologia cotidiana de construccion
+  // (PERFIL CAL. 26, TUBERIA 3/4", TUBERIA 1/2", CED. 40, VARILLA #3,
+  // TORNILLO 1 1/4") que no es una cantidad, nunca lo fue. Se agregan los
+  // patrones que faltaban a la MISMA lista de rangos tecnicos ya excluidos
+  // (insideTechnicalRange, usado abajo tanto para qty como para
+  // referencePU) -- ningun otro comportamiento cambia.
   const technicalMatches=[
     /\b\d+(?:\.\d+)?\s*:\s*\d+(?:\.\d+)?\b/g,
     /\b\d+(?:\.\d+)?(?:\s*[x×]\s*\d+(?:\.\d+)?){1,3}\b/gi,
-    /\b\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:mm|cm|in|pulg(?:adas?)?|dia(?:metro)?|ø)\b/gi
+    // Fraccion o numero mixto (1 1/4) de pulgada: tolera una palabra de
+    // enlace ("de") entre el numero y la unidad, y el simbolo " de pulgada.
+    /\b\d+(?:\.\d+)?(?:\s+\d+\s*\/\s*\d+|\s*\/\s*\d+(?:\.\d+)?)?\s*(?:de\s+)?(?:mm|cm|in|pulg(?:adas?)?|dia(?:metro)?|ø)\b/gi,
+    /\b\d+(?:\s+\d+\s*\/\s*\d+|\/\d+)?\s*"/g,
+    // Calibre/cedula de lamina o tuberia: "CAL. 26", "CALIBRE 26", "CED. 40",
+    // "CEDULA 40" -- el numero es una especificacion tecnica, nunca cantidad.
+    /\b(?:cal(?:ibre)?|c[eé]d(?:ula)?)\.?\s*\d+\b/gi,
+    // Numero de varilla de refuerzo: "VARILLA #3", "#3".
+    /\b(?:varilla\s*)?#\s*\d+\b/gi
   ].flatMap(re=>[...text.matchAll(re)].map(m=>({start:m.index??0, end:(m.index??0)+m[0].length, text:m[0]})));
   const technicalRanges=technicalMatches.map(m=>[m.start,m.end]);
   const insideTechnicalRange=index=>technicalRanges.some(([start,end])=>index>=start&&index<end);

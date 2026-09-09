@@ -1,4 +1,5 @@
 import { requireFeature } from '../server/api-lib/_authGuard.mjs';
+import { classifyOpenAIError, publicMessageForErrorClass } from '../server/api-lib/_aiHealthSignal.mjs';
 
 const MODEL = process.env.OPENAI_PRICE_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 
@@ -71,7 +72,15 @@ Devuelve SOLO un JSON valido, sin markdown ni texto adicional:
         tools:[{ type:'web_search_preview', user_location:{ type:'approximate', country:'MX' } }]
       });
     }
-    if(!out.ok) throw new Error(out.data?.error?.message || `OpenAI API error ${out.status}`);
+    if(!out.ok){
+      const errorClass = classifyOpenAIError(out.status, out.data);
+      console.error(`[OpenAI] market-price error real (HTTP ${out.status}, clase ${errorClass}):`, out.data?.error?.message || `OpenAI API error ${out.status}`);
+      const error = new Error(out.data?.error?.message || `OpenAI API error ${out.status}`);
+      error.status = out.status >= 400 && out.status < 500 ? out.status : 502;
+      error.errorClass = errorClass;
+      error.publicMessage = publicMessageForErrorClass(errorClass);
+      throw error;
+    }
 
     const text = extractText(out.data);
     if(!text) throw new Error('La busqueda web no devolvio contenido.');
@@ -88,6 +97,14 @@ Devuelve SOLO un JSON valido, sin markdown ni texto adicional:
 
     res.status(200).json({ quote });
   }catch(err){
-    res.status(err.status || 400).json({ error: err.message || 'No se pudo consultar el precio de mercado.' });
+    // err.publicMessage (si existe) es el mensaje generico y seguro para
+    // fallos reales de OpenAI (ver classifyOpenAIError arriba) -- nunca el
+    // texto crudo del proveedor. err.message queda de fallback para errores
+    // propios de ZOEMEC (validacion, auth), que ya son texto seguro.
+    const message = err.publicMessage || err.message || 'No se pudo consultar el precio de mercado.';
+    res.status(err.status || 400).json({
+      error: message,
+      ...(err.errorClass ? { errorClass: err.errorClass } : {})
+    });
   }
 }

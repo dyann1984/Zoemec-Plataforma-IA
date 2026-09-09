@@ -1,5 +1,6 @@
 import { APU_DEFAULT_FACTORS } from '../../src/lib/apuCalc.js';
 import { normalizeAIApuToV2 } from '../../src/domain/apuSchema.js';
+import { recordOpenAIOutcome, classifyOpenAIError, publicMessageForErrorClass } from './_aiHealthSignal.mjs';
 
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 
@@ -38,27 +39,53 @@ function openaiStatusMessage(status, fallback){
    temperature y formato de respuesta; esto no cambia ningun comportamiento,
    solo evita repetir el bloque de fetch+manejo de errores tres veces. */
 async function requestChatCompletion({ messages, temperature = 0.15, maxTokens, jsonResponse = false }){
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method:'POST',
-    headers:{
-      Authorization:`Bearer ${process.env.OPENAI_API_KEY}`,
-      'Content-Type':'application/json'
-    },
-    body:JSON.stringify({
-      model:MODEL,
-      temperature,
-      ...(jsonResponse ? { response_format:{ type:'json_object' } } : {}),
-      ...(maxTokens ? { max_tokens:maxTokens } : {}),
-      messages
-    })
-  });
+  let response;
+  try{
+    response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method:'POST',
+      headers:{
+        Authorization:`Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type':'application/json'
+      },
+      body:JSON.stringify({
+        model:MODEL,
+        temperature,
+        ...(jsonResponse ? { response_format:{ type:'json_object' } } : {}),
+        ...(maxTokens ? { max_tokens:maxTokens } : {}),
+        messages
+      })
+    });
+  }catch(networkErr){
+    // Fallo de red/timeout: nunca llego a haber respuesta HTTP (ver AUD-018).
+    // await intencional: en una funcion serverless, el proceso puede terminar
+    // apenas se resuelve/rechaza esta promesa -- sin await, el registro de la
+    // señal podria nunca escribirse.
+    await recordOpenAIOutcome({ ok:false, status:0, errBody:null });
+    const errorClass = classifyOpenAIError(0, null);
+    console.error('[OpenAI] fallo de red/timeout en requestChatCompletion:', networkErr?.message || networkErr);
+    const error = new Error('No se pudo contactar a OpenAI (timeout o error de red).');
+    error.status = 502;
+    error.errorClass = errorClass;
+    error.publicMessage = publicMessageForErrorClass(errorClass);
+    throw error;
+  }
   if(!response.ok){
     const errBody = await readOpenAIJson(response).catch(()=>null);
+    await recordOpenAIOutcome({ ok:false, status:response.status, errBody });
+    const errorClass = classifyOpenAIError(response.status, errBody);
+    // Detalle tecnico completo SOLO en logs de servidor (privados de Vercel) --
+    // nunca en la respuesta HTTP que llega al navegador (ver api/generate-apu.mjs
+    // y api/assistant.mjs, que usan err.publicMessage, no err.message, para el
+    // cliente).
+    console.error(`[OpenAI] error real (HTTP ${response.status}, clase ${errorClass}):`, errBody?.error?.message || `OpenAI API error ${response.status}`);
     const error = new Error(errBody?.error?.message || openaiStatusMessage(response.status, `OpenAI API error ${response.status}`));
     error.status = response.status >= 400 && response.status < 500 ? response.status : 502;
+    error.errorClass = errorClass;
+    error.publicMessage = publicMessageForErrorClass(errorClass);
     throw error;
   }
   const data = await readOpenAIJson(response);
+  await recordOpenAIOutcome({ ok:true });
   return String(data?.choices?.[0]?.message?.content || '');
 }
 

@@ -2415,6 +2415,10 @@ svg.ic{display:block;flex:none}
 .admin-health-card.ok .admin-health-status{background:#E6F6EE;color:#1B7A46}
 .admin-health-card.error .admin-health-status{background:#FBE9EC;color:var(--danger)}
 .admin-health-card.not_available .admin-health-status{background:#F1EEF4;color:var(--muted)}
+.admin-health-card.down .admin-health-status{background:#FBE9EC;color:var(--danger)}
+.admin-health-card.degraded .admin-health-status{background:#FCF1DC;color:#946B00}
+.admin-health-card.unknown .admin-health-status{background:#F1EEF4;color:var(--muted)}
+.admin-health-card.not_configured .admin-health-status{background:#F1EEF4;color:var(--muted)}
 
 /* ---------- Resultado ejecutivo del APU (pantalla limpia antes del editor) ---------- */
 .executive-result{display:flex;flex-direction:column;gap:18px}

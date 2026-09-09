@@ -18,6 +18,7 @@
    importar que tan buen precio tenga. */
 
 import { evaluateReferences, MATCH_VERDICT } from '../../src/lib/technicalMatch.js';
+import { classifyOpenAIError, publicMessageForErrorClass } from './_aiHealthSignal.mjs';
 
 const MODEL = process.env.OPENAI_PRICE_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 
@@ -121,7 +122,15 @@ Incluye entre 1 y 5 referencias reales verificables. Si no encuentras ninguna fu
       tools: [{ type: 'web_search_preview', user_location: { type: 'approximate', country: 'MX' } }]
     });
   }
-  if(!out.ok) throw new Error(out.data?.error?.message || `OpenAI API error ${out.status}`);
+  if(!out.ok){
+    const errorClass = classifyOpenAIError(out.status, out.data);
+    console.error(`[OpenAI] price-intelligence error real (HTTP ${out.status}, clase ${errorClass}):`, out.data?.error?.message || `OpenAI API error ${out.status}`);
+    const error = new Error(out.data?.error?.message || `OpenAI API error ${out.status}`);
+    error.status = out.status >= 400 && out.status < 500 ? out.status : 502;
+    error.errorClass = errorClass;
+    error.publicMessage = publicMessageForErrorClass(errorClass);
+    throw error;
+  }
 
   const text = extractText(out.data);
   const clean = String(text || '').replace(/```json|```/g, '').trim();

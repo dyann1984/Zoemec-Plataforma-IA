@@ -22,6 +22,14 @@ export default async function handler(req, res){
     const result = await searchMarketReferencesWithCache({ description, unit, kind, location, dateBase, technicalSpecification, region, tenantScope });
     res.status(200).json(result);
   }catch(err){
-    res.status(err.status || 400).json({ error: err.message || 'No se pudo consultar precios de mercado.' });
+    // Ver comentario en api/generate-apu.mjs: err.publicMessage (fallo real
+    // de OpenAI, clasificado en _priceIntelligenceCore.mjs) es seguro para
+    // el cliente; err.message queda de fallback para errores propios de
+    // ZOEMEC (auth, validacion).
+    const message = err.publicMessage || err.message || 'No se pudo consultar precios de mercado.';
+    res.status(err.status || 400).json({
+      error: message,
+      ...(err.errorClass ? { errorClass: err.errorClass } : {})
+    });
   }
 }

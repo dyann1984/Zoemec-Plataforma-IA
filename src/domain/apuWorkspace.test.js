@@ -4,7 +4,7 @@ import {
   emptyApuWorkspaceState, removeBatchApus, describeAmbiguousSingleExport,
   duplicateGroupKey, groupConceptsByDuplicateKey, defaultBatchSelection,
   isExportableConceptItem, conceptNeedsReviewFlag, resolveBatchSelection,
-  scopedListView, mergeScopedUpdate
+  scopedListView, mergeScopedUpdate, shouldReleaseStableApuIdentity
 } from './apuWorkspace.js';
 
 test('emptyApuWorkspaceState: forma exacta de "sin trabajo en curso"', () => {
@@ -297,4 +297,31 @@ test('resolveBatchSelection: nunca excluye en silencio -- devuelve la lista de e
   assert.equal(selectedList.length, 2);
   assert.deepEqual(selectedList.map(c => c.concept), ['Movimiento de mueble', 'demolicion de loseta 64m2']);
   assert.deepEqual(excludedConcepts, ['TOTAL']);
+});
+
+/* BUG-01 QA-remediacion (2026-09-09): regresion real encontrada en vivo
+   contra el backend de produccion durante la regresion de 3 APUs con IA
+   real -- generar "Muro de tablaroca con perfil CAL. 26" (V1 $668.42, V2
+   $676.59 tras editar un material), y LUEGO, sin pasar por "Limpiar
+   trabajo"/"Abrir" (el confirm() de "Limpiar trabajo" quedo sin resolver),
+   generar "Tuberia de cobre 3/4″" -- "Guardar version" de la tuberia
+   escribio su V3 ENCIMA del historial de la tablaroca: abrir "APU-PQLSSF"
+   (clave de la tuberia) mostraba V1/V2 con el P.U. de la tablaroca y V3 con
+   el de la tuberia, bajo una sola clave -- el APU de tablaroca desaparecio
+   por completo de "Mis APU guardados", la Bandeja y la busqueda. */
+test('shouldReleaseStableApuIdentity: concepto distinto al cargado -> libera la identidad (nunca reusa el documento de otro APU)', () => {
+  const cargado = 'Suministro y colocación de muro divisorio de tablaroca sobre estructura metálica con perfil CAL. 26, incluye aislamiento y acabado para pintura';
+  const nuevo = 'Suministro e instalación de tubería de cobre tipo M de 3/4" para red hidráulica, incluye conexiones y pruebas de hermeticidad';
+  assert.equal(shouldReleaseStableApuIdentity(cargado, nuevo), true, 'un concepto genuinamente distinto debe liberar la identidad estable, nunca heredar el documento del concepto anterior');
+});
+
+test('shouldReleaseStableApuIdentity: regenerar el MISMO concepto (texto identico) NUNCA libera la identidad -- comportamiento intencional de "Actualizar desarrollo"', () => {
+  const concepto = 'Suministro y colocación de piso cerámico de 60x60 cm sobre firme de concreto, incluye boquilla y limpieza final';
+  assert.equal(shouldReleaseStableApuIdentity(concepto, concepto), false, 'regenerar el mismo concepto repetidas veces debe seguir apuntando al mismo documento al guardar');
+});
+
+test('shouldReleaseStableApuIdentity: sin identidad previa cargada (sesion nueva / "Limpiar"/"Abrir" ya reseteo) -> nunca libera lo que no existe', () => {
+  assert.equal(shouldReleaseStableApuIdentity('', 'Concepto nuevo cualquiera'), false);
+  assert.equal(shouldReleaseStableApuIdentity(null, 'Concepto nuevo cualquiera'), false);
+  assert.equal(shouldReleaseStableApuIdentity(undefined, 'Concepto nuevo cualquiera'), false);
 });

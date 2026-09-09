@@ -283,7 +283,7 @@ export function AdminPanel({user}){
          health.error ? <EmptyState icon="admin" title="No se pudo consultar" text={health.error}/> :
          <div className="admin-health-grid">{Object.entries(health.checks||{}).map(([key,c])=><div className={'admin-health-card '+c.status} key={key}>
            <b>{c.label||key}</b>
-           <span className="admin-health-status">{c.status==='ok'?'Operativo':c.status==='error'?'Con errores':'No disponible'}</span>
+           <span className="admin-health-status">{c.status==='ok'?'Operativo':c.status==='degraded'?'Intermitente':c.status==='down'?'Caido':c.status==='not_configured'?'Sin configurar':c.status==='unknown'?'Sin datos recientes':c.status==='error'?'Con errores':'No disponible'}</span>
            <p>{c.detail}</p>
          </div>)}</div>}
 
@@ -325,7 +325,7 @@ export function AdminPanel({user}){
     {tab==='diagnostico' && (()=>{
       const envRows=[
         ['Firebase Storage/Firestore', health?.checks?.firebase?.status==='ok'],
-        ['OpenAI (OPENAI_API_KEY)', health?.checks?.openai?.status==='ok'],
+        ['OpenAI (OPENAI_API_KEY)', Boolean(health?.checks?.openai?.configured)],
         ['Google Drive (CLIENT_ID/SECRET/REFRESH_TOKEN)', Boolean(platformStatus?.googleDriveConfigured)],
         ['OneDrive cliente (VITE_ONEDRIVE_CLIENT_ID)', isOneDriveConfigured()],
         ['OneDrive servidor (ONEDRIVE_CLIENT_ID/SECRET)', Boolean(oneDriveAdmin?.env?.ONEDRIVE_CLIENT_ID && oneDriveAdmin?.env?.ONEDRIVE_CLIENT_SECRET)],

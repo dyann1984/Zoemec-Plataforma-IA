@@ -300,3 +300,113 @@ test('Round-trip real: Excel -> parseCatalogRows -> catalogLookup -- clave/categ
   assert.equal(bySinonimo.confidence, 0.95);
   assert.ok(bySinonimo.confidence > 0.667, 'debe ser una confianza mayor que la de fuzzy_token, no solo distinta');
 });
+
+// --- QA-remediacion BUG-05 (2026-09-09): calibres, cedulas, numero de
+// varilla y fracciones de pulgada con palabra de enlace ("3/4 DE PULGADA")
+// NUNCA deben interpretarse como cantidad de obra ni P.U. de referencia --
+// son especificaciones tecnicas, igual que las dimensiones/proporciones ya
+// cubiertas arriba (Test A y Test madre de este archivo). Reproducen 1:1 los
+// hallazgos reales de la auditoria QA (APU-1RGF05/tablaroca/tuberia cobre).
+test('parseConceptText: "PERFIL CAL. 26" no interpreta el calibre como cantidad',()=>{
+  const parsed=parseConceptText('PERFIL CAL. 26');
+  assert.equal(parsed.qty,1);
+  assert.equal(parsed.referencePU,0);
+});
+
+test('parseConceptText: "CALIBRE 26" (palabra completa) tampoco se interpreta como cantidad',()=>{
+  const parsed=parseConceptText('LAMINA CALIBRE 26 PARA CUBIERTA');
+  assert.equal(parsed.qty,1);
+  assert.equal(parsed.referencePU,0);
+});
+
+test('parseConceptText: "TUBERIA DE COBRE 3/4"" (fraccion + comilla de pulgada) no se interpreta como cantidad',()=>{
+  const parsed=parseConceptText('TUBERIA DE COBRE 3/4"');
+  assert.equal(parsed.qty,1);
+  assert.equal(parsed.referencePU,0);
+});
+
+test('parseConceptText: "TUBERIA 1/2"" no se interpreta como cantidad',()=>{
+  const parsed=parseConceptText('TUBERIA 1/2"');
+  assert.equal(parsed.qty,1);
+  assert.equal(parsed.referencePU,0);
+});
+
+test('parseConceptText: fraccion de pulgada con palabra de enlace ("3/4 DE PULGADA", sin comilla) tampoco se interpreta como cantidad -- caso real reproducido en la auditoria',()=>{
+  const parsed=parseConceptText('SUMINISTRO E INSTALACION DE TUBERIA DE COBRE TIPO M DE 3/4 DE PULGADA PARA RED HIDRAULICA, INCLUYE CONEXIONES Y SOLDADURA');
+  assert.equal(parsed.qty,1,`qty no debio detectar la fraccion 3/4 como cantidad de obra (obtuvo ${parsed.qty})`);
+  assert.equal(parsed.referencePU,0,`referencePU no debio detectar el "4" de la fraccion (obtuvo ${parsed.referencePU})`);
+});
+
+test('parseConceptText: "CED. 40" (cedula de tuberia) no se interpreta como cantidad',()=>{
+  const parsed=parseConceptText('TUBERIA DE ACERO CED. 40');
+  assert.equal(parsed.qty,1);
+  assert.equal(parsed.referencePU,0);
+});
+
+test('parseConceptText: "CEDULA 40" (palabra completa) tampoco se interpreta como cantidad',()=>{
+  const parsed=parseConceptText('TUBERIA DE ACERO CEDULA 40');
+  assert.equal(parsed.qty,1);
+  assert.equal(parsed.referencePU,0);
+});
+
+test('parseConceptText: "VARILLA #3" (numero de varilla de refuerzo) no se interpreta como cantidad',()=>{
+  const parsed=parseConceptText('VARILLA #3');
+  assert.equal(parsed.qty,1);
+  assert.equal(parsed.referencePU,0);
+});
+
+test('parseConceptText: "TORNILLO 1 1/4"" (numero mixto + pulgada) no se interpreta como cantidad',()=>{
+  const parsed=parseConceptText('TORNILLO 1 1/4"');
+  assert.equal(parsed.qty,1);
+  assert.equal(parsed.referencePU,0);
+});
+
+test('parseConceptText: "MURO DE TABLAROCA... CAL. 26" (caso real reproducido en la auditoria) -- el calibre no infla la cantidad',()=>{
+  const parsed=parseConceptText('MURO DE TABLAROCA DOBLE CARA CON ESTRUCTURA METALICA CAL. 26, AISLAMIENTO ACUSTICO DE LANA MINERAL');
+  assert.equal(parsed.qty,1,`qty no debio detectar el calibre 26 como cantidad de obra (obtuvo ${parsed.qty})`);
+});
+
+test('parseConceptText: un calibre/cedula/varilla NUNCA impide detectar una cantidad/unidad real y explicita en el mismo concepto',()=>{
+  const parsed=parseConceptText('SUMINISTRO Y COLOCACION DE TUBERIA COBRE 3/4" pza 12 $95.50');
+  assert.equal(parsed.unit,'pza');
+  assert.equal(parsed.qty,12);
+  assert.equal(parsed.referencePU,95.50);
+});
+
+// --- QA-remediacion BUG-05, ronda 2 (2026-09-09): casos POSITIVOS -- el
+// arreglo de patrones tecnicos (calibre/cedula/varilla/fraccion de pulgada)
+// no debe generar FALSOS NEGATIVOS: una cantidad/unidad real y explicita
+// debe seguir detectandose normalmente cuando NO hay ningun patron tecnico
+// de por medio. ---
+test('parseConceptText: "26 m2 de piso cerámico" SI detecta cantidad real (falso positivo evitado)',()=>{
+  const parsed=parseConceptText('26 m2 de piso cerámico');
+  assert.equal(parsed.qty,26);
+  assert.equal(parsed.unit,'m²');
+  assert.equal(parsed.referencePU,0);
+});
+
+test('parseConceptText: "40 m de tubería" SI detecta la cantidad 40 (no hay calibre/cedula/fraccion de por medio)',()=>{
+  const parsed=parseConceptText('40 m de tubería');
+  assert.equal(parsed.qty,40);
+  assert.equal(parsed.referencePU,0);
+});
+
+test('parseConceptText: "3 piezas de válvula" SI detecta cantidad 3 / unidad pieza (sustantivo de conteo)',()=>{
+  const parsed=parseConceptText('3 piezas de válvula');
+  assert.equal(parsed.qty,3);
+  assert.equal(parsed.unit,'pieza');
+});
+
+test('parseConceptText: "0.75 m3 de concreto" SI detecta cantidad decimal 0.75 / unidad m³',()=>{
+  const parsed=parseConceptText('0.75 m3 de concreto');
+  assert.equal(parsed.qty,0.75);
+  assert.equal(parsed.unit,'m³');
+  assert.equal(parsed.referencePU,0);
+});
+
+test('parseConceptText: "12.5 m2 de plafón" SI detecta cantidad decimal 12.5 / unidad m²',()=>{
+  const parsed=parseConceptText('12.5 m2 de plafón');
+  assert.equal(parsed.qty,12.5);
+  assert.equal(parsed.unit,'m²');
+  assert.equal(parsed.referencePU,0);
+});

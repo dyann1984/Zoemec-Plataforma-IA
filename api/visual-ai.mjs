@@ -5,6 +5,7 @@ import { countPdfPages } from '../server/api-lib/_libraryExtract.mjs';
 import { validateTakeoffResponse, assertPageLimit } from '../server/api-lib/_planoValidate.mjs';
 import { sanitizeFileName, MAX_UPLOAD_BYTES } from '../server/api-lib/_libraryClassify.mjs';
 import { TIPOS_ELEMENTO, ESCALA_FUENTES, applyPlanoElementReview } from '../src/domain/planoReview.js';
+import { classifyOpenAIError, publicMessageForErrorClass } from '../server/api-lib/_aiHealthSignal.mjs';
 
 const SYSTEM = `Eres ZOEMEC Visual IA, asistente tecnico para arquitectura, construccion y obra.
 Responde siempre en espanol, con criterio profesional, supuestos explicitos y alcance presupuestable.
@@ -372,7 +373,15 @@ async function generateVisualProposal(req, res, authz){
       })
     });
     const data = await readOpenAIJsonSafe(aiRes);
-    if(!aiRes.ok) throw new Error(data.error?.message || 'OpenAI no pudo generar la respuesta.');
+    if(!aiRes.ok){
+      const errorClass = classifyOpenAIError(aiRes.status, data);
+      console.error(`[OpenAI] visual-ai (analisis) error real (HTTP ${aiRes.status}, clase ${errorClass}):`, data?.error?.message || 'OpenAI no pudo generar la respuesta.');
+      const error = new Error(data.error?.message || 'OpenAI no pudo generar la respuesta.');
+      error.status = aiRes.status >= 400 && aiRes.status < 500 ? aiRes.status : 502;
+      error.errorClass = errorClass;
+      error.publicMessage = publicMessageForErrorClass(errorClass);
+      throw error;
+    }
     const result = data.output_text || data.output?.flatMap(o=>o.content||[]).map(c=>c.text).filter(Boolean).join('\n') || 'Sin texto generado.';
     let imageUrl = '';
     let imageB64 = '';
@@ -453,6 +462,13 @@ export default async function handler(req, res){
     if(action === 'reviewElement') return await reviewTakeoffElement(req, res, authz);
     return await generateVisualProposal(req, res, authz);
   }catch(err){
-    res.status(err.status || 400).json({ error:err.message || 'No se pudo usar Visual IA.' });
+    // Ver comentario en api/generate-apu.mjs: err.publicMessage (fallo real
+    // de OpenAI) es seguro para el cliente; err.message queda de fallback
+    // para errores propios de ZOEMEC (auth, validacion, PDF invalido).
+    const message = err.publicMessage || err.message || 'No se pudo usar Visual IA.';
+    res.status(err.status || 400).json({
+      error: message,
+      ...(err.errorClass ? { errorClass: err.errorClass } : {})
+    });
   }
 }

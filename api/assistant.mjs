@@ -12,7 +12,16 @@ export default async function handler(req, res){
     await markFeatureUsed(authz);
     res.status(200).json({ ok:true, answer });
   }catch(err){
-    const message = err.message || 'No se pudo responder con IA.';
-    res.status(err.status || 400).json({ ok:false, error:message, errorCode:String(err.status || 400) });
+    // Ver comentario extenso en api/generate-apu.mjs: err.publicMessage (si
+    // existe) es el mensaje generico y seguro para fallos reales de OpenAI;
+    // err.message queda como fallback para errores propios de ZOEMEC (auth,
+    // limite de plan), que ya son texto seguro de mostrar.
+    const message = err.publicMessage || err.message || 'No se pudo responder con IA.';
+    res.status(err.status || 400).json({
+      ok:false,
+      error:message,
+      errorCode:String(err.status || 400),
+      ...(err.errorClass ? { errorClass: err.errorClass } : {})
+    });
   }
 }

@@ -68,6 +68,19 @@ function toNum(v){
   return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
+/* QA-remediacion (2026-09-09): mismo hallazgo que src/lib/levantamientoCalc.js
+   -- quantity=0 pasado explicitamente (ej. por un caller programatico) se
+   perdia aqui mismo, antes de llegar al calculo: toNum(0) || 1 da 1 porque 0
+   es falsy. El fallback a 1 para cantidad invalida/negativa/sin definir SI
+   sigue siendo intencional (ver 'sanea cantidad negativa/no numerica a 1' en
+   levantamientoSchema.test.js, sin tocar) -- el defecto real es que ESE MISMO
+   fallback tambien pisaba un 0 explicito, valor valido dentro del dominio. */
+function toNumWithDefaultOne(v){
+  if(v == null) return 1;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : 1;
+}
+
 /* Muros canonicos de un Space rectangular (Fase 1.5): M-01..M-04, en el
    mismo orden que produce computeSpaceWalls (src/lib/levantamientoCalc.js).
    wallId de un Element referencia uno de estos ids -- ver mas abajo. */
@@ -95,7 +108,7 @@ export function makeEmptyElement({ type = ELEMENT_TYPE.OTHER, width = 0, height 
     width: toNum(width),
     height: toNum(height),
     length: toNum(length),
-    quantity: toNum(quantity) || 1,
+    quantity: toNumWithDefaultOne(quantity),
     area: 0,
     material,
     notes,

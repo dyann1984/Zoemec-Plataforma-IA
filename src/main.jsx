@@ -1500,7 +1500,7 @@ function ResourceCards({apu}){
 
 function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog,projects,rawApus,linkApuToProject,activeProjectId,activeProject,onNeedProject}){
   const { t: tr } = useI18n();
-  const { beginJob, completeJob, failJob, getUnseen, consumeJob } = useAiJobs();
+  const { jobs: aiJobs, beginJob, completeJob, failJob, startServerJob, waitForJob, getUnseen, consumeJob } = useAiJobs();
   const requireProject=()=>{
     if(activeProjectId) return true;
     if(confirm('Para guardar necesitas un proyecto activo (asi tus APUs quedan asociados a una obra y nunca se mezclan con otra). ¿Crear o seleccionar un proyecto ahora?')) onNeedProject?.();
@@ -1576,16 +1576,77 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     const [latest] = getUnseen('apu-generate');
     if(latest) setRecoveredJob(latest);
   }, [getUnseen, recoveredJob]);
-  const applyRecoveredJob = () => {
+  /* Post-procesa el APU crudo que devuelve OpenAI (mismo shape ya sea que
+     haya llegado por el camino en vivo -- await waitForJob() dentro de
+     generateAI -- o por uno recuperado del servidor tras volver a esta
+     pantalla): enriquecimiento de precios reales, finalizacion profesional
+     y shim de compatibilidad. Se factoriza aqui para que AMBOS caminos usen
+     exactamente la misma logica (nunca una copia que se pueda desincronizar
+     de la otra). */
+  const finalizeGeneratedApu = async (rawApu, parsedLike) => {
+    const draft = {
+      ...rawApu,
+      proyecto: apuV2.proyecto || '', cliente: apuV2.cliente || '', ubicacion: apuV2.ubicacion || '', moneda: apuV2.moneda || 'MXN',
+      cantidadObra: Number(parsedLike.qty || 1) || 1,
+      referencePU: Number(parsedLike.referencePU || 0) || 0,
+      variables: conceptVariablesFromParsed(parsedLike)
+    };
+    let enrichedDraft = draft;
+    try{
+      const runContext = createIntelligence2RunContext({ location: activeProject?.ubicacion || '', dateBase: draft.fechaBase });
+      const result = await enrichApuWithIntelligence2({
+        aiApu: draft, userInput: { concept: parsedLike.concept, unit: parsedLike.unit, qty: parsedLike.qty },
+        concept: parsedLike.concept, ...runContext
+      });
+      enrichedDraft = result.apu;
+      if(result.unitWarning) console.warn('[Material & Price Intelligence 2.1] UNIT_WARNING:', result.unitWarning);
+    }catch{ /* Price Intelligence caida por completo: se sigue con el borrador de la IA */ }
+    const v2 = finalizeProfessionalAPU(enrichedDraft);
+    const shim = legacyShimFromV2(v2, parsedLike.concept, 'OpenAI API');
+    return { shim, v2 };
+  };
+
+  const applyRecoveredJob = async () => {
     if(!recoveredJob) return;
-    const { shim, v2, usedFallback, unit, qty, referencePU } = recoveredJob.result || {};
-    if(shim){
-      skipMigrateIdRef.current = shim.id;
-      setConcept(shim.concept);
-      setApu(shim);
-      if(!usedFallback && v2) setApuV2({ ...v2, id: shim.id });
-      setExcelInfo({fileName: usedFallback ? 'Plantilla tecnica ZOEMEC' : 'OpenAI API', concept:shim.concept, unit, qty, referencePU, catalog});
-      setShowExecutive(true);
+    if(recoveredJob.origin === 'server'){
+      // Job server-side (Fase 2): result trae el APU crudo ({ok, apu}), NO
+      // el shim/v2 ya terminado -- el enriquecimiento de precios y la
+      // finalizacion profesional siempre corren en el cliente, igual que en
+      // el camino en vivo (ver finalizeGeneratedApu arriba).
+      const payload = recoveredJob.payload || {};
+      const parsedLike = payload.parsedMeta || { concept: payload.concept, unit: payload.unit, qty: payload.qty, referencePU: payload.referencePU };
+      if(recoveredJob.status === 'completed' && recoveredJob.result?.ok){
+        const { shim, v2 } = await finalizeGeneratedApu(recoveredJob.result.apu, parsedLike);
+        skipMigrateIdRef.current = shim.id;
+        setConcept(v2.concept || shim.concept);
+        setApu(shim);
+        setApuV2({ ...v2, id: shim.id });
+        setExcelInfo({fileName:'OpenAI API', concept:shim.concept, unit:parsedLike.unit, qty:parsedLike.qty, referencePU:parsedLike.referencePU, catalog});
+        setShowExecutive(true);
+      }else{
+        // El job termino en failed (o sin resultado utilizable): mismo
+        // criterio del camino en vivo -- se aplica la plantilla tecnica en
+        // vez de dejar al usuario sin nada.
+        const reason = recoveredJob.error || 'la IA no respondio';
+        const next = templateFallbackAPU({concept:parsedLike.concept, unit:parsedLike.unit, qty:parsedLike.qty, referencePU:parsedLike.referencePU, variables:conceptVariablesFromParsed(parsedLike)}, catalog, 0, 'Plantilla tecnica ZOEMEC', reason);
+        setConcept(next.concept);
+        setApu(next);
+        setExcelInfo({fileName:'Plantilla tecnica ZOEMEC', concept:next.concept, unit:next.unit, qty:parsedLike.qty, referencePU:parsedLike.referencePU, catalog});
+        setShowExecutive(true);
+      }
+    }else{
+      // Rama legado: job client-driven (Fase 1) que pudiera seguir en el
+      // mapa durante la transicion a jobs server-side -- misma logica de
+      // siempre, result ya trae shim/v2 terminados.
+      const { shim, v2, usedFallback, unit, qty, referencePU } = recoveredJob.result || {};
+      if(shim){
+        skipMigrateIdRef.current = shim.id;
+        setConcept(shim.concept);
+        setApu(shim);
+        if(!usedFallback && v2) setApuV2({ ...v2, id: shim.id });
+        setExcelInfo({fileName: usedFallback ? 'Plantilla tecnica ZOEMEC' : 'OpenAI API', concept:shim.concept, unit, qty, referencePU, catalog});
+        setShowExecutive(true);
+      }
     }
     consumeJob(recoveredJob.id);
     setRecoveredJob(null);
@@ -1914,6 +1975,19 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   // dispara una generacion, cambia de concepto/sale del modulo antes de que
   // responda, y la respuesta tardia NO debe contaminar el desarrollo activo).
   const aiRequestSeqRef=useRef(0);
+  // Refleja el progreso REAL que publica el job server-side (progressCode,
+  // ver server/api-lib/_route-jobs.mjs) como texto de estado -- en vez de
+  // una secuencia fija de mensajes decorativos del lado del cliente. Se
+  // reevalua cada vez que el mapa compartido de jobs cambia (aiJobs vive en
+  // AiJobsContext); solo actua si el cambio es del job activo de ESTA
+  // generacion.
+  const activeGenerationJobIdRef=useRef(null);
+  useEffect(() => {
+    const id = activeGenerationJobIdRef.current;
+    if(!id) return;
+    const job = aiJobs[id];
+    if(job?.progressCode) setAiStatus(tr(`jobs.progress.${job.progressCode}`));
+  }, [aiJobs]);
   // Material & Price Intelligence 2.1: contexto de budget/telemetry/
   // single-flight COMPARTIDO entre todos los conceptos de UNA corrida de
   // lote (creado al inicio de buildBatchAPUs/runQueueJob, reutilizado por
@@ -1950,79 +2024,31 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     if(routeIfMultipleConcepts()) return;
     const requestId = ++aiRequestSeqRef.current;
     setAiBusy(true);
-    setAiStatus('Analizando el alcance del concepto...');
+    setAiStatus(tr('jobs.progress.JOB_QUEUED'));
     const parsed=parseConceptText(concept);
     if(aiUnit.trim()) parsed.unit=aiUnit.trim();
     if(Number(aiQty)>0) parsed.qty=Number(aiQty);
-    // Registra el job en el store global (sobrevive un cambio de modulo):
-    // si esta pantalla se desmonta antes de que la promesa resuelva, el
-    // resultado se guarda aqui en vez de perderse -- ver completeJob() mas
-    // abajo y el efecto de recuperacion (recoveredJob) arriba.
-    const jobId = beginJob('apu-generate', parsed.concept);
-    // Un intento = una llamada con su propio timeout de 45 s; hasta 3 intentos
-    // en total, con espera mayor si OpenAI responde 429 (limite de tasa).
-    const attemptGenerate = async () => {
-      const controller = new AbortController();
-      const timer = window.setTimeout(() => controller.abort(), 45000);
-      try{
-        const res = await fetch(aiServerUrl('/api/generate-apu'), {
-          method:'POST',
-          headers:await authHeaders(),
-          body:JSON.stringify({concept:parsed.concept,catalog,schema:'v2',referencePU:parsed.referencePU||0}),
-          signal:controller.signal
-        });
-        const data = await res.json().catch(()=>({}));
-        if(!res.ok){ const err = new Error(data?.error || 'No se pudo generar con IA.'); err.status = res.status; throw err; }
-        return data;
-      }finally{
-        window.clearTimeout(timer);
-      }
-    };
+    let jobId = null;
     try{
-      setAiStatus('Generando recursos: mano de obra, materiales, herramienta y equipo...');
-      let data=null, lastAttemptError=null;
-      for(let tryNum=0; tryNum<3 && !data; tryNum++){
-        try{
-          if(tryNum>0){
-            setAiStatus(`Reintentando generación con IA (intento ${tryNum+1} de 3)...`);
-            await new Promise(r=>setTimeout(r, lastAttemptError?.status===429 ? 6000*tryNum : 2500*tryNum));
-          }
-          data = await attemptGenerate();
-        }catch(error){ lastAttemptError = error; }
+      // Fase 2 (arquitectura server-side): la llamada real a OpenAI ya NO la
+      // hace este navegador -- POST /api/jobs crea el job y responde con su
+      // id de inmediato; el servidor sigue procesando aunque el usuario
+      // cambie de modulo, cierre la pestana o apague el equipo (dentro del
+      // maxDuration configurado -- ver informe de la auditoria). parsedMeta
+      // viaja completo en el payload para que, si el resultado se recupera
+      // DESPUES (recoveredJob/applyRecoveredJob), el enriquecimiento de
+      // precios tenga exactamente los mismos datos que el camino en vivo.
+      jobId = await startServerJob('apu-generate', parsed.concept, {
+        payload: { concept: parsed.concept, catalog, schema:'v2', referencePU: parsed.referencePU || 0, unit: parsed.unit, qty: parsed.qty, parsedMeta: parsed },
+        projectId: activeProjectId || null,
+      });
+      activeGenerationJobIdRef.current = jobId;
+      const job = await waitForJob(jobId);
+      if(requestId !== aiRequestSeqRef.current) return; // el usuario ya disparo otra generacion mientras esta esperaba
+      if(job.status !== 'completed' || !job.result?.ok){
+        throw new Error(job.error || 'No se pudo generar con IA.');
       }
-      if(!data) throw lastAttemptError || new Error('No se pudo generar con IA.');
-      if(requestId !== aiRequestSeqRef.current) return; // respuesta tardia de un intento anterior: se descarta
-      const draft = {
-        ...data.apu,
-        proyecto: apuV2.proyecto || '', cliente: apuV2.cliente || '', ubicacion: apuV2.ubicacion || '', moneda: apuV2.moneda || 'MXN',
-        cantidadObra: Number(parsed.qty || 1) || 1,
-        referencePU: Number(parsed.referencePU || 0) || 0,
-        variables: conceptVariablesFromParsed(parsed)
-      };
-      // Material & Price Intelligence 2.1 (integracion final): mismo
-      // orquestador que el flujo de lote (generateBatchAPU) -- proteccion de
-      // unidad/cantidad/concepto capturados por el usuario (UNIT_WARNING si
-      // la IA propone algo distinto, nunca se sobreescribe en silencio),
-      // Material Origin por recurso, cache+budget+single-flight, y solo
-      // entonces busqueda real de precio de mercado (mismo endpoint
-      // /api/price-intelligence de siempre, ver src/domain/intelligence2Runtime.js).
-      // Si falla por completo, el borrador conserva los precios ESTIMADO_IA
-      // de la IA (igual que antes).
-      let enrichedDraft = draft;
-      try{
-        setAiStatus('Buscando precios de mercado reales y validando equivalencia tecnica...');
-        const runContext = createIntelligence2RunContext({ location: activeProject?.ubicacion || '', dateBase: draft.fechaBase });
-        const result = await enrichApuWithIntelligence2({
-          aiApu: draft, userInput: { concept: parsed.concept, unit: parsed.unit, qty: parsed.qty },
-          concept: parsed.concept, ...runContext
-        });
-        enrichedDraft = result.apu;
-        if(result.unitWarning) console.warn('[Material & Price Intelligence 2.1] UNIT_WARNING:', result.unitWarning);
-      }catch{ /* Price Intelligence caida por completo: se sigue con el borrador de la IA */ }
-      setAiStatus('Calculando rendimientos, seguridad, procedimiento y medicion...');
-      const v2 = finalizeProfessionalAPU(enrichedDraft);
-      const shim = legacyShimFromV2(v2, parsed.concept, 'OpenAI API');
-      setAiStatus('Validando resultado...');
+      const { shim, v2 } = await finalizeGeneratedApu(job.result.apu, parsed);
       skipMigrateIdRef.current = shim.id;
       setConcept(v2.concept || shim.concept);
       setApu(shim);
@@ -2032,14 +2058,12 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       setAiOpen(false);
       setShowExecutive(true);
       alert('APU generado correctamente');
-      // notify:false -- el alert() de arriba (enrutado a toast por
-      // NoticeHost, que vive en la raiz de la app y nunca se desmonta) ya
-      // avisa al usuario aunque esta pantalla se haya desmontado mientras
-      // se generaba; completeJob solo necesita guardar el resultado.
-      completeJob(jobId, { shim, v2, usedFallback:false, unit:parsed.unit, qty:parsed.qty, referencePU:parsed.referencePU }, { notify:false });
+      // Se aplico en vivo (esta pantalla seguia montada): marcar visto para
+      // que el banner de "recuperamos un resultado" no vuelva a ofrecerlo.
+      consumeJob(jobId);
     }catch(err){
       if(requestId !== aiRequestSeqRef.current) return;
-      const reason = err?.name==='AbortError' ? 'la IA tardo demasiado en responder' : friendlyServiceError(err,'servidor no disponible');
+      const reason = friendlyServiceError(err,'servidor no disponible');
       const next = templateFallbackAPU({concept:parsed.concept, unit:parsed.unit, qty:parsed.qty, referencePU:parsed.referencePU, variables:conceptVariablesFromParsed(parsed)}, catalog, 0, 'Plantilla tecnica ZOEMEC', reason);
       setConcept(next.concept);
       setApu(next);
@@ -2047,9 +2071,13 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       setAiStatus(`Plantilla tecnica aplicada (IA no disponible): ${next.family}`);
       setAiOpen(false);
       setShowExecutive(true);
-      completeJob(jobId, { shim: next, v2:null, usedFallback:true, unit:parsed.unit, qty:parsed.qty, referencePU:parsed.referencePU }, { notify:true, label: parsed.concept });
+      // El job del servidor (si llego a crearse) ya quedo en su estado
+      // final alla; aqui solo se marca visto porque la pantalla YA decidio
+      // que hacer (plantilla), no hace falta ofrecer "recuperar" despues.
+      if(jobId) consumeJob(jobId);
     }finally{
       if(requestId === aiRequestSeqRef.current) setAiBusy(false);
+      activeGenerationJobIdRef.current = null;
     }
   };
   const importExcel=async(file)=>{ if(!file) return; if(/\.xls$/i.test(file.name)){alert('Este lector trabaja con .xlsx o .csv. Abre tu archivo en Excel y guárdalo como .xlsx.');return;} try{ const cat=await parseExcelToCatalog(file); if(!cat.length){alert('No detecté columnas de descripción y precio en el Excel. Revisa que tenga encabezados como "Descripción" y "Precio".');return;} setCatalog(cat); alert(`Catálogo importado: ${cat.length} insumos con precio. Al generar el APU usaré tus precios reales cuando coincidan.`); }catch(err){ alert(`No pude leer el archivo: ${err?.message || 'formato no compatible'}. Usa .xlsx o .csv.`); } };

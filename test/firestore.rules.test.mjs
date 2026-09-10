@@ -190,6 +190,45 @@ describe('firestore.rules — visual_requests (RC4 Fase 2: Planos IA / Takeoff r
   });
 });
 
+describe('firestore.rules — users/{uid}/jobs (Fase 2: jobs de IA server-side)', () => {
+  /* El cliente SOLO lee su propio job (listener onSnapshot que reemplaza
+     polling, ver src/lib/serverJobsCloud.js) -- toda escritura pasa por
+     server/api-lib/_route-jobs.mjs con el SDK admin (ignora estas reglas).
+     Estas pruebas confirman: aislamiento por usuario en lectura, y que el
+     SDK de cliente JAMAS puede escribir/fabricar un resultado de job
+     directo (ni siquiera el propio dueno). */
+  it('usuario A no puede leer un job de B', async () => {
+    await seed((db) => db.doc('users/bob/jobs/job1').set({ uid: 'bob', type: 'apu-generate', status: 'completed' }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('users/bob/jobs/job1').get());
+  });
+
+  it('usuario A SI puede leer su propio job', async () => {
+    await seed((db) => db.doc('users/alice/jobs/job2').set({ uid: 'alice', type: 'apu-generate', status: 'processing' }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(alice.doc('users/alice/jobs/job2').get());
+  });
+
+  it('el dueno NO puede escribir/fabricar su propio job via SDK de cliente (solo el servidor, con Admin SDK, escribe)', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('users/alice/jobs/job3').set({ uid: 'alice', type: 'apu-generate', status: 'completed', result: { ok: true, apu: { fabricado: true } } }));
+  });
+
+  it('un usuario ajeno tampoco puede escribir un job a nombre de otro', async () => {
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(bob.doc('users/alice/jobs/job4').set({ uid: 'alice', type: 'apu-generate', status: 'completed' }));
+  });
+
+  it('un administrador real SI puede leer el job de cualquier usuario', async () => {
+    await seed(async (db) => {
+      await db.doc('users/admin2').set({ role: 'admin', plan: 'Empresa', active: true });
+      await db.doc('users/bob/jobs/job5').set({ uid: 'bob', type: 'apu-generate', status: 'failed' });
+    });
+    const admin = testEnv.authenticatedContext('admin2').firestore();
+    await assertSucceeds(admin.doc('users/bob/jobs/job5').get());
+  });
+});
+
 describe('firestore.rules — devices (fuga de PII)', () => {
   it('usuario A no puede listar/consultar toda la coleccion devices', async () => {
     await seed((db) => db.doc('devices/dev1').set({ uid: 'bob', email: 'bob@test.zoemec' }));

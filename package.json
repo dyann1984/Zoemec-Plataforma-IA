@@ -18,12 +18,14 @@
     "test:decisions": "firebase emulators:exec --project zoemec-plataforma-ia --only firestore,auth \"node --test test/technicalMemoryApi.test.mjs test/challengeDecisionsApi.test.mjs\"",
     "test:projects": "firebase emulators:exec --project zoemec-plataforma-ia --only firestore,auth \"node --test test/projectsApi.test.mjs test/apusApi.test.mjs test/apuIdStability.e2e.test.mjs test/legacyMigrationRetry.e2e.test.mjs\"",
     "test:dossier": "firebase emulators:exec --project zoemec-plataforma-ia --only firestore,auth \"node --test test/exportEventsApi.test.mjs\"",
-    "test:security": "firebase emulators:exec --project zoemec-plataforma-ia --only firestore,auth \"node --test test/firestore.rules.test.mjs test/authGuard.test.mjs test/technicalMemoryApi.test.mjs test/challengeDecisionsApi.test.mjs test/projectsApi.test.mjs test/apusApi.test.mjs test/exportEventsApi.test.mjs test/apuIdStability.e2e.test.mjs test/legacyMigrationRetry.e2e.test.mjs test/apiGateway.test.mjs\"",
+    "test:security": "firebase emulators:exec --project zoemec-plataforma-ia --only firestore,auth \"node --test test/firestore.rules.test.mjs test/authGuard.test.mjs test/technicalMemoryApi.test.mjs test/challengeDecisionsApi.test.mjs test/projectsApi.test.mjs test/apusApi.test.mjs test/exportEventsApi.test.mjs test/apuIdStability.e2e.test.mjs test/legacyMigrationRetry.e2e.test.mjs test/apiGateway.test.mjs test/jobsApi.test.mjs\"",
     "test:batchqueue": "firebase emulators:exec --project zoemec-plataforma-ia --only firestore,auth \"node --test test/apuBatchQueueCloud.test.mjs\"",
     "test:gateway": "firebase emulators:exec --project zoemec-plataforma-ia --only firestore,auth \"node --test test/apiGateway.test.mjs\"",
-    "test:priceCache": "firebase emulators:exec --project zoemec-plataforma-ia --only firestore,auth \"node --test test/priceIntelligenceCache.firestore.test.mjs\""
+    "test:priceCache": "firebase emulators:exec --project zoemec-plataforma-ia --only firestore,auth \"node --test test/priceIntelligenceCache.firestore.test.mjs\"",
+    "test:jobs": "firebase emulators:exec --project zoemec-plataforma-ia --only firestore,auth \"node --test test/jobsApi.test.mjs\""
   },
   "dependencies": {
+    "@vercel/functions": "^3.9.7",
     "@vitejs/plugin-react": "^6.0.3",
     "fflate": "^0.8.2",
     "firebase": "^12.15.0",

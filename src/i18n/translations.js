@@ -846,6 +846,17 @@ export const translations = {
         completed: 'Completado',
         failed: 'Con error',
       },
+      // Codigos de progreso publicados por el job server-side (nunca texto
+      // libre desde el servidor, ver server/api-lib/_route-jobs.mjs) -- la
+      // UI resuelve el texto aqui, en el idioma activo.
+      progress: {
+        JOB_QUEUED: 'Analizando el alcance del concepto...',
+        JOB_PROCESSING: 'Preparando la generación con IA...',
+        JOB_GENERATING: 'Generando recursos: mano de obra, materiales, herramienta y equipo...',
+        JOB_RETRYING: 'Reintentando generación con IA...',
+        JOB_DONE: 'IA lista.',
+        JOB_FAILED: 'La IA no pudo completar la generación.',
+      },
       recoveredTitle: 'Recuperamos un resultado generado mientras no estabas en esta pantalla.',
       recoveredApply: 'Aplicar resultado',
       recoveredDiscard: 'Descartar',
@@ -1776,6 +1787,14 @@ export const translations = {
         processing: 'In progress',
         completed: 'Completed',
         failed: 'Failed',
+      },
+      progress: {
+        JOB_QUEUED: 'Analyzing the scope of the concept...',
+        JOB_PROCESSING: 'Preparing AI generation...',
+        JOB_GENERATING: 'Generating resources: labor, materials, tools and equipment...',
+        JOB_RETRYING: 'Retrying AI generation...',
+        JOB_DONE: 'AI ready.',
+        JOB_FAILED: 'The AI could not complete the generation.',
       },
       recoveredTitle: 'We recovered a result generated while you were away from this screen.',
       recoveredApply: 'Apply result',

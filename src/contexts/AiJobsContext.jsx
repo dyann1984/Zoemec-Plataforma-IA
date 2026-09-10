@@ -12,6 +12,8 @@ import {
   unseenJobsOfType,
 } from '../domain/aiJobQueue.js';
 import { addToIndex, deleteJobFromCloud, loadRecentJobsFromCloud, markInterruptedOnLoad, saveJobToCloud } from '../lib/aiJobsCloud.js';
+import { createServerJob, subscribeToRecentServerJobs } from '../lib/serverJobsCloud.js';
+import { loadSeenServerJobIds, markServerJobSeen } from '../lib/serverJobsSeen.js';
 
 /* Registro global de trabajos de IA de larga duracion (generar APU, analizar
    plano/Takeoff). Se monta UNA sola vez en la raiz de la app (ver
@@ -26,36 +28,59 @@ import { addToIndex, deleteJobFromCloud, loadRecentJobsFromCloud, markInterrupte
    produccion); este contexto solo garantiza que el resultado no se pierda
    si no lo estan.
 
-   NIVEL REAL DE PERSISTENCIA (auditoria explicita, ver src/lib/aiJobsCloud.js
-   para el detalle tecnico):
-   - Cambiar de modulo/ruta dentro de la app: SI sobrevive (este Provider
-     nunca se desmonta -- estado en memoria de React, intacto).
-   - Cambiar de pestana del navegador / minimizar la ventana: SI sobrevive
-     (el proceso de JS de la pestana sigue vivo; los navegadores pueden
-     limitar timers en segundo plano pero no matan el estado ni el fetch en
-     curso).
-   - Refrescar la pagina (F5) o cerrar y volver a abrir ZOEMEC: el ESTADO Y
-     RESULTADO de un job que ya alcanzo a terminar (completed/failed) SI se
-     recupera -- se espeja a Firestore (users/{uid}/state/aiJob:{id}) en cada
-     cambio y se rehidrata al montar. Un job que seguia "processing" en el
-     momento exacto del refresh/cierre NO puede reclamar que sigue en curso
-     de verdad: la llamada HTTP a /api/generate-apu (o /api/visual-ai) muere
-     junto con la pestana como cualquier fetch del navegador -- eso lo
-     reclasifica honestamente a "failed" al rehidratar (markInterruptedOnLoad)
-     en vez de dejarlo "processing" para siempre o fingir que termino.
-     Sobrevivir tambien la llamada EN VUELO durante un cierre de pestana
-     requeriria mover la ejecucion de la IA a un proceso que no dependa de la
-     conexion del navegador (ej. un job real server-side con Firestore como
-     cola) -- cambio de arquitectura de backend, fuera de alcance de esta
-     ronda; el codigo esta preparado para conectarse a eso despues (mismo
-     jobId/status ya modelado) sin otro rediseno del lado del cliente. */
+   DOS MECANISMOS DE JOB CONVIVEN AQUI (Fase 2 de la auditoria agrega el
+   segundo, sin quitar el primero):
+
+   A) Jobs "client-driven" (startJob/beginJob/completeJob/failJob, Fase 1):
+      la llamada a OpenAI la hace EL NAVEGADOR (fetch directo). Este
+      Provider guarda el resultado (espejo en Firestore, users/{uid}/state/
+      aiJob:{id}) para que sobreviva un refresh/reapertura -- pero la
+      llamada EN VUELO muere si la pestana se cierra a la mitad, como
+      cualquier fetch del navegador. Sigue en uso por Takeoff/Visual AI.
+
+   B) Jobs "server-driven" (startServerJob, Fase 2 -- ver
+      server/api-lib/_route-jobs.mjs): la llamada a OpenAI la hace EL
+      SERVIDOR (Vercel Function + waitUntil), disparada por un POST que
+      responde de inmediato con un jobId. El documento
+      users/{uid}/jobs/{jobId} es de SOLO LECTURA para el cliente
+      (firestore.rules) -- este Provider solo escucha (onSnapshot, nunca
+      polling) via UN listener compartido (subscribeToRecentServerJobs) en
+      vez de un listener por job. Usado hoy por generacion de APU con IA
+      (generateAI en main.jsx). Ver el informe de la Fase 2 para el detalle
+      de por que esto SI sobrevive cerrar la pestana/apagar el equipo
+      (dentro del maxDuration configurado) y las limitaciones reales que
+      quedan (duracion maxima de la funcion, sin cola/reintentos
+      duraderos). */
 const AiJobsContext = createContext(null);
+
+function mapServerJobToLocal(raw, { label, seen }){
+  const status = raw.status === 'queued' ? 'pending' : raw.status;
+  return {
+    id: raw.id,
+    type: raw.type,
+    label: label ?? '',
+    payload: raw.payload ?? null,
+    status,
+    result: raw.result ?? null,
+    error: raw.error ?? null,
+    progressCode: raw.progressCode || null,
+    createdAt: raw.createdAt || Date.now(),
+    updatedAt: raw.updatedAt || Date.now(),
+    startedAt: raw.startedAt || null,
+    finishedAt: raw.completedAt || null,
+    seen: Boolean(seen),
+    origin: 'server',
+  };
+}
 
 export function AiJobsProvider({ children }){
   const [jobs, setJobs] = useState({});
   const [uid, setUid] = useState(null);
   const seqRef = useRef(0);
   const uidRef = useRef(null);
+  const labelsRef = useRef({});
+  const seenRef = useRef(new Set());
+  const waitersRef = useRef(new Map());
   useEffect(() => { uidRef.current = uid; }, [uid]);
 
   useEffect(() => {
@@ -85,6 +110,44 @@ export function AiJobsProvider({ children }){
       });
     })();
     return () => { alive = false; };
+  }, [uid]);
+
+  // Jobs server-side (mecanismo B): UN solo listener compartido para los
+  // jobs recientes del usuario -- nunca un listener por job, para
+  // mantenerlo barato (ver informe de costos de la Fase 2). Cualquier job
+  // nuevo (startServerJob) aparece aqui solo, en el siguiente snapshot: no
+  // hace falta suscribirse individualmente a cada uno.
+  useEffect(() => {
+    if(!firebaseReady || !uid) return undefined;
+    seenRef.current = loadSeenServerJobIds(uid);
+    const unsub = subscribeToRecentServerJobs(db, uid, (rawJobs) => {
+      setJobs(prev => {
+        const next = { ...prev };
+        for(const raw of rawJobs){
+          if(!raw?.id) continue;
+          const wasTerminal = prev[raw.id] && isTerminalJobStatus(prev[raw.id].status);
+          const label = labelsRef.current[raw.id] ?? prev[raw.id]?.label;
+          const mapped = mapServerJobToLocal(raw, { label, seen: seenRef.current.has(raw.id) });
+          next[raw.id] = mapped;
+          if(isTerminalJobStatus(mapped.status) && !wasTerminal){
+            const title = mapped.label || 'Proceso';
+            window.zoemecNotify?.(
+              mapped.status === 'completed' ? `${title}: listo.` : `${title}: ${mapped.error || 'no se pudo completar.'}`,
+              mapped.status === 'completed' ? 'success' : 'error'
+            );
+          }
+          // Resuelve a quien este esperando este job puntual (ver
+          // waitForJob) -- fuera del updater de setJobs a proposito (no
+          // debe repetirse si React reintenta el updater).
+          if(isTerminalJobStatus(mapped.status)){
+            const waiters = waitersRef.current.get(raw.id);
+            if(waiters?.length){ waiters.forEach(fn => fn(mapped)); waitersRef.current.delete(raw.id); }
+          }
+        }
+        return next;
+      });
+    }, (err) => { console.error('[AiJobsContext] server jobs listener error', err); });
+    return () => { unsub(); };
   }, [uid]);
 
   const persist = useCallback((job) => {
@@ -127,10 +190,31 @@ export function AiJobsProvider({ children }){
     return id;
   }, [persist]);
 
+  /* Job server-side (mecanismo B, Fase 2): POST /api/jobs, que responde con
+     el jobId de inmediato -- la ejecucion real sigue en el servidor
+     (waitUntil) sin depender de que esta pestana siga abierta. `label` se
+     guarda solo localmente (el documento del job no lo trae) para mostrarlo
+     en el banner de recuperacion y el centro de "Procesos". */
+  const startServerJob = useCallback(async (type, label, { payload, idempotencyKey, projectId } = {}) => {
+    const key = idempotencyKey || `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const { jobId } = await createServerJob({ type, payload, idempotencyKey: key, projectId });
+    labelsRef.current[jobId] = label;
+    setJobs(prev => (prev[jobId] ? prev : {
+      ...prev,
+      [jobId]: mapServerJobToLocal({ id: jobId, type, status: 'processing', createdAt: Date.now(), updatedAt: Date.now() }, { label, seen: false }),
+    }));
+    return jobId;
+  }, []);
+
   const consumeJob = useCallback((id) => {
     setJobs(prev => (prev[id] ? { ...prev, [id]: markJobSeen(prev[id]) } : prev));
-    if(uidRef.current) deleteJobFromCloud(db, uidRef.current, id);
-  }, []);
+    if(jobs[id]?.origin === 'server'){
+      seenRef.current.add(id);
+      markServerJobSeen(uidRef.current, id);
+    }else if(uidRef.current){
+      deleteJobFromCloud(db, uidRef.current, id);
+    }
+  }, [jobs]);
 
   /* Variante de bajo nivel para pantallas que ya tienen su propio try/catch
      (ej. generateAI en la pantalla APU): registran el job al empezar y lo
@@ -171,9 +255,27 @@ export function AiJobsProvider({ children }){
   const getJob = useCallback((id) => jobs[id] || null, [jobs]);
   const getUnseen = useCallback((type) => unseenJobsOfType(jobs, type), [jobs]);
 
+  /* Deja a un llamador (ej. generateAI) esperar el resultado de un job
+     server-side como si fuera un fetch normal -- await startServerJob(...)
+     seguido de await waitForJob(jobId) -- sin que el resto de su logica
+     (enriquecimiento de precios, identidad, aplicar al formulario) tenga
+     que saber que el resultado en realidad llego por un listener de
+     Firestore y no por la respuesta HTTP. Se resuelve con el job mapeado
+     completo (status/result/error); el llamador decide que hacer con cada
+     status, igual que antes decidia con try/catch sobre el fetch. */
+  const waitForJob = useCallback((jobId) => new Promise((resolve) => {
+    const existing = jobs[jobId];
+    if(existing && isTerminalJobStatus(existing.status)){ resolve(existing); return; }
+    const list = waitersRef.current.get(jobId) || [];
+    list.push(resolve);
+    waitersRef.current.set(jobId, list);
+  }), [jobs]);
+
   const value = useMemo(() => ({
     jobs,
     startJob,
+    startServerJob,
+    waitForJob,
     beginJob,
     completeJob,
     failJob,
@@ -181,7 +283,7 @@ export function AiJobsProvider({ children }){
     getJob,
     getUnseen,
     activeJobs: activeJobsOf(jobs),
-  }), [jobs, startJob, beginJob, completeJob, failJob, consumeJob, getJob, getUnseen]);
+  }), [jobs, startJob, startServerJob, waitForJob, beginJob, completeJob, failJob, consumeJob, getJob, getUnseen]);
 
   return <AiJobsContext.Provider value={value}>{children}</AiJobsContext.Provider>;
 }

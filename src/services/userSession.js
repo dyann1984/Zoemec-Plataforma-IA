@@ -7,11 +7,30 @@ import { db } from '../firebase.js';
 import { startOneDriveConnect } from '../lib/onedrive.js';
 import { getDeviceId } from '../utils/localStorage.js';
 import { isAdminUser, userInitials } from '../domain/permissions.js';
+import { logLoginTrace, errInfo, isPermissionDeniedCode } from './loginDiagnostics.js';
 
+/* DIAGNOSTICO TEMPORAL (incidente produccion "permission-denied" al iniciar
+   sesion): antes, cualquier fallo aqui (en el getDoc o en el setDoc) se
+   volvia indistinguible para quien llama -- login() solo veia "esto truena"
+   y caia a fallbackProfile() sin saber si fue el GET, el CREATE, ni con que
+   codigo real. Ahora se loguea la etapa exacta y se relanza el MISMO error
+   sin modificarlo, para no cambiar el comportamiento existente (el try/catch
+   de login() lo sigue atrapando igual que antes). Borrar junto con
+   src/services/loginDiagnostics.js cuando se cierre el incidente. */
 export async function loadOrCreateProfile(fbUser, fallbackName='Usuario ZOEMEC'){
   const userRef = doc(db, 'users', fbUser.uid);
-  const snap = await getDoc(userRef);
-  if(snap.exists()) return { uid: fbUser.uid, ...snap.data() };
+  let snap;
+  try{
+    snap = await getDoc(userRef);
+  }catch(getError){
+    logLoginTrace(isPermissionDeniedCode(getError?.code) ? 'PROFILE_GET_PERMISSION_DENIED' : 'PROFILE_GET_OTHER_ERROR', errInfo(getError));
+    throw getError;
+  }
+  if(snap.exists()){
+    logLoginTrace('PROFILE_GET_FOUND');
+    return { uid: fbUser.uid, ...snap.data() };
+  }
+  logLoginTrace('PROFILE_GET_NOT_FOUND');
   const profile = {
     uid: fbUser.uid,
     name: fbUser.displayName || fallbackName || fbUser.email?.split('@')[0] || 'Usuario ZOEMEC',
@@ -24,7 +43,13 @@ export async function loadOrCreateProfile(fbUser, fallbackName='Usuario ZOEMEC')
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp()
   };
-  await setDoc(userRef, profile, { merge:true });
+  try{
+    await setDoc(userRef, profile, { merge:true });
+  }catch(createError){
+    logLoginTrace(isPermissionDeniedCode(createError?.code) ? 'PROFILE_CREATE_PERMISSION_DENIED' : 'PROFILE_CREATE_OTHER_ERROR', errInfo(createError));
+    throw createError;
+  }
+  logLoginTrace('PROFILE_CREATE_SUCCESS');
   return profile;
 }
 

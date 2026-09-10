@@ -32,6 +32,7 @@ import { useAuthoritativeApus } from './hooks/useAuthoritativeApus.js';
 import { authHeaders, apiPost, readJsonSafe, httpErrorMessage, apiGetSafe, aiServerUrl } from './services/apiClient.js';
 import { firebaseMessage, friendlyServiceError } from './services/errorMessages.js';
 import { loadOrCreateProfile, fallbackProfile, buildSession, connectOneDrive } from './services/userSession.js';
+import { logLoginTrace, errInfo } from './services/loginDiagnostics.js';
 import {
   hasValidSession, PLAN_LIMITS, ADMIN_EMAILS,
   isAdminUser, canUse, userInitials
@@ -537,6 +538,16 @@ function App(){
       return false;
     }
     const deviceId = getDeviceId();
+    // DIAGNOSTICO TEMPORAL (incidente produccion "permission-denied" al
+    // iniciar sesion): lastStage guarda la ultima etapa confirmada para que,
+    // si algo revienta hasta el catch externo, LOGIN_CATCH pueda reportar en
+    // que punto exacto ocurrio -- sin esto, el catch generico no distingue
+    // "fallo en signIn" de "fallo despues de construir la sesion". No
+    // cambia ningun valor de retorno ni ninguna rama de decision existente.
+    // Borrar junto con src/services/loginDiagnostics.js cuando se cierre el
+    // incidente.
+    let lastStage = 'LOGIN_START';
+    logLoginTrace(lastStage, { mode });
     try{
       if(mode === 'register'){
         // El chequeo de dispositivo (Firestore) necesita al usuario ya autenticado:
@@ -576,35 +587,53 @@ function App(){
         alert(tr('auth.errors.accountCreatedCheckEmail'));
         return true;
       }
+      lastStage = 'AUTH_SIGNIN_START'; logLoginTrace(lastStage);
       const credential = await signInWithEmailAndPassword(auth, cleanEmail, password);
+      lastStage = 'AUTH_SIGNIN_SUCCESS'; logLoginTrace(lastStage);
       let profile;
+      lastStage = 'PROFILE_LOAD_START'; logLoginTrace(lastStage);
       try{
         profile = await loadOrCreateProfile(credential.user);
+        lastStage = 'PROFILE_LOAD_SUCCESS'; logLoginTrace(lastStage);
       }catch(profileError){
         console.error(profileError);
+        lastStage = 'PROFILE_LOAD_FALLBACK';
+        logLoginTrace(lastStage, errInfo(profileError));
         profile = fallbackProfile(credential.user, deviceId);
       }
       const tokenResult = await credential.user.getIdTokenResult().catch(()=>null);
       const claims = tokenResult?.claims || null;
+      logLoginTrace(credential.user.emailVerified ? 'AUTH_EMAIL_VERIFIED_TRUE' : 'AUTH_EMAIL_VERIFIED_FALSE');
       if(!credential.user.emailVerified && !isAdminUser({ email:profile?.email, claims }, profile)){
-        await sendEmailVerification(credential.user, emailActionCodeSettings).catch(()=>{});
+        lastStage = 'EMAIL_VERIFICATION_SEND_START'; logLoginTrace(lastStage);
+        await sendEmailVerification(credential.user, emailActionCodeSettings)
+          .then(() => { lastStage = 'EMAIL_VERIFICATION_SEND_SUCCESS'; logLoginTrace(lastStage); })
+          .catch((sendError) => {
+            lastStage = 'EMAIL_VERIFICATION_SEND_ERROR';
+            logLoginTrace(lastStage, errInfo(sendError));
+          });
         await signOut(auth);
         alert(tr('auth.errors.emailNotVerifiedResent'));
         return false;
       }
+      logLoginTrace(profile.active === false ? 'PROFILE_ACTIVE_FALSE' : 'PROFILE_ACTIVE_TRUE');
       if(profile.active === false){
         await signOut(auth);
         alert(tr('auth.errors.accountDisabled'));
         return false;
       }
+      lastStage = 'SESSION_BUILD_START'; logLoginTrace(lastStage);
       const session = buildSession(profile, credential.user, claims);
+      lastStage = 'SESSION_BUILD_SUCCESS'; logLoginTrace(lastStage);
       setUsage({...usage, [cleanEmail]:{apusCreated:session.apusCreated || 0, deviceId:session.deviceId}});
       setActiveUid(session.uid);
       setUser(session);
       setScreen('app');
+      lastStage = 'SCREEN_APP_SET'; logLoginTrace(lastStage);
       setModule('inicio');
       return true;
     }catch(error){
+      logLoginTrace('LOGIN_CATCH', { stage: lastStage, ...errInfo(error) });
       alert(firebaseMessage(error, tr));
       return false;
     }

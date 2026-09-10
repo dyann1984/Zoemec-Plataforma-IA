@@ -1564,10 +1564,18 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
      su resultado directo (mismo camino de siempre); esto solo cubre el caso
      en que ya no estaba aqui cuando la IA termino. */
   const [recoveredJob,setRecoveredJob]=useState(null);
+  // getUnseen cambia de identidad cada vez que AiJobsContext actualiza su
+  // mapa de jobs (useCallback con dependencia [jobs]) -- se usa como
+  // dependencia en vez de [] a proposito: la hidratacion desde Firestore
+  // (ver AiJobsContext/aiJobsCloud.js) es asincrona, puede terminar DESPUES
+  // de este primer render, y con [] el chequeo se habria hecho una sola vez
+  // contra el mapa todavia vacio, perdiendo el job para siempre. No pisa una
+  // recuperacion que el usuario ya esta viendo (recoveredJob truthy).
   useEffect(() => {
+    if(recoveredJob) return;
     const [latest] = getUnseen('apu-generate');
     if(latest) setRecoveredJob(latest);
-  }, []);
+  }, [getUnseen, recoveredJob]);
   const applyRecoveredJob = () => {
     if(!recoveredJob) return;
     const { shim, v2, usedFallback, unit, qty, referencePU } = recoveredJob.result || {};
@@ -4240,10 +4248,14 @@ function PlanoTakeoff({user, setModule}){
   const { t: tr } = useI18n();
   const { beginJob, completeJob, failJob, getUnseen, consumeJob } = useAiJobs();
   const [recoveredTakeoff,setRecoveredTakeoff]=useState(null);
+  // Mismo motivo que en APU/generateAI: getUnseen cambia de identidad cuando
+  // termina la hidratacion asincrona desde Firestore, asi que se usa como
+  // dependencia en vez de [] para no perder la recuperacion en una carrera.
   useEffect(() => {
+    if(recoveredTakeoff) return;
     const [latest] = getUnseen('takeoff-analyze');
     if(latest) setRecoveredTakeoff(latest);
-  }, []);
+  }, [getUnseen, recoveredTakeoff]);
   const [fileName,setFileName]=useState('');
   const [mimeType,setMimeType]=useState('');
   const [dataBase64,setDataBase64]=useState('');

@@ -529,12 +529,16 @@ function App(){
   // delegan en syncSessionFromAuth (via el coordinator) y solo deciden que
   // alert mostrar segun el resultado.
   const syncSessionFromAuth = async (fbUser, { tracer } = {}) => {
+    // Recorte post-incidente: la traza etapa-por-etapa del camino feliz
+    // (AUTH_SIGNIN_*, PROFILE_LOAD_START/SUCCESS, SESSION_BUILD_*,
+    // SCREEN_APP_SET, etc.) ya cumplio su proposito -- confirmo la causa
+    // raiz real (ver PR). Se retiran para no dejar ruido en la consola de
+    // cada usuario real en cada login; se conservan SOLO las trazas de
+    // camino de error, que siguen siendo diagnostico util permanente.
     const t = tracer || createLoginTracer();
-    t.trace('PROFILE_LOAD_START');
     let profile;
     try{
       profile = await loadOrCreateProfile(fbUser, undefined, { tracer: t });
-      t.trace('PROFILE_LOAD_SUCCESS');
     }catch(profileError){
       console.error(profileError);
       t.trace('PROFILE_LOAD_FALLBACK', errInfo(profileError));
@@ -549,7 +553,6 @@ function App(){
       return null;
     });
     const claims = tokenResult?.claims || null;
-    t.trace(fbUser.emailVerified ? 'AUTH_EMAIL_VERIFIED_TRUE' : 'AUTH_EMAIL_VERIFIED_FALSE');
     if(!fbUser.emailVerified && !isAdminUser({ email:profile?.email, claims }, profile)){
       // FIX auditoria verificacion de correo: antes esto dejaba al usuario
       // en silencio (sin alerta, sin cambiar "screen") -- en una recarga
@@ -566,7 +569,6 @@ function App(){
       setScreen('login');
       return { status:'unverified' };
     }
-    t.trace(profile.active === false ? 'PROFILE_ACTIVE_FALSE' : 'PROFILE_ACTIVE_TRUE');
     if(profile.active === false){
       await signOut(auth);
       setActiveUid(null);
@@ -574,9 +576,7 @@ function App(){
       setScreen('landing');
       return { status:'inactive' };
     }
-    t.trace('SESSION_BUILD_START');
     const session = buildSession(profile, fbUser, claims);
-    t.trace('SESSION_BUILD_SUCCESS');
     setActiveUid(session.uid);
     setUser(session);
     setUsage(prev => ({...prev, [session.email]:{apusCreated:session.apusCreated || 0, deviceId:session.deviceId}}));
@@ -589,7 +589,6 @@ function App(){
        avanza sola -- tanto en un login interactivo como en una
        restauracion de sesion via reload. */
     setScreen(current => (current === 'landing' || current === 'login' || current === 'register') ? 'app' : current);
-    t.trace('SCREEN_APP_SET');
     return { status:'ok', session };
   };
 
@@ -618,15 +617,14 @@ function App(){
       return { ok:false, status:'service-unavailable' };
     }
     const deviceId = getDeviceId();
-    // DIAGNOSTICO TEMPORAL (incidente produccion "permission-denied" al
-    // iniciar sesion): un tracer por intento -- todas las etapas de ESTE
-    // intento (incluidas las de loadOrCreateProfile, via syncSessionFromAuth)
-    // comparten el mismo traceId en consola
-    // ("[ZOEMEC][LOGIN_TRACE] <id> ETAPA"), asi que dos intentos seguidos no
-    // se confunden al leer los logs. Borrar junto con
-    // src/services/loginDiagnostics.js cuando se cierre el incidente.
+    // Diagnostico permanente (ver src/services/loginDiagnostics.js): un
+    // tracer por intento, para que -- si algo falla -- todas las etapas de
+    // ESE intento (incluidas las de loadOrCreateProfile, via
+    // syncSessionFromAuth) compartan el mismo traceId en consola
+    // ("[ZOEMEC][LOGIN_TRACE] <id> ETAPA") y no se confundan con otro
+    // intento. Solo se traza el camino de error -- el camino feliz ya no
+    // deja rastro (recorte post-incidente).
     const tracer = createLoginTracer();
-    tracer.trace('LOGIN_START', { mode });
     try{
       if(mode === 'register'){
         // FIX (hallazgo real de esta verificacion, ver authTransitionGuardRef
@@ -670,9 +668,7 @@ function App(){
           await setDoc(doc(db, 'users', credential.user.uid), profile, { merge:true });
           await setDoc(deviceRef, { uid: credential.user.uid, email: cleanEmail, createdAt: serverTimestamp() }, { merge:true });
           setUsage({...usage, [cleanEmail]:{apusCreated:0, deviceId}});
-          tracer.trace('EMAIL_VERIFICATION_SEND_START', { via:'register' });
           await sendEmailVerification(credential.user, emailActionCodeSettings)
-            .then(() => tracer.trace('EMAIL_VERIFICATION_SEND_SUCCESS'))
             .catch((sendError) => { tracer.trace('EMAIL_VERIFICATION_SEND_ERROR', errInfo(sendError)); throw sendError; });
           await signOut(auth);
           setActiveUid(null);
@@ -684,24 +680,19 @@ function App(){
           authTransitionGuardRef.current = false;
         }
       }
-      tracer.trace('AUTH_SIGNIN_START');
       const credential = await signInWithEmailAndPassword(auth, cleanEmail, password);
-      tracer.trace('AUTH_SIGNIN_SUCCESS');
       const outcome = await sessionCoordinator.run(credential.user.uid, () => syncSessionFromAuth(credential.user, { tracer }));
       if(outcome.status === 'unverified'){
-        tracer.trace('LOGIN_RESULT_UNVERIFIED');
         return { ok:false, status:'unverified', email:cleanEmail };
       }
       if(outcome.status === 'inactive'){
         alert(tr('auth.errors.accountDisabled'));
-        tracer.trace('LOGIN_RESULT_INACTIVE');
         return { ok:false, status:'inactive' };
       }
       // outcome.status === 'ok': setUser/setScreen/setActiveUid/setUsage ya
       // quedaron aplicados dentro de syncSessionFromAuth -- login() no los
       // repite (eso era exactamente la condicion de carrera).
       setModule('inicio');
-      tracer.trace('LOGIN_RESULT_OK');
       return { ok:true, status:'ok', session: outcome.session };
     }catch(error){
       tracer.trace('LOGIN_CATCH', errInfo(error));
@@ -724,7 +715,6 @@ function App(){
   const resendVerificationEmail = async (email, password) => {
     const cleanEmail = String(email || '').trim().toLowerCase();
     const tracer = createLoginTracer();
-    tracer.trace('EMAIL_VERIFICATION_SEND_START', { via:'resend-button' });
     // FIX (hallazgo real EN VIVO durante la verificacion de este mismo
     // cambio -- reproducido con una cuenta QA real, no hipotetico): este
     // ciclo signIn -> signOut TAMBIEN dispara onAuthStateChanged, que sin
@@ -744,12 +734,10 @@ function App(){
       const credential = await signInWithEmailAndPassword(auth, cleanEmail, password);
       if(credential.user.emailVerified){
         await signOut(auth);
-        tracer.trace('EMAIL_VERIFICATION_SEND_SKIPPED_ALREADY_VERIFIED');
         return { ok:true, status:'already-verified' };
       }
       await sendEmailVerification(credential.user, emailActionCodeSettings);
       await signOut(auth);
-      tracer.trace('EMAIL_VERIFICATION_SEND_SUCCESS');
       return { ok:true, status:'sent' };
     }catch(error){
       await signOut(auth).catch((signOutError) => tracer.trace('SIGNOUT_AFTER_RESEND_ERROR', errInfo(signOutError)));

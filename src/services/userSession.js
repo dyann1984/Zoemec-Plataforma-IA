@@ -52,9 +52,12 @@ export async function loadOrCreateProfile(fbUser, fallbackName='Usuario ZOEMEC',
     const raw = { uid: fbUser.uid, ...snap.data() };
     const { profile, needsNormalization, patch } = normalizeUserProfile(raw, fbUser);
     if(!needsNormalization){
-      trace('PROFILE_GET_FOUND');
       return profile;
     }
+    // Se conserva esta traza (a diferencia del resto del camino feliz,
+    // recortado post-incidente): detectar un perfil legacy es poco
+    // frecuente y vale la pena poder monitorear cuantas cuentas siguen
+    // necesitando este backfill.
     trace('PROFILE_GET_FOUND_LEGACY', { fields: Object.keys(patch) });
     try{
       await setDoc(userRef, { ...patch, updatedAt: serverTimestamp() }, { merge:true });
@@ -66,7 +69,6 @@ export async function loadOrCreateProfile(fbUser, fallbackName='Usuario ZOEMEC',
     }
     return profile;
   }
-  trace('PROFILE_GET_NOT_FOUND');
   const profile = {
     uid: fbUser.uid,
     name: fbUser.displayName || fallbackName || fbUser.email?.split('@')[0] || 'Usuario ZOEMEC',
@@ -85,7 +87,6 @@ export async function loadOrCreateProfile(fbUser, fallbackName='Usuario ZOEMEC',
     trace(isPermissionDeniedCode(createError?.code) ? 'PROFILE_CREATE_PERMISSION_DENIED' : 'PROFILE_CREATE_OTHER_ERROR', errInfo(createError));
     throw createError;
   }
-  trace('PROFILE_CREATE_SUCCESS');
   return profile;
 }
 

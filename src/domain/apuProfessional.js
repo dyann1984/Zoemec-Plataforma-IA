@@ -236,10 +236,10 @@ export function collectApuBusinessIssues(apu = {}, options = {}){
   const issues = [];
   const now = options.now ? new Date(options.now) : new Date();
   sourceRows(apu).forEach(({kind,row,source}, index) => {
-    if(!text(source.proveedor || source.sourceName)) issues.push({ code:'price_without_source', kind, index, severity:'warning', message:`${row.clave || kind} no tiene fuente identificable.` });
+    if(!text(source.proveedor || source.sourceName)) issues.push({ code:'price_without_source', kind, index, resourceLabel: row.clave || kind, severity:'warning', message:`${row.clave || kind} no tiene fuente identificable.` });
     const months = ageMonths(source.fecha || source.priceDate, now);
-    if(months === null) issues.push({ code:'price_without_date', kind, index, severity:'warning', message:`${row.clave || kind} no tiene fecha de precio.` });
-    else if(months > 12) issues.push({ code:'stale_price', kind, index, severity:'warning', message:`${row.clave || kind} tiene un precio de ${months} meses de antiguedad.` });
+    if(months === null) issues.push({ code:'price_without_date', kind, index, resourceLabel: row.clave || kind, severity:'warning', message:`${row.clave || kind} no tiene fecha de precio.` });
+    else if(months > 12) issues.push({ code:'stale_price', kind, index, resourceLabel: row.clave || kind, months, severity:'warning', message:`${row.clave || kind} tiene un precio de ${months} meses de antiguedad.` });
   });
   if(!(apu.materials || []).length) issues.push({ code:'missing_materials', severity:'warning', message:'El APU no contiene materiales.' });
   if(!(apu.labor || []).length) issues.push({ code:'missing_labor', severity:'error', message:'El APU no contiene mano de obra.' });
@@ -254,7 +254,7 @@ export function collectApuBusinessIssues(apu = {}, options = {}){
   const unique = new Set();
   sourceRows(apu).forEach(({kind,row}, index) => {
     const key = `${kind}:${text(row.clave || row.descripcion).toLowerCase()}`;
-    if(unique.has(key)) issues.push({ code:'duplicate_resource', kind, index, severity:'warning', message:`Recurso duplicado: ${row.clave || row.descripcion}.` });
+    if(unique.has(key)) issues.push({ code:'duplicate_resource', kind, index, resourceLabel: row.clave || row.descripcion, severity:'warning', message:`Recurso duplicado: ${row.clave || row.descripcion}.` });
     unique.add(key);
   });
   return issues;

@@ -63,15 +63,31 @@ function resolveSeverity(code){
   return SEVERITY_BY_CODE[code] || AUDIT_SEVERITY.CRITICAL;
 }
 
+/* Campos que YA tienen su propio lugar en el finding normalizado (no
+   pertenecen a "params" de i18n, se leerian duplicados). Todo lo demas que
+   traiga `raw` (value, months, count, descripcion, integracion, keywords,
+   resourceLabel, discipline, rendimiento, cuadrilla...) es exactamente el
+   dato dinamico que cada codigo necesita para su plantilla ES/EN -- ver
+   src/i18n/translations.js#findings y resolveFindingMessage en
+   src/domain/findingMessages.js. Nunca se traduce aqui: este modulo solo
+   preserva el dato, la UI/PDF/Excel deciden el idioma. */
+const RESERVED_FINDING_FIELDS = new Set(['code', 'message', 'kind', 'index', 'field', 'category', 'severity']);
+
 function normalizeFinding(raw, origin){
   const severity = resolveSeverity(raw.code);
   const location = [raw.kind, raw.index != null ? `#${raw.index + 1}` : null].filter(Boolean).join(' ');
+  const params = { kind: raw.kind ?? null, index: raw.index ?? null, indexDisplay: raw.index != null ? raw.index + 1 : null, field: raw.field ?? null };
+  for(const key of Object.keys(raw)){
+    if(RESERVED_FINDING_FIELDS.has(key)) continue;
+    params[key] = raw[key];
+  }
   return {
     id: `${origin}:${raw.code}${raw.index != null ? ':' + raw.index : ''}`,
     severity,
     category: raw.category || raw.kind || origin,
     code: raw.code,
     message: raw.message,
+    params,
     evidence: location || null,
     kind: raw.kind ?? null,
     index: raw.index ?? null,

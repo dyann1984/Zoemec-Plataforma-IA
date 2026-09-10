@@ -28,9 +28,36 @@ const jobDocKey = (jobId) => `aiJob:${jobId}`;
 const INDEX_KEY = 'aiJobsIndex';
 const MAX_INDEX = 15;
 
+/* Firestore rechaza arrays anidados (array dentro de array) en cualquier
+   profundidad -- y el resultado real de un job de APU trae justo eso
+   (shim.materials/labor/equipo son arrays de tuplas, ver v2RowsToLegacy en
+   main.jsx). setDoc() valida esto de forma SINCRONA y truena antes de
+   devolver una promesa rechazable -- envolver solo la promesa en .catch()
+   no alcanza a cubrirlo, por eso este modulo usa try/catch real. `result` y
+   `payload` (las dos partes de un job que pueden traer cualquier forma,
+   segun el tipo de trabajo) se guardan como texto JSON en vez de objeto
+   anidado: evita el problema de raiz sin tener que conocer aqui la forma
+   exacta de cada tipo de resultado. */
+export function toCloudDoc(job){
+  const out = { ...job };
+  if(out.result !== undefined) out.result = out.result == null ? null : JSON.stringify(out.result);
+  if(out.payload !== undefined) out.payload = out.payload == null ? null : JSON.stringify(out.payload);
+  return out;
+}
+
+export function fromCloudDoc(raw){
+  if(!raw) return raw;
+  const job = { ...raw };
+  if(typeof job.result === 'string'){ try{ job.result = JSON.parse(job.result); }catch{ job.result = null; } }
+  if(typeof job.payload === 'string'){ try{ job.payload = JSON.parse(job.payload); }catch{ job.payload = null; } }
+  return job;
+}
+
 export async function saveJobToCloud(db, uid, job){
   if(!db || !uid || !job) return;
-  await setDoc(doc(db, 'users', uid, 'state', jobDocKey(job.id)), job).catch(() => {});
+  try{
+    await setDoc(doc(db, 'users', uid, 'state', jobDocKey(job.id)), toCloudDoc(job));
+  }catch{ /* nunca bloquear la UI por un fallo de persistencia -- el job sigue vivo en memoria */ }
 }
 
 export async function deleteJobFromCloud(db, uid, jobId){
@@ -80,7 +107,7 @@ export async function loadRecentJobsFromCloud(db, uid){
     const jobs = [];
     for(const chunk of chunks){
       const snaps = await getDocs(query(stateCol, where(documentId(), 'in', chunk)));
-      snaps.forEach(s => jobs.push(s.data()));
+      snaps.forEach(s => jobs.push(fromCloudDoc(s.data())));
     }
     return jobs;
   }catch{

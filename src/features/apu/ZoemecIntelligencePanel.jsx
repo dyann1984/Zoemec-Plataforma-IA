@@ -76,8 +76,8 @@ function FindingCard({ finding, actions }){
 
 function SummaryBar({ summary, tr }){
   const bidRiskExposureLabel = !summary.bidRisk.severity ? null
-    : summary.bidRisk.estimatedExposure > 0 ? `${money(summary.bidRisk.estimatedExposure)} exposición`
-    : 'sin exposición monetizada';
+    : summary.bidRisk.estimatedExposure > 0 ? tr('intel.exposureAmount', { amount: money(summary.bidRisk.estimatedExposure) })
+    : tr('intel.noMonetizedExposure');
   return <div className="zi-summary-bar">
     <div className="zi-summary-card">
       <span className="zi-summary-label">{tr('intel.confidenceLabel')}</span>
@@ -94,12 +94,12 @@ function SummaryBar({ summary, tr }){
     <div className="zi-summary-card">
       <span className="zi-summary-label">{tr('intel.auditLabel')}</span>
       <span className="zi-summary-value">{summary.audit.count ?? summary.audit.display}</span>
-      <span className="zi-summary-sub">{summary.audit.topSeverity ? `top: ${summary.audit.topSeverity}` : summary.audit.count === 0 ? 'sin hallazgos' : ''}</span>
+      <span className="zi-summary-sub">{summary.audit.topSeverity ? tr('intel.topSeverity', { severity: resolveSeverityLabel(tr, summary.audit.topSeverity) }) : summary.audit.count === 0 ? tr('intel.noFindings') : ''}</span>
     </div>
     <div className="zi-summary-card">
       <span className="zi-summary-label">{tr('intel.challengeLabel')}</span>
       <span className="zi-summary-value">{summary.challenge.count ?? summary.challenge.display}</span>
-      <span className="zi-summary-sub">{summary.challenge.monetizableCount ? `${summary.challenge.monetizableCount} monetizable(s)` : summary.challenge.count === 0 ? 'sin cuestionamientos' : ''}</span>
+      <span className="zi-summary-sub">{summary.challenge.monetizableCount ? tr('intel.monetizableCount', { count: summary.challenge.monetizableCount }) : summary.challenge.count === 0 ? tr('intel.noQuestions') : ''}</span>
     </div>
   </div>;
 }

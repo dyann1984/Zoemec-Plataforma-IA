@@ -501,6 +501,11 @@ label{display:block;font-size:.74rem;font-weight:600;color:var(--muted);text-tra
 .auth-card small{display:block;margin-top:12px;color:var(--muted)}
 .auth-card small a{color:var(--teal);font-weight:600;text-decoration:none}
 .auth-card .back{display:inline-block;margin-top:14px;color:var(--muted);font-size:.85rem;text-decoration:none}
+.verify-email-page{min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--paper);padding:24px}
+.verify-actions{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.verify-note{margin:0;font-size:.82rem;color:var(--muted)}
+.verify-note.ok{color:#1f7a4d}
+.verify-note.error{color:var(--danger)}
 
 /* ====================================================================
    APP SHELL
@@ -3336,4 +3341,41 @@ svg.ic{display:block;flex:none}
   .survey-tab{margin-right:10px;padding:8px 2px;font-size:.82rem}
   .import3d-dropzone{padding:20px 12px}
   .phonescan-camera-preview{aspect-ratio:3/4;max-height:50vh}
+}
+
+/* ==== Comparativa (mapa competitivo) ==== */
+.compare-page{display:flex;flex-direction:column;gap:20px}
+.cmp-methodology{background:var(--mint);border:1px solid var(--line);border-radius:14px;padding:16px 18px;display:flex;flex-direction:column;gap:6px}
+.cmp-methodology p{margin:0;color:var(--muted);font-size:.86rem;line-height:1.5}
+.cmp-methodology .cmp-note{font-size:.76rem}
+.cmp-filters{display:flex;flex-wrap:wrap;gap:8px}
+.cmp-filter-chip{border:1px solid var(--line);background:var(--card);color:var(--ink-text);border-radius:999px;padding:7px 14px;font-size:.82rem;cursor:pointer;transition:background .15s,color .15s}
+.cmp-filter-chip.active{background:var(--accent-solid);border-color:var(--accent-solid);color:#fff}
+.cmp-table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:14px;background:var(--card)}
+.cmp-table{border-collapse:collapse;width:100%;min-width:720px;font-size:.86rem}
+.cmp-table th,.cmp-table td{padding:10px 14px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+.cmp-table thead th{position:sticky;top:0;background:var(--card);z-index:1;vertical-align:top}
+.cmp-table tbody th{font-weight:600;color:var(--ink-text);white-space:normal;min-width:160px}
+.cmp-feature-col{min-width:170px}
+.cmp-col-head{display:flex;flex-direction:column;gap:2px}
+.cmp-col-head small{color:var(--muted);font-weight:400;font-size:.72rem}
+.cmp-col-zoemec{background:var(--mint)}
+.cmp-val{display:inline-flex;align-items:center;justify-content:center;min-width:24px;padding:2px 8px;border-radius:8px;font-size:.72rem;font-weight:600}
+.cmp-val-yes{color:#1f7a4d;background:#EAF7F0}
+.cmp-val-no{color:var(--danger);background:rgba(181,74,98,.12)}
+.cmp-val-partial{color:var(--gold-ink);background:var(--gold-soft)}
+.cmp-val-unknown{color:var(--muted);background:var(--surface-soft-2);font-weight:500;white-space:normal}
+.cmp-pricing-row td{white-space:normal;vertical-align:top}
+.cmp-unconfirmed-tag{display:block;color:var(--muted);font-size:.7rem;margin-top:2px}
+.cmp-why h2{margin-bottom:4px}
+.cmp-why>p{color:var(--muted);margin-top:0}
+.cmp-why-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:12px}
+.cmp-why-card{border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--card)}
+.cmp-why-card b{display:block;margin-bottom:6px;color:var(--ink-text)}
+.cmp-why-card p{margin:0;color:var(--muted);font-size:.84rem;line-height:1.45}
+.cmp-sources{border-top:1px solid var(--line);padding-top:14px}
+.cmp-sources ul{margin:8px 0 0;padding-left:18px;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:4px 16px}
+.cmp-sources a{color:var(--teal)}
+@media (max-width:760px){
+  .cmp-table{min-width:640px}
 }

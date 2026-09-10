@@ -8,6 +8,7 @@ import { apuDataStateLabel } from '../../domain/apuSchema.js';
 import { MEMORY_SCOPE, MEMORY_TYPE, MEMORY_STATUS } from '../../domain/technicalMemory.js';
 import { challengeSeverity } from '../../domain/apuChallenge.js';
 import { apiPost, apiGetSafe } from '../../services/apiClient.js';
+import { useI18n } from '../../i18n/I18nContext.jsx';
 
 const RANK = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1, INFO: 0 };
 // Identificadores reales que ya existen en el APU (Fase 6): nunca se inventa
@@ -55,30 +56,30 @@ function FindingCard({ finding, actions }){
   </div>;
 }
 
-function SummaryBar({ summary }){
+function SummaryBar({ summary, tr }){
   const bidRiskExposureLabel = !summary.bidRisk.severity ? null
     : summary.bidRisk.estimatedExposure > 0 ? `${money(summary.bidRisk.estimatedExposure)} exposición`
     : 'sin exposición monetizada';
   return <div className="zi-summary-bar">
     <div className="zi-summary-card">
-      <span className="zi-summary-label">Confidence</span>
+      <span className="zi-summary-label">{tr('intel.confidenceLabel')}</span>
       <span className={`zi-summary-value${summary.confidence.score == null ? ' zi-empty' : ''}`}>{summary.confidence.display}</span>
       {summary.confidence.status && <span className="zi-summary-sub">{summary.confidence.status}</span>}
     </div>
     <div className="zi-summary-card">
-      <span className="zi-summary-label">Bid Risk</span>
+      <span className="zi-summary-label">{tr('intel.bidRiskLabel')}</span>
       {summary.bidRisk.severity
         ? <span className="zi-summary-value"><SeverityBadge severity={summary.bidRisk.severity} /></span>
         : <span className="zi-summary-value zi-empty">{summary.bidRisk.display}</span>}
       {bidRiskExposureLabel && <span className="zi-summary-sub">{bidRiskExposureLabel}</span>}
     </div>
     <div className="zi-summary-card">
-      <span className="zi-summary-label">Auditoría</span>
+      <span className="zi-summary-label">{tr('intel.auditLabel')}</span>
       <span className="zi-summary-value">{summary.audit.count ?? summary.audit.display}</span>
       <span className="zi-summary-sub">{summary.audit.topSeverity ? `top: ${summary.audit.topSeverity}` : summary.audit.count === 0 ? 'sin hallazgos' : ''}</span>
     </div>
     <div className="zi-summary-card">
-      <span className="zi-summary-label">Challenge</span>
+      <span className="zi-summary-label">{tr('intel.challengeLabel')}</span>
       <span className="zi-summary-value">{summary.challenge.count ?? summary.challenge.display}</span>
       <span className="zi-summary-sub">{summary.challenge.monetizableCount ? `${summary.challenge.monetizableCount} monetizable(s)` : summary.challenge.count === 0 ? 'sin cuestionamientos' : ''}</span>
     </div>
@@ -483,7 +484,7 @@ function HistorialTab({ history, onRestore }){
   </div>)}</div>;
 }
 
-const TABS = [['resumen', 'Resumen'], ['confidence', 'Confidence'], ['bidrisk', 'Bid Risk'], ['auditoria', 'Auditoría'], ['challenge', 'Challenge'], ['escenarios', 'Escenarios'], ['evidencia', 'Evidencia'], ['memoria', 'Memoria'], ['historial', 'Historial']];
+const TAB_KEYS = ['resumen', 'confidence', 'bidrisk', 'auditoria', 'challenge', 'escenarios', 'evidencia', 'memoria', 'historial'];
 
 /* ZOEMEC INTELLIGENCE (Fase 5 + Fase 6): unico punto de montaje de los 4
    motores de dominio dentro del editor, mas persistencia real de Memoria
@@ -495,6 +496,7 @@ const TABS = [['resumen', 'Resumen'], ['confidence', 'Confidence'], ['bidrisk', 
    referencia es una dependencia valida y evita recalculos en cada render
    sin necesidad de un deep-equal costoso). */
 export function ZoemecIntelligencePanel({ apu, onChange, history, onRestoreVersion, user }){
+  const { t: tr } = useI18n();
   const intelligence = useMemo(() => computeZoemecIntelligence(apu), [apu]);
   const summary = useMemo(() => summarizeIntelligence(intelligence), [intelligence]);
   const [tab, setTab] = useState('resumen');
@@ -508,10 +510,10 @@ export function ZoemecIntelligencePanel({ apu, onChange, history, onRestoreVersi
   };
 
   return <section className="zi-panel">
-    <div className="zi-panel-head"><h2>ZOEMEC INTELLIGENCE</h2><span className="zi-subtitle">Auditor · Challenge · Confidence · Bid Risk · Scenario · Memoria</span></div>
-    <SummaryBar summary={summary} />
+    <div className="zi-panel-head"><h2>ZOEMEC INTELLIGENCE</h2><span className="zi-subtitle">{tr('intel.panelSubtitle')}</span></div>
+    <SummaryBar summary={summary} tr={tr} />
     <div className="zi-tabs" role="tablist">
-      {TABS.map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={tab === key} className={`zi-tab${tab === key ? ' active' : ''}`} onClick={() => setTab(key)}>{label}</button>)}
+      {TAB_KEYS.map(key => <button key={key} type="button" role="tab" aria-selected={tab === key} className={`zi-tab${tab === key ? ' active' : ''}`} onClick={() => setTab(key)}>{tr(`intel.tabs.${key}`)}</button>)}
     </div>
     <div className="zi-tabpanel">
       {tab === 'resumen' && <ResumenTab intelligence={intelligence} confidence={intelligence.confidence} bidRisk={intelligence.bidRisk} />}

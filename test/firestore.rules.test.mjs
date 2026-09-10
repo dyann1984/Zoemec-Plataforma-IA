@@ -93,6 +93,95 @@ describe('firestore.rules — users (D1: autoasignacion de admin/plan)', () => {
   });
 });
 
+describe('firestore.rules — normalizacion de perfiles legacy (incidente permission-denied en login)', () => {
+  /* Root cause confirmado del incidente: un documento users/{uid} sin
+     role/plan/active (creado por una version anterior de ZOEMEC, o
+     manualmente) no podia recibir NINGUNA escritura -- ni siquiera para
+     rellenar exactamente esos 3 campos con los valores de arranque
+     seguros -- porque la regla anterior exigia igualdad estricta entre el
+     valor existente y el nuevo, y un campo ausente nunca es "==" a nada. */
+
+  it('el dueno SI puede rellenar "active" cuando el documento legacy no lo trae, pero solo con el default seguro (true)', async () => {
+    await seed((db) => db.doc('users/alice').set({ role: 'user', plan: 'Gratis', name: 'Alice Legacy' })); // sin "active"
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(alice.doc('users/alice').update({ active: true }));
+  });
+
+  it('el dueno NO puede rellenar "active" ausente con false (el unico default seguro es true)', async () => {
+    await seed((db) => db.doc('users/alice').set({ role: 'user', plan: 'Gratis', name: 'Alice Legacy' }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('users/alice').update({ active: false }));
+  });
+
+  it('el dueno SI puede rellenar "plan" cuando el documento legacy no lo trae, pero solo con "Gratis"', async () => {
+    await seed((db) => db.doc('users/alice').set({ role: 'user', active: true, name: 'Alice Legacy' })); // sin "plan"
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(alice.doc('users/alice').update({ plan: 'Gratis' }));
+  });
+
+  it('el dueno NO puede rellenar "plan" ausente con un plan de pago', async () => {
+    await seed((db) => db.doc('users/alice').set({ role: 'user', active: true, name: 'Alice Legacy' }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('users/alice').update({ plan: 'Empresa' }));
+  });
+
+  it('el dueno SI puede rellenar "role" cuando el documento legacy no lo trae, pero solo con "user"', async () => {
+    await seed((db) => db.doc('users/alice').set({ plan: 'Gratis', active: true, name: 'Alice Legacy' })); // sin "role"
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(alice.doc('users/alice').update({ role: 'user' }));
+  });
+
+  it('el dueno NO puede rellenar "role" ausente con "admin" (la brecha que mas importa evitar)', async () => {
+    await seed((db) => db.doc('users/alice').set({ plan: 'Gratis', active: true, name: 'Alice Legacy' }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('users/alice').update({ role: 'admin' }));
+  });
+
+  it('un documento legacy sin NINGUNO de los 3 campos se normaliza completo en una sola escritura con los defaults seguros', async () => {
+    await seed((db) => db.doc('users/alice').set({ name: 'Alice muy legacy', email: 'alice@zoemec.test' })); // sin role/plan/active
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(alice.doc('users/alice').update({ role: 'user', plan: 'Gratis', active: true }));
+  });
+
+  it('un admin real con perfil legacy (role="admin" presente, "active" ausente) SI puede normalizar solo el campo faltante', async () => {
+    // Nota: alice aqui YA es admin segun isAdmin() (su propio documento dice
+    // role:'admin'), asi que la rama isAdmin() del "allow update" la
+    // autoriza a escribir lo que sea en su propio doc -- eso es correcto
+    // (un admin real puede editar cualquier perfil, incluido el suyo). La
+    // proteccion real contra degradar un role/plan ya presente vive en la
+    // rama NO-admin (isOwner-only), ya cubierta por "usuario A no puede
+    // subir su propio plan/rol via update" (esa alice tiene role:'user', no
+    // 'admin', asi que isAdmin() es false para ella y solo queda la rama
+    // fieldFilledOnlyWithSafeDefault). Esta prueba solo confirma que el
+    // camino de normalizacion sigue funcionando para una cuenta admin con
+    // un perfil legacy incompleto.
+    await seed((db) => db.doc('users/alice').set({ role: 'admin', plan: 'Empresa' })); // sin "active"
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(alice.doc('users/alice').update({ active: true }));
+  });
+
+  it('una cuenta desactivada a proposito (active:false YA presente) nunca se puede "normalizar" de vuelta a true', async () => {
+    await seed((db) => db.doc('users/alice').set({ role: 'user', plan: 'Gratis', active: false }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('users/alice').update({ active: true }));
+  });
+
+  it('no se puede aprovechar el relleno de un campo ausente para colar un cambio no autorizado en OTRO campo ya presente', async () => {
+    await seed((db) => db.doc('users/alice').set({ role: 'user', plan: 'Gratis', name: 'Alice' })); // sin "active"
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('users/alice').update({ active: true, role: 'admin' }));
+  });
+
+  it('el comportamiento previo para un documento YA completo sigue exactamente igual (sin regresion)', async () => {
+    await seed((db) => db.doc('users/alice').set({ role: 'user', plan: 'Gratis', active: true }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('users/alice').update({ plan: 'Empresa' }));
+    await assertFails(alice.doc('users/alice').update({ role: 'admin' }));
+    await assertFails(alice.doc('users/alice').update({ active: false }));
+    await assertSucceeds(alice.doc('users/alice').update({ name: 'Alice Actualizada' }));
+  });
+});
+
 describe('firestore.rules — library (D2: aislamiento multiusuario)', () => {
   it('usuario A no puede leer un documento privado de B', async () => {
     await seed((db) => db.doc('library/doc1').set({ ownerUid: 'bob', visibility: 'private' }));

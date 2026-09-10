@@ -7,6 +7,7 @@ import { db } from '../firebase.js';
 import { startOneDriveConnect } from '../lib/onedrive.js';
 import { getDeviceId } from '../utils/localStorage.js';
 import { isAdminUser, userInitials } from '../domain/permissions.js';
+import { normalizeUserProfile } from '../domain/userProfile.js';
 import { logLoginTrace, errInfo, isPermissionDeniedCode } from './loginDiagnostics.js';
 
 /* DIAGNOSTICO TEMPORAL (incidente produccion "permission-denied" al iniciar
@@ -15,22 +16,57 @@ import { logLoginTrace, errInfo, isPermissionDeniedCode } from './loginDiagnosti
    y caia a fallbackProfile() sin saber si fue el GET, el CREATE, ni con que
    codigo real. Ahora se loguea la etapa exacta y se relanza el MISMO error
    sin modificarlo, para no cambiar el comportamiento existente (el try/catch
-   de login() lo sigue atrapando igual que antes). Borrar junto con
-   src/services/loginDiagnostics.js cuando se cierre el incidente. */
-export async function loadOrCreateProfile(fbUser, fallbackName='Usuario ZOEMEC'){
+   de quien llama lo sigue atrapando igual que antes). `tracer` (ver
+   src/services/loginDiagnostics.js) es opcional: si login()/la restauracion
+   de sesion ya crearon uno para este intento, sus etapas (PROFILE_GET,
+   PROFILE_CREATE, PROFILE_NORMALIZE) quedan bajo el MISMO traceId; sin
+   tracer, cae a logLoginTrace() (sin traceId) para no romper llamadores que
+   todavia no lo pasen. Borrar junto con src/services/loginDiagnostics.js
+   cuando se cierre el incidente.
+
+   Perfiles legacy (hallazgo del incidente): un documento users/{uid} creado
+   por una version anterior de ZOEMEC (o manualmente) puede no traer
+   role/plan/active, o traerlos con un tipo incorrecto. Antes eso se
+   devolvia tal cual, y CUALQUIER escritura posterior a ese documento
+   (ej. el sync de companyName en main.jsx) tronaba con permission-denied,
+   porque la regla de "update" de Firestore exige que role/plan/active
+   permanezcan iguales entre el documento existente y el resultante -- una
+   comparacion que nunca puede ser cierta si el campo no existe. Ahora se
+   normaliza SIEMPRE en memoria (normalizeUserProfile, logica pura y
+   probada por separado) para que el login nunca dependa de que el backfill
+   en Firestore tenga exito; el backfill mismo se intenta best-effort (si
+   falla -- ej. mientras firestore.rules todavia no incluye la regla que lo
+   permite -- se loguea y se continua con el perfil normalizado en memoria,
+   nunca se bloquea el login por esto). */
+export async function loadOrCreateProfile(fbUser, fallbackName='Usuario ZOEMEC', { tracer } = {}){
+  const trace = (stage, extra) => (tracer ? tracer.trace(stage, extra) : logLoginTrace(stage, extra));
   const userRef = doc(db, 'users', fbUser.uid);
   let snap;
   try{
     snap = await getDoc(userRef);
   }catch(getError){
-    logLoginTrace(isPermissionDeniedCode(getError?.code) ? 'PROFILE_GET_PERMISSION_DENIED' : 'PROFILE_GET_OTHER_ERROR', errInfo(getError));
+    trace(isPermissionDeniedCode(getError?.code) ? 'PROFILE_GET_PERMISSION_DENIED' : 'PROFILE_GET_OTHER_ERROR', errInfo(getError));
     throw getError;
   }
   if(snap.exists()){
-    logLoginTrace('PROFILE_GET_FOUND');
-    return { uid: fbUser.uid, ...snap.data() };
+    const raw = { uid: fbUser.uid, ...snap.data() };
+    const { profile, needsNormalization, patch } = normalizeUserProfile(raw, fbUser);
+    if(!needsNormalization){
+      trace('PROFILE_GET_FOUND');
+      return profile;
+    }
+    trace('PROFILE_GET_FOUND_LEGACY', { fields: Object.keys(patch) });
+    try{
+      await setDoc(userRef, { ...patch, updatedAt: serverTimestamp() }, { merge:true });
+      trace('PROFILE_NORMALIZE_WRITE_SUCCESS', { fields: Object.keys(patch) });
+    }catch(normalizeError){
+      // Nunca bloquea el login: el perfil normalizado en memoria ya es
+      // valido y seguro, con o sin el backfill persistido.
+      trace(isPermissionDeniedCode(normalizeError?.code) ? 'PROFILE_NORMALIZE_WRITE_PERMISSION_DENIED' : 'PROFILE_NORMALIZE_WRITE_OTHER_ERROR', errInfo(normalizeError));
+    }
+    return profile;
   }
-  logLoginTrace('PROFILE_GET_NOT_FOUND');
+  trace('PROFILE_GET_NOT_FOUND');
   const profile = {
     uid: fbUser.uid,
     name: fbUser.displayName || fallbackName || fbUser.email?.split('@')[0] || 'Usuario ZOEMEC',
@@ -46,10 +82,10 @@ export async function loadOrCreateProfile(fbUser, fallbackName='Usuario ZOEMEC')
   try{
     await setDoc(userRef, profile, { merge:true });
   }catch(createError){
-    logLoginTrace(isPermissionDeniedCode(createError?.code) ? 'PROFILE_CREATE_PERMISSION_DENIED' : 'PROFILE_CREATE_OTHER_ERROR', errInfo(createError));
+    trace(isPermissionDeniedCode(createError?.code) ? 'PROFILE_CREATE_PERMISSION_DENIED' : 'PROFILE_CREATE_OTHER_ERROR', errInfo(createError));
     throw createError;
   }
-  logLoginTrace('PROFILE_CREATE_SUCCESS');
+  trace('PROFILE_CREATE_SUCCESS');
   return profile;
 }
 

@@ -26,6 +26,28 @@ service cloud.firestore {
       );
     }
 
+    // FIX incidente produccion (permission-denied en login): un perfil
+    // users/{uid} creado por una version anterior de ZOEMEC (o manualmente,
+    // fuera del flujo normal de registro) puede no traer role/plan/active.
+    // La regla de "update" de abajo exigia que esos 3 campos permanecieran
+    // IGUALES entre el documento existente y el resultante -- una condicion
+    // que nunca puede cumplirse si el campo no existe (get() con default
+    // devuelve null, y ningun valor real es == null), asi que CUALQUIER
+    // escritura al perfil de una cuenta legacy (incluida la propia
+    // normalizacion, ver src/domain/userProfile.js) quedaba bloqueada para
+    // siempre con permission-denied. Esta funcion agrega la UNICA excepcion
+    // segura: si el campo esta AUSENTE (null) en el documento existente,
+    // se permite escribirlo -- pero solo con el valor de arranque exacto que
+    // ya usa el codigo de registro (role:'user', plan:'Gratis', active:true)
+    // -- jamas con cualquier otro valor. Un campo YA presente (aunque sea
+    // 'admin', un plan de pago, o active:false) sigue exigiendo igualdad
+    // estricta, exactamente como antes: esto NUNCA degrada un admin a user,
+    // NUNCA cambia un plan existente, y NUNCA reactiva una cuenta
+    // desactivada a proposito.
+    function fieldFilledOnlyWithSafeDefault(existingValue, newValue, safeDefault) {
+      return newValue == existingValue || (existingValue == null && newValue == safeDefault);
+    }
+
     match /users/{uid}/state/{stateKey} {
       allow read, write: if isOwner(uid);
     }
@@ -44,9 +66,9 @@ service cloud.firestore {
       allow update: if isAdmin()
         || (
           isOwner(uid)
-          && request.resource.data.role == resource.data.role
-          && request.resource.data.plan == resource.data.plan
-          && request.resource.data.active == resource.data.active
+          && fieldFilledOnlyWithSafeDefault(resource.data.get('role', null), request.resource.data.get('role', null), 'user')
+          && fieldFilledOnlyWithSafeDefault(resource.data.get('plan', null), request.resource.data.get('plan', null), 'Gratis')
+          && fieldFilledOnlyWithSafeDefault(resource.data.get('active', null), request.resource.data.get('active', null), true)
         );
       allow delete: if isAdmin();
     }

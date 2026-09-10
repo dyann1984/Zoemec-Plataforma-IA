@@ -1,7 +1,7 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { jsPDF } from 'jspdf';
-import { createUserWithEmailAndPassword, getIdTokenResult, GoogleAuthProvider, onAuthStateChanged, sendEmailVerification, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile } from 'firebase/auth';
+import { createUserWithEmailAndPassword, getAdditionalUserInfo, getIdTokenResult, GoogleAuthProvider, onAuthStateChanged, sendEmailVerification, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile } from 'firebase/auth';
 import { addDoc, collection, deleteDoc, doc, getCountFromServer, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import { deleteObject, getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { auth, db, emailActionCodeSettings, firebaseReady, storage } from './firebase.js';
@@ -32,6 +32,9 @@ import { useAuthoritativeApus } from './hooks/useAuthoritativeApus.js';
 import { authHeaders, apiPost, readJsonSafe, httpErrorMessage, apiGetSafe, aiServerUrl } from './services/apiClient.js';
 import { firebaseMessage, friendlyServiceError } from './services/errorMessages.js';
 import { loadOrCreateProfile, fallbackProfile, buildSession, connectOneDrive } from './services/userSession.js';
+import { logLoginTrace, errInfo, createLoginTracer, isPermissionDeniedCode } from './services/loginDiagnostics.js';
+import { createSessionCoordinator } from './domain/authSessionCoordinator.js';
+import { canResendVerification, remainingCooldownSeconds } from './domain/resendCooldown.js';
 import {
   hasValidSession, PLAN_LIMITS, ADMIN_EMAILS,
   isAdminUser, canUse, userInitials
@@ -355,6 +358,34 @@ function App(){
   }, []);
   const [zoeContext, setZoeContext] = useState({ user: null, route: 'inicio', activeApu: null, budget: null, project: null, importedFile: null, library: [], alerts: [], history: [] });
   const [user, setUser] = useState(null);
+  // FIX incidente produccion (condicion de carrera login/onAuthStateChanged):
+  // ver src/domain/authSessionCoordinator.js. Un unico coordinador por
+  // instancia de App -- login(), loginWithGoogle() y el listener
+  // onAuthStateChanged comparten esta MISMA instancia para que, sin importar
+  // quien dispare primero una transicion de auth, syncSessionFromAuth()
+  // (loadOrCreateProfile + construir sesion + setUser/setScreen/setActiveUid/
+  // setUsage) se ejecute como MUCHO una vez por transicion.
+  const sessionCoordinator = useRef(createSessionCoordinator()).current;
+  // FIX (hallazgo real durante la verificacion de este mismo cambio, ver
+  // commit): register() y el paso de deteccion-de-dispositivo-nuevo de
+  // loginWithGoogle() hacen SU PROPIA secuencia de escrituras a Firestore
+  // (perfil + registro de dispositivo + a veces borrar la cuenta reci
+  // creada) ANTES de que exista una sesion "normal" que coordinar. Firebase
+  // dispara onAuthStateChanged en cuanto createUserWithEmailAndPassword()/
+  // signInWithPopup() resuelven -- ANTES, incluso, de que la continuacion de
+  // esa misma funcion alcance a ejecutarse (se confirmo en pruebas reales:
+  // el listener independiente llegaba a leer/crear el perfil Y a cerrar la
+  // sesion mientras register() seguia esperando su propio setDoc, dejando el
+  // boton en "Connecting..." indefinidamente -- exactamente el bug de
+  // "Connecting..." colgado que se investigo en este mismo incidente). El
+  // coordinator por si solo no alcanza a evitarlo (no puede saber que
+  // register()/loginWithGoogle() van a reclamar ese uid hasta que su propio
+  // codigo llega a llamarlo, y para entonces el listener ya pudo haber
+  // actuado). Esta bandera se activa de forma SINCRONA antes de la llamada a
+  // Firebase Auth que dispara el listener, asi que ya esta activa para
+  // cuando ese listener se ejecute, sin depender del orden real de
+  // microtasks entre ambos.
+  const authTransitionGuardRef = useRef(false);
   const [accounts, setAccounts] = useLocalState('zoemec-accounts', [], user?.uid);
   const [usage, setUsage] = useLocalState('zoemec-usage', {}, user?.uid);
   const [company, setCompany] = useCloudState(user, 'zoemec-company', defaultCompany);
@@ -449,7 +480,16 @@ function App(){
   useEffect(() => {
     if(!firebaseReady || !user?.uid || !company?.name) return;
     const t = window.setTimeout(() => {
-      setDoc(doc(db, 'users', user.uid), { companyName: company.name }, { merge:true }).catch(()=>{});
+      // Item 4 del incidente (errores silenciosos en autenticacion/perfil):
+      // antes esto tragaba CUALQUIER fallo sin dejar rastro. companyName por
+      // si solo nunca dispara el permission-denied de perfiles legacy (no
+      // toca role/plan/active), pero sigue siendo una escritura a
+      // users/{uid} -- si falla por otra razon (red, cuota, reglas), ahora
+      // queda un log clasificado en vez de desaparecer en silencio. Sigue
+      // sin alertar al usuario a proposito: un sync de nombre de empresa
+      // fallido no es motivo para interrumpirle el trabajo.
+      setDoc(doc(db, 'users', user.uid), { companyName: company.name }, { merge:true })
+        .catch((error) => logLoginTrace(isPermissionDeniedCode(error?.code) ? 'PROFILE_COMPANY_SYNC_PERMISSION_DENIED' : 'PROFILE_COMPANY_SYNC_OTHER_ERROR', errInfo(error)));
     }, 1200);
     return () => window.clearTimeout(t);
   }, [user?.uid, company?.name]);
@@ -468,61 +508,101 @@ function App(){
     if(Array.isArray(savedForum) && savedForum.some(p => legacyForumThreads.has(p.q))) localStorage.setItem('zoemec-foro', JSON.stringify(savedForum.filter(p => !legacyForumThreads.has(p.q))));
   }, []);
 
+  // FIX incidente produccion (condicion de carrera login()/onAuthStateChanged):
+  // ANTES, login()/loginWithGoogle() Y el listener onAuthStateChanged tenian
+  // CADA UNO su propia copia de "cargar/crear perfil -> construir sesion ->
+  // setUser/setScreen/setActiveUid/setUsage" -- ambos se disparaban en
+  // paralelo para la MISMA transicion de autenticacion (signIn dispara el
+  // listener por su cuenta, ademas de que login() seguia su propio codigo),
+  // sin ninguna coordinacion: ganaba quien resolviera ultimo. En el peor
+  // caso, login() podia mostrar un alert de error mientras el listener, en
+  // paralelo, terminaba autenticando al usuario de todas formas -- un
+  // "AUTH LOGIN SUCCESS + POST-LOGIN FIRESTORE FAILED" que la UI reportaba
+  // como si fuera un fallo total de login.
+  //
+  // Ahora existe UNA sola implementacion (syncSessionFromAuth) de esa
+  // secuencia, y sessionCoordinator.run(uid, ...) (ver
+  // src/domain/authSessionCoordinator.js) garantiza que, sin importar
+  // cuantos llamadores pidan construir la sesion para el mismo uid al mismo
+  // tiempo, solo se ejecute una vez. login()/loginWithGoogle() YA NO tocan
+  // Firestore para el perfil ni llaman setUser/setScreen ellos mismos --
+  // delegan en syncSessionFromAuth (via el coordinator) y solo deciden que
+  // alert mostrar segun el resultado.
+  const syncSessionFromAuth = async (fbUser, { tracer } = {}) => {
+    // Recorte post-incidente: la traza etapa-por-etapa del camino feliz
+    // (AUTH_SIGNIN_*, PROFILE_LOAD_START/SUCCESS, SESSION_BUILD_*,
+    // SCREEN_APP_SET, etc.) ya cumplio su proposito -- confirmo la causa
+    // raiz real (ver PR). Se retiran para no dejar ruido en la consola de
+    // cada usuario real en cada login; se conservan SOLO las trazas de
+    // camino de error, que siguen siendo diagnostico util permanente.
+    const t = tracer || createLoginTracer();
+    let profile;
+    try{
+      profile = await loadOrCreateProfile(fbUser, undefined, { tracer: t });
+    }catch(profileError){
+      console.error(profileError);
+      t.trace('PROFILE_LOAD_FALLBACK', errInfo(profileError));
+      profile = fallbackProfile(fbUser);
+    }
+    // Item 4 del incidente: un fallo aqui (custom claims/admin) ya no se
+    // traga en silencio total -- se loguea y se sigue sin claims (equivale
+    // a tratar al usuario como no-admin, el default mas restrictivo/seguro),
+    // en vez de bloquear el login por un problema de red al pedir el token.
+    const tokenResult = await fbUser.getIdTokenResult().catch((error) => {
+      t.trace('AUTH_CLAIMS_FETCH_ERROR', errInfo(error));
+      return null;
+    });
+    const claims = tokenResult?.claims || null;
+    if(!fbUser.emailVerified && !isAdminUser({ email:profile?.email, claims }, profile)){
+      // FIX auditoria verificacion de correo: antes esto dejaba al usuario
+      // en silencio (sin alerta, sin cambiar "screen") -- en una recarga
+      // de pagina con sesion aun no verificada, la pantalla podia quedar
+      // atorada sin explicacion. Ahora se cierra la sesion real y se manda
+      // a login. Ya NO se envia un correo de verificacion automatico aqui
+      // (item 6 del incidente: el reenvio es una accion explicita del
+      // usuario -- ver resendVerificationEmail -- para no arriesgar
+      // auth/too-many-requests con un reintento automatico en cada intento
+      // fallido/cada carga de pagina).
+      await signOut(auth).catch((error) => t.trace('SIGNOUT_AFTER_UNVERIFIED_ERROR', errInfo(error)));
+      setActiveUid(null);
+      setUser(null);
+      setScreen('login');
+      return { status:'unverified' };
+    }
+    if(profile.active === false){
+      await signOut(auth);
+      setActiveUid(null);
+      setUser(null);
+      setScreen('landing');
+      return { status:'inactive' };
+    }
+    const session = buildSession(profile, fbUser, claims);
+    setActiveUid(session.uid);
+    setUser(session);
+    setUsage(prev => ({...prev, [session.email]:{apusCreated:session.apusCreated || 0, deviceId:session.deviceId}}));
+    /* Antes, si ya existia una sesion valida de Firebase (ej. al recargar
+       la pagina), "screen" se quedaba en su valor por defecto ('landing')
+       porque solo login()/loginWithGoogle() avanzaban a 'app'. Con eso, un
+       usuario ya autenticado veia la landing publica en vez del Dashboard
+       hasta volver a escribir su correo/contrasena. Ahora, si detectamos
+       sesion valida y la pantalla sigue en landing/login/register, se
+       avanza sola -- tanto en un login interactivo como en una
+       restauracion de sesion via reload. */
+    setScreen(current => (current === 'landing' || current === 'login' || current === 'register') ? 'app' : current);
+    return { status:'ok', session };
+  };
+
   useEffect(() => {
     if(!firebaseReady) return undefined;
-    return onAuthStateChanged(auth, async (fbUser) => {
+    return onAuthStateChanged(auth, (fbUser) => {
       if(!fbUser){
         setActiveUid(null);
         setUser(null);
         setScreen(current => current === 'app' ? 'landing' : current);
         return;
       }
-      try{
-        let profile;
-        try{
-          profile = await loadOrCreateProfile(fbUser);
-        }catch(profileError){
-          console.error(profileError);
-          profile = fallbackProfile(fbUser);
-        }
-        const tokenResult = await fbUser.getIdTokenResult().catch(()=>null);
-        const claims = tokenResult?.claims || null;
-        if(!fbUser.emailVerified && !isAdminUser({ email:profile?.email, claims }, profile)){
-          // FIX auditoria verificacion de correo: antes esto dejaba al usuario
-          // en silencio (sin alerta, sin cambiar "screen") -- en una recarga
-          // de pagina con sesion aun no verificada, la pantalla podia quedar
-          // atorada sin explicacion. Ahora se cierra la sesion real y se
-          // manda a login con un aviso claro, igual que el intento de login
-          // explicito (mas abajo).
-          await signOut(auth).catch(()=>{});
-          setActiveUid(null);
-          setUser(null);
-          setScreen('login');
-          return;
-        }
-        if(profile.active === false){
-          await signOut(auth);
-          setActiveUid(null);
-          setUser(null);
-          setScreen('landing');
-          alert(tr('auth.errors.accountDisabled'));
-          return;
-        }
-        const session = buildSession(profile, fbUser, claims);
-        setActiveUid(session.uid);
-        setUser(session);
-        setUsage(prev => ({...prev, [session.email]:{apusCreated:session.apusCreated || 0, deviceId:session.deviceId}}));
-        /* Antes, si ya existia una sesion valida de Firebase (ej. al recargar
-           la pagina), "screen" se quedaba en su valor por defecto ('landing')
-           porque solo login()/loginWithGoogle() avanzaban a 'app'. Con eso, un
-           usuario ya autenticado veia la landing publica en vez del Dashboard
-           hasta volver a escribir su correo/contrasena. Ahora, si detectamos
-           sesion valida y la pantalla sigue en landing/login/register, se
-           avanza sola. */
-        setScreen(current => (current === 'landing' || current === 'login' || current === 'register') ? 'app' : current);
-      }catch(error){
-        console.error(error);
-      }
+      if(authTransitionGuardRef.current) return; // register()/loginWithGoogle() ya estan manejando esta transicion
+      sessionCoordinator.run(fbUser.uid, () => syncSessionFromAuth(fbUser)).catch(error => console.error(error));
     });
   }, []);
 
@@ -530,113 +610,53 @@ function App(){
     const cleanEmail = email.trim().toLowerCase();
     if(!cleanEmail || !password || password.length < 6){
       alert(tr('auth.errors.invalidForm'));
-      return false;
+      return { ok:false, status:'invalid-form' };
     }
     if(!firebaseReady){
       alert(tr('auth.errors.serviceUnavailable'));
-      return false;
+      return { ok:false, status:'service-unavailable' };
     }
     const deviceId = getDeviceId();
+    // Diagnostico permanente (ver src/services/loginDiagnostics.js): un
+    // tracer por intento, para que -- si algo falla -- todas las etapas de
+    // ESE intento (incluidas las de loadOrCreateProfile, via
+    // syncSessionFromAuth) compartan el mismo traceId en consola
+    // ("[ZOEMEC][LOGIN_TRACE] <id> ETAPA") y no se confundan con otro
+    // intento. Solo se traza el camino de error -- el camino feliz ya no
+    // deja rastro (recorte post-incidente).
+    const tracer = createLoginTracer();
     try{
       if(mode === 'register'){
-        // El chequeo de dispositivo (Firestore) necesita al usuario ya autenticado:
-        // las reglas de seguridad exigen signedIn() para leer/crear en /devices/{id}.
-        // Por eso primero se crea la cuenta y, si el dispositivo ya se uso, se borra
-        // esa cuenta recien creada en vez de dejarla huerfana.
-        const deviceRef = doc(db, 'devices', deviceId);
-        const displayName = (name || cleanEmail.split('@')[0] || 'Usuario ZOEMEC').trim();
-        const credential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
-        const deviceSnap = await getDoc(deviceRef);
-        if(deviceSnap.exists()){
-          await credential.user.delete().catch(()=>signOut(auth));
-          alert(tr('auth.errors.deviceUsed'));
-          return false;
-        }
-        await updateProfile(credential.user, { displayName });
-        const profile = {
-          uid: credential.user.uid,
-          name: displayName,
-          email: cleanEmail,
-          role: 'user',
-          plan: 'Gratis',
-          active: true,
-          apusCreated: 0,
-          deviceId,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        };
-        await setDoc(doc(db, 'users', credential.user.uid), profile, { merge:true });
-        await setDoc(deviceRef, { uid: credential.user.uid, email: cleanEmail, createdAt: serverTimestamp() }, { merge:true });
-        setUsage({...usage, [cleanEmail]:{apusCreated:0, deviceId}});
-        await sendEmailVerification(credential.user, emailActionCodeSettings);
-        await signOut(auth);
-        setActiveUid(null);
-        setUser(null);
-        setScreen('login');
-        alert(tr('auth.errors.accountCreatedCheckEmail'));
-        return true;
-      }
-      const credential = await signInWithEmailAndPassword(auth, cleanEmail, password);
-      let profile;
-      try{
-        profile = await loadOrCreateProfile(credential.user);
-      }catch(profileError){
-        console.error(profileError);
-        profile = fallbackProfile(credential.user, deviceId);
-      }
-      const tokenResult = await credential.user.getIdTokenResult().catch(()=>null);
-      const claims = tokenResult?.claims || null;
-      if(!credential.user.emailVerified && !isAdminUser({ email:profile?.email, claims }, profile)){
-        await sendEmailVerification(credential.user, emailActionCodeSettings).catch(()=>{});
-        await signOut(auth);
-        alert(tr('auth.errors.emailNotVerifiedResent'));
-        return false;
-      }
-      if(profile.active === false){
-        await signOut(auth);
-        alert(tr('auth.errors.accountDisabled'));
-        return false;
-      }
-      const session = buildSession(profile, credential.user, claims);
-      setUsage({...usage, [cleanEmail]:{apusCreated:session.apusCreated || 0, deviceId:session.deviceId}});
-      setActiveUid(session.uid);
-      setUser(session);
-      setScreen('app');
-      setModule('inicio');
-      return true;
-    }catch(error){
-      alert(firebaseMessage(error, tr));
-      return false;
-    }
-  };
-  const loginWithGoogle = async () => {
-    if(!firebaseReady){
-      alert(tr('auth.errors.serviceUnavailable'));
-      return false;
-    }
-    const provider = new GoogleAuthProvider();
-    const deviceId = getDeviceId();
-    try{
-      const credential = await signInWithPopup(auth, provider);
-      const fbUser = credential.user;
-      const userRef = doc(db, 'users', fbUser.uid);
-      let profile;
-      try{
-        const snap = await getDoc(userRef);
-        if(snap.exists()){
-          profile = { uid: fbUser.uid, ...snap.data() };
-        }else{
+        // FIX (hallazgo real de esta verificacion, ver authTransitionGuardRef
+        // mas arriba): sin esta bandera, el listener onAuthStateChanged
+        // -- que Firebase dispara en cuanto createUserWithEmailAndPassword()
+        // resuelve, a veces ANTES de que esta misma funcion siga corriendo --
+        // corria en paralelo su propia loadOrCreateProfile/signOut sobre la
+        // cuenta recien creada mientras este bloque todavia esperaba sus
+        // propios setDoc: eso dejaba el boton de "Conectando..." colgado
+        // para siempre (una de las causas reales del bug de "Connecting..."
+        // investigado en este incidente). Se activa ANTES de la llamada que
+        // dispara el listener y se libera pase lo que pase (finally).
+        authTransitionGuardRef.current = true;
+        try{
+          // El chequeo de dispositivo (Firestore) necesita al usuario ya autenticado:
+          // las reglas de seguridad exigen signedIn() para leer/crear en /devices/{id}.
+          // Por eso primero se crea la cuenta y, si el dispositivo ya se uso, se borra
+          // esa cuenta recien creada en vez de dejarla huerfana.
           const deviceRef = doc(db, 'devices', deviceId);
+          const displayName = (name || cleanEmail.split('@')[0] || 'Usuario ZOEMEC').trim();
+          const credential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
           const deviceSnap = await getDoc(deviceRef);
           if(deviceSnap.exists()){
-            await signOut(auth);
+            await credential.user.delete().catch(()=>signOut(auth));
             alert(tr('auth.errors.deviceUsed'));
-            return false;
+            return { ok:false, status:'device-used' };
           }
-          profile = {
-            uid: fbUser.uid,
-            name: fbUser.displayName || fbUser.email?.split('@')[0] || 'Usuario ZOEMEC',
-            email: fbUser.email,
+          await updateProfile(credential.user, { displayName });
+          const profile = {
+            uid: credential.user.uid,
+            name: displayName,
+            email: cleanEmail,
             role: 'user',
             plan: 'Gratis',
             active: true,
@@ -645,29 +665,152 @@ function App(){
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp()
           };
-          await setDoc(userRef, profile, { merge:true });
-          await setDoc(deviceRef, { uid: fbUser.uid, email: fbUser.email, createdAt: serverTimestamp() }, { merge:true });
+          await setDoc(doc(db, 'users', credential.user.uid), profile, { merge:true });
+          await setDoc(deviceRef, { uid: credential.user.uid, email: cleanEmail, createdAt: serverTimestamp() }, { merge:true });
+          setUsage({...usage, [cleanEmail]:{apusCreated:0, deviceId}});
+          await sendEmailVerification(credential.user, emailActionCodeSettings)
+            .catch((sendError) => { tracer.trace('EMAIL_VERIFICATION_SEND_ERROR', errInfo(sendError)); throw sendError; });
+          await signOut(auth);
+          setActiveUid(null);
+          setUser(null);
+          setScreen('login');
+          alert(tr('auth.errors.accountCreatedCheckEmail'));
+          return { ok:true, status:'registered' };
+        }finally{
+          authTransitionGuardRef.current = false;
         }
-      }catch(profileError){
-        console.error(profileError);
-        profile = fallbackProfile(fbUser, deviceId);
       }
-      if(profile.active === false){
-        await signOut(auth);
+      const credential = await signInWithEmailAndPassword(auth, cleanEmail, password);
+      const outcome = await sessionCoordinator.run(credential.user.uid, () => syncSessionFromAuth(credential.user, { tracer }));
+      if(outcome.status === 'unverified'){
+        return { ok:false, status:'unverified', email:cleanEmail };
+      }
+      if(outcome.status === 'inactive'){
         alert(tr('auth.errors.accountDisabled'));
-        return false;
+        return { ok:false, status:'inactive' };
       }
-      const tokenResult = await fbUser.getIdTokenResult().catch(()=>null);
-      const session = buildSession(profile, fbUser, tokenResult?.claims || null);
-      setUsage(prev => ({...prev, [session.email]:{apusCreated:session.apusCreated || 0, deviceId:session.deviceId}}));
-      setActiveUid(session.uid);
-      setUser(session);
-      setScreen('app');
+      // outcome.status === 'ok': setUser/setScreen/setActiveUid/setUsage ya
+      // quedaron aplicados dentro de syncSessionFromAuth -- login() no los
+      // repite (eso era exactamente la condicion de carrera).
       setModule('inicio');
-      return true;
+      return { ok:true, status:'ok', session: outcome.session };
+    }catch(error){
+      tracer.trace('LOGIN_CATCH', errInfo(error));
+      alert(firebaseMessage(error, tr));
+      return { ok:false, status:'error', error };
+    }
+  };
+
+  /* Item 6 del incidente (flujo de recuperacion, Caso A: "Auth existe +
+     perfil existe + email no verificado"): reenvio EXPLICITO, separado de
+     login(). Antes, cada intento de login contra una cuenta sin verificar
+     disparaba sendEmailVerification() automaticamente -- varios intentos
+     seguidos (ej. el usuario corrigiendo su contrasena) podian acercarse al
+     limite real de Firebase (auth/too-many-requests) sin que el usuario lo
+     pidiera. Ahora requiere un click explicito (con cooldown de UX en el
+     componente Auth, ver mas abajo) y hace su propio ciclo corto
+     signIn -> sendEmailVerification -> signOut, sin tocar el estado global
+     de sesion (nunca llama setUser/setScreen: si el usuario ya esta viendo
+     el formulario de login, ahi se queda). */
+  const resendVerificationEmail = async (email, password) => {
+    const cleanEmail = String(email || '').trim().toLowerCase();
+    const tracer = createLoginTracer();
+    // FIX (hallazgo real EN VIVO durante la verificacion de este mismo
+    // cambio -- reproducido con una cuenta QA real, no hipotetico): este
+    // ciclo signIn -> signOut TAMBIEN dispara onAuthStateChanged, que sin
+    // la bandera corria su propio loadOrCreateProfile en paralelo -- y
+    // cuando el signOut() de aqui abajo llegaba primero, esa lectura de
+    // Firestore en curso (con la sesion ya invalidada a mitad de la
+    // peticion) fallaba con exactamente el mismo permission-denied que
+    // reporto el incidente original. Esto es evidencia fuerte de que la
+    // causa raiz real del incidente no era (solo) un perfil legacy
+    // incompleto, sino esta clase de carrera signIn-rapido/signOut-rapido
+    // contra el listener global -- afecta a cualquier flujo que haga su
+    // propio signIn+signOut corto (register(), este resend, y el viejo
+    // login() sin coordinar). Mismo mecanismo que register(), ver
+    // authTransitionGuardRef arriba.
+    authTransitionGuardRef.current = true;
+    try{
+      const credential = await signInWithEmailAndPassword(auth, cleanEmail, password);
+      if(credential.user.emailVerified){
+        await signOut(auth);
+        return { ok:true, status:'already-verified' };
+      }
+      await sendEmailVerification(credential.user, emailActionCodeSettings);
+      await signOut(auth);
+      return { ok:true, status:'sent' };
+    }catch(error){
+      await signOut(auth).catch((signOutError) => tracer.trace('SIGNOUT_AFTER_RESEND_ERROR', errInfo(signOutError)));
+      tracer.trace('EMAIL_VERIFICATION_SEND_ERROR', errInfo(error));
+      return { ok:false, status:'error', error };
+    }finally{
+      authTransitionGuardRef.current = false;
+    }
+  };
+
+  const loginWithGoogle = async () => {
+    if(!firebaseReady){
+      alert(tr('auth.errors.serviceUnavailable'));
+      return { ok:false, status:'service-unavailable' };
+    }
+    const provider = new GoogleAuthProvider();
+    const deviceId = getDeviceId();
+    // Mismo fix que register() (ver authTransitionGuardRef arriba): signInWithPopup()
+    // tambien dispara onAuthStateChanged, y el chequeo anti-abuso de
+    // dispositivo de mas abajo (solo para cuentas nuevas) necesita terminar
+    // sin que el listener interfiera. Se libera en el finally pase lo que
+    // pase; la llamada explicita a sessionCoordinator.run() de aqui abajo
+    // sigue funcionando igual (el guard solo silencia al listener, no a
+    // esta funcion).
+    authTransitionGuardRef.current = true;
+    try{
+      const credential = await signInWithPopup(auth, provider);
+      const fbUser = credential.user;
+      // El chequeo anti-abuso de dispositivo (misma logica que register())
+      // SOLO aplica cuando esta cuenta de Google se acaba de crear -- un
+      // usuario de Google QUE YA EXISTE (isNewUser:false) esta iniciando
+      // sesion, no creando una cuenta nueva, y su perfil (si falta) es un
+      // caso de recuperacion (Caso B/C del incidente), no de deteccion de
+      // abuso. getAdditionalUserInfo().isNewUser es la señal oficial del
+      // SDK -- no se infiere por heuristica de fechas.
+      const isNewUser = getAdditionalUserInfo(credential)?.isNewUser === true;
+      if(isNewUser){
+        const deviceRef = doc(db, 'devices', deviceId);
+        // Item 4 del incidente: si esta lectura falla (red, permisos), se
+        // deja pasar como "dispositivo no visto" (fail-open) para no
+        // bloquear un alta legitima por un problema de infraestructura no
+        // relacionado -- pero ahora queda logueado para diagnostico en vez
+        // de desaparecer sin rastro.
+        const deviceSnap = await getDoc(deviceRef).catch((error) => {
+          logLoginTrace('GOOGLE_DEVICE_CHECK_ERROR', errInfo(error));
+          return null;
+        });
+        if(deviceSnap?.exists()){
+          await fbUser.delete().catch((error) => {
+            logLoginTrace('GOOGLE_NEW_USER_DELETE_ERROR', errInfo(error));
+            return signOut(auth);
+          });
+          alert(tr('auth.errors.deviceUsed'));
+          return { ok:false, status:'device-used' };
+        }
+        await setDoc(deviceRef, { uid: fbUser.uid, email: fbUser.email, createdAt: serverTimestamp() }, { merge:true })
+          .catch((error) => logLoginTrace('GOOGLE_DEVICE_RECORD_WRITE_ERROR', errInfo(error)));
+      }
+      const outcome = await sessionCoordinator.run(fbUser.uid, () => syncSessionFromAuth(fbUser));
+      if(outcome.status === 'unverified'){
+        return { ok:false, status:'unverified' };
+      }
+      if(outcome.status === 'inactive'){
+        alert(tr('auth.errors.accountDisabled'));
+        return { ok:false, status:'inactive' };
+      }
+      setModule('inicio');
+      return { ok:true, status:'ok', session: outcome.session };
     }catch(error){
       alert(firebaseMessage(error, tr));
-      return false;
+      return { ok:false, status:'error', error };
+    }finally{
+      authTransitionGuardRef.current = false;
     }
   };
   const logout = async () => {
@@ -687,8 +830,8 @@ function App(){
     onGoToApp={hasValidSession(user) ? ()=>dismissVerifyScreen('app') : null}
   />;
   else if(screen === 'landing') content = <Landing setScreen={setScreen} login={login} company={companyView} />;
-  else if(screen === 'login') content = <Auth mode="login" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} company={companyView} />;
-  else if(screen === 'register') content = <Auth mode="register" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} company={companyView} />;
+  else if(screen === 'login') content = <Auth mode="login" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} resendVerificationEmail={resendVerificationEmail} company={companyView} />;
+  else if(screen === 'register') content = <Auth mode="register" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} resendVerificationEmail={resendVerificationEmail} company={companyView} />;
   else if(!hasValidSession(user)) content = <Landing setScreen={setScreen} login={login} company={companyView} />;
   else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView} apus={apus} clients={clients} projects={projects} activeProject={activeProject} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId}>
     {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} activeProject={activeProject} user={user} demoMode={DEMO_MODE} demoContext={DEMO_MODE ? createDemoContext() : null} />}
@@ -942,13 +1085,21 @@ function Landing({setScreen, login, company}){
   </div>
 }
 
-function Auth({mode,setScreen,login,loginWithGoogle,company}){
+function Auth({mode,setScreen,login,loginWithGoogle,resendVerificationEmail,company}){
   const { t: tr } = useI18n();
   const [name,setName]=useState('');
   const [email,setEmail]=useState('');
   const [password,setPassword]=useState('');
   const [busy,setBusy]=useState(false);
   const [status,setStatus]=useState(null);
+  // Item 6 del incidente (Caso A: "Auth existe + perfil existe + email no
+  // verificado"): antes login() disparaba un reenvio automatico en cada
+  // intento fallido y mostraba un alert generico. Ahora, si el intento
+  // devuelve status:'unverified', se muestra un panel propio con el mensaje
+  // exacto pedido y un boton de reenvio EXPLICITO con cooldown -- nunca se
+  // reenvia solo.
+  const [pendingVerification,setPendingVerification]=useState(null); // { email } | null
+  const [resend,setResend]=useState({ busy:false, lastSentAt:null, lastResult:null });
   useEffect(()=>{ apiGetSafe('/api/status').then(setStatus); },[]);
   const submit=async ()=>{
     if(!email.trim() || !password.trim()){
@@ -956,9 +1107,25 @@ function Auth({mode,setScreen,login,loginWithGoogle,company}){
       return;
     }
     setBusy(true);
-    try{ await login(name, email.trim(), password, mode); }
+    try{
+      const result = await login(name, email.trim(), password, mode);
+      if(result?.status === 'unverified'){
+        setPendingVerification({ email: email.trim() });
+        setResend({ busy:false, lastSentAt:null, lastResult:null });
+      }else if(result?.ok){
+        setPendingVerification(null);
+      }
+    }
     finally{ setBusy(false); }
   };
+  const handleResend = async () => {
+    if(!pendingVerification || !resendVerificationEmail) return;
+    if(!canResendVerification(resend.lastSentAt)) return;
+    setResend(s => ({ ...s, busy:true }));
+    const result = await resendVerificationEmail(pendingVerification.email, password);
+    setResend({ busy:false, lastSentAt: Date.now(), lastResult: result?.ok ? result.status : 'error' });
+  };
+  const resendSecondsLeft = remainingCooldownSeconds(resend.lastSentAt);
   return <div className="auth-split">
     <div className="auth-brand">
       <Backdrop/>
@@ -982,6 +1149,16 @@ function Auth({mode,setScreen,login,loginWithGoogle,company}){
       <div className="auth-card">
         <h1>{mode==='login'?tr('auth.loginTitle'):tr('auth.registerTitle')}</h1>
         <p>{mode==='login'?tr('auth.loginSubtitle'):tr('auth.registerSubtitle')}</p>
+        {pendingVerification && <div className="auth-warning auth-verification-pending">
+          <p>{tr('auth.accountExistsUnverified')}</p>
+          <button type="button" onClick={handleResend} disabled={resend.busy || resendSecondsLeft>0}>
+            {resend.busy ? tr('auth.submitConnecting') : tr('auth.resendVerificationButton')}
+          </button>
+          {resendSecondsLeft>0 && <small>{tr('auth.resendVerificationCooldown', { seconds: resendSecondsLeft })}</small>}
+          {resend.lastResult==='sent' && <small>{tr('auth.resendVerificationSent')}</small>}
+          {resend.lastResult==='already-verified' && <small>{tr('auth.resendVerificationAlreadyVerified')}</small>}
+          {resend.lastResult==='error' && <small>{tr('auth.resendVerificationError')}</small>}
+        </div>}
         {mode==='register' && <><label>{tr('auth.nameLabel')}</label><input value={name} onChange={e=>setName(e.target.value)} placeholder={tr('auth.namePlaceholder')} /></>}
         <label>{tr('auth.emailLabel')}</label>
         <input placeholder={tr('auth.emailPlaceholder')} type="email" value={email} onChange={e=>setEmail(e.target.value)} />
@@ -2473,7 +2650,14 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     const nextCount = (userUsage.apusCreated||0)+1;
     setUsage({...usage,[user.email]:{...userUsage,apusCreated:nextCount,deviceId:user.deviceId}});
     if(firebaseReady && user?.uid){
-      setDoc(doc(db, 'users', user.uid), { apusCreated:nextCount, updatedAt:serverTimestamp() }, { merge:true }).catch(console.error);
+      // Item 4 del incidente: mismo criterio que el sync de companyName --
+      // clasifica el error (permission-denied vs otro) para diagnostico en
+      // vez de un console.error crudo sin contexto, pero sigue sin alertar
+      // al usuario (el contador ya se actualizo localmente en setUsage de
+      // arriba; que la persistencia en la nube falle no debe interrumpirle
+      // el flujo de generar su APU).
+      setDoc(doc(db, 'users', user.uid), { apusCreated:nextCount, updatedAt:serverTimestamp() }, { merge:true })
+        .catch((error) => logLoginTrace(isPermissionDeniedCode(error?.code) ? 'PROFILE_APUSCREATED_SYNC_PERMISSION_DENIED' : 'PROFILE_APUSCREATED_SYNC_OTHER_ERROR', errInfo(error)));
     }
   };
   const save=()=>{ if(!requireApuAccess()) return; if(!requireProject()) return; setApus([apu,...apus.filter(x=>x.id!==apu.id)]); markApuUsed(); alert(tr('apu.savedApu'));};

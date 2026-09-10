@@ -21,13 +21,56 @@ const FIREBASE_CODE_TO_KEY = [
   ['permission-denied', 'permissionDenied'],
 ];
 
+/* FIX (incidente produccion, hallazgo "clasificacion de permission-denied
+   demasiado generica"): antes, CUALQUIER error cuyo .code contuviera el
+   substring "permission-denied" se etiquetaba como "permisos de Firestore",
+   sin importar si en realidad venia de Auth, Storage, una Cloud Function
+   callable, o una llamada REST cruda a una API de Google. Eso puede mostrarle
+   al usuario un mensaje que culpa a Firestore cuando el problema real es de
+   otra capa. classifyErrorOrigin() distingue por el prefijo real que cada
+   SDK de Firebase usa en error.code (Auth: "auth/...", Storage:
+   "storage/...", Functions callable: "functions/..."); el codigo de
+   Firestore NO lleva prefijo (es "permission-denied" a secas). Una llamada
+   REST cruda (fetch directo a *.googleapis.com, sin pasar por un SDK)
+   normalmente no trae ninguno de estos prefijos y reporta el status en
+   mayusculas ("PERMISSION_DENIED") en vez de en el formato de los SDKs --
+   eso se clasifica aparte como "rest" en vez de asumirse Firestore por
+   default. */
+export function classifyErrorOrigin(error){
+  const code = String(error?.code || '');
+  const status = String(error?.status || '').toUpperCase();
+  if(code.startsWith('auth/')) return 'auth';
+  if(code.startsWith('storage/')) return 'storage';
+  if(code.startsWith('functions/')) return 'functions';
+  if(code === 'permission-denied') return 'firestore';
+  if(code === 'PERMISSION_DENIED' || status === 'PERMISSION_DENIED') return 'rest';
+  return 'unknown';
+}
+
+const PERMISSION_DENIED_KEY_BY_ORIGIN = {
+  firestore: 'permissionDeniedFirestore',
+  auth: 'permissionDeniedAuth',
+  storage: 'permissionDeniedStorage',
+  functions: 'permissionDeniedFunctions',
+  rest: 'permissionDeniedRest',
+  unknown: 'permissionDeniedRest',
+};
+
 /* t: funcion useI18n().t (o cualquier (key)=>string). Si no se provee (por
    ejemplo, codigo que todavia corre fuera de I18nProvider), cae al texto en
    espanol de siempre -- nunca truena por falta de t. */
 export function firebaseMessage(error, t){
   const code = String(error?.code || '');
   const match = FIREBASE_CODE_TO_KEY.find(([needle]) => code.includes(needle));
-  const key = match ? match[1] : 'generic';
+  let key = match ? match[1] : 'generic';
+  // Un "PERMISSION_DENIED" crudo (REST, sin pasar por ningun SDK) no trae el
+  // formato en minusculas-con-guion que espera FIREBASE_CODE_TO_KEY -- sin
+  // esto, caeria en "generic" y se perderia la senal de que fue un rechazo
+  // de permisos.
+  const isUnmatchedRestDenial = !match && classifyErrorOrigin(error) === 'rest';
+  if(key === 'permissionDenied' || isUnmatchedRestDenial){
+    key = PERMISSION_DENIED_KEY_BY_ORIGIN[classifyErrorOrigin(error)];
+  }
   if(typeof t === 'function'){
     const translated = t(`auth.errors.${key}`);
     // translate() (src/i18n/i18nStorage.js) cae de vuelta a la propia key si
@@ -53,6 +96,11 @@ const FALLBACK_ES = {
   invalidActionCode: 'Este enlace ya fue utilizado o no es valido.',
   network: 'No hay conexion con Firebase. Revisa internet y vuelve a intentar.',
   permissionDenied: 'No se pudo completar la operacion por permisos de Firestore. Intenta de nuevo o contacta al administrador.',
+  permissionDeniedFirestore: 'No se pudo completar la operacion por permisos de Firestore. Intenta de nuevo o contacta al administrador.',
+  permissionDeniedAuth: 'No se pudo completar la operacion de inicio de sesion por un permiso denegado. Intenta de nuevo o contacta al administrador.',
+  permissionDeniedStorage: 'No se pudo completar la operacion por permisos de almacenamiento de archivos. Intenta de nuevo o contacta al administrador.',
+  permissionDeniedFunctions: 'No se pudo completar la operacion (permiso denegado por el servicio). Intenta de nuevo o contacta al administrador.',
+  permissionDeniedRest: 'No se pudo completar la operacion (permiso denegado). Intenta de nuevo o contacta al administrador.',
   generic: 'No se pudo conectar con Firebase. Intenta de nuevo en unos minutos.',
 };
 

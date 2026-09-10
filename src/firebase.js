@@ -27,6 +27,26 @@ export const firebaseConfig = {
 };
 
 export const firebaseReady = Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
+
+/* Dominio publico real de ZOEMEC (Vercel, no Firebase Hosting). Se usa como
+   destino de los enlaces de verificacion de correo -- ver
+   emailActionCodeSettings mas abajo -- para que el usuario nunca aterrice en
+   la pagina generica de Firebase (https://<authDomain>/__/auth/action). Debe
+   estar en Firebase Console > Authentication > Settings > Authorized
+   domains, o sendEmailVerification lanzara auth/unauthorized-continue-uri. */
+export const APP_PUBLIC_URL = env.VITE_PUBLIC_APP_URL || 'https://zoemecia.com';
+
+/* handleCodeInApp:true hace que Firebase mande el enlace de verificacion
+   DIRECTO a esta URL (con ?mode=verifyEmail&oobCode=... en query), no al
+   action handler generico de Firebase -- así ZOEMEC controla la pantalla
+   completa (ver VerifyEmailScreen en src/main.jsx). El catch-all de
+   vercel.json ya reenvia cualquier ruta a index.html, asi que la SPA recibe
+   esos parametros sin importar la ruta. */
+export const emailActionCodeSettings = {
+  url: APP_PUBLIC_URL + '/',
+  handleCodeInApp: true,
+};
+
 export const firebaseApp = initializeApp(firebaseConfig);
 export const auth = getAuth(firebaseApp);
 export const db = getFirestore(firebaseApp);

@@ -13,6 +13,7 @@ export const ICONS = {
   comunidad:<><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/><path d="M8 9h8M8 13h5"/></>,
   academia:<><path d="M22 10L12 5 2 10l10 5 10-5z"/><path d="M6 12v5c0 1.3 2.7 3 6 3s6-1.7 6-3v-5"/></>,
   reportes:<><path d="M3 3v18h18"/><path d="M7 16v-5M12 16V8M17 16v-9"/></>,
+  comparativa:<><path d="M12 3v18"/><path d="M7 6L3 14a4 4 0 008 0z"/><path d="M21 6l-4 8a4 4 0 008 0z"/><path d="M5 6h14"/><path d="M9 21h6"/></>,
   cuantificaciones:<><path d="M16 3l5 5L8 21l-5-5z"/><path d="M14 5l2 2M11 8l2 2M8 11l2 2"/></>,
   concreto:<><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><path d="M3.3 7L12 12l8.7-5M12 22V12"/></>,
   acero:<><path d="M5 4v16M12 4v16M19 4v16"/><path d="M3 8h18M3 16h18"/></>,

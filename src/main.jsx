@@ -4,7 +4,7 @@ import { jsPDF } from 'jspdf';
 import { createUserWithEmailAndPassword, getIdTokenResult, GoogleAuthProvider, onAuthStateChanged, sendEmailVerification, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile } from 'firebase/auth';
 import { addDoc, collection, deleteDoc, doc, getCountFromServer, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import { deleteObject, getDownloadURL, ref, uploadBytes } from 'firebase/storage';
-import { auth, db, firebaseReady, storage } from './firebase.js';
+import { auth, db, emailActionCodeSettings, firebaseReady, storage } from './firebase.js';
 import { useCloudState } from './cloud.js';
 import { consumeOneDriveRedirect, isOneDriveConfigured } from './lib/onedrive.js';
 import { createDemoContext } from './lib/apuFlow.js';
@@ -72,6 +72,9 @@ import {
 } from './lib/apuBatchQueueCloud.js';
 import { TechnicalCenter } from './features/technical-center/TechnicalCenter.jsx';
 import { AdminPanel } from './features/admin/AdminPanel.jsx';
+import { ComparePage } from './features/compare/ComparePage.jsx';
+import { AiJobsProvider, useAiJobs } from './contexts/AiJobsContext.jsx';
+import { VerifyEmailScreen } from './features/auth/VerifyEmailScreen.jsx';
 import { ProfessionalApuEditor } from './features/apu/ProfessionalApuEditor.jsx';
 import { RevisionBandeja } from './features/apu/RevisionBandeja.jsx';
 import { parseExcelToCatalog, cleanText, normalizeUnitLabel, parseExcelToAPU, parseRobustConceptCatalog, parseConceptText, parseConceptListText, conceptVariablesFromParsed } from './lib/excelImport.js';
@@ -189,6 +192,41 @@ function CloudBadge({user}){
   </div>;
 }
 
+/* Centro de procesos: lista los trabajos de IA activos/recien terminados
+   (ver src/contexts/AiJobsContext.jsx). Vive en la topbar, fuera de cualquier
+   modulo, para que el usuario pueda ver "1 tarea ejecutandose" sin importar
+   en que pantalla este -- y para que cambiar de modulo/pestana NUNCA de la
+   impresion de que el proceso "se detuvo": sigue corriendo y reportando aqui. */
+function ProcessesIndicator(){
+  const { t: tr } = useI18n();
+  const { jobs, activeJobs, consumeJob } = useAiJobs();
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef(null);
+  useEffect(() => {
+    if(!open) return;
+    const onDown = (e) => { if(boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+  const recent = Object.values(jobs).sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0)).slice(0,8);
+  if(!recent.length) return null;
+  return <div className="notif-panel" ref={boxRef}>
+    <button type="button" className="bell" onClick={()=>setOpen(v=>!v)} aria-label={tr('jobs.title')}>
+      <Icon name="history" size={19}/>{activeJobs.length>0 && <span className="notif-dot"/>}
+    </button>
+    {open && <div className="notif-drop">
+      <div className="notif-drop-head"><b>{tr('jobs.title')}</b>{activeJobs.length>0 && <small>{tr('jobs.activeCount',{count:activeJobs.length})}</small>}</div>
+      {recent.map(j=><div className="notif-item" key={j.id}>
+        <span className={'notif-mark '+(j.status==='failed'?'error':j.status==='completed'?'success':'info')}/>
+        <div>
+          <p>{j.label || tr(`jobs.type.${j.type}`)} — {tr(`jobs.status.${j.status}`)}</p>
+          {!j.seen && (j.status==='completed'||j.status==='failed') && <button className="soft" onClick={()=>consumeJob(j.id)}>{tr('jobs.dismiss')}</button>}
+        </div>
+      </div>)}
+    </div>}
+  </div>;
+}
+
 function NotificationBell({user}){
   const [items,setItems]=useLocalState('zoemec-notif-history', [], user?.uid);
   const [open,setOpen]=useState(false);
@@ -274,8 +312,34 @@ function useProjectScoped(list, setList, activeProjectId){
 }
 
 function App(){
+  const { t: tr } = useI18n();
   const [screen, setScreen] = useState('landing');
   const [module, setModule] = useState('inicio');
+  // Enlace de verificacion de correo (?mode=verifyEmail&oobCode=...), ver
+  // src/features/auth/VerifyEmailScreen.jsx y emailActionCodeSettings en
+  // src/firebase.js. Se lee UNA sola vez al montar (useState lazy init) para
+  // que sobreviva aunque onAuthStateChanged u otros efectos disparen
+  // renders antes de que el usuario decida que hacer en esa pantalla.
+  const [verifyOobCode, setVerifyOobCode] = useState(() => {
+    try{
+      const params = new URLSearchParams(window.location.search);
+      if(params.get('mode') === 'verifyEmail') return params.get('oobCode') || '';
+    }catch{ /* SSR/entornos sin window: nunca debe tronar el render */ }
+    return null;
+  });
+  const dismissVerifyScreen = (nextScreen) => {
+    setVerifyOobCode(null);
+    try{
+      const url = new URL(window.location.href);
+      url.searchParams.delete('mode');
+      url.searchParams.delete('oobCode');
+      url.searchParams.delete('apiKey');
+      url.searchParams.delete('continueUrl');
+      url.searchParams.delete('lang');
+      window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+    }catch{ /* nunca bloquear la navegacion por esto */ }
+    if(nextScreen) setScreen(nextScreen);
+  };
   /* Modo Build Week / Demo: Panel Admin ya no aparece en el menu lateral, pero
      sigue existiendo intacto. Un administrador puede llegar directo agregando
      #admin a la URL (ej. localhost:5173/#admin); si el usuario no es admin,
@@ -424,8 +488,16 @@ function App(){
         const tokenResult = await fbUser.getIdTokenResult().catch(()=>null);
         const claims = tokenResult?.claims || null;
         if(!fbUser.emailVerified && !isAdminUser({ email:profile?.email, claims }, profile)){
+          // FIX auditoria verificacion de correo: antes esto dejaba al usuario
+          // en silencio (sin alerta, sin cambiar "screen") -- en una recarga
+          // de pagina con sesion aun no verificada, la pantalla podia quedar
+          // atorada sin explicacion. Ahora se cierra la sesion real y se
+          // manda a login con un aviso claro, igual que el intento de login
+          // explicito (mas abajo).
+          await signOut(auth).catch(()=>{});
           setActiveUid(null);
           setUser(null);
+          setScreen('login');
           return;
         }
         if(profile.active === false){
@@ -433,7 +505,7 @@ function App(){
           setActiveUid(null);
           setUser(null);
           setScreen('landing');
-          alert('Tu cuenta esta desactivada. Contacta al administrador de ZOEMEC.');
+          alert(tr('auth.errors.accountDisabled'));
           return;
         }
         const session = buildSession(profile, fbUser, claims);
@@ -457,11 +529,11 @@ function App(){
   const login = async (name='Usuario ZOEMEC', email='', password='', mode='login') => {
     const cleanEmail = email.trim().toLowerCase();
     if(!cleanEmail || !password || password.length < 6){
-      alert('Captura un correo valido y una contrasena de minimo 6 caracteres.');
+      alert(tr('auth.errors.invalidForm'));
       return false;
     }
     if(!firebaseReady){
-      alert('El servicio de inicio de sesion no esta disponible en este momento. Intenta de nuevo mas tarde.');
+      alert(tr('auth.errors.serviceUnavailable'));
       return false;
     }
     const deviceId = getDeviceId();
@@ -477,7 +549,7 @@ function App(){
         const deviceSnap = await getDoc(deviceRef);
         if(deviceSnap.exists()){
           await credential.user.delete().catch(()=>signOut(auth));
-          alert('Este dispositivo ya uso la prueba gratis. Para evitar cuentas duplicadas, inicia sesion con tu cuenta o solicita un plan.');
+          alert(tr('auth.errors.deviceUsed'));
           return false;
         }
         await updateProfile(credential.user, { displayName });
@@ -496,12 +568,12 @@ function App(){
         await setDoc(doc(db, 'users', credential.user.uid), profile, { merge:true });
         await setDoc(deviceRef, { uid: credential.user.uid, email: cleanEmail, createdAt: serverTimestamp() }, { merge:true });
         setUsage({...usage, [cleanEmail]:{apusCreated:0, deviceId}});
-        await sendEmailVerification(credential.user);
+        await sendEmailVerification(credential.user, emailActionCodeSettings);
         await signOut(auth);
         setActiveUid(null);
         setUser(null);
         setScreen('login');
-        alert('Cuenta creada. Te enviamos un correo de verificacion. Confirma tu email y luego inicia sesion.');
+        alert(tr('auth.errors.accountCreatedCheckEmail'));
         return true;
       }
       const credential = await signInWithEmailAndPassword(auth, cleanEmail, password);
@@ -515,14 +587,14 @@ function App(){
       const tokenResult = await credential.user.getIdTokenResult().catch(()=>null);
       const claims = tokenResult?.claims || null;
       if(!credential.user.emailVerified && !isAdminUser({ email:profile?.email, claims }, profile)){
-        await sendEmailVerification(credential.user).catch(()=>{});
+        await sendEmailVerification(credential.user, emailActionCodeSettings).catch(()=>{});
         await signOut(auth);
-        alert('Tu correo aun no esta verificado. Te enviamos otro correo de verificacion.');
+        alert(tr('auth.errors.emailNotVerifiedResent'));
         return false;
       }
       if(profile.active === false){
         await signOut(auth);
-        alert('Tu cuenta esta desactivada. Contacta al administrador de ZOEMEC.');
+        alert(tr('auth.errors.accountDisabled'));
         return false;
       }
       const session = buildSession(profile, credential.user, claims);
@@ -533,13 +605,13 @@ function App(){
       setModule('inicio');
       return true;
     }catch(error){
-      alert(firebaseMessage(error));
+      alert(firebaseMessage(error, tr));
       return false;
     }
   };
   const loginWithGoogle = async () => {
     if(!firebaseReady){
-      alert('El servicio de inicio de sesion no esta disponible en este momento. Intenta de nuevo mas tarde.');
+      alert(tr('auth.errors.serviceUnavailable'));
       return false;
     }
     const provider = new GoogleAuthProvider();
@@ -558,7 +630,7 @@ function App(){
           const deviceSnap = await getDoc(deviceRef);
           if(deviceSnap.exists()){
             await signOut(auth);
-            alert('Este dispositivo ya uso la prueba gratis. Inicia sesion con tu cuenta original o solicita un plan ZOEMEC.');
+            alert(tr('auth.errors.deviceUsed'));
             return false;
           }
           profile = {
@@ -582,7 +654,7 @@ function App(){
       }
       if(profile.active === false){
         await signOut(auth);
-        alert('Tu cuenta esta desactivada. Contacta al administrador de ZOEMEC.');
+        alert(tr('auth.errors.accountDisabled'));
         return false;
       }
       const tokenResult = await fbUser.getIdTokenResult().catch(()=>null);
@@ -594,7 +666,7 @@ function App(){
       setModule('inicio');
       return true;
     }catch(error){
-      alert(firebaseMessage(error));
+      alert(firebaseMessage(error, tr));
       return false;
     }
   };
@@ -609,7 +681,12 @@ function App(){
   let content;
   const activeProject = projects.find(p => p.id === activeProjectId) || null;
   const needsProject = !projects.length;
-  if(screen === 'landing') content = <Landing setScreen={setScreen} login={login} company={companyView} />;
+  if(verifyOobCode !== null) content = <VerifyEmailScreen
+    oobCode={verifyOobCode}
+    onGoToLogin={()=>dismissVerifyScreen('login')}
+    onGoToApp={hasValidSession(user) ? ()=>dismissVerifyScreen('app') : null}
+  />;
+  else if(screen === 'landing') content = <Landing setScreen={setScreen} login={login} company={companyView} />;
   else if(screen === 'login') content = <Auth mode="login" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} company={companyView} />;
   else if(screen === 'register') content = <Auth mode="register" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} company={companyView} />;
   else if(!hasValidSession(user)) content = <Landing setScreen={setScreen} login={login} company={companyView} />;
@@ -625,6 +702,7 @@ function App(){
     {module === 'comunidad' && <Community />}
     {module === 'planes' && <PlansAccess user={user} />}
     {module === 'reportes' && <Reports clients={clients} apus={apus} budgets={budgets} />}
+    {module === 'comparativa' && <ComparePage />}
     {module === 'admin' && user.isAdmin && <AdminPanel user={user} />}
   </Shell>;
   return <><NoticeHost />{content}<Assistant context={zoeContext} setModule={setModule} /></>;
@@ -865,6 +943,7 @@ function Landing({setScreen, login, company}){
 }
 
 function Auth({mode,setScreen,login,loginWithGoogle,company}){
+  const { t: tr } = useI18n();
   const [name,setName]=useState('');
   const [email,setEmail]=useState('');
   const [password,setPassword]=useState('');
@@ -873,7 +952,7 @@ function Auth({mode,setScreen,login,loginWithGoogle,company}){
   useEffect(()=>{ apiGetSafe('/api/status').then(setStatus); },[]);
   const submit=async ()=>{
     if(!email.trim() || !password.trim()){
-      alert('Captura correo y contraseña para continuar.');
+      alert(tr('auth.missingCredentials'));
       return;
     }
     setBusy(true);
@@ -885,35 +964,35 @@ function Auth({mode,setScreen,login,loginWithGoogle,company}){
       <Backdrop/>
       <div className="auth-brand-inner">
         <div className="hero-logo light"><ZoemecBrand variant="login"/></div>
-        <h2>Ingeniería de costos, precisa y profesional.</h2>
-        <p>Un asistente técnico que lee documentos, detecta conceptos, valida evidencia y convierte APUs en entregables listos para concurso y obra.</p>
+        <h2>{tr('auth.heroTitle')}</h2>
+        <p>{tr('auth.heroDesc')}</p>
         <div className="auth-points">
-          <span><Icon name="apu" size={18}/> ZOE interpreta conceptos y propone matrices APU</span>
-          <span><Icon name="tecnico" size={18}/> Modelo visual con evidencia, riesgos y costos</span>
-          <span><Icon name="presupuestos" size={18}/> Exporta presupuesto profesional en PDF y Excel</span>
+          <span><Icon name="apu" size={18}/> {tr('auth.heroBullet1')}</span>
+          <span><Icon name="tecnico" size={18}/> {tr('auth.heroBullet2')}</span>
+          <span><Icon name="presupuestos" size={18}/> {tr('auth.heroBullet3')}</span>
         </div>
         {status && <div className="auth-status">
           <span className={'auth-status-dot'+(status.firebase==='ok'&&status.openai==='ok'?' ok':'')}/>
-          <span>{status.firebase==='ok'&&status.openai==='ok' ? 'Plataforma operando con normalidad' : 'Algunos servicios de IA no responden en este momento'}</span>
+          <span>{status.firebase==='ok'&&status.openai==='ok' ? tr('auth.statusOk') : tr('auth.statusDegraded')}</span>
         </div>}
-        {status?.announcement && <div className="auth-announcement"><b>Novedades</b><p>{status.announcement}</p></div>}
+        {status?.announcement && <div className="auth-announcement"><b>{tr('auth.whatsNew')}</b><p>{status.announcement}</p></div>}
       </div>
     </div>
     <div className="auth-form-side">
       <div className="auth-card">
-        <h1>{mode==='login'?'Iniciar sesión':'Crear cuenta'}</h1>
-        <p>{mode==='login'?'Accede con tu cuenta registrada.':'Empieza con 1 APU gratis por dispositivo.'}</p>
-        {mode==='register' && <><label>Nombre completo</label><input value={name} onChange={e=>setName(e.target.value)} placeholder="Tu nombre" /></>}
-        <label>Correo electrónico</label>
-        <input placeholder="correo@empresa.com" type="email" value={email} onChange={e=>setEmail(e.target.value)} />
-        <label>Contraseña</label>
-        <input placeholder="mínimo 6 caracteres" type="password" value={password} onChange={e=>setPassword(e.target.value)} />
-        <button onClick={submit} disabled={busy}>{busy?'Conectando...':(mode==='login'?'Entrar':'Crear cuenta')}</button>
-        <div className="auth-or"><span>o</span></div>
-        <button className="google" disabled={busy} onClick={async()=>{ setBusy(true); try{ await loginWithGoogle?.(); } finally{ setBusy(false); } }}><Icon name="clientes" size={18}/> Continuar con Google</button>
-        {mode==='register' && <div className="auth-warning"><b>Cuenta gratis:</b> 1 APU sin costo. Se registra el dispositivo para evitar multiples correos gratis.</div>}
-        <small>{mode==='login'?'¿No tienes cuenta? ':'¿Ya tienes cuenta? '}<a onClick={()=>setScreen(mode==='login'?'register':'login')}>{mode==='login'?'Regístrate':'Inicia sesión'}</a></small>
-        <a className="back" onClick={()=>setScreen('landing')}>← Volver al inicio</a>
+        <h1>{mode==='login'?tr('auth.loginTitle'):tr('auth.registerTitle')}</h1>
+        <p>{mode==='login'?tr('auth.loginSubtitle'):tr('auth.registerSubtitle')}</p>
+        {mode==='register' && <><label>{tr('auth.nameLabel')}</label><input value={name} onChange={e=>setName(e.target.value)} placeholder={tr('auth.namePlaceholder')} /></>}
+        <label>{tr('auth.emailLabel')}</label>
+        <input placeholder={tr('auth.emailPlaceholder')} type="email" value={email} onChange={e=>setEmail(e.target.value)} />
+        <label>{tr('auth.passwordLabel')}</label>
+        <input placeholder={tr('auth.passwordPlaceholder')} type="password" value={password} onChange={e=>setPassword(e.target.value)} />
+        <button onClick={submit} disabled={busy}>{busy?tr('auth.submitConnecting'):(mode==='login'?tr('auth.submitLogin'):tr('auth.submitRegister'))}</button>
+        <div className="auth-or"><span>{tr('auth.orDivider')}</span></div>
+        <button className="google" disabled={busy} onClick={async()=>{ setBusy(true); try{ await loginWithGoogle?.(); } finally{ setBusy(false); } }}><Icon name="clientes" size={18}/> {tr('auth.googleBtn')}</button>
+        {mode==='register' && <div className="auth-warning">{tr('auth.freeAccountNote')}</div>}
+        <small>{mode==='login'?tr('auth.toRegisterPrompt'):tr('auth.toLoginPrompt')}<a onClick={()=>setScreen(mode==='login'?'register':'login')}>{mode==='login'?tr('auth.toRegisterLink'):tr('auth.toLoginLink')}</a></small>
+        <a className="back" onClick={()=>setScreen('landing')}>{tr('auth.backHome')}</a>
       </div>
     </div>
   </div>
@@ -964,6 +1043,7 @@ function Shell({children,user,logout,module,setModule,company,apus,clients,proje
     ['visual','render',tr('shell.menu.visual'),tr('shell.menu.visualDesc')],
     ['tecnico','tecnico',tr('shell.menu.tecnico'),tr('shell.menu.tecnicoDesc')],
     ['reportes','reportes',tr('shell.menu.reportes')],
+    ['comparativa','comparativa',tr('shell.menu.comparativa'),tr('shell.menu.comparativaDesc')],
     ...(user.isAdmin ? [['admin','admin',tr('shell.menu.admin'),tr('shell.menu.adminDesc')]] : [])
   ];
   const goTo = (m) => { setModule(m); setDrawerOpen(false); };
@@ -980,7 +1060,7 @@ function Shell({children,user,logout,module,setModule,company,apus,clients,proje
     {drawerOpen && <div className="drawer-backdrop" onClick={()=>setDrawerOpen(false)} aria-hidden="true"/>}
     <aside className="sidebar">
       <div className="sidebar-head">
-        <div className="brand"><ZoemecBrand variant="sidebar" subtitle="Ingeniería y construcción"/></div>
+        <div className="brand"><ZoemecBrand variant="sidebar" subtitle={tr('shell.brandSubtitle')}/></div>
         <button className="drawer-close" ref={drawerCloseRef} onClick={()=>{ setDrawerOpen(false); hamburgerRef.current?.focus(); }} aria-label={tr('shell.closeDrawer')}>×</button>
       </div>
       <div className="menu">{menu.map(m=><button key={m[0]} className={module===m[0]?'active':''} onClick={()=>goTo(m[0])}><span className="mi"><Icon name={m[1]}/></span><span className="menu-copy"><b>{m[2]}</b>{m[3] && <small>{m[3]}</small>}</span></button>)}</div>
@@ -1006,7 +1086,7 @@ function Shell({children,user,logout,module,setModule,company,apus,clients,proje
             <button className={locale==='en'?'active':''} onClick={()=>setLocale('en')} aria-pressed={locale==='en'}>EN</button>
           </div>
           <button className="theme-toggle" onClick={toggleTheme} aria-label={tr('toggle.themeToggleLabel')} title={theme==='light'?tr('toggle.themeDark'):tr('toggle.themeLight')}><Icon name={theme==='light'?'moon':'sun'} size={17}/></button>
-          <CloudBadge user={user}/><NotificationBell user={user}/><span className="avatar">{user.initials}</span><div><b>{user.name}</b><small>{user.isAdmin ? tr('shell.role.admin') : user.plan}</small></div><button className="logout-btn" onClick={logout}>{tr('shell.logout')}</button>
+          <CloudBadge user={user}/><ProcessesIndicator/><NotificationBell user={user}/><span className="avatar">{user.initials}</span><div><b>{user.name}</b><small>{user.isAdmin ? tr('shell.role.admin') : user.plan}</small></div><button className="logout-btn" onClick={logout}>{tr('shell.logout')}</button>
         </div>
       </header>
       {children}
@@ -1419,6 +1499,7 @@ function ResourceCards({apu}){
 
 function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog,projects,rawApus,linkApuToProject,activeProjectId,activeProject,onNeedProject}){
   const { t: tr } = useI18n();
+  const { beginJob, completeJob, failJob, getUnseen, consumeJob } = useAiJobs();
   const requireProject=()=>{
     if(activeProjectId) return true;
     if(confirm('Para guardar necesitas un proyecto activo (asi tus APUs quedan asociados a una obra y nunca se mezclan con otra). ¿Crear o seleccionar un proyecto ahora?')) onNeedProject?.();
@@ -1475,6 +1556,36 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   const [activeJob,setActiveJob]=useState(null);
   const [resumableJob,setResumableJob]=useState(null);
   const cancelRequestedRef=useRef(false);
+  /* Recuperacion de un APU generado con IA mientras esta pantalla estaba
+     desmontada (usuario cambio de modulo/pestana durante la generacion) --
+     ver src/contexts/AiJobsContext.jsx. Solo se revisa UNA vez al montar:
+     si el usuario se queda en esta pantalla, el propio generateAI ya aplica
+     su resultado directo (mismo camino de siempre); esto solo cubre el caso
+     en que ya no estaba aqui cuando la IA termino. */
+  const [recoveredJob,setRecoveredJob]=useState(null);
+  useEffect(() => {
+    const [latest] = getUnseen('apu-generate');
+    if(latest) setRecoveredJob(latest);
+  }, []);
+  const applyRecoveredJob = () => {
+    if(!recoveredJob) return;
+    const { shim, v2, usedFallback, unit, qty, referencePU } = recoveredJob.result || {};
+    if(shim){
+      if(shouldReleaseStableApuIdentity(apu.concept, shim.concept)) setStableApuId(shim.id);
+      skipMigrateIdRef.current = shim.id;
+      setConcept(shim.concept);
+      setApu(shim);
+      if(!usedFallback && v2) setApuV2({ ...v2, id: shim.id });
+      setExcelInfo({fileName: usedFallback ? 'Plantilla tecnica ZOEMEC' : 'OpenAI API', concept:shim.concept, unit, qty, referencePU, catalog});
+      setShowExecutive(true);
+    }
+    consumeJob(recoveredJob.id);
+    setRecoveredJob(null);
+  };
+  const discardRecoveredJob = () => {
+    if(recoveredJob) consumeJob(recoveredJob.id);
+    setRecoveredJob(null);
+  };
   useEffect(()=>{
     if(!firebaseReady || !user?.uid) return;
     let alive = true;
@@ -1835,6 +1946,11 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     const parsed=parseConceptText(concept);
     if(aiUnit.trim()) parsed.unit=aiUnit.trim();
     if(Number(aiQty)>0) parsed.qty=Number(aiQty);
+    // Registra el job en el store global (sobrevive un cambio de modulo):
+    // si esta pantalla se desmonta antes de que la promesa resuelva, el
+    // resultado se guarda aqui en vez de perderse -- ver completeJob() mas
+    // abajo y el efecto de recuperacion (recoveredJob) arriba.
+    const jobId = beginJob('apu-generate', parsed.concept);
     // Un intento = una llamada con su propio timeout de 45 s; hasta 3 intentos
     // en total, con espera mayor si OpenAI responde 429 (limite de tasa).
     const attemptGenerate = async () => {
@@ -1908,6 +2024,11 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       setAiOpen(false);
       setShowExecutive(true);
       alert('APU generado correctamente');
+      // notify:false -- el alert() de arriba (enrutado a toast por
+      // NoticeHost, que vive en la raiz de la app y nunca se desmonta) ya
+      // avisa al usuario aunque esta pantalla se haya desmontado mientras
+      // se generaba; completeJob solo necesita guardar el resultado.
+      completeJob(jobId, { shim, v2, usedFallback:false, unit:parsed.unit, qty:parsed.qty, referencePU:parsed.referencePU }, { notify:false });
     }catch(err){
       if(requestId !== aiRequestSeqRef.current) return;
       const reason = err?.name==='AbortError' ? 'la IA tardo demasiado en responder' : friendlyServiceError(err,'servidor no disponible');
@@ -1918,6 +2039,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       setAiStatus(`Plantilla tecnica aplicada (IA no disponible): ${next.family}`);
       setAiOpen(false);
       setShowExecutive(true);
+      completeJob(jobId, { shim: next, v2:null, usedFallback:true, unit:parsed.unit, qty:parsed.qty, referencePU:parsed.referencePU }, { notify:true, label: parsed.concept });
     }finally{
       if(requestId === aiRequestSeqRef.current) setAiBusy(false);
     }
@@ -2427,6 +2549,13 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         <button type="button" className="soft" onClick={discardResumableJob} disabled={batchBusy}>{tr('apu.discard')}</button>
       </div>
     </div>; })()}
+    {recoveredJob && <div className="trial-banner resume-banner">
+      <div>{tr('jobs.recoveredTitle')} — <b>{recoveredJob.label}</b></div>
+      <div className="resume-banner-actions">
+        <button type="button" onClick={applyRecoveredJob}>{tr('jobs.recoveredApply')}</button>
+        <button type="button" className="soft" onClick={discardRecoveredJob}>{tr('jobs.recoveredDiscard')}</button>
+      </div>
+    </div>}
     {/* H. Generacion: inicio natural del flujo, siempre visible arriba */}
     <div className="panel ai-panel" ref={conceptCardRef}>
       <div className="ai-panel-head"><HardHat size={36}/><div><b>{tr('apu.panelTitle')}</b><small className="muted">{tr('apu.panelDesc')}</small></div></div>
@@ -4109,6 +4238,12 @@ function VisualAI({user, setModule}){
    fiables): solo pagina + evidencia textual, tal como se aprobo. */
 function PlanoTakeoff({user, setModule}){
   const { t: tr } = useI18n();
+  const { beginJob, completeJob, failJob, getUnseen, consumeJob } = useAiJobs();
+  const [recoveredTakeoff,setRecoveredTakeoff]=useState(null);
+  useEffect(() => {
+    const [latest] = getUnseen('takeoff-analyze');
+    if(latest) setRecoveredTakeoff(latest);
+  }, []);
   const [fileName,setFileName]=useState('');
   const [mimeType,setMimeType]=useState('');
   const [dataBase64,setDataBase64]=useState('');
@@ -4137,15 +4272,33 @@ function PlanoTakeoff({user, setModule}){
   const analyze=async()=>{
     if(!dataBase64){ window.zoemecNotify?.(tr('takeoff.uploadPlanFirstMsg'),'error'); return; }
     setAnalyzing(true);
+    // Igual patron que generateAI en APU (ver src/contexts/AiJobsContext.jsx):
+    // si el usuario cambia de modulo antes de que /api/visual-ai responda,
+    // el resultado se guarda en el store global en vez de perderse cuando
+    // este componente se desmonte.
+    const jobId = beginJob('takeoff-analyze', fileName);
     try{
       const referenciaUsuario = (refDesc.trim() && refMedida) ? { descripcion:refDesc.trim(), medida:Number(refMedida), unidad:refUnidad } : undefined;
       const data=await apiPost('/api/visual-ai', { action:'takeoff', fileName, mimeType, dataBase64, referenciaUsuario });
       setResult(data);
       setEdits({});
       setSimilarByIndex({});
+      completeJob(jobId, { data }, { notify:true, label: fileName });
     }catch(err){
       window.zoemecNotify?.(friendlyServiceError(err,tr('takeoff.analyzeFailMsg')), 'error');
+      failJob(jobId, err, { notify:false });
     }finally{ setAnalyzing(false); }
+  };
+  const applyRecoveredTakeoff = () => {
+    if(!recoveredTakeoff) return;
+    const { data } = recoveredTakeoff.result || {};
+    if(data){ setResult(data); setEdits({}); setSimilarByIndex({}); }
+    consumeJob(recoveredTakeoff.id);
+    setRecoveredTakeoff(null);
+  };
+  const discardRecoveredTakeoff = () => {
+    if(recoveredTakeoff) consumeJob(recoveredTakeoff.id);
+    setRecoveredTakeoff(null);
   };
 
   const setEdit=(index,patch)=>setEdits(prev=>({...prev,[index]:{...prev[index],...patch}}));
@@ -4198,6 +4351,13 @@ function PlanoTakeoff({user, setModule}){
   const estadoLabel={ PROPUESTO_POR_IA:tr('takeoff.stateProposedAI'), REQUIERE_REVISION:tr('takeoff.stateNeedsReview'), VALIDADO_POR_USUARIO:tr('takeoff.stateValidated'), RECHAZADO:tr('takeoff.stateRejected') };
 
   return <div className="plano-takeoff">
+    {recoveredTakeoff && <div className="trial-banner resume-banner">
+      <div>{tr('jobs.recoveredTitle')} — <b>{recoveredTakeoff.label}</b></div>
+      <div className="resume-banner-actions">
+        <button type="button" onClick={applyRecoveredTakeoff}>{tr('jobs.recoveredApply')}</button>
+        <button type="button" className="soft" onClick={discardRecoveredTakeoff}>{tr('jobs.recoveredDiscard')}</button>
+      </div>
+    </div>}
     <div className="panel visual-uploader">
       <label className="visual-drop">
         <div><Icon name="doc" size={42}/><b>{fileName || tr('takeoff.uploadPlan')}</b><span>{tr('takeoff.uploadHint')}</span></div>
@@ -4562,7 +4722,9 @@ function Reports({clients,apus,budgets}){
 createRoot(document.getElementById('root')).render(
   <I18nProvider>
     <ThemeProvider>
-      <App />
+      <AiJobsProvider>
+        <App />
+      </AiJobsProvider>
     </ThemeProvider>
   </I18nProvider>
 );

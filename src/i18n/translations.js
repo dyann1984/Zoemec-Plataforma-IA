@@ -333,6 +333,7 @@ export const translations = {
       noSearchResults: 'No hay clientes con ese criterio de búsqueda.',
     },
     apu: {
+      stepConcepto: 'Concepto', stepIA: 'IA', stepAnalisis: 'Análisis', stepValidacion: 'Validación', stepEntregables: 'Entregables',
       noProjectPill: 'Trabajando sin proyecto', noProjectLink: 'crea o selecciona uno para guardar',
       trialBannerLabel: 'Plan gratis activo:', trialBannerText: 'tienes {n} APU disponible. Para exportar y crear más APUs activa un plan.',
       resumeBannerLabel: 'Lote sin terminar detectado:', resumeCatalogFallback: 'catálogo',
@@ -1263,6 +1264,7 @@ export const translations = {
       noSearchResults: 'No clients match that search.',
     },
     apu: {
+      stepConcepto: 'Concept', stepIA: 'AI', stepAnalisis: 'Analysis', stepValidacion: 'Validation', stepEntregables: 'Deliverables',
       noProjectPill: 'Working without a project', noProjectLink: 'create or select one to save',
       trialBannerLabel: 'Free plan active:', trialBannerText: 'you have {n} APU available. Activate a plan to export and create more APUs.',
       resumeBannerLabel: 'Unfinished batch detected:', resumeCatalogFallback: 'catalog',

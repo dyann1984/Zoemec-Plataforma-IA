@@ -1410,9 +1410,10 @@ function legacyShimFromV2(v2, fallbackConcept, sourceFile){
   };
 }
 
-const APU_STEPS = ['Concepto','IA','Análisis','Validación','Entregables'];
 function ApuStepper({stepIndex}){
-  return <div className="apu-stepper">{APU_STEPS.map((s,i)=><div key={s} className={`apu-step${i===stepIndex?' current':i<stepIndex?' done':''}`}><span className="apu-step-dot">{i<stepIndex?'✓':i+1}</span><span className="apu-step-label">{s}</span></div>)}</div>;
+  const { t: tr } = useI18n();
+  const steps = [tr('apu.stepConcepto'), tr('apu.stepIA'), tr('apu.stepAnalisis'), tr('apu.stepValidacion'), tr('apu.stepEntregables')];
+  return <div className="apu-stepper">{steps.map((s,i)=><div key={s} className={`apu-step${i===stepIndex?' current':i<stepIndex?' done':''}`}><span className="apu-step-dot">{i<stepIndex?'✓':i+1}</span><span className="apu-step-label">{s}</span></div>)}</div>;
 }
 
 /* Progreso puramente presentacional durante la llamada IA (una sola peticion
@@ -1571,7 +1572,6 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     if(!recoveredJob) return;
     const { shim, v2, usedFallback, unit, qty, referencePU } = recoveredJob.result || {};
     if(shim){
-      if(shouldReleaseStableApuIdentity(apu.concept, shim.concept)) setStableApuId(shim.id);
       skipMigrateIdRef.current = shim.id;
       setConcept(shim.concept);
       setApu(shim);

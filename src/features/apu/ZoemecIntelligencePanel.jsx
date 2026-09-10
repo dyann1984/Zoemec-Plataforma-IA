@@ -9,6 +9,7 @@ import { MEMORY_SCOPE, MEMORY_TYPE, MEMORY_STATUS } from '../../domain/technical
 import { challengeSeverity } from '../../domain/apuChallenge.js';
 import { apiPost, apiGetSafe } from '../../services/apiClient.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
+import { resolveFindingMessage, resolveSeverityLabel } from '../../domain/findingMessages.js';
 
 const RANK = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1, INFO: 0 };
 // Identificadores reales que ya existen en el APU (Fase 6): nunca se inventa
@@ -16,14 +17,15 @@ const RANK = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1, INFO: 0 };
 // usa un valor explicito de "sin capturar" en vez de fabricar uno.
 const projectIdOf = apu => apu?.proyecto || apu?.clave || apu?.id || 'sin-proyecto';
 const apuIdOf = apu => apu?.id || apu?.clave || 'sin-id';
-const AUDIT_SEVERITY_LABEL = { CRITICAL: 'CRÍTICO', HIGH: 'ALTO', MEDIUM: 'MEDIO', LOW: 'BAJO', INFO: 'INFO' };
 
 /* Severidad SIEMPRE con texto+icono+color (regla 12 del spec) -- la palabra
    completa se imprime siempre, el color/forma es un refuerzo, nunca la
-   unica senal. */
-function SeverityBadge({ severity }){
+   unica senal. Texto resuelto via i18n (findings.severity.*, ver
+   src/domain/findingMessages.js) -- nunca el enum crudo ni un mapa fijo en
+   espanol como antes. */
+function SeverityBadge({ severity, tr }){
   const sev = severity || 'INFO';
-  return <span className={`zi-badge zi-badge-${sev.toLowerCase()}`}>{AUDIT_SEVERITY_LABEL[sev] || sev}</span>;
+  return <span className={`zi-badge zi-badge-${sev.toLowerCase()}`}>{resolveSeverityLabel(tr, sev)}</span>;
 }
 
 // Confidence usa el MISMO vocabulario HIGH/MEDIUM/LOW que Auditor, pero con
@@ -41,25 +43,41 @@ const DIMENSION_LABEL = { structure: 'Estructura', calculation: 'Cálculo', pric
    unitImpact/projectImpact solo se muestran cuando el finding realmente los
    trae (Auditor no los tiene, Bid Risk si). */
 function FindingCard({ finding, actions }){
+  const { t: tr } = useI18n();
   const hasImpact = finding.unitImpact !== undefined || finding.projectImpact !== undefined;
   const impact = hasImpact ? describeImpact(finding.projectImpact, finding.reason) : null;
+  // category: para findings de Bid Risk es un codigo estructurado
+  // (BID_RISK_CATEGORY, ej. HIGH_AUDIT_FINDING) y se traduce via
+  // findings.bidRiskCategory; para findings de Auditor es simplemente el
+  // origen del renglon (materials/labor/schema/...), sin traduccion propia
+  // todavia -- se muestra igual que antes (prettificado) si no hay
+  // coincidencia en el diccionario.
+  const categoryLabel = finding.category
+    ? (tr(`findings.bidRiskCategory.${finding.category}`) !== `findings.bidRiskCategory.${finding.category}`
+        ? tr(`findings.bidRiskCategory.${finding.category}`)
+        : String(finding.category).replace(/_/g, ' '))
+    : null;
+  const description = resolveFindingMessage(tr, { code: finding.code, params: finding.params, message: finding.message || finding.description });
+  const recommendationText = finding.recommendationCode
+    ? tr(`findings.bidRiskRecommendation.${finding.recommendationCode}`)
+    : finding.recommendation;
   return <div className="zi-finding-card">
-    <div className="zi-finding-head"><SeverityBadge severity={finding.severity} />{finding.category && <b>{String(finding.category).replace(/_/g, ' ')}</b>}</div>
-    <div className="zi-finding-desc">{finding.message || finding.description}</div>
-    {finding.evidence && <div className="zi-finding-meta">Evidencia: <b>{finding.evidence}</b></div>}
+    <div className="zi-finding-head"><SeverityBadge severity={finding.severity} tr={tr} />{categoryLabel && <b>{categoryLabel}</b>}</div>
+    <div className="zi-finding-desc">{description}</div>
+    {finding.evidence && <div className="zi-finding-meta">{tr('intel.evidenceLabel')}: <b>{finding.evidence}</b></div>}
     {hasImpact && <div className="zi-finding-meta">
-      {finding.unitImpact != null && <span>Impacto unitario: <b>{money(finding.unitImpact)}</b></span>}
-      <span>Impacto proyecto: <b>{impact.display || money(impact.value)}</b></span>
+      {finding.unitImpact != null && <span>{tr('intel.unitImpactLabel')}: <b>{money(finding.unitImpact)}</b></span>}
+      <span>{tr('intel.projectImpactLabel')}: <b>{impact.display || money(impact.value)}</b></span>
     </div>}
-    {finding.recommendation && <div className="zi-finding-meta">Recomendación: {finding.recommendation}</div>}
+    {recommendationText && <div className="zi-finding-meta">{tr('intel.recommendationLabel')}: {recommendationText}</div>}
     {actions}
   </div>;
 }
 
 function SummaryBar({ summary, tr }){
   const bidRiskExposureLabel = !summary.bidRisk.severity ? null
-    : summary.bidRisk.estimatedExposure > 0 ? `${money(summary.bidRisk.estimatedExposure)} exposición`
-    : 'sin exposición monetizada';
+    : summary.bidRisk.estimatedExposure > 0 ? tr('intel.exposureAmount', { amount: money(summary.bidRisk.estimatedExposure) })
+    : tr('intel.noMonetizedExposure');
   return <div className="zi-summary-bar">
     <div className="zi-summary-card">
       <span className="zi-summary-label">{tr('intel.confidenceLabel')}</span>
@@ -69,65 +87,68 @@ function SummaryBar({ summary, tr }){
     <div className="zi-summary-card">
       <span className="zi-summary-label">{tr('intel.bidRiskLabel')}</span>
       {summary.bidRisk.severity
-        ? <span className="zi-summary-value"><SeverityBadge severity={summary.bidRisk.severity} /></span>
+        ? <span className="zi-summary-value"><SeverityBadge severity={summary.bidRisk.severity} tr={tr} /></span>
         : <span className="zi-summary-value zi-empty">{summary.bidRisk.display}</span>}
       {bidRiskExposureLabel && <span className="zi-summary-sub">{bidRiskExposureLabel}</span>}
     </div>
     <div className="zi-summary-card">
       <span className="zi-summary-label">{tr('intel.auditLabel')}</span>
       <span className="zi-summary-value">{summary.audit.count ?? summary.audit.display}</span>
-      <span className="zi-summary-sub">{summary.audit.topSeverity ? `top: ${summary.audit.topSeverity}` : summary.audit.count === 0 ? 'sin hallazgos' : ''}</span>
+      <span className="zi-summary-sub">{summary.audit.topSeverity ? tr('intel.topSeverity', { severity: resolveSeverityLabel(tr, summary.audit.topSeverity) }) : summary.audit.count === 0 ? tr('intel.noFindings') : ''}</span>
     </div>
     <div className="zi-summary-card">
       <span className="zi-summary-label">{tr('intel.challengeLabel')}</span>
       <span className="zi-summary-value">{summary.challenge.count ?? summary.challenge.display}</span>
-      <span className="zi-summary-sub">{summary.challenge.monetizableCount ? `${summary.challenge.monetizableCount} monetizable(s)` : summary.challenge.count === 0 ? 'sin cuestionamientos' : ''}</span>
+      <span className="zi-summary-sub">{summary.challenge.monetizableCount ? tr('intel.monetizableCount', { count: summary.challenge.monetizableCount }) : summary.challenge.count === 0 ? tr('intel.noQuestions') : ''}</span>
     </div>
   </div>;
 }
 
 function ResumenTab({ intelligence, confidence, bidRisk }){
+  const { t: tr } = useI18n();
   return <div>
-    {!confidence.ok && <div className="zi-error-box">Confidence no disponible: {confidence.error}</div>}
-    {confidence.ok && <p>Recomendación de revisión: <b>{confidence.data.recommendation}</b></p>}
-    {confidence.ok && confidence.data.criticalFactors.length > 0 && <div className="zi-error-box">Factores críticos que limitan el score: {confidence.data.criticalFactors.map(f => f.dimension).join(', ')}</div>}
-    {!bidRisk.ok && <div className="zi-error-box">Bid Risk no disponible: {bidRisk.error}</div>}
+    {!confidence.ok && <div className="zi-error-box">{tr('intel.confidenceUnavailable', { reason: confidence.error })}</div>}
+    {confidence.ok && <p>{tr('intel.reviewRecommendationLabel')}: <b>{confidence.data.recommendation}</b></p>}
+    {confidence.ok && confidence.data.criticalFactors.length > 0 && <div className="zi-error-box">{tr('intel.criticalFactorsLabel')}: {confidence.data.criticalFactors.map(f => f.dimension).join(', ')}</div>}
+    {!bidRisk.ok && <div className="zi-error-box">{tr('intel.bidRiskUnavailable', { reason: bidRisk.error })}</div>}
     {bidRisk.ok && bidRisk.data.findings.length > 0 && <>
-      <h4 style={{ margin: '10px 0 6px', fontSize: '.82rem' }}>Top riesgos</h4>
+      <h4 style={{ margin: '10px 0 6px', fontSize: '.82rem' }}>{tr('intel.topRisks')}</h4>
       <div className="zi-finding-list">{[...bidRisk.data.findings].sort((a, b) => RANK[b.severity] - RANK[a.severity]).slice(0, 3).map(f => <FindingCard key={f.id} finding={f} />)}</div>
     </>}
-    {bidRisk.ok && bidRisk.data.findings.length === 0 && confidence.ok && confidence.data.status !== 'INSUFFICIENT_EVIDENCE' && <p className="zi-empty-box">Sin riesgos ni observaciones relevantes en este momento.</p>}
+    {bidRisk.ok && bidRisk.data.findings.length === 0 && confidence.ok && confidence.data.status !== 'INSUFFICIENT_EVIDENCE' && <p className="zi-empty-box">{tr('intel.noRisksOrObservations')}</p>}
   </div>;
 }
 
 function ConfidenceTab({ confidence }){
-  if(!confidence.ok) return <div className="zi-error-box">Confidence no disponible: {confidence.error}</div>;
+  const { t: tr } = useI18n();
+  if(!confidence.ok) return <div className="zi-error-box">{tr('intel.confidenceUnavailable', { reason: confidence.error })}</div>;
   const c = confidence.data;
   return <div>
-    <p>Score global: <b>{c.score != null ? `${c.score}%` : 'SIN EVIDENCIA SUFICIENTE'}</b> · <ConfidenceStatusBadge status={c.status} /> · recomendación: <b>{c.recommendation}</b></p>
+    <p>{tr('intel.confidenceScoreLabel')}: <b>{c.score != null ? `${c.score}%` : tr('intel.insufficientEvidenceScore')}</b> · <ConfidenceStatusBadge status={c.status} /> · {tr('intel.reviewRecommendationLabel')}: <b>{c.recommendation}</b></p>
     <div className="zi-dim-grid">
       {Object.entries(c.dimensions).map(([name, dim]) => <div key={name} className="zi-dim-card">
-        <div className="zi-dim-name"><span>{DIMENSION_LABEL[name] || name}</span><ConfidenceStatusBadge status={dim.status} /></div>
+        <div className="zi-dim-name"><span>{tr(`intel.dimension.${name}`) !== `intel.dimension.${name}` ? tr(`intel.dimension.${name}`) : (DIMENSION_LABEL[name] || name)}</span><ConfidenceStatusBadge status={dim.status} /></div>
         <div className="zi-dim-score">{dim.score != null ? dim.score : '—'}</div>
         {dim.score != null && <div className="zi-dim-bar"><span style={{ width: `${dim.score}%` }} /></div>}
         {dim.reasons.slice(0, 1).map((r, i) => <p key={i} className="zi-dim-reason">{r}</p>)}
-        {dim.missingData.length > 0 && <p className="zi-dim-reason">Sin datos: {dim.missingData.join(', ')}</p>}
+        {dim.missingData.length > 0 && <p className="zi-dim-reason">{tr('intel.noDataLabel')}: {dim.missingData.join(', ')}</p>}
       </div>)}
     </div>
   </div>;
 }
 
 function AuditoriaTab({ audit }){
+  const { t: tr } = useI18n();
   const [filter, setFilter] = useState(null);
-  if(!audit.ok) return <div className="zi-error-box">Auditor no disponible: {audit.error}</div>;
+  if(!audit.ok) return <div className="zi-error-box">{tr('intel.auditUnavailable', { reason: audit.error })}</div>;
   const findings = filter ? audit.data.findings.filter(f => f.severity === filter) : audit.data.findings;
   return <div>
     <div className="zi-filter-row">
       {AUDIT_SEVERITY_FILTERS.map(sev => <button key={sev} type="button" className={`zi-filter-chip${filter === sev ? ' active' : ''}`} onClick={() => setFilter(f => f === sev ? null : sev)}>
-        {AUDIT_SEVERITY_LABEL[sev]} ({audit.data.summary[sev.toLowerCase()] ?? 0})
+        {resolveSeverityLabel(tr, sev)} ({audit.data.summary[sev.toLowerCase()] ?? 0})
       </button>)}
     </div>
-    {findings.length === 0 ? <div className="zi-empty-box">Sin hallazgos{filter ? ` de severidad ${AUDIT_SEVERITY_LABEL[filter]}` : ''}.</div>
+    {findings.length === 0 ? <div className="zi-empty-box">{filter ? tr('intel.auditNoFindingsSeverity', { severity: resolveSeverityLabel(tr, filter) }) : tr('intel.auditNoFindings')}</div>
       : <div className="zi-finding-list">{findings.map(f => <FindingCard key={f.id} finding={f} />)}</div>}
   </div>;
 }
@@ -153,6 +174,7 @@ function VerificationBadge({ status }){
 const APPLICATION_LABEL = { PENDING_APPLICATION: 'PENDIENTE DE APLICAR', APPLIED_LOCAL_ONLY: 'APLICADO (SOLO EN ESTE EDITOR, SIN GUARDAR)', FAILED: 'ERROR AL APLICAR' };
 
 function ChallengeTab({ apu, challenge, onSimulate }){
+  const { t: tr } = useI18n();
   const apuId = apuIdOf(apu);
   const projectId = projectIdOf(apu);
   const [decisions, setDecisions] = useState(null); // {[challengeId]: decisionDoc} -- null = cargando
@@ -191,8 +213,8 @@ function ChallengeTab({ apu, challenge, onSimulate }){
     }
   };
 
-  if(!challenge.ok) return <div className="zi-error-box">Challenge no disponible: {challenge.error}</div>;
-  if(!challenge.data.challenges.length) return <div className="zi-empty-box">Sin cuestionamientos de Challenge sobre este APU.</div>;
+  if(!challenge.ok) return <div className="zi-error-box">{tr('intel.challengeUnavailable', { reason: challenge.error })}</div>;
+  if(!challenge.data.challenges.length) return <div className="zi-empty-box">{tr('intel.noChallenges')}</div>;
   return <div className="zi-finding-list">
     {challenge.data.challenges.map(c => {
       const persisted = decisions?.[c.id];
@@ -204,56 +226,58 @@ function ChallengeTab({ apu, challenge, onSimulate }){
           {persisted?.applicationStatus && <p className="zi-finding-meta">Aplicación de la corrección: <b>{APPLICATION_LABEL[persisted.applicationStatus] || persisted.applicationStatus}</b></p>}
           {!persisted && decisions !== null && <p className="zi-finding-meta">Estado de revisión: <b>PENDIENTE</b></p>}
           <div className="zi-finding-actions">
-            <button className="soft" disabled={state?.status === 'saving'} onClick={() => record(c, 'MAINTAIN')}>Mantener</button>
+            <button className="soft" disabled={state?.status === 'saving'} onClick={() => record(c, 'MAINTAIN')}>{tr('intel.keepValue')}</button>
             {/* Solo "rendimiento" tiene un valor de correccion real (baselineValue) --
                 un challenge de "precio" no propone ningun precio corregido (no hay
                 evidencia de cual seria el correcto, ver apuChallenge.js#priceChallenges),
                 asi que no tiene sentido ofrecer "simular" ahi: no habria nada real que simular. */}
-            {c.category === 'rendimiento' && c.resourceDescripcion && <button className="soft" onClick={() => onSimulate?.(c)}>Simular corrección</button>}
-            <button className="soft" disabled={state?.status === 'saving'} onClick={() => setJustifyDraft(d => ({ ...d, [c.id]: d[c.id] ?? '' }))}>Justificar</button>
+            {c.category === 'rendimiento' && c.resourceDescripcion && <button className="soft" onClick={() => onSimulate?.(c)}>{tr('intel.simulateFix')}</button>}
+            <button className="soft" disabled={state?.status === 'saving'} onClick={() => setJustifyDraft(d => ({ ...d, [c.id]: d[c.id] ?? '' }))}>{tr('intel.justifyBtn')}</button>
           </div>
           {justifyDraft[c.id] != null && <div className="zi-scenario-form" style={{ marginTop: 6 }}>
-            <label style={{ flex: 1 }}>Justificación
-              <input value={justifyDraft[c.id]} onChange={e => setJustifyDraft(d => ({ ...d, [c.id]: e.target.value }))} placeholder="Motivo real de mantener este valor" />
+            <label style={{ flex: 1 }}>{tr('intel.justificationLabel')}
+              <input value={justifyDraft[c.id]} onChange={e => setJustifyDraft(d => ({ ...d, [c.id]: e.target.value }))} placeholder={tr('intel.justificationPlaceholder')} />
             </label>
-            <button disabled={!justifyDraft[c.id] || state?.status === 'saving'} onClick={async () => { await record(c, 'JUSTIFY', justifyDraft[c.id]); setJustifyDraft(d => { const n = { ...d }; delete n[c.id]; return n; }); }}>Guardar justificación</button>
-            <button className="ghost" onClick={() => setJustifyDraft(d => { const n = { ...d }; delete n[c.id]; return n; })}>Cancelar</button>
+            <button disabled={!justifyDraft[c.id] || state?.status === 'saving'} onClick={async () => { await record(c, 'JUSTIFY', justifyDraft[c.id]); setJustifyDraft(d => { const n = { ...d }; delete n[c.id]; return n; }); }}>{tr('intel.saveJustification')}</button>
+            <button className="ghost" onClick={() => setJustifyDraft(d => { const n = { ...d }; delete n[c.id]; return n; })}>{tr('intel.cancel')}</button>
           </div>}
           {/* Regla 10: guardando/guardado/error explicitos, nunca "exito optimista" falso. */}
-          {state?.status === 'saving' && <p className="zi-pending-note">Guardando…</p>}
-          {state?.status === 'saved' && <p className="zi-pending-note">Guardado.</p>}
-          {state?.status === 'error' && <div className="zi-error-box">No se pudo guardar: {state.message}</div>}
+          {state?.status === 'saving' && <p className="zi-pending-note">{tr('intel.saving')}</p>}
+          {state?.status === 'saved' && <p className="zi-pending-note">{tr('intel.saved')}</p>}
+          {state?.status === 'error' && <div className="zi-error-box">{tr('intel.saveFailed', { reason: state.message })}</div>}
         </div>} />;
     })}
   </div>;
 }
 
 function BidRiskTab({ bidRisk }){
-  if(!bidRisk.ok) return <div className="zi-error-box">Bid Risk no disponible: {bidRisk.error}</div>;
+  const { t: tr } = useI18n();
+  if(!bidRisk.ok) return <div className="zi-error-box">{tr('intel.bidRiskUnavailable', { reason: bidRisk.error })}</div>;
   const b = bidRisk.data;
   return <div>
-    <p>Severidad global: <SeverityBadge severity={b.severity} /> · Exposición estimada: <b>{b.estimatedExposure > 0 ? money(b.estimatedExposure) : (b.findings.length ? 'NO CALCULABLE' : '$0')}</b></p>
-    {b.findings.length === 0 ? <div className="zi-empty-box">Sin hallazgos de riesgo.</div>
+    <p>{tr('intel.globalSeverity')}: <SeverityBadge severity={b.severity} tr={tr} /> · {tr('intel.estimatedExposure')}: <b>{b.estimatedExposure > 0 ? money(b.estimatedExposure) : (b.findings.length ? tr('intel.notCalculable') : money(0))}</b></p>
+    {b.findings.length === 0 ? <div className="zi-empty-box">{tr('intel.noRiskFindings')}</div>
       : <div className="zi-finding-list">{[...b.findings].sort((a, b2) => RANK[b2.severity] - RANK[a.severity]).map(f => <FindingCard key={f.id} finding={f} />)}</div>}
   </div>;
 }
 
 function ScenarioCompare({ result }){
+  const { t: tr } = useI18n();
   const { delta, confidence, bidRisk } = result;
-  const projectDisplay = (base, label) => base != null ? money(base) : describeImpact(null, delta.reason).display;
+  const projectDisplay = (base) => base != null ? money(base) : describeImpact(null, delta.reason).display;
   return <div className="zi-scenario-compare">
-    <div className="zi-scenario-col"><h4>Base</h4>
-      <div className="zi-scenario-row"><span>Costo unitario</span><b>{money(delta.baseUnitCost)}</b></div>
-      <div className="zi-scenario-row"><span>Costo proyecto</span><b>{projectDisplay(delta.baseProjectCost)}</b></div>
-      <div className="zi-scenario-row"><span>Confidence</span><b>{confidence.base.score != null ? `${confidence.base.score}% ${confidence.base.status}` : 'SIN EVIDENCIA'}</b></div>
-      <div className="zi-scenario-row"><span>Bid Risk</span><SeverityBadge severity={bidRisk.base.severity} /></div>
+    <div className="zi-scenario-col"><h4>{tr('intel.scenarioBase')}</h4>
+      <div className="zi-scenario-row"><span>{tr('intel.unitCost')}</span><b>{money(delta.baseUnitCost)}</b></div>
+      <div className="zi-scenario-row"><span>{tr('intel.projectCost')}</span><b>{projectDisplay(delta.baseProjectCost)}</b></div>
+      <div className="zi-scenario-row"><span>{tr('intel.confidenceLabel')}</span><b>{confidence.base.score != null ? `${confidence.base.score}% ${confidence.base.status}` : tr('intel.noEvidence')}</b></div>
+      <div className="zi-scenario-row"><span>{tr('intel.bidRiskLabel')}</span><SeverityBadge severity={bidRisk.base.severity} tr={tr} /></div>
     </div>
-    <div className="zi-scenario-col"><h4>Escenario</h4>
-      <div className="zi-scenario-row"><span>Costo unitario</span><b>{money(delta.scenarioUnitCost)}</b></div>
-      <div className="zi-scenario-row"><span>Costo proyecto</span><b>{projectDisplay(delta.scenarioProjectCost)}</b></div>
-      <div className="zi-scenario-row"><span>Delta</span><b className={`zi-scenario-delta ${delta.unitDelta >= 0 ? 'up' : 'down'}`}>{delta.unitDelta >= 0 ? '+' : ''}{money(delta.unitDelta)}{delta.percentDelta != null ? ` (${delta.percentDelta}%)` : ''}</b></div>
-      <div className="zi-scenario-row"><span>Confidence</span><b>{confidence.scenario.score != null ? `${confidence.scenario.score}% ${confidence.scenario.status}` : 'SIN EVIDENCIA'}</b></div>
-      <div className="zi-scenario-row"><span>Bid Risk</span><SeverityBadge severity={bidRisk.scenario.severity} /></div>
+    <div className="zi-scenario-col"><h4>{tr('intel.scenarioAlt')}</h4>
+      <div className="zi-scenario-row"><span>{tr('intel.unitCost')}</span><b>{money(delta.scenarioUnitCost)}</b></div>
+      <div className="zi-scenario-row"><span>{tr('intel.projectCost')}</span><b>{projectDisplay(delta.scenarioProjectCost)}</b></div>
+      <div className="zi-scenario-row"><span>{tr('intel.scenarioDelta')}</span><b className={`zi-scenario-delta ${delta.unitDelta >= 0 ? 'up' : 'down'}`}>{delta.unitDelta >= 0 ? '+' : ''}{money(delta.unitDelta)}{delta.percentDelta != null ? ` (${delta.percentDelta}%)` : ''}</b></div>
+      <div className="zi-scenario-row"><span>{tr('intel.confidenceLabel')}</span><b>{confidence.scenario.score != null ? `${confidence.scenario.score}% ${confidence.scenario.status}` : tr('intel.noEvidence')}</b></div>
+      <div className="zi-scenario-row"><span>{tr('intel.bidRiskLabel')}</span><SeverityBadge severity={bidRisk.scenario.severity} tr={tr} /></div>
     </div>
   </div>;
 }

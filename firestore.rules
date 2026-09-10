@@ -30,6 +30,18 @@ service cloud.firestore {
       allow read, write: if isOwner(uid);
     }
 
+    // Jobs de IA server-side (Fase 2 de la auditoria -- generar APU con IA
+    // ejecutado en el servidor via waitUntil, no en el navegador). El
+    // cliente SOLO lee (para el listener onSnapshot que reemplaza polling);
+    // toda escritura pasa por server/api-lib/_route-jobs.mjs con el SDK
+    // admin, que ignora estas reglas -- el cliente jamas escribe un job
+    // directo (evita que alguien reporte su propio job como "completed" con
+    // un resultado fabricado).
+    match /users/{uid}/jobs/{jobId} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow write: if false;
+    }
+
     match /users/{uid} {
       allow read: if isOwner(uid) || isAdmin();
       // El propio dueno solo puede crear su perfil con privilegios de arranque

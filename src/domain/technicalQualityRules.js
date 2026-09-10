@@ -50,6 +50,7 @@ export function runTechnicalQualityRules(apu = {}){
         severity: 'error',
         category,
         discipline: meta.discipline,
+        keywords: keywords.join(', '),
         message: `${meta.discipline}: no se encontro ningun renglon de "${category}" que corresponda a esta disciplina (se esperaba alguna palabra como: ${keywords.join(', ')}). Revisa si el recurso principal falta o esta mal descrito.`
       });
     }

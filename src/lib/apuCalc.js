@@ -290,13 +290,13 @@ export function findApuNumericIssues(apu = {}, totals = calcAPU(apu)){
   rows.forEach(([kind, row], index) => {
     const cant = Number(row?.[1]);
     const base = Number(row?.[3]);
-    if(Number.isFinite(cant) && cant < 0) issues.push({ code: 'negative_quantity', kind, index, message: `Cantidad negativa en renglon ${index + 1} de ${kind}: se trata como 0.` });
-    if(Number.isFinite(base) && base < 0) issues.push({ code: 'negative_price', kind, index, message: `Precio/costo negativo en renglon ${index + 1} de ${kind}: se trata como 0.` });
+    if(Number.isFinite(cant) && cant < 0) issues.push({ code: 'negative_quantity', kind, index, value: cant, message: `Cantidad negativa en renglon ${index + 1} de ${kind}: se trata como 0.` });
+    if(Number.isFinite(base) && base < 0) issues.push({ code: 'negative_price', kind, index, value: base, message: `Precio/costo negativo en renglon ${index + 1} de ${kind}: se trata como 0.` });
     if(!Number.isFinite(cant) || !Number.isFinite(base)) issues.push({ code: 'non_finite_value', kind, index, message: `Valor no numerico (NaN/Infinity) en renglon ${index + 1} de ${kind}: se trata como 0.` });
   });
   ['herramienta', 'indCampo', 'indOficina', 'finance', 'utility', 'cargos', 'iva'].forEach((field) => {
     const value = Number(apu[field]);
-    if(Number.isFinite(value) && value < 0) issues.push({ code: 'negative_percentage', field, message: `Porcentaje "${field}" negativo (${value}%): se trata como 0.` });
+    if(Number.isFinite(value) && value < 0) issues.push({ code: 'negative_percentage', field, value, message: `Porcentaje "${field}" negativo (${value}%): se trata como 0.` });
   });
   if(totals.pu <= 0) issues.push({ code: 'zero_or_negative_price', message: 'El precio unitario resultante es cero o negativo.' });
   return issues;
@@ -325,7 +325,7 @@ function checkResourceIntegration(issues, kind, index, row){
   if(kind === 'seguridad' && (integracion === 'POR_UNIDAD_OBRA' || !integracion)){
     const desc = String(row?.descripcion || '').toLowerCase();
     if(REUSABLE_EPP_KEYWORDS.some(k => desc.includes(k))){
-      issues.push({ code: 'epp_reusable_sin_amortizar', kind, index, message: `Renglon ${index + 1} de seguridad ("${row?.descripcion || ''}") parece EPP reutilizable pero usa integracion POR_UNIDAD_OBRA (o ninguna): revisar si deberia ser AMORTIZABLE para no cargar el precio completo a cada unidad de obra.` });
+      issues.push({ code: 'epp_reusable_sin_amortizar', kind, index, descripcion: row?.descripcion || '', message: `Renglon ${index + 1} de seguridad ("${row?.descripcion || ''}") parece EPP reutilizable pero usa integracion POR_UNIDAD_OBRA (o ninguna): revisar si deberia ser AMORTIZABLE para no cargar el precio completo a cada unidad de obra.` });
     }
   }
   if(!integracion){
@@ -334,7 +334,7 @@ function checkResourceIntegration(issues, kind, index, row){
   }
   if(integracion === 'POR_JORNADA' || integracion === 'AMORTIZABLE'){
     if(!(Number(row?.rendimientoDiario) > 0)){
-      issues.push({ code: 'missing_rendimiento_diario', kind, index, message: `Renglon ${index + 1} de ${kind} usa integracion "${integracion}" pero no trae "rendimientoDiario" (>0): el importe se calcula como 0 hasta que se indique.` });
+      issues.push({ code: 'missing_rendimiento_diario', kind, index, integracion, message: `Renglon ${index + 1} de ${kind} usa integracion "${integracion}" pero no trae "rendimientoDiario" (>0): el importe se calcula como 0 hasta que se indique.` });
     }
   }
   if(integracion === 'AMORTIZABLE' && !(Number(row?.vidaUtilDias) > 0)){
@@ -393,7 +393,7 @@ export function findApuNumericIssuesV2(apu = {}, totals = calcAPUv2(apu)){
   // que se reporta como advertencia para revision humana, no se corrige solo.
   const laborRows = Array.isArray(apu.labor) ? apu.labor : [];
   if(laborRows.length > 2){
-    issues.push({ code: 'possible_crew_fragmentation', kind: 'labor', message: `${laborRows.length} renglones de mano de obra: verificar que representen oficios realmente distintos y no el mismo ciclo de produccion fragmentado en varias "cuadrillas".` });
+    issues.push({ code: 'possible_crew_fragmentation', kind: 'labor', count: laborRows.length, message: `${laborRows.length} renglones de mano de obra: verificar que representen oficios realmente distintos y no el mismo ciclo de produccion fragmentado en varias "cuadrillas".` });
   }
   // Validacion defensiva (auditoria "Cuad.=2 en ambos renglones" -- causa
   // raiz real: labor[i].cuadrilla debe ser el numero de trabajadores DE ESE
@@ -417,7 +417,7 @@ export function findApuNumericIssuesV2(apu = {}, totals = calcAPUv2(apu)){
       const sameRendimiento = withCuadrilla.every(r => r.rendimiento === withCuadrilla[0].rendimiento);
       const sameCuadrilla = withCuadrilla.every(r => r.cuadrilla === withCuadrilla[0].cuadrilla);
       if(sameRendimiento && sameCuadrilla){
-        issues.push({ code: 'possible_cuadrilla_total_repeated', kind: 'labor', message: `${withCuadrilla.length} renglones de mano de obra comparten el mismo rendimiento (${withCuadrilla[0].rendimiento}) y la misma cuadrilla (${withCuadrilla[0].cuadrilla}): verificar que "cuadrilla" declare los trabajadores de CADA oficio (ej. 1 operador + 1 ayudante = cuadrilla 1 y 1), no el total de la cuadrilla repetido en cada renglon.` });
+        issues.push({ code: 'possible_cuadrilla_total_repeated', kind: 'labor', count: withCuadrilla.length, rendimiento: withCuadrilla[0].rendimiento, cuadrilla: withCuadrilla[0].cuadrilla, message: `${withCuadrilla.length} renglones de mano de obra comparten el mismo rendimiento (${withCuadrilla[0].rendimiento}) y la misma cuadrilla (${withCuadrilla[0].cuadrilla}): verificar que "cuadrilla" declare los trabajadores de CADA oficio (ej. 1 operador + 1 ayudante = cuadrilla 1 y 1), no el total de la cuadrilla repetido en cada renglon.` });
       }
     }
   }
@@ -447,7 +447,7 @@ export function findApuNumericIssuesV2(apu = {}, totals = calcAPUv2(apu)){
   }
   ['indCampo', 'indOficina', 'finance', 'utility', 'cargos', 'iva'].forEach((field) => {
     const value = Number(apu.factores?.[field]);
-    if(Number.isFinite(value) && value < 0) issues.push({ code: 'negative_percentage', field, message: `Porcentaje "${field}" negativo (${value}%): se trata como 0.` });
+    if(Number.isFinite(value) && value < 0) issues.push({ code: 'negative_percentage', field, value, message: `Porcentaje "${field}" negativo (${value}%): se trata como 0.` });
   });
   if(totals.pu <= 0) issues.push({ code: 'zero_or_negative_price', message: 'El precio unitario resultante es cero o negativo.' });
   return issues;

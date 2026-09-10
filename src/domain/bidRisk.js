@@ -48,7 +48,7 @@ function auditSeverityToBidRisk(severity){
   return severity === 'CRITICAL' ? BID_RISK_SEVERITY.CRITICAL : BID_RISK_SEVERITY.HIGH;
 }
 
-function finding({ id, severity, category, description, evidence, unitImpact = null, projectImpact = null, reason = null, recommendation, source, aggregate = false }){
+function finding({ id, severity, category, description, code = null, params = null, evidence, unitImpact = null, projectImpact = null, reason = null, recommendation, recommendationCode = null, source, aggregate = false }){
   // projectImpact null siempre lleva una razon explicita -- nunca se deja
   // sin explicar por que no se pudo monetizar. Cuando ni siquiera el
   // impacto unitario existe, la razon es la generica NOT_ESTIMABLE; cuando
@@ -57,7 +57,15 @@ function finding({ id, severity, category, description, evidence, unitImpact = n
   const finalReason = projectImpact == null
     ? (reason || (unitImpact == null ? NOT_ESTIMABLE : 'PROJECT_QUANTITY_NOT_CAPTURED'))
     : null;
-  return { id, severity, category, description, evidence, unitImpact, projectImpact: projectImpact == null ? null : round2(projectImpact), reason: finalReason, recommendation, source, aggregate };
+  // code/params (cuando el finding los trae -- ver findingsFromAudit y
+  // costConcentrationFinding) son el mismo mecanismo de i18n de
+  // src/domain/apuAuditor.js: la UI los resuelve via
+  // resolveFindingMessage/tr('findings.<code>', params) en vez de mostrar
+  // `description` (texto fijo en espanol) directo. recommendationCode es el
+  // equivalente para el campo `recommendation` (ver findings.bidRiskRecommendation
+  // en src/i18n/translations.js) -- category YA es un codigo estructurado
+  // (BID_RISK_CATEGORY), se traduce aparte via findings.bidRiskCategory.
+  return { id, severity, category, description, code, params, evidence, unitImpact, projectImpact: projectImpact == null ? null : round2(projectImpact), reason: finalReason, recommendation, recommendationCode, source, aggregate };
 }
 
 /* INCOMPLETE_APU / CRITICAL_RESOURCE_MISSING / HIGH_AUDIT_FINDING: traducen
@@ -74,7 +82,8 @@ function findingsFromAudit(audit){
       else if(INCOMPLETE_CODES.has(f.code)) category = BID_RISK_CATEGORY.INCOMPLETE_APU;
       return finding({
         id: `audit:${f.id}`, severity: auditSeverityToBidRisk(f.severity), category,
-        description: f.message, evidence: f.evidence, recommendation: 'Revisar y completar antes de aprobar el APU.', source: 'auditor'
+        description: f.message, code: f.code, params: f.params, evidence: f.evidence,
+        recommendation: 'Revisar y completar antes de aprobar el APU.', recommendationCode: 'REVIEW_BEFORE_APPROVE', source: 'auditor'
       });
     });
 }
@@ -100,7 +109,7 @@ function findingsFromChallenge(challenge, importeBase){
       return finding({
         id: `challenge:${c.id}`, severity, category: BID_RISK_CATEGORY.PRICE_WITHOUT_EVIDENCE,
         description: c.title, evidence: c.baselineSource, unitImpact: absUnit, projectImpact: absProject,
-        recommendation: 'Cotizar con al menos una fuente de mercado verificable.', source: 'challenge'
+        recommendation: 'Cotizar con al menos una fuente de mercado verificable.', recommendationCode: 'QUOTE_MARKET_SOURCE', source: 'challenge'
       });
     }
     // Signo real (no absoluto) solo para decidir la categoria: positivo =
@@ -114,6 +123,7 @@ function findingsFromChallenge(challenge, importeBase){
       category: isUnderestimation ? BID_RISK_CATEGORY.POSSIBLE_UNDERESTIMATION : BID_RISK_CATEGORY.AGGRESSIVE_PRODUCTIVITY,
       description: c.title, evidence: c.baselineSource, unitImpact: absUnit, projectImpact: absProject,
       recommendation: isUnderestimation ? 'Verificar si el rendimiento usado es realista: el proyecto podria costar mas de lo presupuestado.' : 'Confirmar que el rendimiento usado es alcanzable en campo.',
+      recommendationCode: isUnderestimation ? 'VERIFY_YIELD_REALISTIC' : 'CONFIRM_YIELD_ACHIEVABLE',
       source: 'challenge'
     });
   });
@@ -131,7 +141,8 @@ function aggregateChallengeImpactFinding(challenge, importeBase){
     id: 'challenge:aggregate', severity: BID_RISK_SEVERITY.CRITICAL, category: BID_RISK_CATEGORY.HIGH_CHALLENGE_IMPACT,
     description: `La suma de ${challenge.challenges.length} hallazgos de Challenge representa ${(Math.abs(total) / importeBase * 100).toFixed(1)}% del importe del concepto.`,
     evidence: 'Resumen agregado -- no duplica los renglones individuales ya listados.', projectImpact: total,
-    recommendation: 'Revision integral del APU antes de licitar: la exposicion combinada es alta.', source: 'challenge', aggregate: true
+    code: 'bid_risk_aggregate_challenge_impact', params: { count: challenge.challenges.length, pct: (Math.abs(total) / importeBase * 100).toFixed(1) },
+    recommendation: 'Revision integral del APU antes de licitar: la exposicion combinada es alta.', recommendationCode: 'FULL_REVIEW_BEFORE_BID', source: 'challenge', aggregate: true
   });
 }
 
@@ -145,13 +156,15 @@ function findingsFromConfidence(confidence){
     findings.push(finding({
       id: 'confidence:low', severity: BID_RISK_SEVERITY.HIGH, category: BID_RISK_CATEGORY.LOW_CONFIDENCE,
       description: `Confianza tecnica global BAJA (score=${confidence.score}).`, evidence: confidence.criticalFactors.map(c => c.dimension).join(', ') || 'multiples dimensiones debiles',
-      recommendation: 'No licitar este concepto sin revision humana completa.', source: 'confidence'
+      code: 'bid_risk_low_confidence', params: { score: confidence.score },
+      recommendation: 'No licitar este concepto sin revision humana completa.', recommendationCode: 'DO_NOT_BID_WITHOUT_REVIEW', source: 'confidence'
     }));
   } else if(confidence.status === 'INSUFFICIENT_EVIDENCE'){
     findings.push(finding({
       id: 'confidence:insufficient', severity: BID_RISK_SEVERITY.MEDIUM, category: BID_RISK_CATEGORY.INSUFFICIENT_EVIDENCE,
       description: 'No hay evidencia suficiente para evaluar la confianza tecnica de este concepto.', evidence: 'multiples dimensiones sin datos',
-      recommendation: 'Completar informacion basica (precios, rendimiento, clasificacion) antes de poder evaluar riesgo.', source: 'confidence'
+      code: 'bid_risk_insufficient_evidence', params: {},
+      recommendation: 'Completar informacion basica (precios, rendimiento, clasificacion) antes de poder evaluar riesgo.', recommendationCode: 'COMPLETE_BASIC_INFO', source: 'confidence'
     }));
   }
   const hc = confidence.dimensions.historicalConsistency;
@@ -159,7 +172,8 @@ function findingsFromConfidence(confidence){
     findings.push(finding({
       id: 'confidence:unconfirmed-yield', severity: BID_RISK_SEVERITY.MEDIUM, category: BID_RISK_CATEGORY.UNCONFIRMED_ASSUMPTIONS,
       description: 'La mayoria de los rendimientos de mano de obra no estan calibrados contra historico real ni validados por un humano.', evidence: hc.evidence.join('; '),
-      recommendation: 'Validar con un supervisor de campo antes de usar este APU como base firme de oferta.', source: 'confidence'
+      code: 'bid_risk_unconfirmed_yield', params: {},
+      recommendation: 'Validar con un supervisor de campo antes de usar este APU como base firme de oferta.', recommendationCode: 'VALIDATE_WITH_SUPERVISOR', source: 'confidence'
     }));
   }
   return findings;
@@ -193,7 +207,8 @@ function costConcentrationFinding(apu, totals, cantidadObra){
   return finding({
     id: 'cost-concentration', severity, category: BID_RISK_CATEGORY.COST_CONCENTRATION,
     description: `"${top.row.descripcion || top.kind}" concentra ${(share * 100).toFixed(1)}% del costo directo del concepto.`, evidence: `direct=${direct.toFixed(2)}, renglon=${top.cost.toFixed(2)}`,
-    unitImpact: round2(top.cost), projectImpact, recommendation: 'Verificar ese renglon con especial cuidado: cualquier error de precio o cantidad ahi domina el costo total.', source: 'motor_determinista'
+    code: 'bid_risk_cost_concentration', params: { resourceLabel: top.row.descripcion || top.kind, pct: (share * 100).toFixed(1) },
+    unitImpact: round2(top.cost), projectImpact, recommendation: 'Verificar ese renglon con especial cuidado: cualquier error de precio o cantidad ahi domina el costo total.', recommendationCode: 'VERIFY_ROW_CAREFULLY', source: 'motor_determinista'
   });
 }
 

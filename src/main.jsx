@@ -12,6 +12,8 @@ import { APU_DEFAULT_FACTORS, DEFAULT_IVA_RATE, calcAPU, rowImporte, toSafeNonNe
 import { migrateLegacyApuToV2 } from './domain/apuSchema.js';
 import { finalizeProfessionalAPU, makePriceRecord } from './domain/apuProfessional.js';
 import { runApuConfidence, formatGlobalConfidence } from './domain/apuConfidence.js';
+import { runApuAudit } from './domain/apuAuditor.js';
+import { computeBidReadiness, BID_READINESS_STATUS } from './domain/bidReadiness.js';
 import { AI_PROGRESS_STEPS, nextProgressIndex, resolveBusyLabel, canStartAiGeneration } from './domain/aiGenerationProgress.js';
 import { validateProjectDraft } from './domain/projectDraftValidation.js';
 import { exportAPUExcelV2, exportAPUPdfV2, exportAPUPdfMaster } from './lib/apuExportV2.js';
@@ -830,6 +832,7 @@ function App(){
     onGoToApp={hasValidSession(user) ? ()=>dismissVerifyScreen('app') : null}
   />;
   else if(screen === 'landing') content = <Landing setScreen={setScreen} login={login} company={companyView} />;
+  else if(screen === 'compare-public') content = <ComparePublicWrapper setScreen={setScreen}/>;
   else if(screen === 'login') content = <Auth mode="login" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} resendVerificationEmail={resendVerificationEmail} company={companyView} />;
   else if(screen === 'register') content = <Auth mode="register" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} resendVerificationEmail={resendVerificationEmail} company={companyView} />;
   else if(!hasValidSession(user)) content = <Landing setScreen={setScreen} login={login} company={companyView} />;
@@ -1007,10 +1010,16 @@ function Landing({setScreen, login, company}){
   const p = pipeline[step] || pipeline[0];
   const { theme, toggleTheme } = useTheme();
   const { canInstall, promptInstall, showIOSHint } = useInstallPrompt();
+  const scrollTo = (id) => (e) => { e.preventDefault(); document.getElementById(id)?.scrollIntoView({ behavior:'smooth', block:'start' }); };
   return <div className="landing">
     <header className="nav-public">
       <div className="brand-mini"><ZoemecBrand variant="header"/></div>
-      <nav><a>{tr('nav.plataforma')}</a><a>{tr('nav.gemeloDigital')}</a><a>{tr('nav.apuConIA')}</a><a>{tr('nav.entregables')}</a></nav>
+      <nav>
+        <a href="#que-es" onClick={scrollTo('que-es')}>{tr('nav.plataforma')}</a>
+        <a href="#como-funciona" onClick={scrollTo('como-funciona')}>{tr('nav.comoFunciona')}</a>
+        <a href="#bid-readiness" onClick={scrollTo('bid-readiness')}>{tr('nav.bidReadiness')}</a>
+        <a href="#comparativa" onClick={scrollTo('comparativa')}>{tr('nav.comparativa')}</a>
+      </nav>
       <div className="nav-actions">
         <div className="locale-segmented" role="group" aria-label={tr('toggle.langToggleLabel')}>
           <button className={'locale-segmented-btn'+(locale==='es'?' active':'')} onClick={()=>setLocale('es')} aria-pressed={locale==='es'}>ES</button>
@@ -1025,9 +1034,11 @@ function Landing({setScreen, login, company}){
         <button onClick={()=>setScreen('register')}>{tr('nav.comenzarGratis')}</button>
       </div>
     </header>
+
+    {/* HERO -- nuevo posicionamiento: ZOEMEC audita la oferta, no solo la calcula */}
     <section className="hero-build">
       <div className="hero-copy">
-        <span className="eyebrow">{tr('hero.eyebrow')}</span>
+        <span className="eyebrow badge-ai">{tr('hero.badge')}</span>
         <h1>{tr('hero.headlinePre')}<br/><span className="hl">{tr('hero.headlineHighlight')}</span></h1>
         <p>{tr('hero.subtitle')}</p>
         <div className="hero-capabilities">
@@ -1036,7 +1047,7 @@ function Landing({setScreen, login, company}){
           <div><Icon name="presupuestos" size={22}/><b>{tr('capabilities.presupuestos')}</b></div>
           <div><Icon name="reportes" size={22}/><b>{tr('capabilities.entregables')}</b></div>
         </div>
-        <div className="hero-actions"><button onClick={()=>setScreen('register')}>{tr('ctas.comenzarGratis')}</button><a className="secondary" href="#plataforma-preview">{tr('ctas.verPlataforma')}</a></div>
+        <div className="hero-actions"><button onClick={()=>setScreen('register')}>{tr('ctas.comenzarGratis')}</button><a className="secondary" href="#como-funciona" onClick={scrollTo('como-funciona')}>{tr('ctas.verPlataforma')}</a></div>
       </div>
       <div className="future-stage" aria-label={tr('panel.ariaLabel')}>
         <img className="stage-photo" src="/images/hero/zoemec-hero-web.webp" alt={tr('panel.heroAlt')} />
@@ -1055,23 +1066,160 @@ function Landing({setScreen, login, company}){
         <div className="stage-tag">{tr('panel.vistaIlustrativa')}</div>
       </div>
     </section>
+
     <section className="trust-strip">
       <div><Icon name="link" size={22}/><div><b>{tr('trust.datosTitulo')}</b><span>{tr('trust.datosDesc')}</span></div></div>
       <div><Icon name="admin" size={22}/><div><b>{tr('trust.authTitulo')}</b><span>{tr('trust.authDesc')}</span></div></div>
       <div><Icon name="proyectos" size={22}/><div><b>{tr('trust.controlTitulo')}</b><span>{tr('trust.controlDesc')}</span></div></div>
       <div><Icon name="folder" size={22}/><div><b>{tr('trust.privacidadTitulo')}</b><span>{tr('trust.privacidadDesc')}</span></div></div>
     </section>
-    <section className="landing-story">
+
+    {/* QUE ES ZOEMEC -- modulos reales, cada uno con que hace / para que sirve / que decision ayuda a tomar */}
+    <section className="landing-section" id="que-es">
+      <div className="landing-story-head">
+        <span className="eyebrow">{tr('whatIs.eyebrow')}</span>
+        <h2>{tr('whatIs.titulo')}</h2>
+        <p className="section-lead">{tr('whatIs.lead')}</p>
+      </div>
+      <div className="module-grid">
+        {tr('whatIs.modules').map(m=><div className="module-card" key={m.name}>
+          <b>{m.name}</b>
+          <p><i>{tr('whatIs.labelWhat')}</i> {m.what}</p>
+          <p><i>{tr('whatIs.labelFor')}</i> {m.forWhat}</p>
+          <p><i>{tr('whatIs.labelDecision')}</i> {m.decision}</p>
+        </div>)}
+      </div>
+    </section>
+
+    {/* PROBLEMA */}
+    <section className="landing-section landing-section-dark">
+      <div className="landing-story-head">
+        <span className="eyebrow">{tr('problem.eyebrow')}</span>
+        <h2>{tr('problem.titulo')}</h2>
+      </div>
+      <div className="problem-grid">
+        <ul className="problem-list">
+          {tr('problem.fragments').map(f=><li key={f}>{f}</li>)}
+        </ul>
+        <div className="problem-question">
+          <p>{tr('problem.notJustCalc')}</p>
+          <b>{tr('problem.realQuestion')}</b>
+        </div>
+      </div>
+    </section>
+
+    {/* COMO FUNCIONA -- 6 pasos */}
+    <section className="landing-section" id="como-funciona">
       <div className="landing-story-head">
         <span className="eyebrow">{tr('story.eyebrow')}</span>
         <h2>{tr('story.titulo')}</h2>
       </div>
-      <div className="story-steps">
-        <div className="story-step"><b>01</b><h3>{tr('story.step1Titulo')}</h3><p>{tr('story.step1Desc')}</p></div>
-        <div className="story-step"><b>02</b><h3>{tr('story.step2Titulo')}</h3><p>{tr('story.step2Desc')}</p></div>
-        <div className="story-step"><b>03</b><h3>{tr('story.step3Titulo')}</h3><p>{tr('story.step3Desc')}</p></div>
+      <div className="flow-steps-public">
+        {tr('story.flow').map((f,i)=><React.Fragment key={f.title}>
+          <div className="flow-step-public"><b>{i+1}. {f.title}</b><span>{f.desc}</span></div>
+          {i<tr('story.flow').length-1 && <i className="flow-arrow-public">↓</i>}
+        </React.Fragment>)}
       </div>
     </section>
+
+    {/* INTELIGENCIA DE COSTOS */}
+    <section className="landing-section landing-section-dark">
+      <div className="landing-story-head">
+        <span className="eyebrow">{tr('costIntel.eyebrow')}</span>
+        <h2>{tr('costIntel.titulo')}</h2>
+      </div>
+      <div className="feature-cols">
+        {tr('costIntel.items').map(it=><div className="feature-col-card" key={it.label}><b>{it.label}</b><span>{it.desc}</span></div>)}
+      </div>
+      <p className="landing-callout">{tr('costIntel.callout')}</p>
+    </section>
+
+    {/* BID RISK */}
+    <section className="landing-section">
+      <div className="landing-story-head">
+        <span className="eyebrow">{tr('bidRiskSection.eyebrow')}</span>
+        <h2>{tr('bidRiskSection.titulo')}</h2>
+      </div>
+      <div className="feature-cols">
+        {tr('bidRiskSection.items').map(it=><div className="feature-col-card" key={it.label}><b>{it.label}</b><span>{it.desc}</span></div>)}
+      </div>
+    </section>
+
+    {/* BID READINESS */}
+    <section className="landing-section landing-section-dark" id="bid-readiness">
+      <div className="landing-story-head">
+        <span className="eyebrow">{tr('bidReadinessSection.eyebrow')}</span>
+        <h2>{tr('bidReadinessSection.titulo')}</h2>
+      </div>
+      <div className="bid-readiness-showcase">
+        <div className="bid-readiness-showcase-score"><b>82</b><span>/100</span></div>
+        <p className="bid-readiness-showcase-status">{tr('bidReadinessSection.statusExample')}</p>
+        <ul>
+          {tr('bidReadinessSection.exampleItems').map(it=><li key={it}>{it}</li>)}
+        </ul>
+        <button onClick={()=>setScreen('register')}>{tr('bidReadinessSection.cta')}</button>
+      </div>
+    </section>
+
+    {/* AUDITORIA */}
+    <section className="landing-section">
+      <div className="landing-story-head">
+        <span className="eyebrow">{tr('auditSection.eyebrow')}</span>
+        <h2>{tr('auditSection.titulo')}</h2>
+      </div>
+      <div className="chip-grid">
+        {tr('auditSection.detectors').map(d=><span className="chip" key={d}>{d}</span>)}
+      </div>
+    </section>
+
+    {/* MEMORIA TECNICA */}
+    <section className="landing-section landing-section-dark">
+      <div className="landing-story-head">
+        <span className="eyebrow">{tr('memorySection.eyebrow')}</span>
+        <h2>{tr('memorySection.titulo')}</h2>
+      </div>
+      <div className="chip-grid">
+        {tr('memorySection.items').map(d=><span className="chip" key={d}>{d}</span>)}
+      </div>
+    </section>
+
+    {/* COMPARATIVA -- resumen compacto, el detalle real vive en ComparePage */}
+    <section className="landing-section" id="comparativa">
+      <div className="landing-story-head">
+        <span className="eyebrow">{tr('compareSection.eyebrow')}</span>
+        <h2>{tr('compareSection.titulo')}</h2>
+      </div>
+      <div className="compare-mini-grid">
+        {tr('compareSection.categories').map(c=><div className="compare-mini-chip" key={c}><Icon name="comparativa" size={16}/>{c}</div>)}
+      </div>
+      <button className="ghost-up-light" onClick={()=>setScreen('compare-public')}>{tr('compareSection.cta')}</button>
+    </section>
+
+    {/* PARA QUIEN ES */}
+    <section className="landing-section landing-section-dark">
+      <div className="landing-story-head">
+        <span className="eyebrow">{tr('audience.eyebrow')}</span>
+        <h2>{tr('audience.titulo')}</h2>
+      </div>
+      <div className="audience-grid">
+        {tr('audience.cards').map(c=><div className="audience-card" key={c.title}><b>{c.title}</b><span>{c.desc}</span></div>)}
+      </div>
+    </section>
+
+    {/* DIFERENCIA */}
+    <section className="landing-section">
+      <div className="landing-story-head">
+        <span className="eyebrow">{tr('difference.eyebrow')}</span>
+        <h2>{tr('difference.titulo')}</h2>
+      </div>
+      <div className="difference-grid">
+        <div className="difference-col"><b>{tr('difference.estimateLabel')}</b><p>{tr('difference.estimateAnswers')}</p></div>
+        <div className="difference-col difference-col-highlight"><b>{tr('difference.zoemecLabel')}</b>
+          <ul>{tr('difference.zoemecAnswers').map(a=><li key={a}>{a}</li>)}</ul>
+        </div>
+      </div>
+    </section>
+
     <section className="landing-preview" id="plataforma-preview">
       <div className="landing-story-head">
         <span className="eyebrow">{tr('preview.eyebrow')}</span>
@@ -1082,7 +1230,34 @@ function Landing({setScreen, login, company}){
         <figure><img src="/images/screenshots/apu-matrix.png" alt={tr('preview.apuAlt')}/><figcaption>{tr('preview.apuCaption')}</figcaption></figure>
       </div>
     </section>
+
+    {/* CTA FINAL */}
+    <section className="landing-final-cta">
+      <h2>{tr('finalCta.titulo')}</h2>
+      <div className="landing-final-cta-actions">
+        <button onClick={()=>setScreen('register')}>{tr('finalCta.primary')}</button>
+        <a className="secondary" href="#que-es" onClick={scrollTo('que-es')}>{tr('finalCta.secondary')}</a>
+      </div>
+    </section>
   </div>
+}
+
+/* Envoltorio publico de la Comparativa (Fase Astra, seccion 13): reutiliza el
+   MISMO ComparePage ya montado dentro de Shell (module==='comparativa') --
+   no se duplica su logica ni sus datos, solo se le agrega un encabezado
+   publico minimo (marca + volver) porque aqui no hay sesion ni Shell. */
+function ComparePublicWrapper({ setScreen }){
+  const { t: tr } = useI18n();
+  return <div className="landing">
+    <header className="nav-public">
+      <div className="brand-mini"><ZoemecBrand variant="header"/></div>
+      <div className="nav-actions">
+        <button className="ghost" onClick={()=>setScreen('landing')}>{tr('compareSection.back')}</button>
+        <button onClick={()=>setScreen('register')}>{tr('nav.comenzarGratis')}</button>
+      </div>
+    </header>
+    <ComparePage/>
+  </div>;
 }
 
 function Auth({mode,setScreen,login,loginWithGoogle,resendVerificationEmail,company}){
@@ -1330,8 +1505,12 @@ function DigitalTwin({apu, compact, onOpen}){
   </div>;
 }
 
+const BID_READINESS_STATUS_LABEL_EN = Object.freeze({
+  READY: 'Ready to submit', READY_WITH_OBSERVATIONS: 'Ready with observations',
+  NEEDS_REVIEW: 'Needs review before submitting', NOT_READY: 'Not ready to submit', NO_DATA: ''
+});
 function Dashboard({setModule,apus,clients,budgets,projects,activeProject:activeProjectProp,user}){
-  const { t: tr } = useI18n();
+  const { t: tr, locale } = useI18n();
   const [remoteStatus,setRemoteStatus] = useState(null);
   const [oneDriveStatus,setOneDriveStatus] = useState(null);
   const [libraryCount,setLibraryCount] = useState(null);
@@ -1403,7 +1582,116 @@ function Dashboard({setModule,apus,clients,budgets,projects,activeProject:active
     apiPost('/api/onedrive', { action:'status' }).then(data=>{ if(alive) setOneDriveStatus(data); }).catch(()=>{ if(alive) setOneDriveStatus(null); });
     return ()=>{ alive=false; };
   }, [user]);
+  // Centro de Inteligencia de Preconstruccion (Fase Astra): estos 3 bloques
+  // (Bid Readiness, Riesgo, Confianza) NUNCA calculan nada por su cuenta --
+  // son una lectura de presentacion de motores ya deterministas y ya
+  // probados (bidReadiness.js -> apuAuditor/bidRisk/apuConfidence). Si esos
+  // motores no tienen suficiente evidencia, aqui se refleja honestamente
+  // (score null, "Genera un APU..."), nunca se inventa un numero.
+  const bidReadiness = useMemo(()=>computeBidReadiness(apus), [apus]);
+  const riskProject = bidReadiness.riskProject || null;
+  const confidenceProject = bidReadiness.confidenceProject || null;
+  const riskLevel = !riskProject ? null
+    : riskProject.critical > 0 ? 'CRITICAL'
+    : riskProject.high > 0 ? 'HIGH'
+    : riskProject.medium > 0 ? 'MEDIUM'
+    : 'LOW';
+  // Hallazgos reales para el Bloque 5: mismos motores que Bid Readiness,
+  // limitado a los primeros 20 APUs del proyecto activo por costo de calculo
+  // en el dashboard (el detalle completo, sin limite, vive en APU
+  // Inteligente/ZOEMEC Intelligence, que ya audita cada concepto individual).
+  const findingsPreview = useMemo(()=>{
+    return apus.slice(0,20).flatMap(a=>{
+      try{
+        return runApuAudit(a).findings
+          .filter(f=>f.severity==='CRITICAL'||f.severity==='HIGH')
+          .map(f=>({...f, concept:a.concept||a.clave||tr('dash.findingsUnnamedConcept')}));
+      }catch{ return []; }
+    });
+  }, [apus, tr]);
+  const lastUpdated = useMemo(()=>{
+    const ts = [...apus, ...budgets].map(x=>x?.updatedAt?.toMillis?.() || (typeof x?.updatedAt==='number' ? x.updatedAt : 0)).filter(Boolean);
+    return ts.length ? Math.max(...ts) : null;
+  }, [apus, budgets]);
   return <section className="ai-os"><PageHead kicker={tr('modules.dashboard.kicker')} title={tr('modules.dashboard.title')} desc={tr('modules.dashboard.desc')} action={<button onClick={()=>setModule('apu')}>{tr('dash.ctaAskZoe')}</button>} />
+    <div className="precon-center">
+      {/* BLOQUE 1 -- Estado del proyecto */}
+      <div className="precon-block precon-status">
+        <h3>{tr('dash.block1Title')}</h3>
+        {activeProject ? <>
+          <div className="precon-status-head">
+            <b>{activeProject.name}</b>
+            <span>{activeProject.client || tr('dash.defaultClient')}</span>
+          </div>
+          <div className="precon-status-stats">
+            <div><small>{tr('dash.kpiPresupuestos')}</small><b>{monto ? money(monto) : '—'}</b></div>
+            <div><small>{tr('dash.kpiApus')}</small><b>{apus.length}</b></div>
+            <div><small>{tr('dash.kpiDocumentos')}</small><b>{libraryCount ?? '—'}</b></div>
+            <div><small>{tr('dash.block1LastUpdate')}</small><b>{lastUpdated ? new Date(lastUpdated).toLocaleDateString(locale==='en'?'en-US':'es-MX') : tr('dash.block1NoUpdates')}</b></div>
+          </div>
+        </> : <EmptyState text={tr('dash.block1Empty')} actionLabel={tr('dash.block1EmptyAction')} onAction={()=>setModule('cartera')}/>}
+      </div>
+
+      {/* BLOQUE 2 -- Bid Readiness Score */}
+      <div className={`precon-block precon-readiness status-${(bidReadiness.status||'NO_DATA').toLowerCase()}`}>
+        <h3>{tr('dash.block2Title')}</h3>
+        {bidReadiness.score == null ? <p className="precon-empty-msg">{tr('dash.block2Empty')}</p> : <>
+          <div className="precon-readiness-score"><b>{bidReadiness.score}</b><span>/100</span></div>
+          <p className="precon-readiness-status">{locale==='en' ? BID_READINESS_STATUS_LABEL_EN[bidReadiness.status] : bidReadiness.statusLabelEs}</p>
+          {bidReadiness.deductions.length ? <ul className="precon-deductions">
+            {bidReadiness.deductions.map(d=><li key={d.code}>−{d.points} {tr('dash.block2Points')}: {locale==='en' ? d.labelEn : d.labelEs}</li>)}
+          </ul> : <p className="precon-readiness-clean">{tr('dash.block2Clean')}</p>}
+        </>}
+      </div>
+
+      {/* BLOQUE 3 -- Riesgo economico */}
+      <div className={`precon-block precon-risk risk-${(riskLevel||'none').toLowerCase()}`}>
+        <h3>{tr('dash.block3Title')}</h3>
+        {!riskProject ? <p className="precon-empty-msg">{tr('dash.block3Empty')}</p> : <>
+          <div className="precon-risk-amount"><b>{money(riskProject.estimatedExposure||0)}</b></div>
+          <p className="precon-risk-level">{tr(`dash.riskLevel${riskLevel}`)}</p>
+          {riskProject.topRisks?.length ? <ul className="precon-risk-list">
+            {riskProject.topRisks.slice(0,3).map(r=><li key={r.apuId}><b>{r.concept||r.apuId}</b> — {tr(`dash.riskLevel${r.severity}`)}</li>)}
+          </ul> : <p className="precon-readiness-clean">{tr('dash.block3Clean')}</p>}
+          <button onClick={()=>setModule('apu')}>{tr('dash.block3Cta')}</button>
+        </>}
+      </div>
+
+      {/* BLOQUE 4 -- Confianza */}
+      <div className="precon-block precon-confidence">
+        <h3>{tr('dash.block4Title')}</h3>
+        {!confidenceProject ? <p className="precon-empty-msg">{tr('dash.block4Empty')}</p> : <>
+          <div className="precon-confidence-score"><b>{confidenceProject.averageScore ?? '—'}{confidenceProject.averageScore!=null?'%':''}</b></div>
+          <div className="precon-confidence-breakdown">
+            <span>{tr('dash.block4High',{count:confidenceProject.high})}</span>
+            <span>{tr('dash.block4Medium',{count:confidenceProject.medium})}</span>
+            <span>{tr('dash.block4Low',{count:confidenceProject.low})}</span>
+            <span>{tr('dash.block4Insufficient',{count:confidenceProject.insufficientEvidence})}</span>
+          </div>
+          <button onClick={()=>setModule('apu')}>{tr('dash.block4Cta')}</button>
+        </>}
+      </div>
+
+      {/* BLOQUE 5 -- Hallazgos */}
+      <div className="precon-block precon-findings">
+        <h3>{tr('dash.block5Title')}</h3>
+        {!apus.length ? <p className="precon-empty-msg">{tr('dash.block5Empty')}</p> : findingsPreview.length ? <>
+          <p>{tr('dash.block5Summary',{count:findingsPreview.length})}</p>
+          <ul className="precon-findings-list">
+            {findingsPreview.slice(0,4).map(f=><li key={f.id}><b>{f.concept}</b>: {f.message}</li>)}
+          </ul>
+          <button onClick={()=>setModule('apu')}>{tr('dash.block5Cta')}</button>
+        </> : <p className="precon-readiness-clean">{tr('dash.block5Clean')}</p>}
+      </div>
+
+      {/* BLOQUE 6 -- Flujo de preconstruccion */}
+      <div className="precon-block precon-flow">
+        <h3>{tr('dash.block6Title')}</h3>
+        <div className="precon-flow-steps">
+          {tr('dash.flowSteps').map((s,i)=><React.Fragment key={s}><span className="precon-flow-step">{s}</span>{i<tr('dash.flowSteps').length-1 && <i className="precon-flow-arrow">→</i>}</React.Fragment>)}
+        </div>
+      </div>
+    </div>
     <div className="demo-hero">
       <h2>{tr('dash.heroTitle')}</h2>
       <p>{tr('dash.heroDesc')}</p>
@@ -4912,7 +5200,7 @@ function Reports({clients,apus,budgets}){
   const segs=hasData ? [{label:'Presupuestos',value:budgets.length,color:'#9D6FD0'},{label:'APUs',value:apus.length,color:'#2A1740'},{label:'Clientes',value:clients.length,color:'#C7A35C'}].filter(s=>s.value>0) : [];
   const bars=[['Presupuestos enviados',Math.min(100,budgets.length*10),'#9D6FD0'],['APU creados',Math.min(100,apus.length*10),'#2A1740'],['Clientes nuevos',Math.min(100,clients.length*10),'#C7A35C']];
   const alerts=hasData ? [...apus.slice(0,2).map(a=>`APU ${a.clave || a.id} disponible para revisar`), ...budgets.slice(0,2).map(b=>`Presupuesto ${b.name} en cartera`)] : [];
-  return <section><PageHead kicker="Reportes" title="Tablero ejecutivo" desc="Ventas, presupuestos, clientes, APUs, avances, utilidad y rendimiento de la oficina." action={<button onClick={()=>window.print()}>Exportar reporte</button>} /><div className="report-hero"><div><small>Venta potencial</small><b>{money(total)}</b><span>acumulado</span></div><div><small>Pipeline</small><b>{budgets.length ? 'Activo' : '0%'}</b><span>tasa de cierre</span></div><div><small>Productividad</small><b>{apus.length}</b><span>APU generados</span></div><div><small>Clientes</small><b>{clients.length}</b><span>activos</span></div></div><div className="dash-charts report-grid"><div className="panel"><h2>Cotizacion mensual</h2><Spark points={budgets.length ? budgets.slice(-8).map(b=>Math.max(1,(Number(b.total)||0)/1000)) : [0,0,0,0,0,0,0,0]} h={110}/><div className="chart-foot"><span>{budgets.length ? 'Presupuestos reales' : 'Sin datos reales'}</span><b>{budgets.length ? 'Actualizado' : '0% acumulado'}</b></div></div><div className="panel chart-donut"><h2>Cartera por tipo de obra</h2><Donut segments={segs} center={hasData ? '100%' : '0%'} sub="cartera"/><div className="donut-legend">{segs.length ? segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>) : <EmptyState text="Sin datos para graficar."/>}</div></div></div><div className="report-bottom"><div className="panel"><h2>Resumen mensual</h2>{bars.map(([label,val,color])=><div className="bar-row" key={label}><span>{label}</span><i><b style={{width:val+'%',background:color}}></b></i><em className="bar-val">{val}%</em></div>)}</div><div className="panel"><h2>Alertas ejecutivas</h2>{alerts.length ? alerts.map(a=><div className="activity" key={a}><Icon name="bell" size={15}/> {a}</div>) : <EmptyState text="Sin alertas hasta que existan movimientos reales."/>}</div></div></section>
+  return <section><PageHead kicker="Reportes" title="Tablero ejecutivo" desc="Ventas, presupuestos, clientes, APUs, avances, utilidad y rendimiento de la oficina." action={<button onClick={()=>window.print()}>Imprimir reporte</button>} /><div className="report-hero"><div><small>Venta potencial</small><b>{money(total)}</b><span>acumulado</span></div><div><small>Pipeline</small><b>{budgets.length ? 'Activo' : '0%'}</b><span>tasa de cierre</span></div><div><small>Productividad</small><b>{apus.length}</b><span>APU generados</span></div><div><small>Clientes</small><b>{clients.length}</b><span>activos</span></div></div><div className="dash-charts report-grid"><div className="panel"><h2>Cotizacion mensual</h2><Spark points={budgets.length ? budgets.slice(-8).map(b=>Math.max(1,(Number(b.total)||0)/1000)) : [0,0,0,0,0,0,0,0]} h={110}/><div className="chart-foot"><span>{budgets.length ? 'Presupuestos reales' : 'Sin datos reales'}</span><b>{budgets.length ? 'Actualizado' : '0% acumulado'}</b></div></div><div className="panel chart-donut"><h2>Cartera por tipo de obra</h2><Donut segments={segs} center={hasData ? '100%' : '0%'} sub="cartera"/><div className="donut-legend">{segs.length ? segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>) : <EmptyState text="Sin datos para graficar."/>}</div></div></div><div className="report-bottom"><div className="panel"><h2>Resumen mensual</h2>{bars.map(([label,val,color])=><div className="bar-row" key={label}><span>{label}</span><i><b style={{width:val+'%',background:color}}></b></i><em className="bar-val">{val}%</em></div>)}</div><div className="panel"><h2>Alertas ejecutivas</h2>{alerts.length ? alerts.map(a=><div className="activity" key={a}><Icon name="bell" size={15}/> {a}</div>) : <EmptyState text="Sin alertas hasta que existan movimientos reales."/>}</div></div></section>
 }
 
 createRoot(document.getElementById('root')).render(

@@ -2449,6 +2449,67 @@ svg.ic{display:block;flex:none}
 .demo-hero-step b{display:block;font-family:var(--mono);color:#C9A24A;font-size:.72rem;letter-spacing:.08em;text-transform:uppercase}
 .demo-hero-step span{display:block;margin-top:4px;font-size:.82rem;color:#fff}
 @media (max-width:760px){.demo-hero-steps{grid-template-columns:repeat(2,1fr)}}
+
+/* ---------- Centro de Inteligencia de Preconstruccion (Fase Astra) ----------
+   6 bloques de decision, primera pantalla del Dashboard. Reusa la MISMA
+   paleta de severidad ya establecida en ZoemecIntelligencePanel (.zi-badge-*,
+   linea ~2675) en vez de inventar colores nuevos: CRITICAL=--danger,
+   HIGH=--zi-amber, MEDIUM=--teal, LOW=--muted. Todo sobre var(--card)/
+   var(--paper)/var(--line), que ya responden a [data-theme="dark"]. */
+.precon-center{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px}
+.precon-block{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px 20px;box-shadow:var(--shadow-sm)}
+.precon-block h3{margin:0 0 12px;font-family:var(--mono);font-size:.72rem;text-transform:uppercase;letter-spacing:.09em;color:var(--muted)}
+.precon-empty-msg,.precon-readiness-clean{color:var(--muted);font-size:.9rem;line-height:1.5;margin:0}
+.precon-block button{margin-top:12px;border-radius:999px;padding:9px 16px;font-size:.85rem;font-weight:700;background:var(--teal);color:#fff;border:none}
+
+/* Bloque 1 */
+.precon-status-head{display:flex;flex-direction:column;gap:2px;margin-bottom:14px}
+.precon-status-head b{font-size:1.1rem;color:var(--ink-text)}
+.precon-status-head span{color:var(--muted);font-size:.85rem}
+.precon-status-stats{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.precon-status-stats small{display:block;font-family:var(--mono);font-size:.65rem;text-transform:uppercase;color:var(--muted);letter-spacing:.06em}
+.precon-status-stats b{display:block;color:var(--ink-text);margin-top:3px}
+
+/* Bloque 2 -- Bid Readiness Score */
+.precon-readiness-score{display:flex;align-items:baseline;gap:4px;margin-bottom:4px}
+.precon-readiness-score b{font-family:var(--display);font-size:2.4rem;color:var(--ink-text);line-height:1}
+.precon-readiness-score span{color:var(--muted);font-size:1rem}
+.precon-readiness-status{font-weight:700;margin:0 0 10px;color:var(--ink-text)}
+.precon-readiness.status-ready .precon-readiness-score b,.precon-readiness.status-ready .precon-readiness-status{color:var(--ok)}
+.precon-readiness.status-not_ready .precon-readiness-score b,.precon-readiness.status-not_ready .precon-readiness-status{color:var(--danger-on-soft,var(--danger))}
+.precon-deductions{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
+.precon-deductions li{font-size:.85rem;color:var(--muted);line-height:1.4}
+
+/* Bloque 3 -- Riesgo economico */
+.precon-risk-amount b{font-family:var(--display);font-size:1.7rem;color:var(--ink-text)}
+.precon-risk-level{font-weight:700;margin:2px 0 10px}
+.precon-risk.risk-critical .precon-risk-level{color:var(--danger-on-soft,var(--danger))}
+.precon-risk.risk-high .precon-risk-level{color:var(--zi-amber)}
+.precon-risk.risk-medium .precon-risk-level{color:var(--teal)}
+.precon-risk.risk-low .precon-risk-level{color:var(--ok)}
+.precon-risk-list{margin:0 0 6px;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
+.precon-risk-list li{font-size:.85rem;color:var(--muted)}
+
+/* Bloque 4 -- Confianza */
+.precon-confidence-score b{font-family:var(--display);font-size:2rem;color:var(--ink-text)}
+.precon-confidence-breakdown{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.precon-confidence-breakdown span{font-size:.78rem;padding:4px 10px;border-radius:999px;background:var(--paper);color:var(--muted);border:1px solid var(--line)}
+
+/* Bloque 5 -- Hallazgos */
+.precon-findings p{margin:0 0 10px;color:var(--ink-text);font-size:.9rem;line-height:1.5}
+.precon-findings-list{margin:0 0 6px;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+.precon-findings-list li{font-size:.83rem;color:var(--muted);line-height:1.4}
+.precon-findings-list li b{color:var(--ink-text)}
+
+/* Bloque 6 -- Flujo (ocupa el ancho completo) */
+.precon-flow{grid-column:1 / -1}
+.precon-flow-steps{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.precon-flow-step{background:var(--paper);border:1px solid var(--line);border-radius:999px;padding:7px 14px;font-size:.82rem;font-weight:700;color:var(--ink-text)}
+.precon-flow-arrow{color:var(--muted)}
+
+@media (max-width:1100px){.precon-center{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:640px){.precon-center{grid-template-columns:1fr}.precon-status-stats{grid-template-columns:repeat(2,1fr)}}
+
 /* ---------- Selector de proyecto activo (topbar) y estado en tarjetas ---------- */
 .project-switcher{display:flex;align-items:center;gap:8px;background:var(--mint);border:1px solid var(--line);border-radius:999px;padding:6px 8px 6px 12px;color:var(--teal)}
 .project-switcher select{border:none;background:transparent;font-weight:700;color:var(--petrol);max-width:220px;padding:2px 4px}
@@ -3378,4 +3439,110 @@ svg.ic{display:block;flex:none}
 .cmp-sources a{color:var(--teal)}
 @media (max-width:760px){
   .cmp-table{min-width:640px}
+}
+
+/* ====================================================================
+   ZOEMEC · Fase Astra (rediseno de landing + reposicionamiento). Nuevas
+   secciones publicas (Que es ZOEMEC, Problema, Como funciona, Cost
+   Intelligence, Bid Risk, Bid Readiness, Auditoria, Memoria Tecnica,
+   Comparativa compacta, Para quien es, Diferencia, CTA final). Alterna
+   .landing-section (clara, responde al toggle de tema via var(--*)) y
+   .landing-section-dark (banda oscura fija, mismo patron ya establecido
+   por .trust-strip/.demo-hero -- gradiente petrol/teal fijo, no responde
+   al toggle a proposito: es un acento de ritmo visual, no contenido que
+   dependa del tema).
+   ==================================================================== */
+.landing-section{padding:88px 4.8vw;background:var(--paper);border-top:1px solid var(--line)}
+.landing-section-dark{padding:88px 4.8vw;background:linear-gradient(135deg,var(--petrol) 0%,#1E2E4A 100%);color:#fff}
+.landing-section .landing-story-head,.landing-section-dark .landing-story-head{max-width:760px;margin:0 auto 44px;text-align:center}
+.landing-section .landing-story-head h2{color:var(--ink);font-size:clamp(1.7rem,2.6vw,2.5rem);line-height:1.18;margin-top:12px}
+.landing-section-dark .landing-story-head h2{color:#fff;font-size:clamp(1.7rem,2.6vw,2.5rem);line-height:1.18;margin-top:12px}
+.landing-section .eyebrow{color:var(--teal)}
+.landing-section-dark .eyebrow{color:#D8C2F2}
+.section-lead{max-width:640px;margin:14px auto 0;color:var(--muted);line-height:1.55}
+.badge-ai{display:inline-block;padding:6px 14px;border-radius:999px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.3);font-size:.72rem!important;margin-bottom:20px!important}
+
+/* Que es ZOEMEC -- grid de modulos con que hace/para que sirve/que decision ayuda a tomar */
+.module-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;max-width:1240px;margin:0 auto}
+.module-card{border:1px solid var(--line);background:var(--card);border-radius:16px;padding:20px;box-shadow:var(--shadow-sm)}
+.module-card b{display:block;color:var(--ink);font-size:1rem;margin-bottom:10px}
+.module-card p{margin:0 0 6px;color:var(--muted);font-size:.84rem;line-height:1.5}
+.module-card p i{font-style:normal;font-weight:600;color:var(--teal)}
+
+/* Problema */
+.problem-grid{display:grid;grid-template-columns:1.1fr .9fr;gap:32px;max-width:1100px;margin:0 auto;align-items:center}
+.problem-list{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:10px}
+.problem-list li{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.24);border-radius:999px;padding:8px 16px;font-size:.86rem}
+.problem-question{border-left:2px solid var(--gold,#C7A35C);padding-left:20px}
+.problem-question p{margin:0 0 8px;color:rgba(255,255,255,.75)}
+.problem-question b{display:block;font-size:1.5rem;color:#fff;font-family:var(--display)}
+
+/* Como funciona -- flujo de 6 pasos, horizontal en desktop */
+.flow-steps-public{display:flex;flex-wrap:wrap;align-items:stretch;justify-content:center;gap:6px;max-width:1240px;margin:0 auto}
+.flow-step-public{flex:1 1 150px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;text-align:center;box-shadow:var(--shadow-sm)}
+.flow-step-public b{display:block;font-family:var(--mono);font-size:.76rem;letter-spacing:.04em;color:var(--teal);margin-bottom:6px}
+.flow-step-public span{display:block;color:var(--muted);font-size:.8rem;line-height:1.4}
+.flow-arrow-public{align-self:center;color:var(--muted);font-size:1.1rem}
+@media (max-width:900px){.flow-steps-public{flex-direction:column}.flow-arrow-public{transform:rotate(90deg)}}
+
+/* Cost Intelligence / Bid Risk -- columnas de feature con label + desc */
+.feature-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;max-width:1180px;margin:0 auto}
+.feature-col-card{border-radius:14px;padding:18px}
+.landing-section .feature-col-card{background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow-sm)}
+.landing-section-dark .feature-col-card{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16)}
+.feature-col-card b{display:block;margin-bottom:6px;font-size:.92rem}
+.landing-section .feature-col-card b{color:var(--ink)}
+.landing-section-dark .feature-col-card b{color:#fff}
+.feature-col-card span{display:block;font-size:.82rem;line-height:1.45}
+.landing-section .feature-col-card span{color:var(--muted)}
+.landing-section-dark .feature-col-card span{color:rgba(255,255,255,.78)}
+.landing-callout{text-align:center;font-size:1.15rem;font-weight:600;color:#fff;margin:28px auto 0;max-width:560px}
+
+/* Bid Readiness -- vitrina grande con el score de ejemplo */
+.bid-readiness-showcase{max-width:420px;margin:0 auto;text-align:center;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);border-radius:20px;padding:32px}
+.bid-readiness-showcase-score{display:flex;align-items:baseline;justify-content:center;gap:4px}
+.bid-readiness-showcase-score b{font-family:var(--display);font-size:3.4rem;color:#fff;line-height:1}
+.bid-readiness-showcase-score span{color:rgba(255,255,255,.6);font-size:1.2rem}
+.bid-readiness-showcase-status{font-weight:700;color:var(--gold,#C7A35C);margin:6px 0 18px}
+.bid-readiness-showcase ul{list-style:none;margin:0 0 20px;padding:0;display:flex;flex-direction:column;gap:8px}
+.bid-readiness-showcase li{color:rgba(255,255,255,.85);font-size:.9rem}
+.bid-readiness-showcase button{border-radius:999px;padding:12px 22px;font-weight:700;background:#fff;color:var(--petrol);border:none}
+
+/* Auditoria / Memoria tecnica -- chips */
+.chip-grid{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;max-width:900px;margin:0 auto}
+.chip{border-radius:999px;padding:9px 18px;font-size:.85rem;font-weight:600}
+.landing-section .chip{background:var(--mint);color:var(--teal);border:1px solid var(--line)}
+.landing-section-dark .chip{background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.22)}
+
+/* Comparativa compacta */
+.compare-mini-grid{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;max-width:900px;margin:0 auto 24px}
+.compare-mini-chip{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 16px;font-size:.86rem;color:var(--ink);font-weight:600}
+.compare-mini-chip svg{color:var(--teal)}
+.landing-section .ghost-up-light,.landing-section-dark .ghost-up-light{display:block;margin:0 auto;border-radius:999px;padding:12px 22px;font-weight:700;background:var(--teal);color:#fff;border:none}
+
+/* Para quien es */
+.audience-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;max-width:1180px;margin:0 auto}
+.audience-card{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);border-radius:14px;padding:20px}
+.audience-card b{display:block;color:#fff;margin-bottom:8px}
+.audience-card span{color:rgba(255,255,255,.78);font-size:.86rem;line-height:1.45}
+
+/* Diferencia */
+.difference-grid{display:grid;grid-template-columns:1fr 1.2fr;gap:20px;max-width:900px;margin:0 auto}
+.difference-col{border:1px solid var(--line);border-radius:16px;padding:24px;background:var(--card)}
+.difference-col b{display:block;font-size:1rem;color:var(--ink);margin-bottom:12px}
+.difference-col p{margin:0;color:var(--muted)}
+.difference-col ul{margin:0;padding-left:18px;color:var(--muted);display:flex;flex-direction:column;gap:8px}
+.difference-col-highlight{background:var(--mint);border-color:var(--teal)}
+@media (max-width:700px){.difference-grid{grid-template-columns:1fr}}
+
+/* CTA final */
+.landing-final-cta{padding:90px 4.8vw;text-align:center;background:linear-gradient(135deg,var(--petrol) 0%,#1E2E4A 100%)}
+.landing-final-cta h2{color:#fff;font-family:var(--display);font-size:clamp(1.8rem,3vw,2.6rem);margin:0 0 26px;max-width:720px;margin-left:auto;margin-right:auto}
+.landing-final-cta-actions{display:flex;justify-content:center;gap:16px;flex-wrap:wrap}
+.landing-final-cta-actions button{border-radius:999px;padding:15px 28px;font-weight:700;background:#fff;color:var(--petrol);border:none}
+.landing-final-cta-actions .secondary{display:inline-flex;align-items:center;padding:15px 28px;border-radius:999px;font-weight:700;color:#fff;border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.1)}
+
+@media (max-width:760px){
+  .problem-grid{grid-template-columns:1fr}
+  .landing-section,.landing-section-dark{padding:56px 22px}
 }

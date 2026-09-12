@@ -1,0 +1,27 @@
+# Fixture de QA (Incidente 3): caja rectangular SIN normales (vn) -- fuerza el
+# camino de geometry.computeVertexNormals() -- y con winding de caras
+# invertido en 3 de las 6 caras -- fuerza el camino de material.side=DoubleSide.
+# Dimensiones deliberadamente distintas por eje (X=1, Y(archivo, "profundidad
+# Z-up")=2, Z(archivo, "altura Z-up")=3) para poder verificar visualmente que,
+# tras la correccion Z-up->Y-up de levantamientoModelLoader.js, la dimension
+# vertical visible sea la de mayor magnitud (3), no una de las otras dos.
+v 0 0 0
+v 1 0 0
+v 1 2 0
+v 0 2 0
+v 0 0 3
+v 1 0 3
+v 1 2 3
+v 0 2 3
+# cara inferior (z=0) - winding normal
+f 1 2 3 4
+# cara superior (z=3) - winding normal
+f 5 8 7 6
+# cara frontal (y=0) - winding INVERTIDO a proposito
+f 1 5 6 2
+# cara trasera (y=2) - winding normal
+f 3 7 8 4
+# cara izquierda (x=0) - winding INVERTIDO a proposito
+f 4 8 5 1
+# cara derecha (x=1) - winding INVERTIDO a proposito
+f 2 6 7 3

@@ -109,14 +109,29 @@ export function raycastFirstHit(raycaster, camera, event, domElement, meshes){
 /* Presets de camara reutilizables. "isometric" es el encuadre historico de
    Technical3DViewer.jsx (camera.position.set(6,6,8)) -- se deja aqui para
    que cualquier visor que quiera el mismo punto de partida lo use tal cual,
-   sin repetir el numero magico. */
+   sin repetir el numero magico.
+
+   `up` (INCIDENTE 3, hallazgo "vistas poco utiles"): con la camara casi
+   exactamente arriba del target (top: x/z~0), la direccion de vista queda
+   CASI PARALELA al vector `up` por defecto de three.js (0,1,0) -- un caso
+   degenerado donde camera.lookAt()/OrbitControls ya no pueden derivar un
+   "arriba de pantalla" consistente y terminan escogiendo un roll arbitrario
+   (confirmado en QA: la vista superior salia rotada ~45 grados, un
+   rectangulo real se veia como un rombo, inutilizable para leer una planta).
+   Cada preset ahora declara su propio `up` explicito -- top usa (0,0,-1)
+   (convencion de plano arquitectonico: "arriba" de la pantalla = -Z) en vez
+   de depender del default, que es exactamente el eje degenerado en ese caso.
+   isometric/front siguen con (0,1,0) (el default de three.js, sin cambios de
+   comportamiento ahi) pero declarado explicito para que applyCameraView
+   nunca dependa de que sobreviva un `up` que un preset previo haya dejado. */
 export const CAMERA_VIEW_PRESETS = Object.freeze({
-  isometric: { x: 6, y: 6, z: 8 },
-  top: { x: 0.001, y: 14, z: 0.001 },
-  front: { x: 0, y: 1.6, z: 14 }
+  isometric: { x: 6, y: 6, z: 8, up: { x: 0, y: 1, z: 0 } },
+  top: { x: 0.001, y: 14, z: 0.001, up: { x: 0, y: 0, z: -1 } },
+  front: { x: 0, y: 1.6, z: 14, up: { x: 0, y: 1, z: 0 } }
 });
 
 export function applyCameraView(camera, controls, preset, target = { x: 0, y: 0, z: 0 }){
+  if(preset.up) camera.up.set(preset.up.x, preset.up.y, preset.up.z);
   camera.position.set(preset.x, preset.y, preset.z);
   controls.target.set(target.x, target.y, target.z);
   controls.update();

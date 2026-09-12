@@ -107,7 +107,8 @@ export function Model3DPreview({ object3D, boundingBox, onBoundingBoxChange = nu
     applyCameraView(cameraRef.current, controlsRef.current, {
       x: center.x + preset.x * frameScale,
       y: center.y + preset.y * frameScale,
-      z: center.z + preset.z * frameScale
+      z: center.z + preset.z * frameScale,
+      up: preset.up
     }, center);
   };
 

@@ -138,7 +138,8 @@ export function Survey3DViewer({ space, onSelectElement }){
     applyCameraView(cameraRef.current, controlsRef.current, {
       x: roomCenter.x + preset.x,
       y: preset.y,
-      z: roomCenter.z + preset.z
+      z: roomCenter.z + preset.z,
+      up: preset.up
     }, roomCenter);
   };
 

@@ -58,9 +58,15 @@ export async function resolveResourcePrice({
     optional: Boolean(resource.optional)
   });
 
+  // Fase 2 (APU regionalizados): country/state/city vienen del proyecto
+  // activo (ver src/domain/intelligence2Runtime.js#createIntelligence2RunContext),
+  // nunca de un dato privado del recurso -- son geografia publica, mismo
+  // criterio de seguridad que `region` ya tenia (assertCacheKeySafe los
+  // acepta, ver priceSearchCache.js).
   const fingerprintInput = {
     normalizedDescription: resource.description, technicalSpecification: resource.technicalSpecification || '',
     unit: resource.unit, region: resource.region || '', currency: resource.currency || 'MXN',
+    country: resource.country || '', state: resource.state || '', city: resource.city || '',
     tenantScope: resource.tenantSpecific && resource.organizationId ? { organizationId: resource.organizationId } : null
   };
 
@@ -90,6 +96,7 @@ export async function resolveResourcePrice({
         description: resource.description, unit: resource.unit, kind: resource.kind || 'materials',
         region: resource.region || '', dateBase: resource.dateBase || '',
         technicalSpecification: resource.technicalSpecification || '',
+        country: resource.country || '', state: resource.state || '', city: resource.city || '',
         tenantScope: fingerprintInput.tenantScope
       });
     }catch(err){
@@ -130,7 +137,14 @@ export async function resolveResourcePrice({
     const entry = await cache.save(fingerprintInput, {
       references, selectedReference, technicalMatch: searchResult?.fichaTecnica || null,
       normalization, priceStatus, priceConfidence: confidence,
-      precioRecomendado: searchResult?.precioRecomendado ?? null, searchError
+      precioRecomendado: searchResult?.precioRecomendado ?? null, searchError,
+      // Fase 2 (APU regionalizados): calculado deterministicamente en
+      // server/api-lib/_priceIntelligenceCore.mjs#deriveRegionalConfidence a
+      // partir de que nivel geografico autoreportaron las referencias ALTO
+      // de ESTE recurso -- nunca se recalcula aqui, solo se transporta.
+      regionalConfidence: searchResult?.regionalConfidence ?? null,
+      regionalFallbackLevel: searchResult?.regionalFallbackLevel ?? null,
+      ubicacionConsultada: searchResult?.ubicacionConsultada ?? null
     }, { ttlMs: ttlMsFor ? ttlMsFor(resource) : undefined });
 
     return { cacheResult: cached.result, queryHash: cached.queryHash, origin, deferred: false, ...entry };
@@ -175,6 +189,25 @@ function attachIntelligence2FieldsToRow(row, resolved){
   row.priceStatus = resolved.priceStatus ?? null;
   row.priceConfidence = resolved.priceConfidence?.level ?? null;
   row.confidenceReasons = resolved.priceConfidence?.reasons ?? [];
+  // Fase 2 (APU regionalizados por ubicacion): confianza regional de ESTE
+  // recurso (ver deriveRegionalConfidence, server/api-lib/_priceIntelligenceCore.mjs)
+  // -- null cuando no hubo busqueda o no hubo referencias ALTO, NUNCA
+  // inventado. row.fuente.region/nivelCobertura reflejan la referencia
+  // realmente usada para el precio recomendado (selectedReference), no la
+  // ubicacion del proyecto -- si esa referencia especifica fue de otra
+  // ciudad/pais, eso es justo lo que hay que mostrar, no ocultarlo.
+  row.regionalConfidence = resolved.regionalConfidence ?? null;
+  row.regionalFallbackLevel = resolved.regionalFallbackLevel ?? null;
+  // region: el contexto de ubicacion (Ciudad, Estado, Pais) que REALMENTE se
+  // uso al buscar este precio -- no el proveedor (eso ya vive en
+  // fuente.proveedor) ni la ubicacion del proyecto en abstracto, sino la que
+  // esta busqueda concreta aplico. nivelCobertura: si la referencia usada
+  // para el precio recomendado en verdad correspondio a ese nivel geografico
+  // o si el sistema tuvo que caer a una fuente de nivel mas amplio.
+  if(resolved.ubicacionConsultada) row.fuente = { ...(row.fuente || {}), region: resolved.ubicacionConsultada };
+  if(resolved.selectedReference?.nivelCobertura){
+    row.fuente = { ...(row.fuente || {}), nivelCobertura: resolved.selectedReference.nivelCobertura };
+  }
   row.queryHash = resolved.queryHash ?? null;
   row.searchedAt = resolved.searchedAt ?? null;
   row.expiresAt = resolved.expiresAt ?? null;
@@ -227,7 +260,14 @@ function attachIntelligence2FieldsToRow(row, resolved){
    cero costo, cero red -- pero SI se sigue clasificando su Material Origin
    (calculo puro, local, sin costo) para que el reporte siga siendo util. */
 export async function enrichApuWithIntelligence2({
-  aiApu, userInput = {}, concept = '', cache, budget, telemetry = null, inFlightRegistry = null, searchFn, ttlMsFor, resourceTypes = null
+  aiApu, userInput = {}, concept = '', cache, budget, telemetry = null, inFlightRegistry = null, searchFn, ttlMsFor, resourceTypes = null,
+  // Fase 2 (APU regionalizados por ubicacion): ubicacion ESTRUCTURADA del
+  // proyecto activo en el momento de esta corrida -- se aplica a TODOS los
+  // recursos de este APU (fingerprint de cache + prompt de busqueda), nunca
+  // se guarda como enlace vivo al proyecto (ver apuSchema.js#ubicacionEstructurada,
+  // que congela una copia en el APU mismo). Ausente/vacio = comportamiento
+  // identico al de antes de esta fase (sin geografia).
+  location = null
 } = {}){
   const { resolved, unitWarning, overriddenFields } = resolveAuthoritativeInput({ userInput, aiProposed: aiApu });
   const apu = { ...aiApu, concept: resolved.concept ?? aiApu.concept, unit: resolved.unit ?? aiApu.unit };
@@ -257,6 +297,7 @@ export async function enrichApuWithIntelligence2({
           description: row.descripcion, unit: row.unidad, kind,
           currentPrice: Number(row[priceField]) || 0,
           estado: row.fuente?.estado || null,
+          country: location?.country || '', state: location?.state || '', city: location?.city || '',
           aiProposedOrigin: row.materialOrigin || null,
           technicallyRequired: Boolean(row.technicallyRequired),
           optional: Boolean(row.optional),

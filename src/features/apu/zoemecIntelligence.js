@@ -20,10 +20,21 @@ export function safeRun(fn){
   catch(error){ return { ok: false, error: error?.message || String(error) }; }
 }
 
-export function computeZoemecIntelligence(apu){
+/* FASE 3 (aprendizaje progresivo seguro): `memoryEvidence` es exactamente lo
+   que technicalMemory.js#buildMemoryEvidence ya devuelve --
+   {yieldApprovedFold, laborBaselines} -- resuelto por el LLAMADOR (requiere
+   I/O: leer memoria aprobada via /api/technical-memory) antes de invocar esta
+   funcion, que sigue siendo sincrona/pura (regla original de este archivo).
+   Antes de esta fase, este parametro nunca se pasaba en produccion: Confidence
+   y Challenge ya aceptaban memoryBoost/memoryBaselines (ver apuConfidence.js/
+   apuChallenge.js) pero nadie se los mandaba fuera de las pruebas. Ausente
+   (undefined), el comportamiento es identico al de antes de esta fase. */
+export function computeZoemecIntelligence(apu, memoryEvidence){
+  const memoryBoost = memoryEvidence?.yieldApprovedFold ? { yieldApprovedFold: memoryEvidence.yieldApprovedFold } : undefined;
+  const memoryBaselines = memoryEvidence?.laborBaselines;
   const audit = safeRun(() => runApuAudit(apu));
-  const challenge = safeRun(() => runApuChallenge(apu));
-  const confidence = safeRun(() => runApuConfidence(apu));
+  const challenge = safeRun(() => runApuChallenge(apu, memoryBaselines ? { memoryBaselines } : {}));
+  const confidence = safeRun(() => runApuConfidence(apu, memoryBoost ? { memoryBoost } : {}));
   const bidRisk = safeRun(() => runBidRisk(apu, confidence.ok ? { confidence: confidence.data, audit: audit.ok ? audit.data : undefined, challenge: challenge.ok ? challenge.data : undefined } : {}));
   return { audit, challenge, confidence, bidRisk };
 }

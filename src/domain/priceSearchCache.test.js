@@ -155,6 +155,39 @@ test('aislamiento tenant -- tenantScope.organizationId distintas producen finger
   assert.notEqual(a, global_, 'un fingerprint con tenantScope nunca debe colisionar con el fingerprint global (sin tenantScope) del mismo recurso');
 });
 
+/* ======================================================================
+   Fase 2 -- APU regionalizados: country/state/city como dimension nueva
+   del fingerprint (ver comentario de buildQueryFingerprint).
+   ====================================================================== */
+
+test('Fase 2 -- country/state/city distintos producen fingerprints distintos', async () => {
+  const base = { normalizedDescription: 'Cemento CPC 30R 50 kg', unit: 'saco' };
+  const monterrey = await buildQueryFingerprint({ ...base, country: 'MX', state: 'Nuevo León', city: 'Monterrey' });
+  const guadalajara = await buildQueryFingerprint({ ...base, country: 'MX', state: 'Jalisco', city: 'Guadalajara' });
+  const sinUbicacion = await buildQueryFingerprint(base);
+  assert.notEqual(monterrey, guadalajara);
+  assert.notEqual(monterrey, sinUbicacion);
+  assert.notEqual(guadalajara, sinUbicacion);
+});
+
+test('Fase 2 -- mismo pais/estado/ciudad con distinta capitalizacion/acentos produce el MISMO fingerprint', async () => {
+  const base = { normalizedDescription: 'Cemento CPC 30R 50 kg', unit: 'saco' };
+  const a = await buildQueryFingerprint({ ...base, country: 'MX', state: 'Nuevo León', city: 'Monterrey' });
+  const b = await buildQueryFingerprint({ ...base, country: 'mx', state: 'nuevo león', city: 'MONTERREY' });
+  assert.equal(a, b);
+});
+
+test('Fase 2 -- ciudad sola sin estado/pais todavia diferencia el fingerprint (fallback parcial)', async () => {
+  const base = { normalizedDescription: 'Cemento CPC 30R 50 kg', unit: 'saco' };
+  const soloCiudad = await buildQueryFingerprint({ ...base, city: 'Monterrey' });
+  const sinNada = await buildQueryFingerprint(base);
+  assert.notEqual(soloCiudad, sinNada);
+});
+
+test('Fase 2 -- assertCacheKeySafe sigue aceptando country/state/city (no estan en la lista prohibida)', () => {
+  assert.doesNotThrow(() => assertCacheKeySafe({ ...FINGERPRINT_CEMENTO, country: 'MX', state: 'Nuevo León', city: 'Monterrey' }));
+});
+
 test('invalidate() borra una entrada especifica sin afectar otras', async () => {
   const cache = createPriceSearchCache({ now: () => 1000 });
   await cache.save(FINGERPRINT_CEMENTO, { priceStatus: 'VERIFIED_MARKET' });

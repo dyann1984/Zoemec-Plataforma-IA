@@ -49,9 +49,12 @@ import { requireAuth } from './_authGuard.mjs';
 import { getAdminDb } from './_firebaseAdmin.mjs';
 import { appendAudit } from './_decisionAudit.mjs';
 import { runApuChallenge, challengeSeverity } from '../../src/domain/apuChallenge.js';
+import { createMemoryProposal, MEMORY_SCOPE, MEMORY_TYPE } from '../../src/domain/technicalMemory.js';
 
 const COLLECTION = 'challengeDecisions';
 const AUDIT_COLLECTION = 'challengeDecisionAudit';
+const MEMORY_COLLECTION = 'technicalMemory';
+const MEMORY_AUDIT_COLLECTION = 'technicalMemoryAudit';
 const VALID_DECISIONS = new Set(['MAINTAIN', 'JUSTIFY', 'CORRECT', 'DISMISS']);
 const APPLICATION_STATUSES = new Set(['PENDING_APPLICATION', 'APPLIED_LOCAL_ONLY', 'FAILED']);
 const SNAPSHOT_NUMERIC_FIELDS = ['currentValue', 'baselineValue', 'unitImpact', 'projectImpact', 'deltaPct'];
@@ -128,7 +131,14 @@ function verifyChallengeSnapshot({ apuSnapshot, challengeId }){
       category: found.category, currentValue: found.currentValue, baselineValue: found.baselineValue,
       baselineSource: found.baselineSource, deltaPct: found.deltaPct,
       unitImpact: found.unitImpact, projectImpact: found.projectImpact,
-      severity: challengeSeverity(found.category)
+      severity: challengeSeverity(found.category),
+      // FASE 3 (aprendizaje progresivo seguro): identidad del recurso, real
+      // del propio hallazgo recalculado por el servidor (apuChallenge.js ya
+      // la trae, nunca inventada aqui) -- necesaria para poder proponer una
+      // entrada de Memoria Tecnica con un `subject` correcto cuando esta
+      // decision se registra como CORRECT (ver proposeMemoryFromVerifiedCorrection abajo).
+      resourceDescripcion: found.resourceDescripcion || null,
+      primaryActivity: apuSnapshot.primaryActivity || null
     },
     verificationStatus: 'SERVER_VERIFIED',
     verificationReason: 'Recalculado por el servidor con runApuChallenge/calcAPUv2 (mismo motor determinista de la plataforma) a partir del snapshot de APU enviado en esta solicitud.'
@@ -233,6 +243,48 @@ async function handleRecord(req, res){
       previousDecision: existing?.decision || null
     };
     tx.set(docRef, next);
+    // FASE 3 (aprendizaje progresivo seguro), Parte 2: una decision CORRECT
+    // cuyo servidor SI pudo verificar (SERVER_VERIFIED, nunca confiando en lo
+    // que declaro el cliente) es la senal mas fuerte que existe hoy de "esto
+    // se confirmo correcto" -- se propone AUTOMATICAMENTE como memoria
+    // tecnica, pero SIEMPRE PROPOSED (createMemoryProposal nunca aprueba
+    // nada; un admin sigue decidiendo via el flujo ya existente en
+    // MemoriaTab). Solo aplica a categoria 'rendimiento' -- 'precio' no tiene
+    // un valor corregido claro que proponer (mismo criterio que ya usa
+    // buildScenarioLabPrefillFromChallenge en el cliente). Gate en
+    // `apuSnapshot` (el parametro CRUDO de esta llamada, no `verification`):
+    // solo la llamada que de verdad trajo un snapshot fresco dispara esto --
+    // la 2a fase del flujo CORRECT (confirmar APPLIED_LOCAL_ONLY) nunca
+    // reenvia apuSnapshot (ver cabecera del archivo), asi que nunca duplica
+    // la propuesta. Id deterministico (AUTO-<docId>) por la misma razon que
+    // decisionDocId: un reintento de la MISMA llamada sobrescribe la MISMA
+    // propuesta en vez de crear duplicados; nunca pisa una entrada ya
+    // APPROVED (esa unicamente cambia via supersedeMemoryEntry, con admin).
+    // Cualquier fallo aqui (dato faltante, proyecto sin id) nunca debe tumbar
+    // el registro de la decision misma -- por eso esta envuelto aparte.
+    if(apuSnapshot && next.decision === 'CORRECT' && next.verificationStatus === 'SERVER_VERIFIED' && next.verifiedSnapshot?.category === 'rendimiento'
+      && next.projectId && next.verifiedSnapshot.resourceDescripcion && next.verifiedSnapshot.baselineValue != null){
+      try{
+        const memoryEntry = {
+          ...createMemoryProposal({
+            scope: MEMORY_SCOPE.PROJECT, type: MEMORY_TYPE.APPROVED_YIELD,
+            subject: { primaryActivity: next.verifiedSnapshot.primaryActivity || undefined, resourceDescripcion: next.verifiedSnapshot.resourceDescripcion },
+            value: next.verifiedSnapshot.baselineValue,
+            context: { projectId: next.projectId },
+            provenance: { apuId: String(apuId), userId: authz.uid, challengeDecisionId: docId, sourceType: 'AUTO_FROM_CHALLENGE_DECISION', wasCorrection: true },
+            createdBy: authz.email || authz.uid
+          }),
+          id: `AUTO-${docId}`
+        };
+        const memoryRef = db.collection(MEMORY_COLLECTION).doc(memoryEntry.id);
+        tx.set(memoryRef, memoryEntry);
+        appendAudit(tx, db.collection(MEMORY_AUDIT_COLLECTION).doc(), {
+          entryId: memoryEntry.id, action: 'PROPOSAL_CREATED', previousStatus: null, newStatus: memoryEntry.status,
+          actor: authz.uid, actorEmail: authz.email, reason: `Auto-generada desde decision CORRECT verificada por el servidor (challengeDecisionId=${docId}).`,
+          source: 'auto:challenge-decision', projectId: next.projectId, apuId: String(apuId), organizationId: null
+        });
+      }catch{ /* una propuesta automatica que no se pudo construir nunca debe impedir registrar la decision real */ }
+    }
     appendAudit(tx, auditRef, {
       entryId: docId, action: existing ? 'DECISION_UPDATED' : 'DECISION_RECORDED',
       previousStatus: existing?.decision || null, newStatus: decision,

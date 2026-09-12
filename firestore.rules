@@ -10,19 +10,48 @@ service cloud.firestore {
       return signedIn() && request.auth.uid == uid;
     }
 
-    // Misma logica de administrador que el codigo (src/domain/permissions.js,
-    // server/api-lib/_authGuard.mjs): antes esta funcion solo aceptaba
-    // role == 'admin' exacto en Firestore, sin variantes ni respaldo. Si ese
-    // campo no traia exactamente ese valor, ni el custom claim de Firebase ni
-    // el correo del admin real servian de nada aqui (aunque el codigo si los
-    // aceptara), y funciones como listar Usuarios en Panel Admin fallaban con
-    // "Missing or insufficient permissions" para un administrador real.
-    function isAdmin() {
+    // SUPER ADMIN = administrador GLOBAL de ZOEMEC (no confundir con
+    // company_manager, el responsable de UNA sola empresa -- ver
+    // isCompanyManager() mas abajo). Misma logica que el codigo
+    // (src/domain/permissions.js#isAdminUser, server/api-lib/_authGuard.mjs#
+    // isSuperAdminProfile) -- las tres deben mantenerse en sincronia.
+    //
+    // Endurecimiento de seguridad (auditoria de roles): esta funcion ANTES
+    // tambien aceptaba users/{uid}.role en ['admin','administrator',
+    // 'administrador','superadmin'] -- eso permitia que un super admin
+    // ascendiera a CUALQUIER otro usuario a super admin con una simple
+    // escritura de Firestore (el <select> que existia en AdminPanel.jsx).
+    // Se elimino esa rama por completo: ya no importa que valor tenga el
+    // campo role de NINGUN documento, nunca vuelve a conceder acceso global.
+    // Ningun usuario puede asignarse este rol; ninguna organizacion puede
+    // crear otro super_admin.
+    //
+    // MECANISMO FINAL: el custom claim real de Firebase `super_admin===true`.
+    // NINGUN endpoint, Firestore write, Team Panel ni Admin Panel de este
+    // repo lo establece jamas -- la unica forma de otorgarlo es
+    // scripts/grant-super-admin.mjs, corrido a mano fuera de la app con las
+    // credenciales reales de Firebase Admin.
+    //
+    // MECANISMO DE TRANSICION (temporal, NO el final): el correo exacto de
+    // la unica cuenta autorizada, como respaldo mientras
+    // scripts/grant-super-admin.mjs todavia no se ha corrido para esa cuenta
+    // en un entorno dado. Debe mantenerse en sincronia con
+    // src/domain/permissions.js#SUPERADMIN_EMAILS y
+    // server/api-lib/_authGuard.mjs#SUPERADMIN_EMAILS -- son las UNICAS tres
+    // fuentes de este calculo en todo el repo.
+    function isSuperAdmin() {
+      // request.auth.token.get('super_admin', false): un custom claim que
+      // NUNCA se establecio para esta cuenta no es solo "false", es una
+      // propiedad AUSENTE del token -- comparar esa propiedad ausente con
+      // == true directamente hace que la regla LANCE un error de evaluacion
+      // en vez de devolver false (confirmado con @firebase/rules-unit-testing:
+      // cualquier cuenta de prueba sin ese claim tumbaba CUALQUIER regla que
+      // dependiera de isSuperAdmin(), incluidas las que un admin real si debia
+      // poder usar). .get() con default evita el problema sin cambiar el
+      // resultado para quien SI tiene el claim.
       return signedIn() && (
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role.lower()
-          in ['admin', 'administrator', 'administrador', 'superadmin']
-        || request.auth.token.admin == true
-        || request.auth.token.email.lower() == 'dianalopez161184@gmail.com'
+        request.auth.token.get('super_admin', false) == true
+        || request.auth.token.get('email', '').lower() == 'dianalopez161184@gmail.com'
       );
     }
 
@@ -48,12 +77,36 @@ service cloud.firestore {
       return newValue == existingValue || (existingValue == null && newValue == safeDefault);
     }
 
+    // Trial empresarial (Fase 1): mismo criterio que isSuperAdmin() arriba -- un
+    // get() contra la membresia real, nunca se confia en un organizationId
+    // que venga del propio documento sin verificar pertenencia. isActiveOrg
+    // Member() exige ademas status=='active' (un miembro desactivado por el
+    // admin de su empresa pierde acceso de lectura de inmediato, sin
+    // necesidad de borrar nada).
+    function orgMembership(orgId) {
+      return get(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid));
+    }
+    function isActiveOrgMember(orgId) {
+      return signedIn() && orgId != null
+        && exists(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid))
+        && orgMembership(orgId).data.status == 'active';
+    }
+    // Responsable de UNA empresa (company_manager) -- NO es super admin de
+    // ZOEMEC, ver isSuperAdmin() arriba. Acepta el valor legado 'org_admin'
+    // ademas del nuevo 'company_manager': organizaciones creadas antes de
+    // este cambio de nombre (Endurecimiento de roles) siguen reconociendo a
+    // su responsable sin necesidad de migrar datos -- lectura dual, toda
+    // escritura nueva (_route-organizations.mjs) ya usa solo el valor nuevo.
+    function isCompanyManager(orgId) {
+      return isActiveOrgMember(orgId) && orgMembership(orgId).data.role in ['company_manager', 'org_admin'];
+    }
+
     match /users/{uid}/state/{stateKey} {
       allow read, write: if isOwner(uid);
     }
 
     match /users/{uid} {
-      allow read: if isOwner(uid) || isAdmin();
+      allow read: if isOwner(uid) || isSuperAdmin();
       // El propio dueno solo puede crear su perfil con privilegios de arranque
       // fijos (role=user, plan=Gratis, active=true): evita que alguien use el
       // SDK de cliente directo para crearse ya como admin/Empresa antes de que
@@ -62,15 +115,64 @@ service cloud.firestore {
       allow create: if isOwner(uid)
         && request.resource.data.role == 'user'
         && request.resource.data.plan == 'Gratis'
-        && request.resource.data.active == true;
-      allow update: if isAdmin()
+        && request.resource.data.active == true
+        // FASE 2 QA (5 usuarios, hallazgo de hardening): organizationId/orgRole
+        // los fija UNICAMENTE _route-organizations.mjs (Admin SDK, create/
+        // acceptInvite dentro de una transaccion que valida cupo/token) -- un
+        // perfil auto-creado por el cliente nunca debe poder declararlos de
+        // entrada, ni siquiera en null (evita "reservar" el campo antes de
+        // que exista una membresia real detras).
+        && !('organizationId' in request.resource.data)
+        && !('orgRole' in request.resource.data);
+      allow update: if isSuperAdmin()
         || (
           isOwner(uid)
           && fieldFilledOnlyWithSafeDefault(resource.data.get('role', null), request.resource.data.get('role', null), 'user')
           && fieldFilledOnlyWithSafeDefault(resource.data.get('plan', null), request.resource.data.get('plan', null), 'Gratis')
           && fieldFilledOnlyWithSafeDefault(resource.data.get('active', null), request.resource.data.get('active', null), true)
+          // FASE 2 QA (5 usuarios, hallazgo de hardening): antes del QA de
+          // organizacion de 5 usuarios, este campo no estaba protegido aqui
+          // explicitamente -- un colaborador SI podia reescribir su propio
+          // organizationId/orgRole via el SDK de cliente directo (comprobado
+          // empiricamente con @firebase/rules-unit-testing). No otorgaba
+          // acceso real (isActiveOrgMember/isOrgAdmin arriba solo confian en
+          // la subcoleccion members, que sigue bloqueada con write:false), pero
+          // se cierra aqui tambien por profundidad de defensa: solo el Admin
+          // SDK (_route-organizations.mjs#handleCreate/handleAcceptInvite,
+          // dentro de una transaccion que valida cupo y token) puede tocar
+          // estos dos campos.
+          && request.resource.data.get('organizationId', null) == resource.data.get('organizationId', null)
+          && request.resource.data.get('orgRole', null) == resource.data.get('orgRole', null)
         );
-      allow delete: if isAdmin();
+      allow delete: if isSuperAdmin();
+    }
+
+    // Organizaciones / Trial Empresarial de 30 dias (Fase 1). Toda escritura
+    // pasa por server/api-lib/_route-organizations.mjs (Admin SDK, ignora
+    // estas reglas) para poder validar cupo de 10 usuarios, tokens de
+    // invitacion y transiciones de estado dentro de transacciones -- el
+    // cliente JAMAS escribe estas colecciones directo (mismo patron ya
+    // establecido para projects/apus/technicalMemory).
+    match /organizations/{orgId} {
+      allow read: if isSuperAdmin() || isActiveOrgMember(orgId);
+      allow write: if false;
+
+      // El equipo necesita ver su propio roster (Panel de Equipo) -- no
+      // expone nada de OTRAS organizaciones, isActiveOrgMember(orgId) exige
+      // membresia activa en ESTA organizacion especifica.
+      match /members/{uid} {
+        allow read: if isSuperAdmin() || isActiveOrgMember(orgId);
+        allow write: if false;
+      }
+
+      // Colaboradores no necesitan ver invitaciones pendientes ajenas; el
+      // invitado (que todavia NO es miembro) consume su invitacion via el
+      // endpoint acceptInvite (token+hash validado server-side), nunca con
+      // una lectura directa de cliente.
+      match /invitations/{invitationId} {
+        allow read: if isSuperAdmin() || isCompanyManager(orgId);
+        allow write: if false;
+      }
     }
 
     match /devices/{deviceId} {
@@ -83,9 +185,9 @@ service cloud.firestore {
       // getDocs(collection(db,'devices')) y obtener email+uid de todos los
       // usuarios registrados en la plataforma.
       allow get: if signedIn();
-      allow list: if isAdmin();
+      allow list: if isSuperAdmin();
       allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
-      allow update, delete: if isAdmin();
+      allow update, delete: if isSuperAdmin();
     }
 
     match /library/{docId} {
@@ -94,38 +196,38 @@ service cloud.firestore {
       // explicitamente global. Antes cualquier cuenta autenticada podia leer
       // TODA la coleccion, incluidos archivos marcados "private" de otros
       // usuarios/empresas (y su downloadURL firmada de larguisima duracion).
-      allow read: if isAdmin()
+      allow read: if isSuperAdmin()
         || (signedIn() && resource.data.ownerUid == request.auth.uid)
         || (signedIn() && resource.data.visibility == 'global');
       allow create: if signedIn()
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.visibility in ['private', 'global']
-        && (request.resource.data.visibility == 'private' || isAdmin());
-      allow update: if isAdmin()
+        && (request.resource.data.visibility == 'private' || isSuperAdmin());
+      allow update: if isSuperAdmin()
         || (
           signedIn()
           && resource.data.ownerUid == request.auth.uid
           && request.resource.data.ownerUid == resource.data.ownerUid
           && request.resource.data.visibility == resource.data.visibility
         );
-      allow delete: if isAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+      allow delete: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
     }
 
     match /visual_requests/{docId} {
-      allow read: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
       allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
-      allow update, delete: if isAdmin();
+      allow update, delete: if isSuperAdmin();
     }
 
     match /payments/{docId} {
-      allow read: if isAdmin();
+      allow read: if isSuperAdmin();
       allow write: if false;
     }
 
     match /forum/{docId} {
       allow read: if signedIn();
       allow create: if signedIn();
-      allow update, delete: if isAdmin();
+      allow update, delete: if isSuperAdmin();
     }
 
     // Memoria Tecnica + decisiones de Challenge (Fase 6): toda escritura
@@ -151,7 +253,7 @@ service cloud.firestore {
       allow write: if false;
     }
     match /technicalMemoryAudit/{docId} {
-      allow read: if isAdmin();
+      allow read: if isSuperAdmin();
       allow write: if false;
     }
     match /challengeDecisions/{docId} {
@@ -159,7 +261,7 @@ service cloud.firestore {
       allow write: if false;
     }
     match /challengeDecisionAudit/{docId} {
-      allow read: if isAdmin();
+      allow read: if isSuperAdmin();
       allow write: if false;
     }
 
@@ -173,24 +275,36 @@ service cloud.firestore {
     // directo (mismo patron que technicalMemory/challengeDecisions). La
     // lectura si es directa del dueno (dato propio, no requiere pasar por
     // el endpoint para consultarlo) o de un administrador.
+    // Fase 1 (trial empresarial): ademas del dueno original, cualquier
+    // miembro ACTIVO de la organizacion a la que el documento quedo asociado
+    // al crearse (organizationId, poblado solo por
+    // server/api-lib/_route-projects.mjs/_route-apus.mjs cuando quien crea
+    // pertenece a una organizacion) puede leerlo -- espacio de trabajo
+    // compartido del equipo. Documentos SIN organizationId (usuarios
+    // individuales, comportamiento previo a esta fase) no cambian en nada.
     match /projects/{docId} {
-      allow read: if isAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
       allow write: if false;
     }
     match /projectAudit/{docId} {
-      allow read: if isAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
       allow write: if false;
     }
     match /apus/{docId} {
-      allow read: if isAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
       allow write: if false;
     }
     match /apuVersions/{docId} {
-      allow read: if isAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
       allow write: if false;
     }
     match /apuAudit/{docId} {
-      allow read: if isAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
       allow write: if false;
     }
 
@@ -199,12 +313,13 @@ service cloud.firestore {
     // api/export-events.mjs (SDK admin). Mismo criterio de lectura que
     // apuAudit/projectAudit: solo el dueno del evento o un admin.
     match /exportEvents/{docId} {
-      allow read: if isAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
       allow write: if false;
     }
 
     match /{document=**} {
-      allow read, write: if isAdmin();
+      allow read, write: if isSuperAdmin();
     }
   }
 }

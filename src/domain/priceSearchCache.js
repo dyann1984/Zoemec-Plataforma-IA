@@ -62,13 +62,31 @@ export function assertCacheKeySafe(fingerprintInput = {}){
    publica de un insumo, nunca datos de proyecto/cliente). tenantScope es
    OPCIONAL: solo se incluye cuando el llamador declara explicitamente que
    este recurso es tenant-specific (regla 5), aislando ese fingerprint por
-   organizationId sin afectar el resto del cache global. */
-export async function buildQueryFingerprint({ normalizedDescription = '', technicalSpecification = '', unit = '', region = '', currency = 'MXN', tenantScope = null } = {}){
+   organizationId sin afectar el resto del cache global.
+
+   Fase 2 (APU regionalizados): country/state/city son campos canonicos
+   ADICIONALES, mismo criterio que tenantScope -- opcionales, normalizados
+   igual que el resto, string vacio cuando el llamador no los declara.
+   Agregar estas 3 claves al objeto que se hashea SI cambia el queryHash de
+   TODO lo que ya estaba en cache (aunque queden '' para el codigo viejo que
+   nunca las pasa) -- es una invalidacion de cache de una sola vez, aceptable
+   para un cache con TTL de 7 dias (regla 12.J: degradacion seguda, nunca
+   perdida de datos -- el peor caso es una tanda de CACHE_MISS que se
+   repueblan solos, nunca un precio incorrecto ni un dato perdido; regla 12.J:
+   degradacion segura). `region`
+   se conserva tal cual (texto libre legado, ej. lo que ya viaja desde
+   projects.ubicacion) para no romper nada que ya lo use; country/state/city
+   es la nueva dimension estructurada que realmente diferencia el cache por
+   geografia. */
+export async function buildQueryFingerprint({ normalizedDescription = '', technicalSpecification = '', unit = '', region = '', country = '', state = '', city = '', currency = 'MXN', tenantScope = null } = {}){
   const canonical = {
     d: normalizeForFingerprint(normalizedDescription),
     s: normalizeForFingerprint(technicalSpecification),
     u: normalizeForFingerprint(unit),
     r: normalizeForFingerprint(region),
+    country: normalizeForFingerprint(country),
+    state: normalizeForFingerprint(state),
+    city: normalizeForFingerprint(city),
     c: normalizeForFingerprint(currency),
     // organizationId SOLO participa si el llamador declaro tenantScope --
     // ausente (undefined) para el 99% de los casos (evidencia de mercado

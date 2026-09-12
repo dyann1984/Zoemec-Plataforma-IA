@@ -27,6 +27,7 @@ import { requireAuth } from './_authGuard.mjs';
 import { getAdminDb } from './_firebaseAdmin.mjs';
 import { appendAudit } from './_decisionAudit.mjs';
 import { createApuVersion, restoreApuVersion } from '../../src/domain/apuVersioning.js';
+import { loadOrgContext, assertOrgNotExpired, canAccessOrgScopedDoc } from './_orgGuard.mjs';
 
 const COLLECTION = 'apus';
 const VERSIONS_COLLECTION = 'apuVersions';
@@ -39,23 +40,28 @@ function versionDocId(apuId, version){
 
 async function handleList(req, res){
   const authz = await requireAuth(req);
+  const orgContext = await loadOrgContext(authz.uid);
   const { id, projectId } = req.query || {};
   const db = getAdminDb();
   if(id){
     const snap = await db.collection(COLLECTION).doc(String(id)).get();
     if(!snap.exists){ res.status(200).json({ apu: null, versions: [] }); return; }
     const apu = snap.data();
-    if(apu.ownerUid !== authz.uid) throw httpError(403, 'Este APU pertenece a otro usuario.');
+    if(!canAccessOrgScopedDoc(apu, authz, orgContext)) throw httpError(403, 'Este APU pertenece a otro usuario.');
     const versionsSnap = await db.collection(VERSIONS_COLLECTION).where('apuId', '==', String(id)).get();
     const versions = versionsSnap.docs.map(d => d.data()).sort((a, b) => Number(a.version.replace(/\D/g, '')) - Number(b.version.replace(/\D/g, '')));
     res.status(200).json({ apu, versions });
     return;
   }
-  // Sin id ni projectId: lista TODOS los APUs del usuario (equivalente al
-  // `rawApus` cross-proyecto de main.jsx -- el filtrado por proyecto activo
-  // ya lo hace useProjectScoped en el cliente, este endpoint solo necesita
-  // devolver "todos los mios", igual que antes hacia useCloudState).
-  let query = db.collection(COLLECTION).where('ownerUid', '==', authz.uid);
+  // Sin id ni projectId: lista TODOS los APUs del usuario, o del equipo
+  // completo si pertenece a una organizacion (Fase 1, mismo criterio que
+  // projects.mjs#handleList) -- equivalente al `rawApus` cross-proyecto de
+  // main.jsx -- el filtrado por proyecto activo ya lo hace useProjectScoped
+  // en el cliente, este endpoint solo necesita devolver "todos los mios/de
+  // mi empresa", igual que antes hacia useCloudState).
+  let query = orgContext
+    ? db.collection(COLLECTION).where('organizationId', '==', orgContext.organizationId)
+    : db.collection(COLLECTION).where('ownerUid', '==', authz.uid);
   if(projectId) query = query.where('projectId', '==', String(projectId));
   const snap = await query.get();
   // Mismo criterio que projects.mjs: "Borrar" en la UI (main.jsx#Projects/
@@ -72,16 +78,19 @@ async function handleList(req, res){
    para reintentos de la migracion transparente. */
 async function handleCreate(req, res){
   const authz = await requireAuth(req);
+  const orgContext = await loadOrgContext(authz.uid);
+  assertOrgNotExpired(orgContext);
   const { id, projectId, apu, reason } = req.body || {};
   if(!id || !apu) throw httpError(400, 'Faltan id/apu.');
   const db = getAdminDb();
   const docRef = db.collection(COLLECTION).doc(String(id));
   const auditRef = db.collection(AUDIT_COLLECTION).doc();
+  const organizationId = orgContext ? orgContext.organizationId : null;
   const result = await db.runTransaction(async (tx) => {
     const snap = await tx.get(docRef);
     if(snap.exists){
       const existing = snap.data();
-      if(existing.ownerUid !== authz.uid) throw httpError(409, 'Ya existe un APU con ese id perteneciente a otro usuario.');
+      if(!canAccessOrgScopedDoc(existing, authz, orgContext)) throw httpError(409, 'Ya existe un APU con ese id perteneciente a otro usuario.');
       return { apu: existing, version: null }; // idempotente: reintento de migracion no duplica
     }
     let built;
@@ -90,17 +99,17 @@ async function handleCreate(req, res){
     const entry = built.history[built.history.length - 1];
     const now = new Date().toISOString();
     const apuDoc = {
-      id: String(id), ownerUid: authz.uid, projectId: projectId || null,
+      id: String(id), ownerUid: authz.uid, organizationId, projectId: projectId || null,
       currentVersion: entry.version, snapshot: built.apu,
       createdAt: now, updatedAt: now
     };
-    const versionDoc = { ...entry, id: versionDocId(id, entry.version), apuId: String(id), ownerUid: authz.uid, createdAt: now };
+    const versionDoc = { ...entry, id: versionDocId(id, entry.version), apuId: String(id), ownerUid: authz.uid, organizationId, createdAt: now };
     tx.set(docRef, apuDoc);
     tx.set(db.collection(VERSIONS_COLLECTION).doc(versionDoc.id), versionDoc);
     appendAudit(tx, auditRef, {
       entryId: apuDoc.id, action: 'APU_CREATED', previousStatus: null, newStatus: entry.version,
       actor: authz.uid, actorEmail: authz.email, reason: reason || null, source: 'api',
-      projectId: apuDoc.projectId, apuId: apuDoc.id, organizationId: null, ownerUid: authz.uid
+      projectId: apuDoc.projectId, apuId: apuDoc.id, organizationId, ownerUid: authz.uid
     });
     return { apu: apuDoc, version: versionDoc };
   });
@@ -127,6 +136,8 @@ async function handleCreate(req, res){
    una version nueva ni se mueve el puntero "actual" en ese caso. */
 async function handleSaveVersion(req, res){
   const authz = await requireAuth(req);
+  const orgContext = await loadOrgContext(authz.uid);
+  assertOrgNotExpired(orgContext);
   const { id, apu, reason, expectedParentVersionId } = req.body || {};
   if(!id || !apu) throw httpError(400, 'Faltan id/apu.');
   if(!expectedParentVersionId) throw httpError(400, 'Falta expectedParentVersionId: indica de que version parte este guardado para poder detectar conflictos de concurrencia.');
@@ -137,7 +148,7 @@ async function handleSaveVersion(req, res){
     const snap = await tx.get(docRef);
     if(!snap.exists) throw httpError(404, 'El APU no existe. Crealo primero con action=create.');
     const current = snap.data();
-    if(current.ownerUid !== authz.uid) throw httpError(403, 'Este APU pertenece a otro usuario.');
+    if(!canAccessOrgScopedDoc(current, authz, orgContext)) throw httpError(403, 'Este APU pertenece a otro usuario.');
     if(current.currentVersion !== expectedParentVersionId){
       const conflict = httpError(409, `Conflicto de version: esperabas partir de ${expectedParentVersionId}, pero la version vigente en el servidor ya es ${current.currentVersion} (alguien mas -- u otra pestaña/dispositivo -- guardo una version mas reciente). Recarga la version vigente antes de reintentar.`);
       conflict.code = 'VERSION_CONFLICT';
@@ -150,13 +161,13 @@ async function handleSaveVersion(req, res){
     const entry = built.history[built.history.length - 1];
     const now = new Date().toISOString();
     const nextApuDoc = { ...current, currentVersion: entry.version, snapshot: built.apu, updatedAt: now };
-    const versionDoc = { ...entry, id: versionDocId(id, entry.version), apuId: String(id), ownerUid: authz.uid, createdAt: now };
+    const versionDoc = { ...entry, id: versionDocId(id, entry.version), apuId: String(id), ownerUid: authz.uid, organizationId: current.organizationId ?? null, createdAt: now };
     tx.set(docRef, nextApuDoc);
     tx.set(db.collection(VERSIONS_COLLECTION).doc(versionDoc.id), versionDoc);
     appendAudit(tx, auditRef, {
       entryId: nextApuDoc.id, action: 'APU_VERSION_SAVED', previousStatus: current.currentVersion, newStatus: entry.version,
       actor: authz.uid, actorEmail: authz.email, reason: reason || null, source: 'api',
-      projectId: nextApuDoc.projectId, apuId: nextApuDoc.id, organizationId: null, ownerUid: authz.uid
+      projectId: nextApuDoc.projectId, apuId: nextApuDoc.id, organizationId: current.organizationId ?? null, ownerUid: authz.uid
     });
     return { apu: nextApuDoc, version: versionDoc };
   });
@@ -170,6 +181,8 @@ async function handleSaveVersion(req, res){
    tenia apuVersioning.js en memoria, ahora persistida). */
 async function handleRestoreVersion(req, res){
   const authz = await requireAuth(req);
+  const orgContext = await loadOrgContext(authz.uid);
+  assertOrgNotExpired(orgContext);
   const { id, version } = req.body || {};
   if(!id || !version) throw httpError(400, 'Faltan id/version a restaurar.');
   const db = getAdminDb();
@@ -180,7 +193,7 @@ async function handleRestoreVersion(req, res){
     const [snap, targetSnap] = await Promise.all([tx.get(docRef), tx.get(targetRef)]);
     if(!snap.exists) throw httpError(404, 'El APU no existe.');
     const current = snap.data();
-    if(current.ownerUid !== authz.uid) throw httpError(403, 'Este APU pertenece a otro usuario.');
+    if(!canAccessOrgScopedDoc(current, authz, orgContext)) throw httpError(403, 'Este APU pertenece a otro usuario.');
     if(!targetSnap.exists) throw httpError(404, `La version ${version} no existe para este APU.`);
     const targetEntry = targetSnap.data();
     let built;
@@ -189,13 +202,13 @@ async function handleRestoreVersion(req, res){
     const entry = built.history[built.history.length - 1];
     const now = new Date().toISOString();
     const nextApuDoc = { ...current, currentVersion: entry.version, snapshot: built.apu, updatedAt: now };
-    const versionDoc = { ...entry, id: versionDocId(id, entry.version), apuId: String(id), ownerUid: authz.uid, createdAt: now };
+    const versionDoc = { ...entry, id: versionDocId(id, entry.version), apuId: String(id), ownerUid: authz.uid, organizationId: current.organizationId ?? null, createdAt: now };
     tx.set(docRef, nextApuDoc);
     tx.set(db.collection(VERSIONS_COLLECTION).doc(versionDoc.id), versionDoc);
     appendAudit(tx, auditRef, {
       entryId: nextApuDoc.id, action: 'APU_VERSION_RESTORED', previousStatus: current.currentVersion, newStatus: entry.version,
       actor: authz.uid, actorEmail: authz.email, reason: `Restauracion de ${version}`, source: 'api',
-      projectId: nextApuDoc.projectId, apuId: nextApuDoc.id, organizationId: null, ownerUid: authz.uid
+      projectId: nextApuDoc.projectId, apuId: nextApuDoc.id, organizationId: current.organizationId ?? null, ownerUid: authz.uid
     });
     return { apu: nextApuDoc, version: versionDoc };
   });
@@ -208,6 +221,8 @@ async function handleRestoreVersion(req, res){
    y sigue siendo consultable via GET ?id= directo. */
 async function handleArchive(req, res){
   const authz = await requireAuth(req);
+  const orgContext = await loadOrgContext(authz.uid);
+  assertOrgNotExpired(orgContext);
   const { id } = req.body || {};
   if(!id) throw httpError(400, 'Falta id del APU a archivar.');
   const db = getAdminDb();
@@ -217,13 +232,13 @@ async function handleArchive(req, res){
     const snap = await tx.get(docRef);
     if(!snap.exists) throw httpError(404, 'El APU no existe.');
     const current = snap.data();
-    if(current.ownerUid !== authz.uid) throw httpError(403, 'Este APU pertenece a otro usuario.');
+    if(!canAccessOrgScopedDoc(current, authz, orgContext)) throw httpError(403, 'Este APU pertenece a otro usuario.');
     const next = { ...current, archivedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
     tx.set(docRef, next);
     appendAudit(tx, auditRef, {
       entryId: next.id, action: 'APU_ARCHIVED', previousStatus: current.currentVersion, newStatus: current.currentVersion,
       actor: authz.uid, actorEmail: authz.email, reason: null, source: 'api',
-      projectId: next.projectId, apuId: next.id, organizationId: null, ownerUid: authz.uid
+      projectId: next.projectId, apuId: next.id, organizationId: current.organizationId ?? null, ownerUid: authz.uid
     });
     return next;
   });
@@ -242,6 +257,8 @@ async function handleArchive(req, res){
    actualizacion. */
 async function handleLinkProject(req, res){
   const authz = await requireAuth(req);
+  const orgContext = await loadOrgContext(authz.uid);
+  assertOrgNotExpired(orgContext);
   const { id, projectId } = req.body || {};
   if(!id || !projectId) throw httpError(400, 'Faltan id/projectId.');
   const db = getAdminDb();
@@ -252,15 +269,15 @@ async function handleLinkProject(req, res){
     const [snap, projectSnap] = await Promise.all([tx.get(docRef), tx.get(projectRef)]);
     if(!snap.exists) throw httpError(404, 'El APU no existe.');
     const current = snap.data();
-    if(current.ownerUid !== authz.uid) throw httpError(403, 'Este APU pertenece a otro usuario.');
+    if(!canAccessOrgScopedDoc(current, authz, orgContext)) throw httpError(403, 'Este APU pertenece a otro usuario.');
     if(!projectSnap.exists) throw httpError(404, 'El proyecto destino no existe.');
-    if(projectSnap.data().ownerUid !== authz.uid) throw httpError(403, 'El proyecto destino pertenece a otro usuario.');
+    if(!canAccessOrgScopedDoc(projectSnap.data(), authz, orgContext)) throw httpError(403, 'El proyecto destino pertenece a otro usuario.');
     const next = { ...current, projectId: String(projectId), updatedAt: new Date().toISOString() };
     tx.set(docRef, next);
     appendAudit(tx, auditRef, {
       entryId: next.id, action: 'APU_PROJECT_LINKED', previousStatus: current.projectId || null, newStatus: next.projectId,
       actor: authz.uid, actorEmail: authz.email, reason: null, source: 'api',
-      projectId: next.projectId, apuId: next.id, organizationId: null, ownerUid: authz.uid
+      projectId: next.projectId, apuId: next.id, organizationId: current.organizationId ?? null, ownerUid: authz.uid
     });
     return next;
   });

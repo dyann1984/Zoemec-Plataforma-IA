@@ -207,7 +207,7 @@ export const translations = {
       hamburger: 'Abrir menú',
       closeDrawer: 'Cerrar menú',
       logout: 'Salir',
-      role: { admin: 'Administrador' },
+      role: { admin: 'Administrador ZOEMEC' },
       menu: {
         inicio: 'Inicio',
         levantamiento: 'Levantamiento IA',
@@ -1296,7 +1296,7 @@ export const translations = {
       hamburger: 'Open menu',
       closeDrawer: 'Close menu',
       logout: 'Log out',
-      role: { admin: 'Administrator' },
+      role: { admin: 'ZOEMEC Administrator' },
       menu: {
         inicio: 'Home',
         levantamiento: 'AI Site Survey',

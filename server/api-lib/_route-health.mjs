@@ -3,7 +3,7 @@
    funciones serverless) -- ver api/gateway.mjs y VERCEL_HOBBY_COMPAT.md.
    Contenido/logica identicos a la version original en api/health.mjs, solo
    cambio la ruta relativa de import. */
-import { requireAdmin } from './_authGuard.mjs';
+import { requireSuperAdmin } from './_authGuard.mjs';
 import { getAdminDb } from './_firebaseAdmin.mjs';
 
 /* Diagnostico real de las dependencias de produccion, solo para administradores.
@@ -53,7 +53,7 @@ export default async function handler(req, res){
     return;
   }
   try{
-    await requireAdmin(req);
+    await requireSuperAdmin(req);
     const [firebase, openai, storage] = await Promise.all([checkFirebase(), checkOpenAI(), checkStorage()]);
     res.status(200).json({
       checks: {

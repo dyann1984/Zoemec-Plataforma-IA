@@ -107,7 +107,7 @@ function logCacheWriteFailure({ queryHash, operation, errorCode, error }){
 
 export async function searchMarketReferencesWithCache({
   description, unit, kind = 'materials', location = '', dateBase = '', categoriaLaboral = '',
-  technicalSpecification = '', region = '', currency = 'MXN', tenantScope = null,
+  technicalSpecification = '', region = '', country = '', state = '', city = '', currency = 'MXN', tenantScope = null,
   maxDailySearches = DEFAULT_MAX_DAILY_SEARCHES, searchImpl = searchMarketReferences, db = null, store = null
 } = {}){
   const database = db || getAdminDb();
@@ -117,7 +117,7 @@ export async function searchMarketReferencesWithCache({
   // `database` real incluso cuando `store` esta forzado, para poder probar
   // el fallo del CACHE de forma aislada del presupuesto.
   const cache = createPriceSearchCache({ store: store || createFirestorePriceCacheStore(database), defaultTtlMs: PRICE_CACHE_TTL_MS.NORMAL });
-  const fingerprintInput = { normalizedDescription: description, technicalSpecification, unit, region: region || location, currency, tenantScope };
+  const fingerprintInput = { normalizedDescription: description, technicalSpecification, unit, region: region || location, country, state, city, currency, tenantScope };
 
   const lookup = await cache.lookup(fingerprintInput);
   if(lookup.result === CACHE_RESULT.HIT){
@@ -126,6 +126,8 @@ export async function searchMarketReferencesWithCache({
       fichaTecnica: entry.technicalMatch, referencias: entry.references,
       precioRecomendado: entry.selectedReference?.precioNormalizado ?? null,
       nivelEvidencia: entry.priceStatus === 'VERIFIED_MARKET' ? 'MERCADO' : entry.priceStatus === 'MARKET_REFERENCE' ? 'REFERENCIAL' : 'ESTIMADO_IA',
+      regionalConfidence: entry.regionalConfidence ?? null, regionalFallbackLevel: entry.regionalFallbackLevel ?? null,
+      ubicacionConsultada: entry.ubicacionConsultada ?? null,
       cacheStatus: CACHE_RESULT.HIT, webSearchPerformed: false, cacheWriteStatus: CACHE_WRITE_STATUS.NOT_APPLICABLE,
       queryHash: lookup.queryHash, searchedAt: entry.searchedAt, expiresAt: entry.expiresAt
     };
@@ -146,13 +148,15 @@ export async function searchMarketReferencesWithCache({
     };
   }
 
-  const searchResult = await searchImpl({ description, unit, kind, location: region || location, dateBase, categoriaLaboral });
+  const searchResult = await searchImpl({ description, unit, kind, location: region || location, country, state, city, dateBase, categoriaLaboral });
   const priceStatus = derivePriceStatus({ price: searchResult.precioRecomendado ?? 0, references: searchResult.referencias || [] });
   const confidence = computePriceConfidence({ references: searchResult.referencias || [] });
   const selectedReference = (searchResult.referencias || []).find(r => r?.match?.verdict === 'ALTO') || null;
   const entry = await cache.save(fingerprintInput, {
     references: searchResult.referencias || [], selectedReference, technicalMatch: searchResult.fichaTecnica || null,
-    priceStatus, priceConfidence: confidence
+    priceStatus, priceConfidence: confidence,
+    regionalConfidence: searchResult.regionalConfidence ?? null, regionalFallbackLevel: searchResult.regionalFallbackLevel ?? null,
+    ubicacionConsultada: searchResult.ubicacionConsultada ?? null
   });
 
   // Hotfix 2.1.1 -- regla 1: la respuesta NUNCA finge persistencia. Si

@@ -9,6 +9,7 @@ process.env.GOOGLE_APPLICATION_CREDENTIALS = process.env.GOOGLE_APPLICATION_CRED
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import handler from '../server/api-lib/_route-technical-memory.mjs';
+import projectsHandler from '../server/api-lib/_route-projects.mjs';
 import { getAdminAuth, getAdminDb } from '../server/api-lib/_firebaseAdmin.mjs';
 import { MEMORY_SCOPE, MEMORY_TYPE, MEMORY_STATUS } from '../src/domain/technicalMemory.js';
 
@@ -21,6 +22,12 @@ async function createUserAndGetIdToken({ email, password = 'Test1234!', emailVer
   const auth = getAdminAuth();
   const user = await auth.createUser({ email, password, emailVerified });
   if(role !== 'user') await getAdminDb().collection('users').doc(user.uid).set({ uid: user.uid, email, role, plan: 'Empresa', active: true }, { merge: true });
+  // Endurecimiento de roles: super_admin (server/api-lib/_authGuard.mjs#
+  // isSuperAdminProfile) ya NO confia en users/{uid}.role -- solo en el
+  // custom claim real o el correo exacto. Se otorga aqui con el Admin SDK
+  // (unica forma legitima, fuera de banda) ANTES del signInWithPassword de
+  // abajo para que el idToken fresco ya lo incluya.
+  if(role === 'admin') await auth.setCustomUserClaims(user.uid, { super_admin: true });
   const res = await fetch(`http://${AUTH_HOST}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password, returnSecureToken: true })
@@ -174,5 +181,110 @@ describe('GET /api/technical-memory', () => {
     const res = await call(get(admin.idToken, { status: MEMORY_STATUS.APPROVED, type: MEMORY_TYPE.APPROVED_PRICE, projectId }));
     assert.ok(res.body.entries.some(e => e.id === created.body.entry.id));
     assert.ok(res.body.entries.every(e => e.status === MEMORY_STATUS.APPROVED));
+  });
+});
+
+// FASE 3 (aprendizaje progresivo SEGURO), Parte 0: handleList antes de esta
+// fase devolvia cualquier entrada que coincidiera con scope/type/status/
+// projectId sin verificar relacion real del usuario con ese proyecto u
+// organizacion. Estas pruebas demuestran el aislamiento real (mismo criterio
+// que priceIntelligenceCache en Fase 2 y projects/apus en Fase 1), contra el
+// handler real y el emulador real -- no solo leyendo el codigo.
+describe('GET /api/technical-memory -- aislamiento por scope (Fase 3, Parte 0)', () => {
+  async function callProjects(req){ const res = mockRes(); await projectsHandler(req, res); return res; }
+
+  it('PROJECT: el dueno del proyecto ve su propia memoria; otro usuario sin relacion con el proyecto no', async () => {
+    const owner = await createUserAndGetIdToken({ email: uniq('proj-owner') });
+    const stranger = await createUserAndGetIdToken({ email: uniq('proj-stranger') });
+    const projectId = `PRO-MEM-${Date.now()}`;
+    const createProject = await callProjects(post(owner.idToken, { action: 'create', id: projectId, name: 'Obra privada' }));
+    assert.equal(createProject.statusCode, 201);
+
+    const proposal = await call(post(owner.idToken, {
+      action: 'proposal', scope: MEMORY_SCOPE.PROJECT, type: MEMORY_TYPE.APPROVED_YIELD,
+      subject: { resourceDescripcion: 'Oficial albañil' }, value: 7, context: { projectId }
+    }));
+    assert.equal(proposal.statusCode, 201);
+
+    const asOwner = await call(get(owner.idToken, { projectId }));
+    assert.ok(asOwner.body.entries.some(e => e.id === proposal.body.entry.id), 'el dueno del proyecto debe ver su propia memoria PROJECT');
+
+    const asStranger = await call(get(stranger.idToken, { projectId }));
+    assert.ok(!asStranger.body.entries.some(e => e.id === proposal.body.entry.id), 'un usuario sin relacion con el proyecto NUNCA debe ver su memoria PROJECT');
+
+    const byIdAsStranger = await call(get(stranger.idToken, { id: proposal.body.entry.id }));
+    assert.equal(byIdAsStranger.body.entry, null, 'pedir la entrada por id directo tampoco debe filtrar la relacion con el proyecto');
+  });
+
+  it('PROJECT: un projectId inventado (el proyecto no existe) nunca expone memoria a nadie que no sea admin', async () => {
+    const attacker = await createUserAndGetIdToken({ email: uniq('proj-fake') });
+    const projectId = `PRO-NO-EXISTE-${Date.now()}`;
+    const proposal = await call(post(attacker.idToken, {
+      action: 'proposal', scope: MEMORY_SCOPE.PROJECT, type: MEMORY_TYPE.APPROVED_YIELD,
+      subject: {}, value: 5, context: { projectId }
+    }));
+    assert.equal(proposal.statusCode, 201, 'crear la propuesta en si no requiere que el proyecto exista todavia');
+    const res = await call(get(attacker.idToken, { projectId }));
+    assert.ok(!res.body.entries.some(e => e.id === proposal.body.entry.id), 'sin un proyecto real que lo respalde, nadie no-admin puede leerla de vuelta');
+  });
+
+  it('ORGANIZATION: un miembro de la Empresa B no puede leer memoria ORGANIZATION de la Empresa A, aunque conozca su organizationId', async () => {
+    const orgAId = `ORG-A-${Date.now()}`;
+    const orgBId = `ORG-B-${Date.now()}`;
+    const db = getAdminDb();
+    const futureDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    await db.collection('organizations').doc(orgAId).set({ name: 'Empresa A', status: 'ACTIVE_TRIAL', expiresAt: futureDate });
+    await db.collection('organizations').doc(orgBId).set({ name: 'Empresa B', status: 'ACTIVE_TRIAL', expiresAt: futureDate });
+
+    const memberA = await createUserAndGetIdToken({ email: uniq('org-a-member') });
+    const memberB = await createUserAndGetIdToken({ email: uniq('org-b-member') });
+    await db.collection('users').doc(memberA.uid).set({ organizationId: orgAId }, { merge: true });
+    await db.collection('users').doc(memberB.uid).set({ organizationId: orgBId }, { merge: true });
+    await db.collection('organizations').doc(orgAId).collection('members').doc(memberA.uid).set({ role: 'org_admin', status: 'active' });
+    await db.collection('organizations').doc(orgBId).collection('members').doc(memberB.uid).set({ role: 'org_admin', status: 'active' });
+
+    const proposal = await call(post(memberA.idToken, {
+      action: 'proposal', scope: MEMORY_SCOPE.ORGANIZATION, type: MEMORY_TYPE.PREFERRED_SUPPLIER,
+      subject: {}, value: 'Proveedor confidencial A', context: { organizationId: orgAId }
+    }));
+    assert.equal(proposal.statusCode, 201);
+
+    const asMemberA = await call(get(memberA.idToken, { scope: MEMORY_SCOPE.ORGANIZATION }));
+    assert.ok(asMemberA.body.entries.some(e => e.id === proposal.body.entry.id), 'un miembro de la propia organizacion SI debe verla');
+
+    const asMemberB = await call(get(memberB.idToken, { scope: MEMORY_SCOPE.ORGANIZATION }));
+    assert.ok(!asMemberB.body.entries.some(e => e.id === proposal.body.entry.id), 'un miembro de OTRA organizacion nunca debe verla, aunque pida el mismo scope');
+  });
+
+  it('USER: la memoria personal de un usuario no es visible para otro usuario', async () => {
+    const userA = await createUserAndGetIdToken({ email: uniq('mem-user-a') });
+    const userB = await createUserAndGetIdToken({ email: uniq('mem-user-b') });
+    const proposal = await call(post(userA.idToken, {
+      action: 'proposal', scope: MEMORY_SCOPE.USER, type: MEMORY_TYPE.APPROVED_YIELD,
+      subject: {}, value: 9, context: { userId: userA.uid }
+    }));
+    assert.equal(proposal.statusCode, 201);
+    const asUserB = await call(get(userB.idToken, { scope: MEMORY_SCOPE.USER }));
+    assert.ok(!asUserB.body.entries.some(e => e.id === proposal.body.entry.id), 'la memoria USER de otra persona nunca debe ser visible');
+    const asUserA = await call(get(userA.idToken, { scope: MEMORY_SCOPE.USER }));
+    assert.ok(asUserA.body.entries.some(e => e.id === proposal.body.entry.id), 'el propio usuario si debe ver su memoria USER');
+  });
+
+  it('GLOBAL: sigue siendo visible para cualquier usuario autenticado (no cambia el comportamiento existente)', async () => {
+    const proposer = await createUserAndGetIdToken({ email: uniq('global-proposer') });
+    const other = await createUserAndGetIdToken({ email: uniq('global-other') });
+    const proposal = await call(post(proposer.idToken, { action: 'proposal', scope: MEMORY_SCOPE.GLOBAL, type: MEMORY_TYPE.APPROVED_YIELD, subject: { primaryActivity: 'acero' }, value: 5 }));
+    const res = await call(get(other.idToken, { scope: MEMORY_SCOPE.GLOBAL }));
+    assert.ok(res.body.entries.some(e => e.id === proposal.body.entry.id), 'GLOBAL debe seguir siendo el piso generico visible para cualquiera');
+  });
+
+  it('un administrador real sigue viendo todo, sin importar el scope', async () => {
+    const owner = await createUserAndGetIdToken({ email: uniq('admin-see-owner') });
+    const admin = await createUserAndGetIdToken({ email: uniq('admin-see-all'), role: 'admin' });
+    const projectId = `PRO-ADMIN-SEE-${Date.now()}`;
+    await callProjects(post(owner.idToken, { action: 'create', id: projectId, name: 'Obra vista por admin' }));
+    const proposal = await call(post(owner.idToken, { action: 'proposal', scope: MEMORY_SCOPE.PROJECT, type: MEMORY_TYPE.APPROVED_YIELD, subject: {}, value: 4, context: { projectId } }));
+    const res = await call(get(admin.idToken, { projectId }));
+    assert.ok(res.body.entries.some(e => e.id === proposal.body.entry.id), 'un admin real debe seguir viendo memoria de cualquier proyecto');
   });
 });

@@ -17,9 +17,9 @@ export default async function handler(req, res){
     await requireFeature(req, 'ai');
     const {
       description = '', unit = '', kind = 'materials', location = '', dateBase = '',
-      technicalSpecification = '', region = '', tenantScope = null
+      technicalSpecification = '', region = '', country = '', state = '', city = '', tenantScope = null
     } = req.body || {};
-    const result = await searchMarketReferencesWithCache({ description, unit, kind, location, dateBase, technicalSpecification, region, tenantScope });
+    const result = await searchMarketReferencesWithCache({ description, unit, kind, location, dateBase, technicalSpecification, region, country, state, city, tenantScope });
     res.status(200).json(result);
   }catch(err){
     res.status(err.status || 400).json({ error: err.message || 'No se pudo consultar precios de mercado.' });

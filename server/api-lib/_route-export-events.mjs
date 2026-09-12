@@ -17,6 +17,7 @@
 import { requireAuth } from './_authGuard.mjs';
 import { getAdminDb } from './_firebaseAdmin.mjs';
 import { computeSnapshotHash } from '../../src/domain/snapshotHash.js';
+import { loadOrgContext, assertOrgNotExpired, canAccessOrgScopedDoc } from './_orgGuard.mjs';
 
 const COLLECTION = 'exportEvents';
 const VALID_FORMATS = new Set(['PDF', 'XLSX']);
@@ -49,6 +50,8 @@ function httpError(status, message){ const e = new Error(message); e.status = st
    para ganar algo -- no representan una entidad ajena). */
 async function handleRecord(req, res){
   const authz = await requireAuth(req);
+  const orgContext = await loadOrgContext(authz.uid);
+  assertOrgNotExpired(orgContext); // punto 7: trial vencido bloquea NUEVAS exportaciones
   const {
     scope = 'APU', projectId, apuId, selectedScenarioIds, format, mode
   } = req.body || {};
@@ -63,15 +66,18 @@ async function handleRecord(req, res){
     if(!projectId) throw httpError(400, 'Falta projectId.');
     const projectSnap = await db.collection('projects').doc(String(projectId)).get();
     if(!projectSnap.exists) throw httpError(404, 'El proyecto no existe.');
-    if(projectSnap.data().ownerUid !== authz.uid) throw httpError(403, 'Este proyecto pertenece a otro usuario.');
-    const apusSnap = await db.collection('apus').where('projectId', '==', String(projectId)).where('ownerUid', '==', authz.uid).get();
+    const projectData = projectSnap.data();
+    if(!canAccessOrgScopedDoc(projectData, authz, orgContext)) throw httpError(403, 'Este proyecto pertenece a otro usuario.');
+    const apusSnap = orgContext
+      ? await db.collection('apus').where('projectId', '==', String(projectId)).where('organizationId', '==', orgContext.organizationId).get()
+      : await db.collection('apus').where('projectId', '==', String(projectId)).where('ownerUid', '==', authz.uid).get();
     const realApus = apusSnap.docs.map(d => d.data()).filter(a => !a.archivedAt);
     const apuVersionIds = realApus.map(a => `${a.id}@${a.currentVersion ?? 'SIN_VERSION'}`);
     const snapshotHashes = await Promise.all(realApus.map(a => computeSnapshotHash(a.snapshot || {})));
     const scenarioIds = Array.isArray(selectedScenarioIds) ? selectedScenarioIds : [];
     const manifestHash = await computeSnapshotHash({ projectId: String(projectId), apuVersionIds, snapshotHashes, options: { mode }, selectedScenarioIds: scenarioIds });
     event = {
-      id: docRef.id, ownerUid: authz.uid, actor: authz.uid, actorEmail: authz.email, scope,
+      id: docRef.id, ownerUid: authz.uid, organizationId: projectData.organizationId ?? null, actor: authz.uid, actorEmail: authz.email, scope,
       projectId: String(projectId), apuVersionIds, snapshotHashes,
       selectedScenarioIds: scenarioIds, manifestHash, format, mode, timestamp: new Date().toISOString()
     };
@@ -80,10 +86,10 @@ async function handleRecord(req, res){
     const apuSnap = await db.collection('apus').doc(String(apuId)).get();
     if(!apuSnap.exists) throw httpError(404, 'El APU no existe.');
     const apuData = apuSnap.data();
-    if(apuData.ownerUid !== authz.uid) throw httpError(403, 'Este APU pertenece a otro usuario.');
+    if(!canAccessOrgScopedDoc(apuData, authz, orgContext)) throw httpError(403, 'Este APU pertenece a otro usuario.');
     const snapshotHash = await computeSnapshotHash(apuData.snapshot || {});
     event = {
-      id: docRef.id, ownerUid: authz.uid, actor: authz.uid, actorEmail: authz.email, scope,
+      id: docRef.id, ownerUid: authz.uid, organizationId: apuData.organizationId ?? null, actor: authz.uid, actorEmail: authz.email, scope,
       projectId: apuData.projectId || null, apuId: String(apuId), apuVersionId: apuData.currentVersion || null,
       snapshotHash, format, mode, timestamp: new Date().toISOString()
     };
@@ -94,9 +100,12 @@ async function handleRecord(req, res){
 
 async function handleList(req, res){
   const authz = await requireAuth(req);
+  const orgContext = await loadOrgContext(authz.uid);
   const { apuId } = req.query || {};
   const db = getAdminDb();
-  let query = db.collection(COLLECTION).where('ownerUid', '==', authz.uid);
+  let query = orgContext
+    ? db.collection(COLLECTION).where('organizationId', '==', orgContext.organizationId)
+    : db.collection(COLLECTION).where('ownerUid', '==', authz.uid);
   if(apuId) query = query.where('apuId', '==', String(apuId));
   const snap = await query.get();
   res.status(200).json({ events: snap.docs.map(d => d.data()) });

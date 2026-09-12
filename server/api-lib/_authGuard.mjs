@@ -1,4 +1,5 @@
 import { FieldValue, getAdminAuth, getAdminDb, hasAdminCredentials } from './_firebaseAdmin.mjs';
+import { resolveOrgStatus, isActiveTrialStatus } from '../../src/domain/organization.js';
 
 /* "library" faltaba aqui (bug real, no de seguridad): rules['library'] daba
    undefined para CUALQUIER plan, asi que requireFeature(req,'library') le
@@ -58,29 +59,47 @@ function normalizePlan(plan){
   return PLAN_RULES[plan] ? plan : 'Gratis';
 }
 
-/* Misma logica que isAdminUser en el frontend (src/domain/permissions.js): no
-   confiar en un solo valor exacto de "role". Acepta variantes normalizadas,
-   custom claim de Firebase (decoded.admin === true) o correo en la lista de
-   administradores. VITE_ADMIN_EMAILS/ADMIN_EMAILS nunca se configuraron en
-   Vercel; la variable que si esta configurada ahi es SUPERADMIN_EMAILS (se
-   lee tambien, ademas de las otras dos por compatibilidad). Se agrega el
-   mismo correo de respaldo fijo que ya usa el cliente (permissions.js) para
-   que el admin real de la plataforma no dependa de una variable de entorno
-   ausente: sin este respaldo, requireAdmin/requireFeature nunca reconocian a
-   ese usuario como admin en el servidor aunque el frontend si lo mostrara
-   como admin (rol tomado solo de Firestore, cuota y limite de ráfaga
-   aplicados como si fuera un usuario normal). */
-const ADMIN_ROLE_VALUES = new Set(['admin', 'administrator', 'administrador', 'superadmin']);
-const ADMIN_EMAILS = String(
-  process.env.VITE_ADMIN_EMAILS || process.env.ADMIN_EMAILS || process.env.SUPERADMIN_EMAILS || 'dianalopez161184@gmail.com'
+/* SUPER ADMIN = administrador GLOBAL de ZOEMEC (no confundir con
+   company_manager, el responsable de UNA sola empresa dentro de su
+   organizacion -- ver src/domain/organization.js#ORG_ROLE y
+   _orgGuard.mjs#requireCompanyManager). Mismo criterio que el cliente
+   (src/domain/permissions.js#isAdminUser), y debe mantenerse en sincronia
+   con firestore.rules#isSuperAdmin() -- son las UNICAS tres fuentes de este
+   calculo en todo el repo.
+
+   Endurecimiento de seguridad (auditoria de roles): antes tambien se aceptaba
+   cualquier users/{uid}.role guardado en Firestore como "admin"/"administrator"/
+   "administrador"/"superadmin" -- eso permitia que un super admin ascendiera
+   a CUALQUIER otro usuario a super admin con una simple escritura de
+   Firestore (ver el <select> que existia en AdminPanel.jsx), exactamente lo
+   que se pidio eliminar ("ningun usuario puede asignarse este rol, ninguna
+   empresa puede crear otro super_admin", "debe validarse server-side").
+   Ningun documento de Firestore puede otorgar este rol nunca mas.
+
+   MECANISMO FINAL: el custom claim real de Firebase `super_admin===true`
+   (decoded.super_admin viene del ID token YA VERIFICADO por
+   verifyIdToken -- nunca del body/query del cliente). NINGUN endpoint de
+   este repo lo establece jamas -- la unica forma de otorgarlo es
+   scripts/grant-super-admin.mjs, corrido a mano fuera de la app con las
+   credenciales reales de Firebase Admin.
+
+   MECANISMO DE TRANSICION (temporal, NO el final): el correo en
+   SUPERADMIN_EMAILS/respaldo fijo. SUPERADMIN_EMAILS es la unica variable de
+   entorno que de verdad esta configurada en Vercel hoy (confirmado); el
+   respaldo fijo evita que el acceso dependa de una variable ausente. Existe
+   solo mientras scripts/grant-super-admin.mjs todavia no se ha corrido para
+   la cuenta real en un entorno dado -- una vez corrido, este respaldo puede
+   retirarse sin perder acceso. Debe mantenerse en sincronia con
+   src/domain/permissions.js#SUPERADMIN_EMAILS y firestore.rules#isSuperAdmin
+   -- son las UNICAS tres fuentes de este calculo en todo el repo. */
+const SUPERADMIN_EMAILS = String(
+  process.env.SUPERADMIN_EMAILS || 'dianalopez161184@gmail.com'
 ).split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
 function normalizeRoleValue(v){ return String(v ?? '').trim().toLowerCase(); }
-function isAdminProfile(decoded, profile){
-  const role = normalizeRoleValue(profile?.role);
-  if(ADMIN_ROLE_VALUES.has(role)) return true;
-  if(decoded?.admin === true) return true;
+function isSuperAdminProfile(decoded, profile){
+  if(decoded?.super_admin === true) return true;
   const email = normalizeRoleValue(profile?.email ?? decoded?.email);
-  if(email && ADMIN_EMAILS.includes(email)) return true;
+  if(email && SUPERADMIN_EMAILS.includes(email)) return true;
   return false;
 }
 
@@ -108,7 +127,7 @@ export async function requireFeature(req, feature){
   const userRef = db.collection('users').doc(decoded.uid);
   const snap = await userRef.get();
   const profile = snap.exists ? snap.data() : {};
-  const isAdmin = isAdminProfile(decoded, profile);
+  const isAdmin = isSuperAdminProfile(decoded, profile);
 
   /* Misma regla que el cliente (src/main.jsx: cierra la sesion si
      !fbUser.emailVerified y no es admin) pero aplicada server-side. Sin esto,
@@ -133,7 +152,32 @@ export async function requireFeature(req, feature){
   const month = usageMonth();
   const currentUsage = Number(profile.usage?.[month]?.[feature] || 0);
 
-  if(!isAdmin){
+  /* Punto 5 del trial empresarial: "sin limites artificiales de uso durante
+     el mes". Un miembro de una organizacion en ACTIVE_TRIAL no debe heredar
+     el limite del plan individual (normalmente Gratis: 1 APU, sin IA) de su
+     users/{uid} personal -- se le trata como acceso completo al chequeo de
+     cuota/plan, igual que ya se hace con isAdmin. A diferencia de admin, SI
+     sigue aplicando enforceRateLimit (rate limiting por rafaga): el punto 5
+     pide "sin limites artificiales" pero mantiene proteccion razonable
+     contra abuso/automatizacion masiva. Si el trial ya vencio
+     (resolveOrgStatus lo resuelve aunque el documento todavia no lo refleje,
+     ver _orgGuard.mjs), no hay bypass: cae al comportamiento Gratis normal,
+     lo que bloquea de facto IA/exportacion (punto 7). */
+  let isActiveTrialOrgMember = false;
+  if(!isAdmin && profile.organizationId){
+    try{
+      const orgSnap = await db.collection('organizations').doc(profile.organizationId).get();
+      if(orgSnap.exists){
+        isActiveTrialOrgMember = isActiveTrialStatus(resolveOrgStatus({ id: orgSnap.id, ...orgSnap.data() }));
+      }
+    }catch{
+      // Si la lectura de la organizacion falla, cae al comportamiento de plan
+      // individual normal -- nunca se otorga acceso extra por una falla.
+    }
+  }
+  const bypassPlanLimits = isAdmin || isActiveTrialOrgMember;
+
+  if(!bypassPlanLimits){
     if(feature === 'apu' && currentUsage >= rules.apuLimit){
       const error = new Error('Tu limite de APUs de este plan ya fue usado. Activa o mejora tu plan para continuar.');
       error.status = 402;
@@ -144,6 +188,8 @@ export async function requireFeature(req, feature){
       error.status = 402;
       throw error;
     }
+  }
+  if(!isAdmin){
     await enforceRateLimit(db, decoded.uid, feature);
   }
 
@@ -171,7 +217,7 @@ export async function requireFeature(req, feature){
   };
 }
 
-export async function requireAdmin(req){
+export async function requireSuperAdmin(req){
   if(!hasAdminCredentials()){
     const error = new Error('Falta FIREBASE_SERVICE_ACCOUNT_JSON en Vercel para validar administradores.');
     error.status = 500;
@@ -186,7 +232,7 @@ export async function requireAdmin(req){
   const decoded = await getAdminAuth().verifyIdToken(token);
   const snap = await getAdminDb().collection('users').doc(decoded.uid).get();
   const profile = snap.exists ? snap.data() : {};
-  if(!isAdminProfile(decoded, profile)){
+  if(!isSuperAdminProfile(decoded, profile)){
     const error = new Error('Esta seccion es solo para administradores.');
     error.status = 403;
     throw error;
@@ -219,7 +265,7 @@ export async function requireAuth(req){
   const userRef = db.collection('users').doc(decoded.uid);
   const snap = await userRef.get();
   const profile = snap.exists ? snap.data() : {};
-  const isAdmin = isAdminProfile(decoded, profile);
+  const isAdmin = isSuperAdminProfile(decoded, profile);
 
   if(!decoded.email_verified && !isAdmin){
     const error = new Error('Verifica tu correo antes de continuar. Revisa tu bandeja de entrada.');

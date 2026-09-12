@@ -7,14 +7,14 @@
    api/health.mjs) -- no se inventa un router ni rutas dinamicas que este
    proyecto (Vercel + `api/*.mjs` plano) no usa en ningun otro lado.
 
-   Identidad SIEMPRE del token verificado (requireAuth/requireAdmin,
+   Identidad SIEMPRE del token verificado (requireAuth/requireSuperAdmin,
    _authGuard.mjs) -- createdBy/approvedBy/rejectedBy nunca se leen del
    body, sin importar que el cliente los mande (regla 3 del spec).
 
    Autorizacion (regla 4, policy explicita -- el proyecto solo tiene
    admin/user hoy, no un rol "supervisor" dedicado):
      - Crear PROPOSAL: cualquier usuario autenticado (requireAuth).
-     - APPROVE / REJECT / SUPERSEDE: requireAdmin. Documentado aqui porque
+     - APPROVE / REJECT / SUPERSEDE: requireSuperAdmin. Documentado aqui porque
        no existe todavia un rol intermedio; si se agrega uno mas adelante,
        este es el unico lugar que hay que cambiar.
 
@@ -23,16 +23,53 @@
    VERCEL_HOBBY_COMPAT.md. Contenido/logica identicos a la version original
    en api/technical-memory.mjs, solo cambiaron las rutas relativas de
    import. */
-import { requireAuth, requireAdmin } from './_authGuard.mjs';
+import { requireAuth, requireSuperAdmin } from './_authGuard.mjs';
 import { getAdminDb } from './_firebaseAdmin.mjs';
 import { appendAudit } from './_decisionAudit.mjs';
+import { loadOrgContext, canAccessOrgScopedDoc } from './_orgGuard.mjs';
 import { createFirestoreMemoryRepository } from './_technicalMemoryFirestoreAdapter.mjs';
-import { createMemoryProposal, approveMemoryEntry, rejectMemoryEntry, supersedeMemoryEntry, MEMORY_STATUS } from '../../src/domain/technicalMemory.js';
+import { createMemoryProposal, approveMemoryEntry, rejectMemoryEntry, supersedeMemoryEntry, MEMORY_STATUS, MEMORY_SCOPE } from '../../src/domain/technicalMemory.js';
 
 const COLLECTION = 'technicalMemory';
 const AUDIT_COLLECTION = 'technicalMemoryAudit';
 
 function httpError(status, message){ const e = new Error(message); e.status = status; return e; }
+
+/* FASE 3 (aprendizaje progresivo SEGURO), Parte 0 -- hallazgo de esta fase:
+   handleList devolvia CUALQUIER entrada que coincidiera con scope/type/
+   status/projectId sin verificar que quien pregunta tenga relacion real con
+   ese proyecto u organizacion -- a diferencia de _route-projects.mjs/
+   _route-apus.mjs, que ya usan canAccessOrgScopedDoc. Pasaba inadvertido
+   porque este endpoint casi no se usaba en produccion; conectarlo de verdad
+   a Confidence/Challenge (el resto de esta fase) le da trafico real, asi que
+   se cierra primero. Regla por scope (misma jerarquia que ya define
+   technicalMemory.js#MEMORY_SCOPE):
+     GLOBAL       -> piso generico de la plataforma, visible para cualquier
+                     usuario autenticado (nunca describe un proyecto/empresa).
+     PROJECT      -> exige poder acceder al PROYECTO real (mismo criterio que
+                     ver el proyecto mismo, no la identidad de quien propuso
+                     la memoria -- es memoria de equipo, no personal).
+     ORGANIZATION -> exige pertenecer a esa organizacion exacta.
+     USER         -> exige ser ese mismo usuario.
+   Un administrador real sigue viendo todo (mismo criterio que el resto de
+   la plataforma, ver isAdmin()/requireSuperAdmin). */
+async function filterVisibleEntries(entries, authz){
+  if(authz.role === 'admin') return entries;
+  const db = getAdminDb();
+  const orgContext = await loadOrgContext(authz.uid);
+  const projectIds = [...new Set(entries
+    .filter(e => e.scope === MEMORY_SCOPE.PROJECT && e.context?.projectId)
+    .map(e => e.context.projectId))];
+  const projectDocs = await Promise.all(projectIds.map(id => db.collection('projects').doc(id).get()));
+  const projectsById = new Map(projectIds.map((id, i) => [id, projectDocs[i].exists ? projectDocs[i].data() : null]));
+  return entries.filter(entry => {
+    if(entry.scope === MEMORY_SCOPE.GLOBAL) return true;
+    if(entry.scope === MEMORY_SCOPE.USER) return entry.context?.userId === authz.uid;
+    if(entry.scope === MEMORY_SCOPE.ORGANIZATION) return Boolean(orgContext && entry.context?.organizationId === orgContext.organizationId);
+    if(entry.scope === MEMORY_SCOPE.PROJECT) return canAccessOrgScopedDoc(projectsById.get(entry.context?.projectId), authz, orgContext);
+    return false;
+  });
+}
 
 async function handleList(req, res){
   const authz = await requireAuth(req);
@@ -40,7 +77,8 @@ async function handleList(req, res){
   const repo = createFirestoreMemoryRepository();
   if(id){
     const entry = await repo.getById(String(id));
-    res.status(200).json({ entry, requestedBy: authz.uid });
+    const visible = entry ? (await filterVisibleEntries([entry], authz))[0] || null : null;
+    res.status(200).json({ entry: visible, requestedBy: authz.uid });
     return;
   }
   let entries = await repo.list({ scope: scope || undefined, type: type || undefined, status: status || undefined });
@@ -48,6 +86,7 @@ async function handleList(req, res){
   // repository interface solo filtra scope/type/status) -- se filtra aqui,
   // en la capa de API, sin tocar el contrato del repositorio.
   if(projectId) entries = entries.filter(e => e.context?.projectId === projectId);
+  entries = await filterVisibleEntries(entries, authz);
   res.status(200).json({ entries, count: entries.length });
 }
 
@@ -84,7 +123,7 @@ async function handleProposal(req, res){
    la accion sobre una entrada ya resuelta falla con 409 -- esa es la
    idempotencia real (regla 12): nunca un doble-approve silencioso. */
 async function handleApprove(req, res){
-  const authz = await requireAdmin(req);
+  const authz = await requireSuperAdmin(req);
   const { id } = req.body || {};
   if(!id) throw httpError(400, 'Falta id de la entrada a aprobar.');
   const db = getAdminDb();
@@ -108,7 +147,7 @@ async function handleApprove(req, res){
 }
 
 async function handleReject(req, res){
-  const authz = await requireAdmin(req);
+  const authz = await requireSuperAdmin(req);
   const { id, reason } = req.body || {};
   if(!id) throw httpError(400, 'Falta id de la entrada a rechazar.');
   const db = getAdminDb();
@@ -136,7 +175,7 @@ async function handleReject(req, res){
    anterior SUPERSEDED sin borrarla (regla 11: nunca update destructivo).
    Ambos documentos + la auditoria se escriben en la MISMA transaccion. */
 async function handleSupersede(req, res){
-  const authz = await requireAdmin(req);
+  const authz = await requireSuperAdmin(req);
   const { id, value, unit, scope, type, subject, context, tags } = req.body || {};
   if(!id) throw httpError(400, 'Falta id de la entrada a reemplazar.');
   const db = getAdminDb();

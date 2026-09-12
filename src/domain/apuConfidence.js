@@ -179,12 +179,47 @@ function historicalConsistencyDimension(apu, options = {}){
   });
 }
 
-// Pesos documentados (suman 1.00 sobre las 8 dimensiones). "calculation" pesa
+/* "regionalEvidence" (Fase 2 -- APU regionalizados por ubicacion, dimension
+   NUEVA): que fraccion de los recursos que SI pasaron por Price Intelligence
+   (tienen priceStatus, ver materialPriceIntelligence2.js) consiguieron
+   evidencia de precio realmente regional (ciudad/estado, regionalConfidence
+   ALTA/MEDIA) en vez de solo nacional/sin dato (BAJA o null). Es una
+   dimension DISTINTA de "prices"/"evidence" (esas miden si el precio en si
+   tiene respaldo de mercado, esta mide si ese respaldo esta anclado a la
+   ubicacion del proyecto) -- un recurso puede tener VERIFIED_MARKET con
+   regionalConfidence BAJA (precio real, pero de una fuente generica
+   nacional) sin contradiccion. Sin ningun recurso que haya pasado por Price
+   Intelligence (APU legacy anterior a esta fase, o generado sin busqueda de
+   precio), no hay base para evaluar -- INSUFFICIENT_EVIDENCE, nunca 0. */
+function regionalEvidenceDimension(apu){
+  const rows = [
+    ...(Array.isArray(apu.materials) ? apu.materials : []),
+    ...(Array.isArray(apu.labor) ? apu.labor : []),
+    ...(Array.isArray(apu.equipment) ? apu.equipment : []),
+    ...(Array.isArray(apu.seguridad) ? apu.seguridad : [])
+  ];
+  const searched = rows.filter(r => r.priceStatus != null);
+  if(!searched.length) return dimension({ score: null, missingData: ['no_price_intelligence_data'] });
+  const regional = searched.filter(r => r.regionalConfidence === 'ALTA' || r.regionalConfidence === 'MEDIA').length;
+  const score = (regional / searched.length) * 100;
+  const sinRegion = searched.length - regional;
+  return dimension({
+    score,
+    reasons: sinRegion ? [`${sinRegion} de ${searched.length} recursos con busqueda de precio no consiguieron evidencia regional (solo referencias nacionales o sin dato de ubicacion) -- informacion regional limitada para esos renglones.`] : [],
+    evidence: [`regionalRows=${regional}/${searched.length}`]
+  });
+}
+
+// Pesos documentados (suman 1.00 sobre las 9 dimensiones). "calculation" pesa
 // mas porque un numero mal calculado invalida todo lo demas; "prices" en
 // segundo lugar porque es el insumo mas directo del riesgo economico.
+// "regionalEvidence" (Fase 2) se resta de "evidence" (0.10 -> 0.05): ambas
+// miden fuerza de la evidencia de mercado, una general y otra geografica,
+// asi que comparten presupuesto de peso en vez de inflar el total.
 const WEIGHTS = Object.freeze({
   calculation: 0.25, prices: 0.20, productivity: 0.15, quantities: 0.10,
-  structure: 0.10, evidence: 0.10, specification: 0.05, historicalConsistency: 0.05
+  structure: 0.10, evidence: 0.05, specification: 0.05, historicalConsistency: 0.05,
+  regionalEvidence: 0.05
 });
 
 const STATUS_RECOMMENDATION = Object.freeze({
@@ -206,7 +241,8 @@ export function runApuConfidence(apu = {}, options = {}){
     productivity: productivityDimension(apu, base.dimensions.rendimientos, challenge.challenges),
     quantities: passthroughDimension(base.dimensions.cantidades, 'cantidades'),
     specification: passthroughDimension(base.dimensions.especificaciones, 'especificaciones'),
-    historicalConsistency: historicalConsistencyDimension(apu, options)
+    historicalConsistency: historicalConsistencyDimension(apu, options),
+    regionalEvidence: regionalEvidenceDimension(apu)
   };
 
   const scored = Object.entries(dimensions).filter(([, d]) => d.score != null);

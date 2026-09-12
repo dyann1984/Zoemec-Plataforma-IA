@@ -424,7 +424,7 @@ label{display:block;font-size:.74rem;font-weight:600;color:var(--muted);text-tra
 /* ====================================================================
    LANDING
    ==================================================================== */
-.landing{min-height:100vh;
+.landing{min-height:100vh;min-height:100dvh;
   background:
     linear-gradient(var(--grid) 1px,transparent 1px) 0 0/26px 26px,
     linear-gradient(90deg,var(--grid) 1px,transparent 1px) 0 0/26px 26px,
@@ -488,7 +488,7 @@ label{display:block;font-size:.74rem;font-weight:600;color:var(--muted);text-tra
 /* ====================================================================
    AUTH
    ==================================================================== */
-.auth-wrap{min-height:100vh;display:grid;place-items:center;padding:24px;
+.auth-wrap{min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding:24px;
   background:
     radial-gradient(90% 70% at 52% 8%, rgba(157,111,208,.42), transparent 58%),
     linear-gradient(145deg,#170f22 0%,#2A1740 52%,#0F0C14 100%)}
@@ -501,7 +501,7 @@ label{display:block;font-size:.74rem;font-weight:600;color:var(--muted);text-tra
 .auth-card small{display:block;margin-top:12px;color:var(--muted)}
 .auth-card small a{color:var(--teal);font-weight:600;text-decoration:none}
 .auth-card .back{display:inline-block;margin-top:14px;color:var(--muted);font-size:.85rem;text-decoration:none}
-.verify-email-page{min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--paper);padding:24px}
+.verify-email-page{min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;background:var(--paper);padding:24px}
 .verify-actions{display:flex;flex-direction:column;gap:8px;margin-top:10px}
 .verify-note{margin:0;font-size:.82rem;color:var(--muted)}
 .verify-note.ok{color:#1f7a4d}
@@ -510,14 +510,27 @@ label{display:block;font-size:.74rem;font-weight:600;color:var(--muted);text-tra
 /* ====================================================================
    APP SHELL
    ==================================================================== */
-.app-layout{display:grid;grid-template-columns:262px 1fr;min-height:100vh}
-.sidebar{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:6px;
+.app-layout{display:grid;grid-template-columns:262px 1fr;min-height:100vh;min-height:100dvh}
+.sidebar{position:sticky;top:0;height:100vh;height:100dvh;display:flex;flex-direction:column;gap:6px;
   background:linear-gradient(180deg,#171020 0%,#2A1740 100%);color:#EFE8F7;padding:20px 14px;overflow-y:auto}
+/* Bug real (auditoria movil, pantallas bajas de altura): .sidebar es un flex
+   column de altura fija (100vh). Con el menu completo (10 items incluyendo
+   "Equipo" del trial empresarial) mas .plan-box y .logout-side, el contenido
+   puede exceder esa altura -- y por default TODOS los hijos flex pueden
+   encogerse (flex-shrink:1) por debajo de su tamano natural para "caber",
+   en vez de activar el scroll de .sidebar (overflow-y:auto, arriba). Eso
+   comprimia .plan-box hasta que su <small> (texto final) quedaba mas bajo
+   que su propio contenedor y se encimaba visualmente con .logout-side.
+   flex-shrink:0 en todo excepto .menu dice "nunca te encojas, mantén tu
+   tamano real"; .menu conserva flex:1 (crece si sobra espacio, en pantallas
+   altas) pero con shrink:0 tambien -- si igual no cabe, es .sidebar quien
+   scrollea completo, nunca un item individual el que se aplasta. */
+.brand,.plan-box,.logout-side{flex-shrink:0}
 .brand{display:flex;align-items:center;gap:11px;padding:6px 8px 16px;border-bottom:1px solid rgba(255,255,255,.08);margin-bottom:8px}
 .brand img{height:60px;width:auto;object-fit:contain;background:transparent;border-radius:0;padding:0;filter:drop-shadow(0 0 6px rgba(145,70,255,.65)) drop-shadow(0 0 14px rgba(145,70,255,.25))}
 .brand b{font-family:var(--display);font-size:1.18rem;color:#fff;display:block;letter-spacing:.02em}
 .brand span{font-size:.68rem;color:#B8A4CC;letter-spacing:.06em}
-.menu{display:flex;flex-direction:column;gap:3px;flex:1}
+.menu{display:flex;flex-direction:column;gap:3px;flex:1 0 auto}
 .menu button{display:flex;align-items:center;gap:11px;background:transparent;color:#DED2EA;box-shadow:none;
   font-family:var(--body);font-weight:500;font-size:.9rem;justify-content:flex-start;padding:9px 12px;border-radius:10px;min-height:44px}
 .menu button span{font-size:1.05rem;width:20px;text-align:center}
@@ -538,6 +551,20 @@ label{display:block;font-size:.74rem;font-weight:600;color:var(--muted);text-tra
 .logout-side:hover{background:var(--danger-solid);border-color:var(--danger-solid)}
 
 .main{display:flex;flex-direction:column;min-width:0}
+/* Mismo bug de fondo que .apu-workspace (ver comentario junto a esa regla,
+   mas abajo): CUALQUIER seccion raiz de modulo montada directo dentro de
+   .main (.main es flex column) hereda min-width:auto por default y puede
+   forzarse mas ancha que el viewport si su contenido no tiene donde
+   envolver, sin que .main{overflow-x:hidden} de ningun aviso -- solo
+   recorta en silencio. min-width:0 solo no alcanzo (confirmado con
+   getBoundingClientRect en vivo: .apu-workspace seguia midiendo ~867px en
+   un viewport de 375px, un hijo flex de columna con overflow en el eje
+   cruzado no queda realmente limitado por "stretch" solo, necesita su
+   propio 100% explicito) -- width:100% fuerza el ancho real del
+   contenedor en vez de depender del stretch implicito de flexbox, en
+   TODOS los hijos directos de una sola vez (evita perseguir esto modulo
+   por modulo). */
+.main>*{width:100%;min-width:0}
 .topbar{position:sticky;top:0;z-index:8;display:flex;align-items:center;justify-content:space-between;gap:16px;
   padding:14px 28px;background:var(--surface);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
 .user{display:flex;align-items:center;gap:12px}
@@ -622,7 +649,14 @@ section{padding:26px 28px 64px}
   justify-content:flex-start;font-weight:600;padding:14px 16px}
 .quick button:hover{border-color:var(--teal);color:var(--teal)}
 .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-.combined-stack{display:grid;gap:18px}
+/* grid-template-columns:minmax(0,1fr) (en vez de dejarlo implicito):
+   confirmado en vivo que un grid de una sola columna SIN esto define su
+   pista con un piso de min-content (el ancho que pida el hijo mas ancho,
+   ej. un panel con tablas/badges que no se comprimen) en vez del ancho
+   real del contenedor -- min-width:0 en los HIJOS no alcanza a corregirlo
+   (el problema es la pista del grid, no el item). minmax(0,1fr) fuerza la
+   pista a nunca superar el ancho disponible, sin importar el contenido. */
+.combined-stack{display:grid;grid-template-columns:minmax(0,1fr);gap:18px}
 .combined-stack>section{display:block}
 .module-subhead{
   display:flex;
@@ -736,7 +770,7 @@ progress::-moz-progress-bar{background:var(--teal)}
   background:var(--gold);opacity:.18}
 .grand span{font-family:var(--display);font-weight:600;font-size:.92rem;opacity:.9}
 .grand b{font-size:1.4rem;color:var(--gold);font-weight:700}
-.actions-col{display:grid;gap:8px;margin-top:14px}
+.actions-col{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;margin-top:14px}
 .actions-col button{justify-content:center}
 .actions-col button:nth-child(3),.actions-col button:nth-child(4){background:#fff;color:var(--petrol);border:1px solid var(--line-2);box-shadow:none}
 .actions-col button:nth-child(3):hover,.actions-col button:nth-child(4):hover{background:var(--mint);border-color:var(--teal)}
@@ -1001,7 +1035,7 @@ svg.ic{display:block;flex:none}
 /* ====================================================================
    LOGIN REDISEÑADO (split)
    ==================================================================== */
-.auth-split{display:grid;grid-template-columns:1.05fr .95fr;min-height:100vh}
+.auth-split{display:grid;grid-template-columns:1.05fr .95fr;min-height:100vh;min-height:100dvh}
 .auth-brand{position:relative;overflow:hidden;color:#cfe6e2;
   background:radial-gradient(120% 100% at 20% 0%, var(--petrol) 0%, var(--ink) 70%);
   display:flex;align-items:center;padding:6vw}
@@ -1417,6 +1451,7 @@ svg.ic{display:block;flex:none}
    ==================================================================== */
 .landing{
   min-height:100vh;
+  min-height:100dvh;
   background:#fff;
   overflow:hidden;
 }
@@ -2036,7 +2071,7 @@ svg.ic{display:block;flex:none}
 .twin-insights{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:4px}
 .twin-insights .info-card{min-height:0;padding:14px}
 @media (max-width:640px){.twin-insights{grid-template-columns:1fr}}
-.os-side{display:grid;gap:12px;height:auto;min-height:0;align-content:start}.os-side>div{padding:18px}.os-side b{display:block;font-size:1.45rem;color:#1B102A;margin:6px 0}.os-side span{color:var(--muted);font-size:.8rem}
+.os-side{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;height:auto;min-height:0;align-content:start}.os-side>div{padding:18px}.os-side b{display:block;font-size:1.45rem;color:#1B102A;margin:6px 0}.os-side span{color:var(--muted);font-size:.8rem}
 .os-actions button{border-radius:16px}
 .asst-fab{border-radius:18px;background:#12091d;border-color:rgba(201,162,74,.55)}
 .asst-panel{border-radius:24px;border-color:rgba(201,162,74,.35);box-shadow:0 36px 100px rgba(14,7,24,.34)}
@@ -2339,7 +2374,7 @@ svg.ic{display:block;flex:none}
 .od-local-ok b{display:block;font-size:.92rem}
 .od-local-ok p{margin:2px 0 0;font-size:.84rem;color:var(--muted);line-height:1.4}
 .od-local-ok button{flex:none}
-.od-file-list{display:grid;gap:8px;margin-top:10px}
+.od-file-list{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;margin-top:10px}
 .od-file-row{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px}
 .od-file-row b{color:var(--ink);font-size:.88rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .od-file-row small{color:var(--muted);font-size:.74rem}
@@ -2407,6 +2442,8 @@ svg.ic{display:block;flex:none}
 .admin-status-toggle{padding:6px 12px;font-size:.76rem;border-radius:20px;box-shadow:none;min-width:auto}
 .admin-status-toggle.ok{background:#E6F6EE;color:#1B7A46;border:1px solid #BFE6D2}
 .admin-status-toggle.off{background:#FBE9EC;color:var(--danger);border:1px solid #F3C6CE}
+.admin-role-badge{display:inline-block;padding:4px 10px;font-size:.76rem;border-radius:20px;background:var(--card);color:var(--muted);border:1px solid var(--line)}
+.admin-role-badge.is-super{background:#E6F6EE;color:#1B7A46;border-color:#BFE6D2;font-weight:700}
 .admin-plan-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px}
 .admin-plan-card{border:1px solid var(--line);border-radius:14px;padding:16px;background:var(--mint);text-align:center}
 .admin-plan-card b{display:block;font-size:.82rem;color:var(--petrol);margin-bottom:6px}
@@ -2547,6 +2584,10 @@ svg.ic{display:block;flex:none}
 /* ==================================================================
    APU Inteligente · rediseño de presentacion (stepper, hero, KPIs)
    ================================================================== */
+/* El bug real de ancho (texto cortado en movil: paragrafos de metodologia,
+   textarea) se corrigio arriba en la regla .main>* -- max-width limita el
+   ancho maximo en escritorio, margin:0 auto lo centra cuando hay espacio
+   de sobra. */
 .apu-workspace{max-width:1240px;margin:0 auto}
 
 .apu-stepper{display:flex;align-items:center;gap:0;margin:14px 0 18px;flex-wrap:wrap}
@@ -2634,7 +2675,14 @@ svg.ic{display:block;flex:none}
 /* ==================================================================
    Editor profesional v2 · accordion por secciones, toolbar compacta
    ================================================================== */
-.professional-apu-editor{display:grid;gap:14px}
+/* Mismo bug de fondo que .combined-stack (ver esa regla): grid de una
+   sola columna implicita, su pista se dimensionaba al min-content de las
+   secciones del editor (Confidence Engine, Bid Risk, Auditor, Challenge,
+   Scenario, Memoria -- ver ZoemecIntelligencePanel.jsx), no al ancho real
+   del contenedor. Confirmado en vivo: .zi-panel media 835px dentro de un
+   editor de 343px de ancho -- min-width:0 en los hijos NO lo corregia
+   (se probo primero, no alcanzo); minmax(0,1fr) en la pista si. */
+.professional-apu-editor{display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
 .pro-toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;position:relative}
 .pro-toolbar-more{position:relative;margin-left:auto}
 .pro-toolbar-more-menu{position:absolute;right:0;top:calc(100% + 6px);background:var(--card);border:1px solid var(--line);border-radius:var(--r-sm);box-shadow:var(--shadow);padding:6px;display:flex;flex-direction:column;gap:4px;z-index:15;min-width:180px}
@@ -3187,6 +3235,7 @@ svg.ic{display:block;flex:none}
     position:fixed;
     top:0; left:0; bottom:0;
     height:100vh;
+    height:100dvh;
     width:300px;
     max-width:84vw;
     z-index:70;
@@ -3234,7 +3283,19 @@ svg.ic{display:block;flex:none}
    reduce texto a ilegible -- el usuario desliza, no se pierde dato.
    ==================================================================== */
 @media (max-width:640px){
-  table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;border-radius:var(--r-sm)}
+  /* background-attachment:local en dos capas de gradiente (fade a cada
+     lado, pegadas al SCROLL del contenido, no al viewport de la tabla) es
+     el truco clasico para que el "sombreado" solo aparezca del lado donde
+     todavia hay columnas ocultas -- desaparece solo al llegar al final,
+     sin JS ni listeners de scroll. Pista visual de que "Equipo"/cualquier
+     tabla ancha SI tiene mas columnas a un swipe de distancia (antes no
+     habia ninguna senal, la ultima columna simplemente no se veia). */
+  table{
+    display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;border-radius:var(--r-sm);
+    background:
+      linear-gradient(90deg,var(--surface) 30%,rgba(0,0,0,0)) 0 0/40px 100% no-repeat local,
+      linear-gradient(-90deg,var(--surface) 30%,rgba(0,0,0,0)) 100% 0/40px 100% no-repeat local;
+  }
   table thead,table tbody{display:table;width:100%}
   table tr{display:table-row}
 }
@@ -3249,6 +3310,16 @@ svg.ic{display:block;flex:none}
   .page-head{flex-direction:column;align-items:flex-start;gap:10px}
   .page-head>div{width:100%}
   .page-head>button{width:100%}
+  /* Bug real (auditoria movil, 320-375px): .module-subhead (Proyectos/
+     Clientes/Oficina Tecnica -- ver main.jsx) es flex-row con
+     justify-content:space-between y su boton en flex:none (nunca se
+     encoge). En pantallas angostas el bloque de texto + el boton juntos
+     no caben: el boton se empujaba fuera del viewport y quedaba
+     invisible (.main tiene overflow-x:hidden, asi que ni siquiera
+     aparecia una barra de scroll -- simplemente desaparecia). Mismo
+     patron de apilado que .page-head arriba. */
+  .module-subhead{flex-direction:column;align-items:flex-start;gap:10px}
+  .module-subhead>button{width:100%}
   .record-modal,.pro-modal{padding:12px}
   .record-form,.pro-modal>div{width:calc(100vw - 24px);max-width:calc(100vw - 24px)}
   .notice-stack{left:12px;right:12px;top:12px;width:auto}
@@ -3546,3 +3617,40 @@ svg.ic{display:block;flex:none}
   .problem-grid{grid-template-columns:1fr}
   .landing-section,.landing-section-dark{padding:56px 22px}
 }
+
+/* Trial empresarial (Fase 1) */
+/* .hero-build .hero-actions button (generico, sin :first-child) trae
+   background:var(--accent-solid) sin color propio -- pensado para un solo
+   boton primario + un <a class="secondary">. Un boton NUEVO ahi (este CTA)
+   heredaba esa misma especificidad (0,2,1) y quedaba con texto invisible
+   (oscuro sobre morado solido). .hero-trial-cta sube la especificidad a
+   (0,3,1) para ganar sin usar !important, con su propia paleta consistente
+   con .secondary (superficie clara, nunca el mismo morado del CTA principal
+   para no competir visualmente con "Comenzar gratis"). */
+.hero-build .hero-actions button.hero-trial-cta{
+  background:var(--surface);color:var(--ink);border:1.5px solid var(--line-2);
+  min-width:230px;
+}
+.hero-build .hero-actions button.hero-trial-cta:hover{background:var(--mint);border-color:var(--teal)}
+.trial-banner{margin:0 0 16px;padding:10px 16px;border-radius:var(--r-sm);background:var(--mint);border:1px solid var(--line);color:var(--muted);font-size:.86rem;font-weight:600;text-align:center}
+.trial-banner-expired{background:var(--gold-soft);border-color:var(--gold);color:var(--gold-ink)}
+.org-signup-page,.invite-accept-page{max-width:520px;margin:60px auto;padding:0 20px}
+.org-signup-card,.invite-accept-card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:32px;box-shadow:var(--shadow-sm)}
+.org-signup-card h1,.invite-accept-card h1{font-family:var(--display);font-size:1.5rem;margin:0 0 8px}
+.org-signup-card p,.invite-accept-card p{color:var(--muted);margin:0 0 20px}
+.org-signup-features{list-style:none;margin:0 0 24px;padding:0;display:flex;flex-direction:column;gap:8px;color:var(--muted);font-size:.92rem}
+.org-signup-features li:before{content:"✓ ";color:var(--teal);font-weight:700}
+.org-signup-card label,.invite-accept-card label{display:block;font-weight:600;margin:14px 0 6px;font-size:.9rem}
+.org-signup-card input,.invite-accept-card input{width:100%;padding:11px 13px;border-radius:var(--r-sm);border:1px solid var(--line-2);background:var(--paper);color:var(--ink-text);font-size:.95rem}
+.org-signup-card button[type=submit],.invite-accept-card .primary{margin-top:22px;width:100%;padding:13px;border-radius:999px;border:none;background:var(--accent-solid);color:#fff;font-weight:700;font-size:.95rem}
+.org-signup-error,.invite-accept-error{color:var(--danger-solid);font-size:.86rem;margin-top:10px}
+
+.team-panel{max-width:820px}
+.team-panel-header{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap}
+.team-panel-header h2{margin:0}
+.team-panel-count{color:var(--muted);font-size:.9rem}
+.team-panel table{width:100%;border-collapse:collapse}
+.team-panel th,.team-panel td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);font-size:.9rem}
+.team-panel td.role-admin{color:var(--teal);font-weight:700}
+.team-panel td.status-disabled{color:var(--danger-solid)}
+.invite-link-box{margin-top:16px;padding:14px;border-radius:var(--r-sm);background:var(--mint);border:1px dashed var(--line-2);word-break:break-all;font-family:var(--mono);font-size:.8rem}

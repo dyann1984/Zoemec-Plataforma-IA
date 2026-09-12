@@ -99,6 +99,14 @@ function makeEmptyFuente(estado = APU_DATA_STATE.REQUIERE_VALIDACION){
     // presentes (null cuando no aplican) para que ningun consumidor tenga
     // que verificar su existencia antes de leerlos.
     matchMethod: null, confidence: null, catalogItemId: null,
+    // Fase 2 (APU regionalizados por ubicacion): nivel geografico que la
+    // busqueda de precio autoreporto para la referencia realmente usada
+    // ('ciudad'|'estado'|'nacional'|'no_especificado', ver
+    // server/api-lib/_priceIntelligenceCore.mjs). Lo escribe
+    // materialPriceIntelligence2.js#attachIntelligence2FieldsToRow, nunca se
+    // inventa aqui -- null significa "sin busqueda de precio regional
+    // todavia", no "nacional".
+    nivelCobertura: null,
     origenPrecio: origenPrecioFor(null, estado)
   };
 }
@@ -137,6 +145,7 @@ function fuenteFromSource(source, estado){
     matchMethod: source.matchMethod || null,
     confidence: typeof source.confidence === 'number' ? Math.round(source.confidence * 100) : null,
     catalogItemId: source.clave || null,
+    nivelCobertura: null,
     origenPrecio: origenPrecioFor(source, resolvedEstado)
   };
 }
@@ -152,6 +161,14 @@ export function makeEmptyAPUv2(){
     proyecto: '',
     cliente: '',
     ubicacion: '',
+    // Fase 2 (APU regionalizados por ubicacion): SNAPSHOT de la ubicacion
+    // estructurada del proyecto en el momento en que se genero este APU --
+    // nunca un enlace vivo. Si el proyecto cambia de ubicacion despues, este
+    // APU conserva la que tenia (regla explicita del brief: "un cambio de
+    // region no debe sobrescribir en silencio APU historicos ya
+    // aprobados"). country/state/city null = APU generado antes de esta
+    // fase o sin ubicacion de proyecto capturada.
+    ubicacionEstructurada: { country: null, state: null, city: null },
     fechaBase: new Date().toLocaleDateString('es-MX'),
     moneda: 'MXN',
     partida: '',
@@ -316,6 +333,9 @@ export function migrateLegacyApuToV2(apuV1 = {}){
     proyecto: '',
     cliente: '',
     ubicacion: '',
+    // Fase 2: ver comentario en makeEmptyAPUv2 -- un APU v1 migrado nunca
+    // tuvo ubicacion estructurada (no existia el concepto), queda null.
+    ubicacionEstructurada: { country: null, state: null, city: null },
     fechaBase: apuV1.date || new Date().toLocaleDateString('es-MX'),
     moneda: 'MXN',
     partida: '',
@@ -474,7 +494,8 @@ export function normalizeAIApuToV2(raw = {}, fallbackConcept = '', options = {})
       proveedor: coerceText(sourcesRaw[index]?.proveedor, '') || null,
       fecha: null,
       region: coerceText(sourcesRaw[index]?.region, '') || null,
-      estado: APU_DATA_STATE.ESTIMADO_IA
+      estado: APU_DATA_STATE.ESTIMADO_IA,
+      nivelCobertura: null
     },
     origen: null
   }));
@@ -501,7 +522,8 @@ export function normalizeAIApuToV2(raw = {}, fallbackConcept = '', options = {})
         proveedor: coerceText(source.proveedor, '') || null,
         fecha: null,
         region: coerceText(source.region, '') || null,
-        estado: APU_DATA_STATE.ESTIMADO_IA
+        estado: APU_DATA_STATE.ESTIMADO_IA,
+        nivelCobertura: null
       },
       technicalReason: coerceText(source.technicalReason, ''),
       origen: null
@@ -525,7 +547,7 @@ export function normalizeAIApuToV2(raw = {}, fallbackConcept = '', options = {})
       cantidad: coerceNumber(row?.[1], 0),
       salarioBase: coerceNumber(row?.[3], 0),
       fsr: coerceNumber(row?.[4], 1),
-      fuente: { proveedor: null, fecha: null, region: null, estado: APU_DATA_STATE.ESTIMADO_IA },
+      fuente: { proveedor: null, fecha: null, region: null, estado: APU_DATA_STATE.ESTIMADO_IA, nivelCobertura: null },
       estado: APU_DATA_STATE.ESTIMADO_IA,
       // rendimientoFuente/yieldConfidence (mismo contrato que la ruta
       // determinista, ver crewModel.js): la IA propuso cuadrilla+rendimiento
@@ -555,7 +577,7 @@ export function normalizeAIApuToV2(raw = {}, fallbackConcept = '', options = {})
     vidaUtilDias: detail.vidaUtilDias != null ? coerceNumber(detail.vidaUtilDias, 0) || null : null,
     factorUso: detail.factorUso != null ? coerceNumber(detail.factorUso, 1) : null,
     modalidad: coerceText(detail.modalidad, '') || null,
-    fuente: { proveedor: null, fecha: null, region: null, estado: APU_DATA_STATE.ESTIMADO_IA }
+    fuente: { proveedor: null, fecha: null, region: null, estado: APU_DATA_STATE.ESTIMADO_IA, nivelCobertura: null }
     };
   });
 
@@ -580,7 +602,7 @@ export function normalizeAIApuToV2(raw = {}, fallbackConcept = '', options = {})
     // "REQUIERE VALIDACION" incluso cuando en realidad es un simple estimado
     // de IA sin evidencia externa (etiqueta imprecisa, no un calculo erroneo,
     // pero debe decir lo que es).
-    fuente: { proveedor: null, fecha: null, region: null, estado: APU_DATA_STATE.ESTIMADO_IA },
+    fuente: { proveedor: null, fecha: null, region: null, estado: APU_DATA_STATE.ESTIMADO_IA, nivelCobertura: null },
     observaciones: ''
     };
   });
@@ -619,6 +641,10 @@ export function normalizeAIApuToV2(raw = {}, fallbackConcept = '', options = {})
     proyecto: '',
     cliente: '',
     ubicacion: '',
+    // Fase 2: ver comentario en makeEmptyAPUv2 -- se llena de verdad en
+    // main.jsx al generar (copia la ubicacion del proyecto activo en ese
+    // momento), aqui nace vacio como el resto del encabezado.
+    ubicacionEstructurada: { country: null, state: null, city: null },
     fechaBase: new Date().toLocaleDateString('es-MX'),
     moneda: 'MXN',
     partida: '',

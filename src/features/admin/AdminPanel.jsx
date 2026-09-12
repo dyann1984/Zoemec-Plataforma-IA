@@ -9,7 +9,7 @@ import { collection, doc, getDoc, getDocs, limit, orderBy, query, setDoc } from 
 import { db } from '../../firebase.js';
 import { authHeaders, apiPost, apiGetSafe } from '../../services/apiClient.js';
 import { friendlyServiceError } from '../../services/errorMessages.js';
-import { ADMIN_EMAILS, isAdminUser } from '../../domain/permissions.js';
+import { SUPERADMIN_EMAILS, isAdminUser } from '../../domain/permissions.js';
 import { isOneDriveConfigured } from '../../lib/onedrive.js';
 import { Icon } from '../../components/ui/Icon.jsx';
 import { PageHead, EmptyState } from '../../components/ui/PageElements.jsx';
@@ -193,7 +193,16 @@ export function AdminPanel({user}){
            <td>{u.name||'—'}</td>
            <td>{u.email||'—'}</td>
            <td>{u.companyName||'—'}</td>
-           <td><select value={u.role||'user'} disabled={savingUid===u.id} onChange={e=>updateUser(u.id,{role:e.target.value})}><option value="user">Usuario</option><option value="admin">Administrador</option></select></td>
+           {/* Endurecimiento de seguridad (auditoria de roles): antes este
+               <select> permitia a cualquier super admin escribir role:'admin'
+               en CUALQUIER otro usuario (setDoc directo, permitido por
+               firestore.rules porque isAdmin() ya bypasea el resto de la
+               regla) -- exactamente la via de escalacion que se pidio
+               eliminar. super_admin ya no depende de este campo de Firestore
+               (ver src/domain/permissions.js#isAdminUser), asi que ahora es
+               un badge de solo lectura: no existe NINGUN control en la app
+               para otorgar super_admin a otra cuenta. */}
+           <td><span className={`admin-role-badge${isAdminUser(null,u)?' is-super':''}`}>{isAdminUser(null,u) ? 'Super Admin' : 'Usuario'}</span></td>
            <td><select value={u.plan||'Gratis'} disabled={savingUid===u.id} onChange={e=>updateUser(u.id,{plan:e.target.value})}><option>Gratis</option><option>Inicial</option><option>Profesional</option><option>Empresa</option></select></td>
            <td><button className={'admin-status-toggle '+(u.active!==false?'ok':'off')} disabled={savingUid===u.id} onClick={()=>updateUser(u.id,{active:u.active===false})}>{u.active!==false?'Activo':'Inactivo'}</button></td>
            <td>{u.apusCreated||0}</td>
@@ -329,7 +338,7 @@ export function AdminPanel({user}){
         ['Google Drive (CLIENT_ID/SECRET/REFRESH_TOKEN)', Boolean(platformStatus?.googleDriveConfigured)],
         ['OneDrive cliente (VITE_ONEDRIVE_CLIENT_ID)', isOneDriveConfigured()],
         ['OneDrive servidor (ONEDRIVE_CLIENT_ID/SECRET)', Boolean(oneDriveAdmin?.env?.ONEDRIVE_CLIENT_ID && oneDriveAdmin?.env?.ONEDRIVE_CLIENT_SECRET)],
-        ['Lista de administradores (VITE_ADMIN_EMAILS)', ADMIN_EMAILS.length > 0]
+        ['Lista de super admins (VITE_SUPERADMIN_EMAILS)', SUPERADMIN_EMAILS.length > 0]
       ];
       return <div className="panel admin-panel-body">
         <div className="admin-panel-head"><h2>Diagnóstico</h2><button className="soft" onClick={()=>{loadHealth();loadOneDriveAdmin();}}>Actualizar</button></div>
@@ -340,7 +349,7 @@ export function AdminPanel({user}){
           <div className="admin-cost-card"><small>isAdmin</small><b>{user?.isAdmin ? 'true' : 'false'}</b></div>
           <div className="admin-cost-card"><small>Plan</small><b>{user?.plan || '—'}</b></div>
         </div>
-        <div className="admin-metric-note">isAdmin se calcula con isAdminUser(): rol normalizado (admin/administrator/administrador/superadmin), custom claim de Firebase (admin===true) o correo en VITE_ADMIN_EMAILS. En desarrollo, este mismo detalle se imprime en la consola del navegador al iniciar sesión.</div>
+        <div className="admin-metric-note">isAdmin (super_admin global de ZOEMEC) se calcula con isAdminUser(): EXCLUSIVAMENTE custom claim real de Firebase (super_admin===true, nunca lo otorga ningún endpoint de esta app) o correo en VITE_SUPERADMIN_EMAILS. Ya no depende de ningún campo de Firestore -- ningún usuario ni empresa puede asignarse este rol. En desarrollo, este mismo detalle se imprime en la consola del navegador al iniciar sesión.</div>
 
         <div className="admin-panel-head" style={{marginTop:'16px'}}><h2 style={{fontSize:'.95rem'}}>Variables y servicios detectados</h2></div>
         <div className="admin-table-wrap"><table className="data-table admin-table">

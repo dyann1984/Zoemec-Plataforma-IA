@@ -17,6 +17,7 @@ import challengeDecisionsHandler from '../server/api-lib/_route-challenge-decisi
 import technicalMemoryHandler from '../server/api-lib/_route-technical-memory.mjs';
 import exportEventsHandler from '../server/api-lib/_route-export-events.mjs';
 import healthHandler from '../server/api-lib/_route-health.mjs';
+import organizationsHandler from '../server/api-lib/_route-organizations.mjs';
 
 const ROUTES = {
   '/api/apus': apusHandler,
@@ -25,6 +26,7 @@ const ROUTES = {
   '/api/technical-memory': technicalMemoryHandler,
   '/api/export-events': exportEventsHandler,
   '/api/health': healthHandler,
+  '/api/organizations': organizationsHandler,
 };
 
 export default async function handler(req, res){

@@ -72,6 +72,45 @@ test('PDF maestro: "Pagina X de Y" es absoluto dentro de TODO el documento (port
   for(let i=1;i<=totalPages;i++) assert.ok(raw.includes(`Pagina ${i} de ${totalPages}`), `falta el pie "Pagina ${i} de ${totalPages}" en el PDF maestro`);
 });
 
+// Fase 2 (cierre de brecha regionalizacion individual/lote), requisitos 6/7:
+// PDF y Excel deben recibir la misma ubicacion (texto derivado del snapshot
+// de main.jsx#buildProjectLocationSnapshot) sin importar si el APU vino del
+// flujo individual o de cualquiera de los dos flujos de lote -- a nivel de
+// exportador esto es indistinguible: ambos solo leen apu.ubicacion (ver
+// buildProfessionalAPUSheet linea ~90 y el header() de drawApuSections).
+test('PDF individual: la Ubicacion del snapshot regional aparece en el encabezado (requisito 6)', () => {
+  const individual = golden(1); individual.ubicacion = 'Monterrey, Nuevo León, México';
+  const { doc } = exportAPUPdfV2(individual, { save: false });
+  const raw = Buffer.from(doc.output('arraybuffer')).toString('latin1');
+  assert.match(raw, /Ubicacion: Monterrey, Nuevo Leon, Mexico/, 'el PDF debe mostrar la ubicacion del snapshot, no dejarla en blanco');
+});
+
+test('PDF: un APU "de lote" (mismo snapshot que uno individual) produce la MISMA linea de Ubicacion (requisito 6)', () => {
+  const individual = golden(1); individual.ubicacion = 'Monterrey, Nuevo León, México';
+  const deLote = golden(2); deLote.ubicacion = 'Monterrey, Nuevo León, México'; // mismo proyecto, generado "por lote"
+  const rawIndividual = Buffer.from(exportAPUPdfV2(individual, { save: false }).doc.output('arraybuffer')).toString('latin1');
+  const rawLote = Buffer.from(exportAPUPdfV2(deLote, { save: false }).doc.output('arraybuffer')).toString('latin1');
+  assert.ok(rawIndividual.includes('Ubicacion: Monterrey, Nuevo Leon, Mexico'));
+  assert.ok(rawLote.includes('Ubicacion: Monterrey, Nuevo Leon, Mexico'));
+});
+
+test('PDF: sin ubicacion capturada, el encabezado lo dice explicitamente (nunca una fila en blanco silenciosa)', () => {
+  const sinUbicacion = golden(1); // golden() no fija ubicacion -> queda en el default vacio de makeEmptyAPUv2
+  assert.equal(sinUbicacion.ubicacion, '');
+  const raw = Buffer.from(exportAPUPdfV2(sinUbicacion, { save: false }).doc.output('arraybuffer')).toString('latin1');
+  assert.match(raw, /Ubicacion: Sin ubicacion capturada/);
+});
+
+test('Excel individual y Excel "de lote" con el mismo proyecto muestran la misma fila Ubicacion (requisito 7)', () => {
+  const individual = golden(1); individual.ubicacion = 'Monterrey, Nuevo León, México';
+  const deLote = golden(2); deLote.ubicacion = 'Monterrey, Nuevo León, México';
+  const sheetIndividual = buildProfessionalAPUSheet(individual);
+  const sheetLote = buildProfessionalAPUSheet(deLote);
+  const ubicacionCell = sheet => sheet.rows.find(row => row[0]?.value === 'Ubicacion')?.[1];
+  assert.equal(ubicacionCell(sheetIndividual), 'Monterrey, Nuevo León, México');
+  assert.equal(ubicacionCell(sheetIndividual), ubicacionCell(sheetLote));
+});
+
 for(const count of [1,10,100])test(`Excel v2 exporta PORTADA + RESUMEN + CONTROL_REVISION + PARAMETROS + ${count} hojas`,async()=>{const dir=fs.mkdtempSync(path.join(os.tmpdir(),'zoemec-many-'));const before=process.cwd();process.chdir(dir);try{const sheets=await exportAPUExcelV2(Array.from({length:count},(_,i)=>golden(i+1)),{writeXlsxFileImpl:writeXlsxFileNode,fileName:`${count}.xlsx`});assert.equal(sheets.length,count+4);assert.equal(sheets[0].sheet,'PORTADA');assert.equal(sheets[1].sheet,'RESUMEN');assert.equal(sheets[2].sheet,'CONTROL_REVISION');assert.equal(sheets[3].sheet,'PARAMETROS');assert.ok(fs.statSync(`${count}.xlsx`).size>1000);if(count===1){const zip=unzipSync(fs.readFileSync('1.xlsx'));const xml=strFromU8(zip['xl/worksheets/sheet2.xml']);assert.match(xml,/<pageSetup[^>]+paperSize="9"[^>]+orientation="landscape"/);assert.match(xml,/showGridLines="false"/);assert.match(xml,/zoomScale="85"/);}}finally{process.chdir(before);fs.rmSync(dir,{recursive:true,force:true});}});
 
 function rc1ExportRegression(){

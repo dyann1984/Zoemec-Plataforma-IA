@@ -38,7 +38,7 @@ import { logLoginTrace, errInfo, createLoginTracer, isPermissionDeniedCode } fro
 import { createSessionCoordinator } from './domain/authSessionCoordinator.js';
 import { canResendVerification, remainingCooldownSeconds } from './domain/resendCooldown.js';
 import {
-  hasValidSession, PLAN_LIMITS, ADMIN_EMAILS,
+  hasValidSession, PLAN_LIMITS,
   isAdminUser, canUse, userInitials
 } from './domain/permissions.js';
 import { Icon } from './components/ui/Icon.jsx';
@@ -80,6 +80,14 @@ import { AdminPanel } from './features/admin/AdminPanel.jsx';
 import { ComparePage } from './features/compare/ComparePage.jsx';
 import { AiJobsProvider, useAiJobs } from './contexts/AiJobsContext.jsx';
 import { VerifyEmailScreen } from './features/auth/VerifyEmailScreen.jsx';
+import { TrialBanner } from './features/organization/TrialBanner.jsx';
+import { TrialSignupScreen, PENDING_ORG_SIGNUP_KEY } from './features/organization/TrialSignupScreen.jsx';
+import { TeamPanel } from './features/organization/TeamPanel.jsx';
+import { InviteAcceptScreen } from './features/organization/InviteAcceptScreen.jsx';
+import { fetchMyOrganization, createOrganization } from './services/organizationApi.js';
+import { LocationPicker } from './components/ui/LocationPicker.jsx';
+import { formatLocationDisplay, hasAnyLocation, buildProjectLocationSnapshot } from './domain/geography.js';
+import { resolveOrgStatus, ORG_STATUS, isActiveTrialStatus } from './domain/organization.js';
 import { ProfessionalApuEditor } from './features/apu/ProfessionalApuEditor.jsx';
 import { RevisionBandeja } from './features/apu/RevisionBandeja.jsx';
 import { parseExcelToCatalog, cleanText, normalizeUnitLabel, parseExcelToAPU, parseRobustConceptCatalog, parseConceptText, parseConceptListText, conceptVariablesFromParsed } from './lib/excelImport.js';
@@ -345,6 +353,44 @@ function App(){
     }catch{ /* nunca bloquear la navegacion por esto */ }
     if(nextScreen) setScreen(nextScreen);
   };
+  // Link de invitacion a organizacion (?invite=token&org=orgId&inv=invitationId,
+  // ver src/features/organization/InviteAcceptScreen.jsx y punto 10 del brief
+  // de trial empresarial). Mismo patron lazy-init que verifyOobCode arriba.
+  const [inviteParams, setInviteParams] = useState(() => {
+    try{
+      const params = new URLSearchParams(window.location.search);
+      const token = params.get('invite');
+      const organizationId = params.get('org');
+      const invitationId = params.get('inv');
+      if(token && organizationId && invitationId) return { token, organizationId, invitationId };
+    }catch{ /* nunca debe tronar el render */ }
+    return null;
+  });
+  const dismissInviteScreen = () => {
+    setInviteParams(null);
+    try{
+      const url = new URL(window.location.href);
+      url.searchParams.delete('invite');
+      url.searchParams.delete('org');
+      url.searchParams.delete('inv');
+      window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+    }catch{ /* nunca bloquear la navegacion por esto */ }
+  };
+  // Contexto de organizacion (Fase 1: trial empresarial de 30 dias). null =
+  // el usuario no pertenece a ninguna organizacion (comportamiento individual
+  // intacto, sin cambios). Se recarga tras login y tras crear/aceptar/unirse
+  // a una organizacion.
+  const [orgSession, setOrgSession] = useState(null);
+  const refreshOrgSession = async () => {
+    try{
+      const data = await fetchMyOrganization();
+      setOrgSession(data);
+      return data;
+    }catch{
+      setOrgSession(null);
+      return null;
+    }
+  };
   /* Modo Build Week / Demo: Panel Admin ya no aparece en el menu lateral, pero
      sigue existiendo intacto. Un administrador puede llegar directo agregando
      #admin a la URL (ej. localhost:5173/#admin); si el usuario no es admin,
@@ -568,6 +614,7 @@ function App(){
       await signOut(auth).catch((error) => t.trace('SIGNOUT_AFTER_UNVERIFIED_ERROR', errInfo(error)));
       setActiveUid(null);
       setUser(null);
+      setOrgSession(null);
       setScreen('login');
       return { status:'unverified' };
     }
@@ -575,6 +622,7 @@ function App(){
       await signOut(auth);
       setActiveUid(null);
       setUser(null);
+      setOrgSession(null);
       setScreen('landing');
       return { status:'inactive' };
     }
@@ -582,6 +630,38 @@ function App(){
     setActiveUid(session.uid);
     setUser(session);
     setUsage(prev => ({...prev, [session.email]:{apusCreated:session.apusCreated || 0, deviceId:session.deviceId}}));
+    // Fase 1 (trial empresarial): carga el contexto de organizacion del
+    // usuario. Si no pertenece a ninguna Y viene de "Probar ZOEMEC 30 dias"
+    // (localStorage, ver TrialSignupScreen.jsx -- no se pudo crear antes
+    // porque requireAuth exige correo verificado, algo que recien se
+    // confirmo arriba), la crea automaticamente en este primer login real.
+    let orgData = await refreshOrgSession();
+    try{
+      const pendingRaw = localStorage.getItem(PENDING_ORG_SIGNUP_KEY);
+      if(pendingRaw && !orgData?.organization){
+        const pending = JSON.parse(pendingRaw);
+        if(pending?.email === session.email?.toLowerCase()){
+          await createOrganization({ name: pending.companyName, responsibleName: pending.responsibleName });
+          orgData = await refreshOrgSession();
+        }
+        localStorage.removeItem(PENDING_ORG_SIGNUP_KEY);
+      }
+    }catch(orgError){
+      console.error(orgError); // nunca bloquea el login por esto -- el usuario puede reintentar crear su organizacion despues
+    }
+    /* Punto 5 del trial empresarial ("sin limites artificiales de uso"):
+       PLAN_LIMITS/canUse (src/domain/permissions.js) siguen leyendo
+       user.plan en TODA la UI (Biblioteca, IA, exportaciones, etc.) -- sin
+       este patch, un miembro de una organizacion en trial activo seguia
+       viendo "bloqueado para plan Gratis" en pantalla, aunque el servidor
+       (_authGuard.mjs#requireFeature, que hace este mismo bypass de forma
+       independiente y es la autoridad real) ya le permitiera la llamada.
+       Mismo patron que buildSession ya usa para isAdmin (fuerza
+       plan:'Empresa'): esto SOLO afecta el gating visual del cliente,
+       nunca escribe users/{uid}.plan real en Firestore. */
+    if(isActiveTrialStatus(resolveOrgStatus(orgData?.organization))){
+      setUser(current => current ? { ...current, plan: 'Empresa' } : current);
+    }
     /* Antes, si ya existia una sesion valida de Firebase (ej. al recargar
        la pagina), "screen" se quedaba en su valor por defecto ('landing')
        porque solo login()/loginWithGoogle() avanzaban a 'app'. Con eso, un
@@ -600,6 +680,7 @@ function App(){
       if(!fbUser){
         setActiveUid(null);
         setUser(null);
+        setOrgSession(null);
         setScreen(current => current === 'app' ? 'landing' : current);
         return;
       }
@@ -820,6 +901,7 @@ function App(){
     localStorage.removeItem('zoemec-user');
     setActiveUid(null);
     setUser(null);
+    setOrgSession(null);
     setScreen('landing');
   };
 
@@ -831,12 +913,20 @@ function App(){
     onGoToLogin={()=>dismissVerifyScreen('login')}
     onGoToApp={hasValidSession(user) ? ()=>dismissVerifyScreen('app') : null}
   />;
+  else if(inviteParams !== null) content = <InviteAcceptScreen
+    {...inviteParams}
+    user={hasValidSession(user) ? user : null}
+    login={login}
+    onAccepted={refreshOrgSession}
+    onGoToApp={()=>{ dismissInviteScreen(); setScreen('app'); }}
+  />;
   else if(screen === 'landing') content = <Landing setScreen={setScreen} login={login} company={companyView} />;
+  else if(screen === 'trial-signup') content = <TrialSignupScreen setScreen={setScreen} login={login} />;
   else if(screen === 'compare-public') content = <ComparePublicWrapper setScreen={setScreen}/>;
   else if(screen === 'login') content = <Auth mode="login" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} resendVerificationEmail={resendVerificationEmail} company={companyView} />;
   else if(screen === 'register') content = <Auth mode="register" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} resendVerificationEmail={resendVerificationEmail} company={companyView} />;
   else if(!hasValidSession(user)) content = <Landing setScreen={setScreen} login={login} company={companyView} />;
-  else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView} apus={apus} clients={clients} projects={projects} activeProject={activeProject} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId}>
+  else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView} apus={apus} clients={clients} projects={projects} activeProject={activeProject} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} orgSession={orgSession}>
     {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} activeProject={activeProject} user={user} demoMode={DEMO_MODE} demoContext={DEMO_MODE ? createDemoContext() : null} />}
     {module === 'levantamiento' && <LevantamientoModule surveys={surveys} setSurveys={setSurveys} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} onSendToApu={()=>setModule('apu')} currentUserEmail={user?.email || null} />}
     {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} rawApus={rawApus} linkApuToProject={linkApuToProject} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} />}
@@ -849,6 +939,7 @@ function App(){
     {module === 'planes' && <PlansAccess user={user} />}
     {module === 'reportes' && <Reports clients={clients} apus={apus} budgets={budgets} />}
     {module === 'comparativa' && <ComparePage />}
+    {module === 'equipo' && orgSession?.organization && <TeamPanel organizationId={orgSession.organization.id} membership={orgSession.membership} />}
     {module === 'admin' && user.isAdmin && <AdminPanel user={user} />}
   </Shell>;
   return <><NoticeHost />{content}<Assistant context={zoeContext} setModule={setModule} /></>;
@@ -1047,7 +1138,7 @@ function Landing({setScreen, login, company}){
           <div><Icon name="presupuestos" size={22}/><b>{tr('capabilities.presupuestos')}</b></div>
           <div><Icon name="reportes" size={22}/><b>{tr('capabilities.entregables')}</b></div>
         </div>
-        <div className="hero-actions"><button onClick={()=>setScreen('register')}>{tr('ctas.comenzarGratis')}</button><a className="secondary" href="#como-funciona" onClick={scrollTo('como-funciona')}>{tr('ctas.verPlataforma')}</a></div>
+        <div className="hero-actions"><button onClick={()=>setScreen('register')}>{tr('ctas.comenzarGratis')}</button><button className="hero-trial-cta" onClick={()=>setScreen('trial-signup')}>Probar ZOEMEC 30 dias (empresas)</button><a className="secondary" href="#como-funciona" onClick={scrollTo('como-funciona')}>{tr('ctas.verPlataforma')}</a></div>
       </div>
       <div className="future-stage" aria-label={tr('panel.ariaLabel')}>
         <img className="stage-photo" src="/images/hero/zoemec-hero-web.webp" alt={tr('panel.heroAlt')} />
@@ -1376,7 +1467,7 @@ function TopSearch({apus=[],clients=[],projects=[],setModule}){
   </div>;
 }
 
-function Shell({children,user,logout,module,setModule,company,apus,clients,projects,activeProject,activeProjectId,setActiveProjectId}){
+function Shell({children,user,logout,module,setModule,company,apus,clients,projects,activeProject,activeProjectId,setActiveProjectId,orgSession}){
   const { theme, toggleTheme } = useTheme();
   const { t: tr, locale, setLocale } = useI18n();
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -1396,9 +1487,22 @@ function Shell({children,user,logout,module,setModule,company,apus,clients,proje
     ['tecnico','tecnico',tr('shell.menu.tecnico'),tr('shell.menu.tecnicoDesc')],
     ['reportes','reportes',tr('shell.menu.reportes')],
     ['comparativa','comparativa',tr('shell.menu.comparativa'),tr('shell.menu.comparativaDesc')],
+    ...(orgSession?.organization ? [['equipo','clientes','Equipo','Usuarios de tu empresa']] : []),
     ...(user.isAdmin ? [['admin','admin',tr('shell.menu.admin'),tr('shell.menu.adminDesc')]] : [])
   ];
   const goTo = (m) => { setModule(m); setDrawerOpen(false); };
+  // Punto 9 del trial empresarial: el usuario ya ve el TrialBanner completo
+  // mas abajo, pero la etiqueta corta junto al nombre en el topbar seguia
+  // diciendo "Gratis" (su plan INDIVIDUAL real, nunca tocado al crear la
+  // organizacion -- ver _route-organizations.mjs) incluso con acceso
+  // completo via el trial de la empresa. Confuso: parece un limite activo
+  // cuando no lo hay. orgStatus resuelto (nunca el campo crudo) decide esta
+  // etiqueta, igual que el resto del trial.
+  const orgStatus = resolveOrgStatus(orgSession?.organization);
+  const planLabel = user.isAdmin ? tr('shell.role.admin')
+    : orgStatus === ORG_STATUS.ACTIVE_TRIAL ? 'Empresa · Trial'
+    : orgStatus === ORG_STATUS.TRIAL_EXPIRED ? 'Empresa · Trial vencido'
+    : user.plan;
   // Escape cierra el drawer desde cualquier punto de la pantalla; el click
   // afuera lo maneja el overlay (.drawer-backdrop) directo en el DOM, mas
   // simple y confiable en movil que medir bounding boxes.
@@ -1438,9 +1542,10 @@ function Shell({children,user,logout,module,setModule,company,apus,clients,proje
             <button className={locale==='en'?'active':''} onClick={()=>setLocale('en')} aria-pressed={locale==='en'}>EN</button>
           </div>
           <button className="theme-toggle" onClick={toggleTheme} aria-label={tr('toggle.themeToggleLabel')} title={theme==='light'?tr('toggle.themeDark'):tr('toggle.themeLight')}><Icon name={theme==='light'?'moon':'sun'} size={17}/></button>
-          <CloudBadge user={user}/><ProcessesIndicator/><NotificationBell user={user}/><span className="avatar">{user.initials}</span><div><b>{user.name}</b><small>{user.isAdmin ? tr('shell.role.admin') : user.plan}</small></div><button className="logout-btn" onClick={logout}>{tr('shell.logout')}</button>
+          <CloudBadge user={user}/><ProcessesIndicator/><NotificationBell user={user}/><span className="avatar">{user.initials}</span><div><b>{user.name}</b><small>{planLabel}</small></div><button className="logout-btn" onClick={logout}>{tr('shell.logout')}</button>
         </div>
       </header>
+      {orgSession?.organization && <TrialBanner organization={orgSession.organization} />}
       {children}
     </main>
   </div>
@@ -2387,6 +2492,13 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   // verdad (1 busqueda real, no 20). El cache en si es un singleton de
   // sesion (ver intelligence2Runtime.js#getSharedPriceCache), no vive aqui.
   const batchIntelligence2ContextRef=useRef(null);
+  // Fase 2 (cierre de brecha regionalizacion): snapshot de ubicacion
+  // {ubicacion, ubicacionEstructurada} capturado UNA vez por corrida de lote,
+  // en el mismo instante que batchIntelligence2ContextRef -- generateBatchAPU
+  // (compartida por los dos flujos de lote, buildBatchAPUs y runQueueJob) lo
+  // usa para que los tres flujos de generacion (individual + 2 de lote)
+  // queden con exactamente el mismo esquema regional (ver buildProjectLocationSnapshot).
+  const batchLocationSnapshotRef=useRef(null);
   // Cambiar de proyecto activo mientras este componente sigue montado (el
   // usuario no sale de "APU Inteligente", solo cambia el selector de proyecto)
   // debe limpiar el borrador en pantalla e invalidar cualquier generacion de
@@ -2476,7 +2588,10 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       let enrichedDraft = draft;
       try{
         setAiStatus('Buscando precios de mercado reales y validando equivalencia tecnica...');
-        const runContext = createIntelligence2RunContext({ location: activeProject?.ubicacion || '', dateBase: draft.fechaBase });
+        const runContext = createIntelligence2RunContext({
+          location: activeProject?.ubicacion || '', dateBase: draft.fechaBase,
+          country: activeProject?.locationCountry || '', state: activeProject?.locationState || '', city: activeProject?.locationCity || ''
+        });
         const result = await enrichApuWithIntelligence2({
           aiApu: draft, userInput: { concept: parsed.concept, unit: parsed.unit, qty: parsed.qty },
           concept: parsed.concept, ...runContext
@@ -2486,6 +2601,16 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       }catch{ /* Price Intelligence caida por completo: se sigue con el borrador de la IA */ }
       setAiStatus('Calculando rendimientos, seguridad, procedimiento y medicion...');
       const v2 = finalizeProfessionalAPU(enrichedDraft);
+      // Fase 2 (APU regionalizados): SNAPSHOT de la ubicacion del proyecto
+      // activo en ESTE momento -- nunca un enlace vivo (ver
+      // apuSchema.js#ubicacionEstructurada). Misma funcion que usan los dos
+      // flujos de lote (buildProjectLocationSnapshot) para que los tres
+      // queden con el mismo esquema regional; tambien fija `ubicacion`
+      // (texto libre, usado por PDF/Excel) al mismo snapshot en vez del
+      // valor heredado del borrador previo.
+      const locationSnapshot = buildProjectLocationSnapshot(activeProject);
+      v2.ubicacionEstructurada = locationSnapshot.ubicacionEstructurada;
+      v2.ubicacion = locationSnapshot.ubicacion;
       const shim = legacyShimFromV2(v2, parsed.concept, 'OpenAI API');
       setAiStatus('Validando resultado...');
       skipMigrateIdRef.current = shim.id;
@@ -2664,6 +2789,12 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       v2.aiGenerated = true;
       v2.templateFallback = false;
       v2.family = data.apu?.family || v2.family;
+      // Fase 2 (cierre de brecha regionalizacion): mismo snapshot que el
+      // flujo individual (buildProjectLocationSnapshot), capturado UNA vez
+      // por corrida de lote en batchLocationSnapshotRef -- ver su
+      // declaracion mas arriba.
+      v2.ubicacionEstructurada = batchLocationSnapshotRef.current?.ubicacionEstructurada || { country: null, state: null, city: null };
+      v2.ubicacion = batchLocationSnapshotRef.current?.ubicacion || '';
       return v2;
     }
     const reason = lastError?.name === 'AbortError' ? 'tiempo agotado' : lastError?.status===429 ? 'limite de tasa de OpenAI (429) tras reintentos' : (lastError?.message || 'sin detalle');
@@ -2672,6 +2803,11 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     v2Fallback.aiGenerated = false;
     v2Fallback.templateFallback = true;
     v2Fallback.family = fallbackV1.family;
+    // Fase 2: tambien el fallback de plantilla (sin IA) queda con el mismo
+    // snapshot de ubicacion -- sigue siendo un APU real del lote, atado al
+    // proyecto activo en el momento en que se corrio el lote.
+    v2Fallback.ubicacionEstructurada = batchLocationSnapshotRef.current?.ubicacionEstructurada || { country: null, state: null, city: null };
+    v2Fallback.ubicacion = batchLocationSnapshotRef.current?.ubicacion || '';
     return v2Fallback;
   };
 
@@ -2692,7 +2828,11 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   };
 
   const buildBatchAPUs=async(list)=>{
-    batchIntelligence2ContextRef.current = createIntelligence2RunContext({ location: activeProject?.ubicacion || '' });
+    batchIntelligence2ContextRef.current = createIntelligence2RunContext({
+      location: activeProject?.ubicacion || '',
+      country: activeProject?.locationCountry || '', state: activeProject?.locationState || '', city: activeProject?.locationCity || ''
+    });
+    batchLocationSnapshotRef.current = buildProjectLocationSnapshot(activeProject);
     setAiStatus(`Validando repetidos y estandarizando ${list.length} conceptos.`);
     const groups = new Map();
     list.forEach((item, index) => {
@@ -2719,6 +2859,13 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       v2.aiGenerated = Boolean(base?.aiGenerated);
       v2.templateFallback = Boolean(base?.templateFallback);
       v2.family = base?.family || v2.family;
+      // Fase 2: el re-finalizado por renglon (arriba) parte de `base`, que ya
+      // trae el snapshot de ubicacion puesto por generateBatchAPU -- se
+      // reafirma explicito aqui, mismo patron que aiGenerated/templateFallback/family,
+      // para no depender de que un futuro cambio en applyConceptMetadataV2/
+      // finalizeProfessionalAPU siga preservando campos no declarados en su esquema.
+      v2.ubicacionEstructurada = base?.ubicacionEstructurada || { country: null, state: null, city: null };
+      v2.ubicacion = base?.ubicacion || '';
       return v2;
     });
     const repeated = list.length - groups.size;
@@ -2747,7 +2894,11 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
      llamada ya en curso, para no dejar un resultado a medio calcular. */
   const CONCEPT_CONCURRENCY = 4;
   const runQueueJob = async (initialJob) => {
-    batchIntelligence2ContextRef.current = createIntelligence2RunContext({ location: activeProject?.ubicacion || '' });
+    batchIntelligence2ContextRef.current = createIntelligence2RunContext({
+      location: activeProject?.ubicacion || '',
+      country: activeProject?.locationCountry || '', state: activeProject?.locationState || '', city: activeProject?.locationCity || ''
+    });
+    batchLocationSnapshotRef.current = buildProjectLocationSnapshot(activeProject);
     let job = initialJob;
     setActiveJob(job);
     const persist = firebaseReady && Boolean(user?.uid);
@@ -3742,7 +3893,7 @@ function Projects({projects,setProjects,activeProjectId,setActiveProjectId,setMo
   }, []);
   const [showForm,setShowForm]=useState(false);
   const [startPrompt,setStartPrompt]=useState(false);
-  const [draft,setDraft]=useState({name:'',client:'',ubicacion:'',moneda:'MXN',budget:'',progress:0,status:'Anteproyecto'});
+  const [draft,setDraft]=useState({name:'',client:'',ubicacion:'',locationCountry:'',locationState:'',locationCity:'',moneda:'MXN',budget:'',progress:0,status:'Anteproyecto'});
   // Antes, un Cliente vacio hacia que "Crear y comenzar" no hiciera nada
   // visible: el unico aviso era un alert() -- globalmente convertido en un
   // toast que se autodesaparece (ver NoticeHost) -- facil de perder. El
@@ -3753,7 +3904,7 @@ function Projects({projects,setProjects,activeProjectId,setActiveProjectId,setMo
   const nameInputRef=useRef(null);
   const clientInputRef=useRef(null);
   const add = () => setShowForm(true);
-  const clearDraft = () => { setDraft({name:'',client:'',ubicacion:'',moneda:'MXN',budget:'',progress:0,status:'Anteproyecto'}); setFormErrors({}); };
+  const clearDraft = () => { setDraft({name:'',client:'',ubicacion:'',locationCountry:'',locationState:'',locationCity:'',moneda:'MXN',budget:'',progress:0,status:'Anteproyecto'}); setFormErrors({}); };
   const save = (e) => {
     e?.preventDefault?.();
     const errors=validateProjectDraft(draft);
@@ -3763,7 +3914,19 @@ function Projects({projects,setProjects,activeProjectId,setActiveProjectId,setMo
       return;
     }
     setFormErrors({});
-    const next={id:'PRO-'+uid(),name:draft.name.trim(),client:draft.client.trim(),ubicacion:draft.ubicacion.trim(),moneda:draft.moneda||'MXN',progress:Number(draft.progress)||0,budget:Number(draft.budget)||0,status:draft.status||'Anteproyecto'};
+    // Fase 2: mismo criterio que el servidor (_route-projects.mjs) -- si hay
+    // ubicacion estructurada, ubicacion (texto legado, exports/UI existente)
+    // se autocalcula a partir de ella; si no, se conserva el texto libre tal
+    // cual (compatibilidad con el formulario anterior a esta fase).
+    const hasStructuredLocation = hasAnyLocation({ country: draft.locationCountry, state: draft.locationState, city: draft.locationCity });
+    const resolvedUbicacion = hasStructuredLocation
+      ? (formatLocationDisplay({ country: draft.locationCountry, state: draft.locationState, city: draft.locationCity }) || '')
+      : draft.ubicacion.trim();
+    const next={
+      id:'PRO-'+uid(),name:draft.name.trim(),client:draft.client.trim(),ubicacion:resolvedUbicacion,
+      locationCountry: draft.locationCountry || null, locationState: draft.locationState || null, locationCity: draft.locationCity || null,
+      moneda:draft.moneda||'MXN',progress:Number(draft.progress)||0,budget:Number(draft.budget)||0,status:draft.status||'Anteproyecto'
+    };
     setProjects([next, ...list]);
     // Proyecto nuevo = espacio realmente vacio y activo de inmediato (seccion 15
     // del sprint): sin esto, el usuario creaba el proyecto pero seguia viendo
@@ -3818,7 +3981,10 @@ function Projects({projects,setProjects,activeProjectId,setActiveProjectId,setMo
               <input ref={clientInputRef} value={draft.client} onChange={e=>{setDraft({...draft,client:e.target.value}); if(formErrors.client) setFormErrors({...formErrors,client:undefined});}} placeholder={tr('projects.fieldClientPlaceholder')} aria-required="true" aria-invalid={!!formErrors.client}/>
               {formErrors.client && <span className="nf-error-msg">{formErrors.client}</span>}
             </div>
-            <div className="nf"><label>{tr('projects.fieldLocation')}</label><input value={draft.ubicacion} onChange={e=>setDraft({...draft,ubicacion:e.target.value})} placeholder={tr('projects.fieldLocationPlaceholder')}/></div>
+            <LocationPicker
+              country={draft.locationCountry} state={draft.locationState} city={draft.locationCity}
+              onChange={({ country, state, city }) => setDraft({ ...draft, locationCountry: country, locationState: state, locationCity: city })}
+            />
             <div className="nf"><label>{tr('projects.fieldCurrency')}</label><select value={draft.moneda} onChange={e=>setDraft({...draft,moneda:e.target.value})}><option>MXN</option><option>USD</option></select></div>
             <div className="nf"><label>{tr('projects.fieldBudget')}</label><input type="number" value={draft.budget} onChange={e=>setDraft({...draft,budget:e.target.value})} placeholder="0.00"/></div>
             <div className="nf"><label>{tr('projects.fieldStatus')}</label><select value={draft.status} onChange={e=>setDraft({...draft,status:e.target.value})}><option>Anteproyecto</option><option>Cotizacion</option><option>En ejecucion</option><option>Pausado</option><option>Cerrado</option></select></div>

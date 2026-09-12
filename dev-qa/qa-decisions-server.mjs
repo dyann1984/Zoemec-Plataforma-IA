@@ -29,11 +29,13 @@ import challengeDecisionsHandler from '../server/api-lib/_route-challenge-decisi
 import projectsHandler from '../server/api-lib/_route-projects.mjs';
 import apusHandler from '../server/api-lib/_route-apus.mjs';
 import exportEventsHandler from '../server/api-lib/_route-export-events.mjs';
+import organizationsHandler from '../server/api-lib/_route-organizations.mjs';
 
 const PORT = Number(process.env.ZOEMEC_AI_PORT || 8787);
 const ROUTES = {
   '/api/technical-memory': technicalMemoryHandler, '/api/challenge-decisions': challengeDecisionsHandler,
-  '/api/projects': projectsHandler, '/api/apus': apusHandler, '/api/export-events': exportEventsHandler
+  '/api/projects': projectsHandler, '/api/apus': apusHandler, '/api/export-events': exportEventsHandler,
+  '/api/organizations': organizationsHandler
 };
 
 function readBody(req){

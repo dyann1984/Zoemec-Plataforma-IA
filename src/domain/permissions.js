@@ -1,6 +1,7 @@
 /* Reglas de negocio de planes y permisos: sin React, sin Firebase, sin DOM.
    Recibe datos ya cargados (perfil de usuario, plan, uso) y decide que puede
    hacer ese usuario. Testeable con objetos planos. */
+import { isActiveTrialStatus } from './organization.js';
 
 export function hasValidSession(user){
   return Boolean(user?.email && user?.plan && (user?.deviceId || user?.uid));
@@ -13,35 +14,64 @@ export const PLAN_LIMITS = {
   Empresa:{ apus:9999, library:true, ai:true, exports:true, label:'Empresa' }
 };
 
-/* Fuente unica de verdad para saber si alguien es administrador. Antes cada
-   pantalla comparaba user.role==='admin' de forma literal: si el rol venia
-   guardado en Firestore como "Administrador", "ADMIN" o con espacios, el Panel
-   Admin simplemente no aparecia (sin ningun error visible). Ahora se normaliza
-   el texto y ademas se acepta custom claim de Firebase o correo en
-   VITE_ADMIN_EMAILS, para no depender de un solo campo fragil.
-   VITE_ADMIN_EMAILS nunca se configuro en Vercel/local (confirmado: no aparece
-   en ninguno de los dos entornos), asi que la lista quedaba vacia y el unico
-   admin real de la plataforma dependia 100% de que Firestore tuviera guardado
-   role:"admin" exacto. Se agrega un correo de respaldo fijo (el mismo patron
-   que ya usa src/firebase.js con sus valores por defecto) para que el acceso
-   de administrador nunca dependa de una variable de entorno olvidada. */
-export const ADMIN_ROLE_VALUES = new Set(['admin', 'administrator', 'administrador', 'superadmin']);
-export const ADMIN_EMAILS = String(import.meta.env.VITE_ADMIN_EMAILS || 'dianalopez161184@gmail.com')
+/* Fuente unica de verdad para saber si alguien es SUPER ADMIN (administrador
+   GLOBAL de ZOEMEC -- no confundir con company_manager, el responsable de
+   UNA sola empresa, ver src/domain/organization.js#ORG_ROLE). Endurecimiento
+   de seguridad (auditoria de roles): antes este calculo tambien aceptaba
+   cualquier users/{uid}.role guardado en Firestore como "admin"/"administrator"/
+   "administrador"/"superadmin" -- eso permitia que un super admin existente
+   ascendiera a CUALQUIER otro usuario a super admin con una simple escritura
+   de Firestore (ver el <select> de rol que existia en AdminPanel.jsx), exactamente
+   lo que se pidio eliminar ("ningun usuario puede asignarse este rol, ninguna
+   empresa puede crear otro super_admin"). Ningun documento de Firestore puede
+   otorgar este rol nunca mas.
+
+   MECANISMO FINAL (el pensado para quedarse): el custom claim real de
+   Firebase `super_admin===true`. NINGUN endpoint de este repo lo establece
+   jamas -- la UNICA forma de otorgarlo es scripts/grant-super-admin.mjs,
+   corrido a mano en una terminal con las credenciales reales de Firebase
+   Admin (fuera de la app, nunca desde el Team Panel, el Admin Panel, ni
+   ninguna llamada de red). Un token sin ese claim simplemente no lo trae --
+   nunca se puede fabricar desde el cliente.
+
+   MECANISMO DE TRANSICION (temporal, NO el mecanismo final): el correo en
+   SUPERADMIN_EMAILS/respaldo fijo. Existe unicamente para que el acceso de
+   super admin no se pierda mientras el claim real todavia no se ha corrido
+   contra un entorno (desarrollo, o produccion recien desplegada) -- ver el
+   mismo respaldo en server/api-lib/_authGuard.mjs#SUPERADMIN_EMAILS y
+   firestore.rules#isSuperAdmin, los tres deben mantenerse en sincronia. Una
+   vez que scripts/grant-super-admin.mjs ya se corrio para la cuenta real en
+   un entorno, este respaldo de correo puede retirarse ahi sin perder acceso
+   -- queda documentado aqui explicitamente para que nadie lo trate como la
+   proteccion definitiva. */
+// `typeof import.meta !== 'undefined' ? import.meta.env?.X : undefined`
+// (mismo guard ya usado en src/domain/intelligence2Runtime.js): import.meta.env
+// solo existe bajo el bundler de Vite (navegador); sin el guard, este archivo
+// no se puede importar desde un script/test de Node puro -- se descubrio
+// exactamente asi (dev-qa/roles-qa.mjs, endurecimiento de roles), y hasta
+// ahora nadie lo habia intentado (permissions.js no tenia pruebas propias).
+const VITE_SUPERADMIN_EMAILS = typeof import.meta !== 'undefined' ? import.meta.env?.VITE_SUPERADMIN_EMAILS : undefined;
+export const SUPERADMIN_EMAILS = String(VITE_SUPERADMIN_EMAILS || 'dianalopez161184@gmail.com')
   .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
 
 export function normalizeRoleValue(v){ return String(v ?? '').trim().toLowerCase(); }
 
 export function isAdminUser(user, profile){
-  const role = normalizeRoleValue(profile?.role ?? user?.role);
-  if(ADMIN_ROLE_VALUES.has(role)) return true;
-  if(user?.claims?.admin === true) return true;
+  if(user?.claims?.super_admin === true) return true;
   const email = normalizeRoleValue(profile?.email ?? user?.email);
-  if(email && ADMIN_EMAILS.includes(email)) return true;
+  if(email && SUPERADMIN_EMAILS.includes(email)) return true;
   return false;
 }
 
-export function canUse(user, feature, used=0){
+/* orgStatus (opcional): estado RESUELTO de la organizacion del usuario (ver
+   src/domain/organization.js#resolveOrgStatus), si pertenece a una. Durante
+   ACTIVE_TRIAL, la UI habilita las mismas acciones que a un admin (punto 5
+   del trial empresarial: "sin limites artificiales de uso") -- esto es solo
+   para pintar botones habilitados/deshabilitados, la autoridad real siempre
+   es el servidor (server/api-lib/_authGuard.mjs#requireFeature). */
+export function canUse(user, feature, used=0, orgStatus=null){
   if(user?.isAdmin) return true;
+  if(isActiveTrialStatus(orgStatus)) return true;
   const plan = PLAN_LIMITS[user?.plan || 'Gratis'] || PLAN_LIMITS.Gratis;
   if(feature === 'apu') return used < plan.apus;
   return Boolean(plan[feature]);

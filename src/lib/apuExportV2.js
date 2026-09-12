@@ -527,6 +527,13 @@ export function drawApuSections(doc,rawApu,opts={}){
     doc.setTextColor(25);doc.setFontSize(7);doc.setFont('helvetica','normal');
     doc.text(pdfText(`Clave: ${apu.clave}   Unidad: ${apu.unit}   Cantidad: ${num(apu.cantidadObra)}   Estado: ${apu.validationStatus||''}`),M,y);y+=4.2;
     doc.text(pdfText(`Proyecto: ${apu.proyecto||'Por definir'}   Cliente: ${apu.cliente||'Por definir'}   Fecha base: ${apu.fechaBase||''}`),M,y);y+=4.2;
+    // Fase 2 (APU regionalizados): mismo dato que ya mostraba la hoja Excel
+    // (buildProfessionalAPUSheet, fila "Ubicacion") -- el PDF individual no lo
+    // mostraba, causando que un usuario que solo exporta PDF nunca viera con
+    // que ubicacion se calculo el APU. apu.ubicacion ya es el snapshot fijado
+    // en generacion (ver buildProjectLocationSnapshot en main.jsx), nunca un
+    // enlace vivo al proyecto.
+    doc.text(pdfText(`Ubicacion: ${apu.ubicacion||'Sin ubicacion capturada'}`),M,y);y+=4.2;
     doc.setFont('helvetica','bold');const conceptLines=doc.splitTextToSize(pdfText(apu.concept),W-2*M);doc.text(conceptLines,M,y);doc.setFont('helvetica','normal');y+=conceptLines.length*3.6+3;
   };
   /* Tabla de ancho proporcional (widthsRatio), en vez de columnas iguales: en

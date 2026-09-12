@@ -6,6 +6,7 @@ process.env.GOOGLE_APPLICATION_CREDENTIALS = process.env.GOOGLE_APPLICATION_CRED
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import handler from '../server/api-lib/_route-projects.mjs';
+import apusHandler from '../server/api-lib/_route-apus.mjs';
 import { getAdminAuth, getAdminDb } from '../server/api-lib/_firebaseAdmin.mjs';
 
 const AUTH_HOST = process.env.FIREBASE_AUTH_EMULATOR_HOST;
@@ -127,5 +128,88 @@ describe('POST /api/projects action=archive', () => {
     await call(post(idToken, { action: 'archive', id: 'PRO-ARCH2' }));
     const list = await call(get(idToken, {}));
     assert.ok(!list.body.projects.some(p => p.id === 'PRO-ARCH2'));
+  });
+});
+
+/* ======================================================================
+   Fase 2 -- APU regionalizados por ubicacion.
+   ====================================================================== */
+describe('POST /api/projects — ubicacion estructurada (Fase 2)', () => {
+  it('action=create con locationCountry/State/City autocalcula ubicacion (texto legado)', async () => {
+    const { idToken } = await createUserAndGetIdToken({ email: uniq('loc-create') });
+    const res = await call(post(idToken, {
+      action: 'create', id: 'PRO-LOC-1', name: 'Obra regionalizada',
+      locationCountry: 'MX', locationState: 'Nuevo León', locationCity: 'Monterrey'
+    }));
+    assert.equal(res.statusCode, 201);
+    assert.equal(res.body.project.ubicacion, 'Monterrey, Nuevo León, México');
+    assert.equal(res.body.project.locationCountry, 'MX');
+    assert.equal(res.body.project.locationState, 'Nuevo León');
+    assert.equal(res.body.project.locationCity, 'Monterrey');
+  });
+
+  it('action=create SIN campos estructurados conserva el comportamiento anterior (ubicacion texto libre tal cual)', async () => {
+    const { idToken } = await createUserAndGetIdToken({ email: uniq('loc-legacy') });
+    const res = await call(post(idToken, { action: 'create', id: 'PRO-LOC-2', name: 'Obra legado', ubicacion: 'Algún lugar sin estructurar' }));
+    assert.equal(res.statusCode, 201);
+    assert.equal(res.body.project.ubicacion, 'Algún lugar sin estructurar');
+    assert.equal(res.body.project.locationCountry, null);
+  });
+
+  it('action=update cambiando SOLO la ciudad recalcula ubicacion completa (no deja "undefined"/huecos)', async () => {
+    const { idToken } = await createUserAndGetIdToken({ email: uniq('loc-update') });
+    await call(post(idToken, {
+      action: 'create', id: 'PRO-LOC-3', name: 'Obra a mudar',
+      locationCountry: 'MX', locationState: 'Jalisco', locationCity: 'Guadalajara'
+    }));
+    const res = await call(post(idToken, { action: 'update', id: 'PRO-LOC-3', locationCity: 'Zapopan' }));
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.project.ubicacion, 'Zapopan, Jalisco, México');
+    assert.equal(res.body.project.locationState, 'Jalisco', 'el estado no cambio, debe conservarse aunque solo se mando la ciudad');
+  });
+
+  it('action=update que NO toca ubicacion deja locationCountry/State/City y ubicacion exactamente igual', async () => {
+    const { idToken } = await createUserAndGetIdToken({ email: uniq('loc-untouched') });
+    await call(post(idToken, {
+      action: 'create', id: 'PRO-LOC-4', name: 'Obra estable',
+      locationCountry: 'MX', locationState: 'Nuevo León', locationCity: 'Monterrey'
+    }));
+    const res = await call(post(idToken, { action: 'update', id: 'PRO-LOC-4', budget: 500000 }));
+    assert.equal(res.body.project.ubicacion, 'Monterrey, Nuevo León, México');
+    assert.equal(res.body.project.locationCity, 'Monterrey');
+  });
+
+  it('INVARIANTE: cambiar la ubicacion de un proyecto NUNCA reescribe un APU ya existente de ese proyecto (regla explicita del brief)', async () => {
+    const { idToken } = await createUserAndGetIdToken({ email: uniq('loc-invariant') });
+    await call(post(idToken, {
+      action: 'create', id: 'PRO-LOC-5', name: 'Obra con APU aprobado',
+      locationCountry: 'MX', locationState: 'Nuevo León', locationCity: 'Monterrey'
+    }));
+    // Fase 2 (cierre de brecha regionalizacion): el fixture incluye el
+    // snapshot completo (ubicacionEstructurada + ubicacion + campos
+    // regionales por recurso) que ahora estampan los tres flujos de
+    // generacion -- la invariante de abajo debe cubrir TODOS estos campos,
+    // no solo los genericos del APU.
+    const apuFixture = {
+      concept: 'Muro de block', unit: 'm2', cantidadObra: 10,
+      ubicacion: 'Monterrey, Nuevo León, México',
+      ubicacionEstructurada: { country: 'MX', state: 'Nuevo León', city: 'Monterrey' },
+      materials: [], labor: [{
+        descripcion: 'Oficial albañil', cuadrilla: 1, rendimiento: 5, salarioBase: 380, fsr: 1.65,
+        regionalConfidence: 'ALTA', regionalFallbackLevel: 'ciudad', searchedAt: '2026-09-01T00:00:00.000Z',
+        fuente: { region: 'Monterrey, Nuevo León, México', nivelCobertura: 'ciudad', fecha: '2026-09-01' }
+      }],
+      equipment: [], consumables: [], seguridad: [], factores: {}
+    };
+    async function callApus(req){ const res = mockRes(); await apusHandler(req, res); return res; }
+    const created = await callApus(post(idToken, { action: 'create', id: 'APU-LOC-1', projectId: 'PRO-LOC-5', apu: apuFixture }));
+    assert.equal(created.statusCode, 201);
+    const before = JSON.stringify(created.body.apu);
+
+    const updateRes = await call(post(idToken, { action: 'update', id: 'PRO-LOC-5', locationCity: 'Guadalupe' }));
+    assert.equal(updateRes.body.project.ubicacion, 'Guadalupe, Nuevo León, México', 'el proyecto SI debe reflejar la nueva ubicacion');
+
+    const afterFetch = await callApus(get(idToken, { id: 'APU-LOC-1' }));
+    assert.equal(JSON.stringify(afterFetch.body.apu), before, 'el APU ya generado debe quedar BYTE POR BYTE igual -- ningun cambio de ubicacion del proyecto lo toca automaticamente');
   });
 });

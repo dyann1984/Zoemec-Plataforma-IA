@@ -7,6 +7,7 @@ import { computeZoemecIntelligence, summarizeIntelligence, describeImpact, safeR
 import { CHANGE_TYPE } from '../../domain/apuScenario.js';
 import { finalizeProfessionalAPU } from '../../domain/apuProfessional.js';
 import { SYSTEM_RESOURCES } from '../../domain/constructionSystems.js';
+import { MEMORY_SCOPE, MEMORY_TYPE, createMemoryProposal, approveMemoryEntry, buildMemoryEvidence } from '../../domain/technicalMemory.js';
 
 function healthyApuFixture(overrides = {}){
   const fuente = { proveedor: 'Proveedor Confiable S.A.', fecha: new Date().toISOString(), estado: 'VERIFICADO' };
@@ -46,6 +47,54 @@ test('computeZoemecIntelligence: un APU vacio no revienta el calculo, cada motor
   assert.equal(intelligence.audit.ok, true);
   assert.equal(intelligence.confidence.ok, true);
   assert.equal(intelligence.confidence.data.status, 'INSUFFICIENT_EVIDENCE');
+});
+
+// FASE 3 (aprendizaje progresivo seguro): computeZoemecIntelligence es el
+// UNICO lugar de produccion que decide si Confidence/Challenge reciben
+// memoria tecnica aprobada -- estas pruebas fijan que el wiring real
+// (segundo parametro memoryEvidence, la forma exacta que ya devuelve
+// technicalMemory.js#buildMemoryEvidence) efectivamente llega a ambos
+// motores, no solo que los motores lo acepten (eso ya lo prueba
+// technicalMemory.test.js).
+test('computeZoemecIntelligence: sin memoryEvidence (segundo argumento ausente), el comportamiento es identico al de antes de esta fase', () => {
+  const apu = finalizeProfessionalAPU(healthyApuFixture({ labor: [{ descripcion: 'Ayudante general', cuadrilla: 1, rendimiento: 4, salarioBase: 350, fsr: 1.85, fuente: {} }] }));
+  const withoutArg = computeZoemecIntelligence(apu);
+  const withUndefined = computeZoemecIntelligence(apu, undefined);
+  assert.deepEqual(withoutArg.confidence.data, withUndefined.confidence.data);
+  assert.deepEqual(withoutArg.challenge.data, withUndefined.challenge.data);
+});
+
+test('computeZoemecIntelligence: una entrada de memoria APPROVED mejora historicalConsistency (Confidence) via memoryEvidence.yieldApprovedFold', () => {
+  const descripcion = 'Ayudante general';
+  const apu = finalizeProfessionalAPU(healthyApuFixture({ labor: [{ descripcion, cuadrilla: 1, rendimiento: 4, salarioBase: 350, fsr: 1.85, fuente: {} }] }));
+  const withoutMemory = computeZoemecIntelligence(apu);
+
+  const entry = approveMemoryEntry(
+    createMemoryProposal({ scope: MEMORY_SCOPE.PROJECT, type: MEMORY_TYPE.APPROVED_YIELD, subject: { primaryActivity: 'acero', resourceDescripcion: descripcion }, value: 4, context: { projectId: 'P1' } }),
+    { approvedBy: 'admin.gonzalez' }
+  );
+  const memoryEvidence = buildMemoryEvidence([entry], [{ type: MEMORY_TYPE.APPROVED_YIELD, subject: { primaryActivity: 'acero', resourceDescripcion: descripcion }, context: { projectId: 'P1' } }]);
+  const withMemory = computeZoemecIntelligence(apu, memoryEvidence);
+
+  assert.ok(withMemory.confidence.data.dimensions.historicalConsistency.score > withoutMemory.confidence.data.dimensions.historicalConsistency.score,
+    'un rendimiento respaldado por memoria tecnica aprobada debe contar como calibrado, igual que uno HISTORICO');
+});
+
+test('computeZoemecIntelligence: memoryEvidence.laborBaselines reemplaza el baseline de plantilla en Challenge', () => {
+  const descripcion = 'Ayudante general';
+  const apu = finalizeProfessionalAPU(healthyApuFixture({ labor: [{ descripcion, cuadrilla: 1, rendimiento: 4, salarioBase: 350, fsr: 1.85, fuente: {} }] }));
+  const memoriaRendimiento = 2; // memoria del proyecto: bastante mas conservadora que la plantilla
+  const entry = approveMemoryEntry(
+    createMemoryProposal({ scope: MEMORY_SCOPE.PROJECT, type: MEMORY_TYPE.APPROVED_YIELD, subject: { primaryActivity: 'acero', resourceDescripcion: descripcion }, value: memoriaRendimiento, context: { projectId: 'P1' } }),
+    { approvedBy: 'admin.gonzalez' }
+  );
+  const memoryEvidence = buildMemoryEvidence([entry], [{ type: MEMORY_TYPE.APPROVED_YIELD, subject: { primaryActivity: 'acero', resourceDescripcion: descripcion }, context: { projectId: 'P1' } }]);
+  const { challenge } = computeZoemecIntelligence(apu, memoryEvidence);
+
+  const finding = challenge.data.challenges.find(c => c.category === 'rendimiento');
+  assert.ok(finding, 'la desviacion contra el baseline de memoria debe seguir detectandose');
+  assert.equal(finding.baselineValue, memoriaRendimiento);
+  assert.match(finding.baselineSource, /[Mm]emoria/, 'el hallazgo debe atribuir el baseline a memoria tecnica, no a la plantilla generica');
 });
 
 test('summarizeIntelligence: Confidence INSUFFICIENT_EVIDENCE se muestra como "SIN EVIDENCIA", nunca un score inventado', () => {

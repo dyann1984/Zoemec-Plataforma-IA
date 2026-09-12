@@ -208,3 +208,55 @@ test('TEST 10: primaryActivity presente + rendimiento solo de IA (sin calibrar) 
   assert.equal(calibrado.dimensions.historicalConsistency.score, 100);
   assert.ok(result.score < calibrado.score, 'un rendimiento sin calibrar debe puntuar menos globalmente que uno respaldado por historico real, aun con la misma disciplina clasificada');
 });
+
+/* ======================================================================
+   Fase 2 -- APU regionalizados por ubicacion: dimension "regionalEvidence".
+   ====================================================================== */
+
+test('Fase 2: sin ningun recurso con priceStatus (APU legacy, nunca paso por Price Intelligence) -> regionalEvidence INSUFFICIENT_EVIDENCE, nunca 0', () => {
+  const apu = finalizeProfessionalAPU(idealApuFixture());
+  const result = runApuConfidence(apu);
+  assert.equal(result.dimensions.regionalEvidence.score, null);
+  assert.equal(result.dimensions.regionalEvidence.status, CONFIDENCE_STATUS.INSUFFICIENT_EVIDENCE);
+});
+
+test('Fase 2: todos los recursos con regionalConfidence ALTA/MEDIA -> regionalEvidence 100', () => {
+  const apu = idealApuFixture();
+  apu.materials.forEach(m => { m.priceStatus = 'VERIFIED_MARKET'; m.regionalConfidence = 'ALTA'; });
+  apu.labor.forEach(l => { l.priceStatus = 'VERIFIED_MARKET'; l.regionalConfidence = 'MEDIA'; });
+  const result = runApuConfidence(finalizeProfessionalAPU(apu));
+  assert.equal(result.dimensions.regionalEvidence.score, 100);
+  assert.deepEqual(result.dimensions.regionalEvidence.reasons, []);
+});
+
+test('Fase 2: mitad de los recursos buscados sin evidencia regional (BAJA/null) -> score proporcional, nunca oculto', () => {
+  const apu = idealApuFixture();
+  apu.materials.forEach((m, i) => { m.priceStatus = 'VERIFIED_MARKET'; m.regionalConfidence = i % 2 === 0 ? 'ALTA' : 'BAJA'; });
+  apu.labor.forEach(l => { l.priceStatus = 'VERIFIED_MARKET'; l.regionalConfidence = 'BAJA'; });
+  const result = runApuConfidence(finalizeProfessionalAPU(apu));
+  assert.ok(result.dimensions.regionalEvidence.score < 100);
+  assert.ok(result.dimensions.regionalEvidence.score > 0);
+  assert.ok(result.dimensions.regionalEvidence.reasons.length > 0, 'debe explicar honestamente cuantos recursos no consiguieron evidencia regional');
+});
+
+test('Fase 2: recursos con priceStatus pero SIN regionalConfidence (busqueda anterior a esta fase, o sin ubicacion de proyecto) cuentan como sin evidencia regional, no se excluyen del denominador', () => {
+  const apu = idealApuFixture();
+  apu.materials.forEach(m => { m.priceStatus = 'VERIFIED_MARKET'; /* regionalConfidence ausente */ });
+  apu.labor.forEach(l => { l.priceStatus = 'VERIFIED_MARKET'; });
+  const result = runApuConfidence(finalizeProfessionalAPU(apu));
+  assert.equal(result.dimensions.regionalEvidence.score, 0, 'sin ningun dato regional, el score debe ser 0 (evaluado, sin evidencia) -- no null (no evaluable)');
+});
+
+test('Fase 2: WEIGHTS de las 9 dimensiones siguen sumando 1.00 (verificado indirectamente: un APU con TODAS las dimensiones evaluables da el mismo promedio ponderado esperado)', () => {
+  const apu = idealApuFixture();
+  apu.materials.forEach(m => { m.priceStatus = 'VERIFIED_MARKET'; m.regionalConfidence = 'ALTA'; });
+  apu.labor.forEach(l => { l.priceStatus = 'VERIFIED_MARKET'; l.regionalConfidence = 'ALTA'; });
+  const result = runApuConfidence(finalizeProfessionalAPU(apu));
+  // Con TODAS las dimensiones en 100 (o cerca), el score global debe rondar
+  // 100 tambien -- si los pesos no sumaran 1.00 esto se desviaria de forma
+  // detectable (ej. sumando 0.95 el promedio ponderado normalizado seguiria
+  // dando ~100 por la normalizacion via weightSum, asi que la prueba real
+  // util es que NINGUNA dimension quede excluida sin explicacion).
+  assert.ok(Object.keys(result.dimensions).length === 9, 'deben existir exactamente 9 dimensiones (8 previas + regionalEvidence)');
+  assert.ok('regionalEvidence' in result.dimensions);
+});

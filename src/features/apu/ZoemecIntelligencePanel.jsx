@@ -5,7 +5,8 @@ import {
 } from './zoemecIntelligence.js';
 import { money } from '../../lib/apuExport.js';
 import { apuDataStateLabel } from '../../domain/apuSchema.js';
-import { MEMORY_SCOPE, MEMORY_TYPE, MEMORY_STATUS } from '../../domain/technicalMemory.js';
+import { formatLocationDisplay } from '../../domain/geography.js';
+import { MEMORY_SCOPE, MEMORY_TYPE, MEMORY_STATUS, buildMemoryEvidence } from '../../domain/technicalMemory.js';
 import { challengeSeverity } from '../../domain/apuChallenge.js';
 import { apiPost, apiGetSafe } from '../../services/apiClient.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
@@ -14,7 +15,15 @@ const RANK = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1, INFO: 0 };
 // Identificadores reales que ya existen en el APU (Fase 6): nunca se inventa
 // un projectId/apuId nuevo -- si el proyecto no se ha capturado todavia, se
 // usa un valor explicito de "sin capturar" en vez de fabricar uno.
-const projectIdOf = apu => apu?.proyecto || apu?.clave || apu?.id || 'sin-proyecto';
+// FASE 3 (aprendizaje progresivo SEGURO): antes solo usaba apu.proyecto (el
+// NOMBRE del proyecto, texto libre) como "projectId" -- inofensivo mientras
+// nada verificaba pertenencia real a un proyecto, pero la Parte 0 de esta
+// fase SI la verifica (server/api-lib/_route-technical-memory.mjs#handleList
+// ahora exige un documento real en `projects/{projectId}`). apu.projectId es
+// el id REAL de Firestore que main.jsx ya adjunta a este mismo objeto (ver
+// professionalApu en main.jsx) -- se prefiere aqui; el resto de la cadena de
+// respaldo se conserva intacta para un APU nunca vinculado a un proyecto.
+const projectIdOf = apu => apu?.projectId || apu?.proyecto || apu?.clave || apu?.id || 'sin-proyecto';
 const apuIdOf = apu => apu?.id || apu?.clave || 'sin-id';
 const AUDIT_SEVERITY_LABEL = { CRITICAL: 'CRÍTICO', HIGH: 'ALTO', MEDIUM: 'MEDIO', LOW: 'BAJO', INFO: 'INFO' };
 
@@ -86,8 +95,61 @@ function SummaryBar({ summary, tr }){
   </div>;
 }
 
-function ResumenTab({ intelligence, confidence, bidRisk }){
+// Fase 2 (APU regionalizados por ubicacion): agrega los indicadores del
+// brief (Ubicacion, Precio regional, Referencias, Confianza, Ultima
+// actualizacion) a partir de lo que YA escribio materialPriceIntelligence2.js
+// en cada renglon -- nunca recalcula ni inventa nada aqui, solo presenta.
+// null cuando NINGUN recurso paso por busqueda de precio todavia (APU recien
+// creado, o generado antes de esta fase) -- la seccion completa se oculta en
+// ese caso, no se muestra un "0" ni una confianza inventada.
+function computeRegionalSummary(apu){
+  const rows = [
+    ...(Array.isArray(apu?.materials) ? apu.materials : []),
+    ...(Array.isArray(apu?.labor) ? apu.labor : []),
+    ...(Array.isArray(apu?.equipment) ? apu.equipment : []),
+    ...(Array.isArray(apu?.seguridad) ? apu.seguridad : [])
+  ];
+  const searched = rows.filter(r => r.priceStatus != null);
+  if(!searched.length) return null;
+  const counts = { ALTA: 0, MEDIA: 0, BAJA: 0, sinDato: 0 };
+  let referencias = 0;
+  let ultimaActualizacion = null;
+  searched.forEach(r => {
+    if(r.regionalConfidence === 'ALTA') counts.ALTA++;
+    else if(r.regionalConfidence === 'MEDIA') counts.MEDIA++;
+    else if(r.regionalConfidence === 'BAJA') counts.BAJA++;
+    else counts.sinDato++;
+    referencias += r.priceRecord?.references?.length || 0;
+    if(r.searchedAt && (!ultimaActualizacion || r.searchedAt > ultimaActualizacion)) ultimaActualizacion = r.searchedAt;
+  });
+  const ubicacion = formatLocationDisplay(apu?.ubicacionEstructurada || {}) || apu?.ubicacion || null;
+  const nivel = counts.ALTA > 0 ? 'ALTA' : counts.MEDIA > 0 ? 'MEDIA' : 'BAJA';
+  return { ubicacion, nivel, counts, totalRecursos: searched.length, referencias, ultimaActualizacion };
+}
+
+const REGIONAL_BADGE_CLASS = { ALTA: 'zi-badge-low', MEDIA: 'zi-badge-medium', BAJA: 'zi-badge-high' };
+const REGIONAL_LABEL = { ALTA: 'Confianza regional alta', MEDIA: 'Confianza regional media', BAJA: 'Confianza regional baja' };
+
+function RegionalIntelligenceCard({ apu }){
+  const summary = useMemo(() => computeRegionalSummary(apu), [apu]);
+  if(!summary) return null;
+  return <div className="zi-finding-card" style={{ marginBottom: 14 }}>
+    <div className="zi-finding-head">
+      <b>Inteligencia regional de costos</b>
+      <span className={`zi-badge ${REGIONAL_BADGE_CLASS[summary.nivel]}`}>{REGIONAL_LABEL[summary.nivel]}</span>
+    </div>
+    <p className="zi-finding-desc">
+      Ubicación: <b>{summary.ubicacion || 'Sin ubicación capturada en el proyecto'}</b><br/>
+      Recursos con búsqueda de precio: <b>{summary.totalRecursos}</b> · Referencias usadas: <b>{summary.referencias}</b>
+      {summary.ultimaActualizacion && <> · Última actualización: <b>{new Date(summary.ultimaActualizacion).toLocaleDateString('es-MX')}</b></>}
+    </p>
+    {summary.nivel === 'BAJA' && <p className="zi-finding-desc">Información regional limitada. ZOEMEC está utilizando referencias estatales y nacionales para complementar esta estimación.</p>}
+  </div>;
+}
+
+function ResumenTab({ apu, intelligence, confidence, bidRisk }){
   return <div>
+    <RegionalIntelligenceCard apu={apu} />
     {!confidence.ok && <div className="zi-error-box">Confidence no disponible: {confidence.error}</div>}
     {confidence.ok && <p>Recomendación de revisión: <b>{confidence.data.recommendation}</b></p>}
     {confidence.ok && confidence.data.criticalFactors.length > 0 && <div className="zi-error-box">Factores críticos que limitan el score: {confidence.data.criticalFactors.map(f => f.dimension).join(', ')}</div>}
@@ -100,19 +162,34 @@ function ResumenTab({ intelligence, confidence, bidRisk }){
   </div>;
 }
 
+// FASE 3 (aprendizaje progresivo seguro): historicalConsistencyDimension
+// (apuConfidence.js) ya reporta memoryApprovedRows=N en su `evidence` --
+// nunca se modifica ese motor aqui (regla de esta fase), solo se LEE lo que
+// ya calculo para mostrar un indicador honesto: nunca aparece si N es 0
+// (memoria aprobada real y usada, no una suposicion de la UI).
+function memoryCalibratedRowsFromDimension(dim){
+  const raw = dim?.evidence?.find(e => e.startsWith('memoryApprovedRows='));
+  const n = raw ? Number(raw.split('=')[1]) : 0;
+  return Number.isFinite(n) ? n : 0;
+}
+
 function ConfidenceTab({ confidence }){
   if(!confidence.ok) return <div className="zi-error-box">Confidence no disponible: {confidence.error}</div>;
   const c = confidence.data;
   return <div>
     <p>Score global: <b>{c.score != null ? `${c.score}%` : 'SIN EVIDENCIA SUFICIENTE'}</b> · <ConfidenceStatusBadge status={c.status} /> · recomendación: <b>{c.recommendation}</b></p>
     <div className="zi-dim-grid">
-      {Object.entries(c.dimensions).map(([name, dim]) => <div key={name} className="zi-dim-card">
-        <div className="zi-dim-name"><span>{DIMENSION_LABEL[name] || name}</span><ConfidenceStatusBadge status={dim.status} /></div>
-        <div className="zi-dim-score">{dim.score != null ? dim.score : '—'}</div>
-        {dim.score != null && <div className="zi-dim-bar"><span style={{ width: `${dim.score}%` }} /></div>}
-        {dim.reasons.slice(0, 1).map((r, i) => <p key={i} className="zi-dim-reason">{r}</p>)}
-        {dim.missingData.length > 0 && <p className="zi-dim-reason">Sin datos: {dim.missingData.join(', ')}</p>}
-      </div>)}
+      {Object.entries(c.dimensions).map(([name, dim]) => {
+        const memoryCalibratedRows = memoryCalibratedRowsFromDimension(dim);
+        return <div key={name} className="zi-dim-card">
+          <div className="zi-dim-name"><span>{DIMENSION_LABEL[name] || name}</span><ConfidenceStatusBadge status={dim.status} /></div>
+          <div className="zi-dim-score">{dim.score != null ? dim.score : '—'}</div>
+          {dim.score != null && <div className="zi-dim-bar"><span style={{ width: `${dim.score}%` }} /></div>}
+          {memoryCalibratedRows > 0 && <span className="zi-badge zi-badge-info">Aprendizaje aplicado: {memoryCalibratedRows} rendimiento(s) calibrado(s) por memoria técnica aprobada</span>}
+          {dim.reasons.slice(0, 1).map((r, i) => <p key={i} className="zi-dim-reason">{r}</p>)}
+          {dim.missingData.length > 0 && <p className="zi-dim-reason">Sin datos: {dim.missingData.join(', ')}</p>}
+        </div>;
+      })}
     </div>
   </div>;
 }
@@ -397,16 +474,17 @@ function MemoryEntryCard({ entry, canModerate, onApprove, onReject, busy }){
   </div>;
 }
 
-function MemoriaTab({ apu, user }){
+// FASE 3: entries/onRefresh ahora vienen del panel padre (ZoemecIntelligencePanel),
+// que resuelve la MISMA memoria del proyecto para alimentar Confidence/
+// Challenge -- una sola peticion compartida en vez de que esta pestaña hiciera
+// la suya propia por separado (que antes dejaba esa memoria sin usar en
+// ningun otro lado).
+function MemoriaTab({ apu, user, entries, error: fetchError, onRefresh }){
   const projectId = projectIdOf(apu);
-  const [entries, setEntries] = useState(null);
   const [error, setError] = useState(null);
   const [proposing, setProposing] = useState(false);
   const [busyId, setBusyId] = useState(null);
   const [form, setForm] = useState({ type: MEMORY_TYPE.APPROVED_YIELD, resourceDescripcion: apu.labor?.[0]?.descripcion || '', value: '' });
-
-  const refresh = () => { apiGetSafe(`/api/technical-memory?projectId=${encodeURIComponent(projectId)}`).then(data => setEntries(data?.entries || [])); };
-  useEffect(() => { refresh(); /* eslint-disable-next-line */ }, [projectId]);
 
   const propose = async () => {
     if(!form.value) return;
@@ -420,26 +498,26 @@ function MemoriaTab({ apu, user }){
       });
       setProposing(false);
       setForm(f => ({ ...f, value: '' }));
-      refresh();
+      onRefresh();
     }catch(err){ setError(err.message); }
   };
 
   const approve = async (entry) => {
     setBusyId(entry.id); setError(null);
-    try{ await apiPost('/api/technical-memory', { action: 'approve', id: entry.id }); refresh(); }
+    try{ await apiPost('/api/technical-memory', { action: 'approve', id: entry.id }); onRefresh(); }
     catch(err){ setError(err.message); }
     finally{ setBusyId(null); }
   };
   const reject = async (entry, reason) => {
     setBusyId(entry.id); setError(null);
-    try{ await apiPost('/api/technical-memory', { action: 'reject', id: entry.id, reason }); refresh(); }
+    try{ await apiPost('/api/technical-memory', { action: 'reject', id: entry.id, reason }); onRefresh(); }
     catch(err){ setError(err.message); }
     finally{ setBusyId(null); }
   };
 
   return <div>
-    <div className="zi-session-note">Memoria del proyecto: persistida en Firestore vía api/technical-memory.mjs (Fase 6) — sobrevive a recargar la página. Aprobar/Rechazar requieren rol de administrador (no existe todavía un rol de "supervisor" dedicado).</div>
-    {error && <div className="zi-error-box">{error}</div>}
+    <div className="zi-session-note">Memoria del proyecto: persistida en Firestore vía api/technical-memory.mjs (Fase 6) — sobrevive a recargar la página. Aprobar/Rechazar requieren rol de administrador (no existe todavía un rol de "supervisor" dedicado). Una entrada APPROVED se usa automáticamente para calibrar Confidence y Challenge de este proyecto.</div>
+    {(error || fetchError) && <div className="zi-error-box">{error || fetchError}</div>}
     {entries === null ? <p className="muted">Cargando…</p>
       : entries.length === 0 ? <div className="zi-empty-box">Sin entradas de memoria para este proyecto todavía.</div>
       : entries.map(e => <MemoryEntryCard key={e.id} entry={e} canModerate={Boolean(user?.isAdmin)} onApprove={approve} onReject={reject} busy={busyId === e.id} />)}
@@ -463,12 +541,17 @@ function EvidenciaTab({ apu }){
   if(!rows.length) return <div className="zi-empty-box">Este APU no tiene renglones todavía.</div>;
   return <div style={{ overflowX: 'auto' }}>
     <table className="zi-evidence-table">
-      <thead><tr><th>Tipo</th><th>Recurso</th><th>Precio/Salario</th><th>Rendimiento</th><th>Fuente</th><th>Estado</th></tr></thead>
+      <thead><tr><th>Tipo</th><th>Recurso</th><th>Precio/Salario</th><th>Rendimiento</th><th>Fuente</th><th>Región</th><th>Estado</th></tr></thead>
       <tbody>{rows.map(({ kind, index, row }) => <tr key={`${kind}-${index}`}>
         <td>{kind}</td><td>{row.descripcion || '—'}</td>
         <td>{money(row.precioUnitario ?? row.salarioBase ?? row.tarifa ?? 0)}</td>
         <td>{row.rendimiento != null ? row.rendimiento.toFixed(3) : '—'}{row.rendimientoFuente ? ` (${row.rendimientoFuente})` : ''}</td>
         <td>{row.fuente?.proveedor || 'Sin proveedor'}{row.fuente?.fecha ? ` · ${row.fuente.fecha}` : ''}</td>
+        {/* Fase 2: region = ubicacion consultada al buscar este precio (no el
+            proveedor); nivelCobertura = si la fuente usada de verdad era de
+            ese nivel geografico, autoreportado por la busqueda, nunca
+            inventado aqui. */}
+        <td>{row.fuente?.region ? <>{row.fuente.region}{row.fuente?.nivelCobertura ? <><br/><small>{row.fuente.nivelCobertura}</small></> : ''}</> : '—'}</td>
         <td>{apuDataStateLabel(row.fuente?.estado)}</td>
       </tr>)}</tbody>
     </table>
@@ -497,7 +580,33 @@ const TAB_KEYS = ['resumen', 'confidence', 'bidrisk', 'auditoria', 'challenge', 
    sin necesidad de un deep-equal costoso). */
 export function ZoemecIntelligencePanel({ apu, onChange, history, onRestoreVersion, user }){
   const { t: tr } = useI18n();
-  const intelligence = useMemo(() => computeZoemecIntelligence(apu), [apu]);
+  const projectId = projectIdOf(apu);
+  // FASE 3 (aprendizaje progresivo seguro): la memoria del proyecto se
+  // resuelve UNA vez aqui arriba (antes vivia solo dentro de MemoriaTab,
+  // desconectada de Confidence/Challenge) -- se comparte con MemoriaTab via
+  // props en vez de que cada uno haga su propia peticion. Se piden TODOS los
+  // estados (no solo APPROVED): MemoriaTab necesita ver PROPOSED para poder
+  // revisarlas; buildMemoryEvidence/resolveTechnicalMemory ya filtran a
+  // APPROVED por su cuenta (technicalMemory.js#isEligible), asi que pasar
+  // aqui las demas nunca cambia el resultado de Confidence/Challenge.
+  const [memoryEntries, setMemoryEntries] = useState(null); // null = cargando
+  const [memoryError, setMemoryError] = useState(null);
+  const refreshMemory = () => {
+    apiGetSafe(`/api/technical-memory?projectId=${encodeURIComponent(projectId)}`)
+      .then(data => { setMemoryEntries(data?.entries || []); setMemoryError(null); })
+      .catch(err => setMemoryError(err.message));
+  };
+  useEffect(() => { refreshMemory(); /* eslint-disable-next-line */ }, [projectId]);
+
+  const memoryEvidence = useMemo(() => {
+    if(!memoryEntries?.length || !Array.isArray(apu.labor) || !apu.labor.length) return undefined;
+    const queries = apu.labor
+      .filter(row => row?.descripcion)
+      .map(row => ({ type: MEMORY_TYPE.APPROVED_YIELD, subject: { primaryActivity: apu.primaryActivity || undefined, resourceDescripcion: row.descripcion }, context: { projectId } }));
+    return queries.length ? buildMemoryEvidence(memoryEntries, queries) : undefined;
+  }, [memoryEntries, apu.labor, apu.primaryActivity, projectId]);
+
+  const intelligence = useMemo(() => computeZoemecIntelligence(apu, memoryEvidence), [apu, memoryEvidence]);
   const summary = useMemo(() => summarizeIntelligence(intelligence), [intelligence]);
   const [tab, setTab] = useState('resumen');
   const [prefill, setPrefill] = useState(null);
@@ -516,14 +625,14 @@ export function ZoemecIntelligencePanel({ apu, onChange, history, onRestoreVersi
       {TAB_KEYS.map(key => <button key={key} type="button" role="tab" aria-selected={tab === key} className={`zi-tab${tab === key ? ' active' : ''}`} onClick={() => setTab(key)}>{tr(`intel.tabs.${key}`)}</button>)}
     </div>
     <div className="zi-tabpanel">
-      {tab === 'resumen' && <ResumenTab intelligence={intelligence} confidence={intelligence.confidence} bidRisk={intelligence.bidRisk} />}
+      {tab === 'resumen' && <ResumenTab apu={apu} intelligence={intelligence} confidence={intelligence.confidence} bidRisk={intelligence.bidRisk} />}
       {tab === 'confidence' && <ConfidenceTab confidence={intelligence.confidence} />}
       {tab === 'bidrisk' && <BidRiskTab bidRisk={intelligence.bidRisk} />}
       {tab === 'auditoria' && <AuditoriaTab audit={intelligence.audit} />}
       {tab === 'challenge' && <ChallengeTab apu={apu} challenge={intelligence.challenge} onSimulate={simulateFromChallenge} />}
       {tab === 'escenarios' && <EscenariosTab apu={apu} onChange={onChange} prefill={prefill} />}
       {tab === 'evidencia' && <EvidenciaTab apu={apu} />}
-      {tab === 'memoria' && <MemoriaTab apu={apu} user={user} />}
+      {tab === 'memoria' && <MemoriaTab apu={apu} user={user} entries={memoryEntries} error={memoryError} onRefresh={refreshMemory} />}
       {tab === 'historial' && <HistorialTab history={history} onRestore={onRestoreVersion} />}
     </div>
   </section>;

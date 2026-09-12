@@ -330,3 +330,121 @@ test('resourceTypes ausente (null, default): preserva el comportamiento producti
 
   assert.equal(searchCalls, 9, 'sin resourceTypes explicito, el comportamiento productivo actual (todas las categorias) no debe cambiar');
 });
+
+/* ======================================================================
+   Fase 2 -- APU regionalizados por ubicacion. enrichApuWithIntelligence2
+   ahora acepta `location:{country,state,city}`, que se reenvia a CADA
+   busqueda (resolveResourcePrice -> searchFn) y se escribe en el renglon
+   (fuente.region/nivelCobertura, regionalConfidence/regionalFallbackLevel)
+   a partir de lo que devuelve la busqueda -- nunca inventado localmente.
+   ====================================================================== */
+
+function altoResultConUbicacion(overrides = {}){
+  return {
+    fichaTecnica: { familia: 'cemento' },
+    referencias: [{ proveedor: 'Home Depot Monterrey', url: 'https://x', precioNormalizado: 250, match: { verdict: 'ALTO', score: 91 }, nivelCobertura: 'ciudad' }],
+    precioRecomendado: 250, nivelEvidencia: 'MERCADO',
+    regionalConfidence: 'ALTA', regionalFallbackLevel: 'ciudad',
+    ubicacionConsultada: 'Monterrey, Nuevo León, México',
+    ...overrides
+  };
+}
+
+test('Fase 2 -- location se reenvia a cada llamada de searchFn (country/state/city)', async () => {
+  const ctx = freshContext();
+  const received = [];
+  const searchFn = async (args) => { received.push(args); return altoResultConUbicacion(); };
+  const apu = aiApuFixture();
+
+  await enrichApuWithIntelligence2({
+    aiApu: apu, userInput: {}, concept: apu.concept, ...ctx, searchFn,
+    location: { country: 'MX', state: 'Nuevo León', city: 'Monterrey' }
+  });
+
+  assert.ok(received.length > 0);
+  received.forEach(args => {
+    assert.equal(args.country, 'MX');
+    assert.equal(args.state, 'Nuevo León');
+    assert.equal(args.city, 'Monterrey');
+  });
+});
+
+test('Fase 2 -- sin location (comportamiento previo a esta fase): searchFn recibe country/state/city vacios, nunca undefined que rompa un llamador estricto', async () => {
+  const ctx = freshContext();
+  const received = [];
+  const searchFn = async (args) => { received.push(args); return altoResult(); };
+  const apu = aiApuFixture();
+
+  await enrichApuWithIntelligence2({ aiApu: apu, userInput: {}, concept: apu.concept, ...ctx, searchFn });
+
+  received.forEach(args => {
+    assert.equal(args.country, '');
+    assert.equal(args.state, '');
+    assert.equal(args.city, '');
+  });
+});
+
+test('Fase 2 -- fuente.region/nivelCobertura y regionalConfidence/regionalFallbackLevel llegan al renglon final', async () => {
+  const ctx = freshContext();
+  const searchFn = async () => altoResultConUbicacion();
+  const apu = aiApuFixture();
+
+  const result = await enrichApuWithIntelligence2({
+    aiApu: apu, userInput: {}, concept: apu.concept, ...ctx, searchFn,
+    location: { country: 'MX', state: 'Nuevo León', city: 'Monterrey' }
+  });
+
+  const row = result.apu.materials[0];
+  assert.equal(row.regionalConfidence, 'ALTA');
+  assert.equal(row.regionalFallbackLevel, 'ciudad');
+  assert.equal(row.fuente.region, 'Monterrey, Nuevo León, México');
+  assert.equal(row.fuente.nivelCobertura, 'ciudad');
+});
+
+test('Fase 2 (requisito 11) -- el fallback Ciudad->Estado->Pais->General llega identico via el orquestador tanto en invocacion "individual" como "de lote"', async () => {
+  const ctx = freshContext();
+  // Solo referencias de nivel estado (no hay de ciudad): el fallback real
+  // (deriveRegionalConfidence, ver _priceIntelligenceCore.test.mjs) ya
+  // decidiria MEDIA/estado -- aqui se simula ese resultado ya derivado
+  // (regionalConfidence/regionalFallbackLevel) para probar que el orquestador
+  // lo traslada igual sin importar desde que flujo se invoque.
+  const searchFn = async () => ({
+    fichaTecnica: { familia: 'cemento' },
+    referencias: [{ proveedor: 'Home Depot México (nacional)', url: 'https://x', precioNormalizado: 250, match: { verdict: 'ALTO', score: 91 }, nivelCobertura: 'estado' }],
+    precioRecomendado: 250, nivelEvidencia: 'MERCADO',
+    regionalConfidence: 'MEDIA', regionalFallbackLevel: 'estado',
+    ubicacionConsultada: 'Nuevo León, México'
+  });
+  const location = { country: 'MX', state: 'Nuevo León', city: 'Monterrey' };
+
+  const individualResult = await enrichApuWithIntelligence2({
+    aiApu: aiApuFixture(), userInput: { concept: 'Concepto individual', unit: 'm', qty: 12 },
+    concept: 'Concepto individual', ...ctx, searchFn, location
+  });
+  const batchResult = await enrichApuWithIntelligence2({
+    aiApu: aiApuFixture(), userInput: { concept: 'Concepto de lote', unit: 'm', qty: 12, clave: 'CON-001' },
+    concept: 'Concepto de lote', ...ctx, searchFn, location
+  });
+
+  for(const r of [individualResult, batchResult]){
+    const row = r.apu.materials[0];
+    assert.equal(row.regionalConfidence, 'MEDIA', 'sin evidencia de ciudad, debe caer a estado (MEDIA), nunca inventar ALTA');
+    assert.equal(row.regionalFallbackLevel, 'estado');
+    assert.equal(row.fuente.nivelCobertura, 'estado');
+  }
+});
+
+test('Fase 2 -- sin referencias ALTO (solo nacional/sin evidencia): regionalConfidence nunca se inventa, queda null o BAJA segun lo que reporto la busqueda', async () => {
+  const ctx = freshContext();
+  const searchFn = async () => sinEvidenciaResult(); // sin referencias -> regionalConfidence/regionalFallbackLevel ausentes en el mock
+  const apu = aiApuFixture();
+
+  const result = await enrichApuWithIntelligence2({
+    aiApu: apu, userInput: {}, concept: apu.concept, ...ctx, searchFn,
+    location: { country: 'MX', state: 'Nuevo León', city: 'Monterrey' }
+  });
+
+  const row = result.apu.materials[0];
+  assert.equal(row.regionalConfidence, null, 'sin evidencia de mercado, nunca se inventa una confianza regional');
+  assert.equal(row.regionalFallbackLevel, null);
+});

@@ -24,6 +24,10 @@ async function createUserAndGetIdToken({ email, password = 'Test1234!', role = '
   const auth = getAdminAuth();
   const user = await auth.createUser({ email, password, emailVerified: true });
   if(role !== 'user') await getAdminDb().collection('users').doc(user.uid).set({ uid: user.uid, email, role, plan: 'Empresa', active: true }, { merge: true });
+  // Endurecimiento de roles: super_admin ya NO confia en users/{uid}.role --
+  // se otorga con el custom claim real (Admin SDK), fuera de banda, antes
+  // del signInWithPassword de abajo para que el idToken fresco lo incluya.
+  if(role === 'admin') await auth.setCustomUserClaims(user.uid, { super_admin: true });
   const res = await fetch(`http://${AUTH_HOST}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password, returnSecureToken: true })
@@ -353,5 +357,109 @@ describe('Fase 6.1 -- audit trail conserva la verificacion y el estado de aplica
     assert.equal(record.clientMismatch, true);
     assert.equal(record.applicationStatus, 'PENDING_APPLICATION');
     assert.ok(record.timestamp, 'debe tener timestamp real de Firestore, no inventado en el cliente');
+  });
+});
+
+// FASE 3 (aprendizaje progresivo seguro), Parte 2: una decision CORRECT que
+// el servidor SI pudo verificar (SERVER_VERIFIED) propone automaticamente
+// una entrada de Memoria Tecnica -- SIEMPRE PROPOSED, nunca aprobada sola.
+function priceDeviatedApuFixture(){
+  const apu = {
+    concept: 'Concepto de prueba precio', unit: 'pza', cantidadObra: 10, primaryActivity: 'generico',
+    materials: [{ descripcion: 'Material sin evidencia de mercado', consumo: 1, unidad: 'pza', precioUnitario: 500, fuente: { estado: 'ESTIMADO_IA' } }],
+    labor: [], equipment: [], consumables: [], seguridad: [], factores: {}
+  };
+  const { challenges } = runApuChallenge(apu);
+  const expectedFinding = challenges.find(c => c.category === 'precio');
+  return { apu, expectedFinding };
+}
+
+describe('FASE 3 -- propuesta automatica de Memoria Tecnica desde una decision CORRECT verificada', () => {
+  it('CORRECT + SERVER_VERIFIED + categoria rendimiento + projectId crea una entrada technicalMemory PROPOSED con subject/value correctos', async () => {
+    const { uid, idToken } = await createUserAndGetIdToken({ email: uniq('auto-memory') });
+    const apuId = `APU-${Date.now()}`;
+    const projectId = `PRO-AUTO-MEM-${Date.now()}`;
+    const { apu, expectedFinding } = deviatedApuFixture();
+    const res = await call(post(idToken, {
+      action: 'record', apuId, projectId, challengeId: expectedFinding.id, decision: 'CORRECT', applicationStatus: 'PENDING_APPLICATION', apuSnapshot: apu
+    }));
+    assert.equal(res.body.decision.verificationStatus, 'SERVER_VERIFIED');
+
+    const memoryId = `AUTO-${res.body.decision.id}`;
+    const memorySnap = await getAdminDb().collection('technicalMemory').doc(memoryId).get();
+    assert.ok(memorySnap.exists, 'la propuesta automatica de memoria debe existir');
+    const entry = memorySnap.data();
+    assert.equal(entry.status, 'PROPOSED', 'nunca se auto-aprueba, sigue requiriendo revision humana');
+    assert.equal(entry.scope, 'PROJECT');
+    assert.equal(entry.type, 'APPROVED_YIELD');
+    assert.equal(entry.subject.resourceDescripcion, expectedFinding.resourceDescripcion);
+    assert.equal(entry.value, expectedFinding.baselineValue);
+    assert.equal(entry.context.projectId, projectId);
+    assert.equal(entry.provenance.apuId, apuId);
+    assert.equal(entry.provenance.userId, uid);
+    assert.equal(entry.provenance.sourceType, 'AUTO_FROM_CHALLENGE_DECISION');
+    assert.equal(entry.provenance.challengeDecisionId, res.body.decision.id);
+
+    const auditSnap = await getAdminDb().collection('technicalMemoryAudit').where('entryId', '==', memoryId).get();
+    assert.equal(auditSnap.size, 1, 'la propuesta automatica debe dejar su propio rastro de auditoria');
+    assert.equal(auditSnap.docs[0].data().source, 'auto:challenge-decision');
+  });
+
+  it('MAINTAIN/JUSTIFY/DISMISS con el mismo hallazgo verificado NUNCA crean una propuesta de memoria', async () => {
+    const { idToken } = await createUserAndGetIdToken({ email: uniq('auto-memory-no') });
+    const projectId = `PRO-AUTO-MEM-NO-${Date.now()}`;
+    for(const decision of ['MAINTAIN', 'JUSTIFY', 'DISMISS']){
+      const apuId = `APU-${decision}-${Date.now()}`;
+      const { apu, expectedFinding } = deviatedApuFixture();
+      const res = await call(post(idToken, { action: 'record', apuId, projectId, challengeId: expectedFinding.id, decision, apuSnapshot: apu }));
+      assert.equal(res.body.decision.verificationStatus, 'SERVER_VERIFIED');
+      const memorySnap = await getAdminDb().collection('technicalMemory').doc(`AUTO-${res.body.decision.id}`).get();
+      assert.equal(memorySnap.exists, false, `${decision} nunca debe generar una propuesta automatica de memoria`);
+    }
+  });
+
+  it('CORRECT sin apuSnapshot (UNVERIFIED_CLIENT_SNAPSHOT) nunca crea una propuesta de memoria', async () => {
+    const { idToken } = await createUserAndGetIdToken({ email: uniq('auto-memory-unverified') });
+    const apuId = `APU-${Date.now()}`;
+    const projectId = `PRO-AUTO-MEM-UNVER-${Date.now()}`;
+    const res = await call(post(idToken, { action: 'record', apuId, projectId, challengeId: 'yield:0', decision: 'CORRECT', clientSnapshot: sampleSnapshot }));
+    assert.equal(res.body.decision.verificationStatus, 'UNVERIFIED_CLIENT_SNAPSHOT');
+    const memorySnap = await getAdminDb().collection('technicalMemory').doc(`AUTO-${res.body.decision.id}`).get();
+    assert.equal(memorySnap.exists, false, 'sin verificacion real del servidor, nunca se propone memoria automatica');
+  });
+
+  it('CORRECT verificado de categoria "precio" nunca crea una propuesta de memoria (sin valor corregido claro que proponer)', async () => {
+    const { idToken } = await createUserAndGetIdToken({ email: uniq('auto-memory-precio') });
+    const apuId = `APU-${Date.now()}`;
+    const projectId = `PRO-AUTO-MEM-PRECIO-${Date.now()}`;
+    const { apu, expectedFinding } = priceDeviatedApuFixture();
+    assert.ok(expectedFinding, 'el fixture debe producir un hallazgo de categoria precio');
+    const res = await call(post(idToken, { action: 'record', apuId, projectId, challengeId: expectedFinding.id, decision: 'CORRECT', apuSnapshot: apu }));
+    assert.equal(res.body.decision.verificationStatus, 'SERVER_VERIFIED');
+    assert.equal(res.body.decision.verifiedSnapshot.category, 'precio');
+    const memorySnap = await getAdminDb().collection('technicalMemory').doc(`AUTO-${res.body.decision.id}`).get();
+    assert.equal(memorySnap.exists, false);
+  });
+
+  it('CORRECT verificado sin projectId nunca crea una propuesta de memoria (no hay a que proyecto atarla)', async () => {
+    const { idToken } = await createUserAndGetIdToken({ email: uniq('auto-memory-no-project') });
+    const apuId = `APU-${Date.now()}`;
+    const { apu, expectedFinding } = deviatedApuFixture();
+    const res = await call(post(idToken, { action: 'record', apuId, challengeId: expectedFinding.id, decision: 'CORRECT', apuSnapshot: apu }));
+    assert.equal(res.body.decision.verificationStatus, 'SERVER_VERIFIED');
+    const memorySnap = await getAdminDb().collection('technicalMemory').doc(`AUTO-${res.body.decision.id}`).get();
+    assert.equal(memorySnap.exists, false);
+  });
+
+  it('un reintento de la MISMA llamada (2a fase del flujo CORRECT, sin apuSnapshot) nunca duplica la propuesta de memoria', async () => {
+    const { idToken } = await createUserAndGetIdToken({ email: uniq('auto-memory-idempotent') });
+    const apuId = `APU-${Date.now()}`;
+    const projectId = `PRO-AUTO-MEM-IDEMP-${Date.now()}`;
+    const { apu, expectedFinding } = deviatedApuFixture();
+    const first = await call(post(idToken, { action: 'record', apuId, projectId, challengeId: expectedFinding.id, decision: 'CORRECT', applicationStatus: 'PENDING_APPLICATION', apuSnapshot: apu }));
+    await call(post(idToken, { action: 'record', apuId, projectId, challengeId: expectedFinding.id, decision: 'CORRECT', applicationStatus: 'APPLIED_LOCAL_ONLY' }));
+    const memoryId = `AUTO-${first.body.decision.id}`;
+    const allWithThatId = await getAdminDb().collection('technicalMemory').where('id', '==', memoryId).get();
+    assert.equal(allWithThatId.size, 1, 'el id deterministico debe seguir dando upsert, nunca un segundo documento');
   });
 });

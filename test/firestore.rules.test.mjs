@@ -75,6 +75,28 @@ describe('firestore.rules — users (D1: autoasignacion de admin/plan)', () => {
     await assertFails(alice.doc('users/alice').update({ role: 'admin' }));
   });
 
+  // FASE 2 QA (organizacion de 5 usuarios): hallazgo encontrado ejercitando el
+  // flujo real de invitaciones con @firebase/rules-unit-testing -- organizationId/
+  // orgRole no estaban protegidos aqui explicitamente, solo role/plan/active.
+  // No otorgaba acceso real (isActiveOrgMember/isOrgAdmin en la seccion de
+  // organizations solo confian en la subcoleccion members, que sigue con
+  // write:false), pero se cierra por profundidad de defensa: solo el Admin SDK
+  // (_route-organizations.mjs) debe poder tocar estos dos campos.
+  it('usuario A no puede auto-crear su perfil ya con organizationId/orgRole declarados', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('users/alice').set({ role: 'user', plan: 'Gratis', active: true, organizationId: 'ORG-X' }));
+    await assertFails(alice.doc('users/alice').set({ role: 'user', plan: 'Gratis', active: true, orgRole: 'org_admin' }));
+  });
+
+  it('usuario A no puede reescribir su propio organizationId/orgRole via update (solo el Admin SDK los fija)', async () => {
+    await seed((db) => db.doc('users/alice').set({ role: 'user', plan: 'Gratis', active: true, organizationId: 'ORG-A', orgRole: 'collaborator' }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('users/alice').update({ organizationId: 'ORG-B' }));
+    await assertFails(alice.doc('users/alice').update({ orgRole: 'org_admin' }));
+    // Un update que no toca estos campos (mismo criterio que plan/role) sigue permitido.
+    await assertSucceeds(alice.doc('users/alice').update({ name: 'Alicia Actualizada' }));
+  });
+
   it('usuario A no puede leer ni modificar el documento de usuario B', async () => {
     await seed((db) => db.doc('users/bob').set({ role: 'user', plan: 'Gratis', active: true }));
     const alice = testEnv.authenticatedContext('alice').firestore();
@@ -82,12 +104,16 @@ describe('firestore.rules — users (D1: autoasignacion de admin/plan)', () => {
     await assertFails(alice.doc('users/bob').update({ plan: 'Empresa' }));
   });
 
+  // Endurecimiento de roles: super_admin ya NO depende de users/{uid}.role
+  // (ver isSuperAdmin() en firestore.rules) -- un admin real de prueba aqui
+  // se simula con el custom claim, la unica via que las reglas reconocen.
+  // Firestore ya no importa lo que diga users/admin1.role.
   it('un administrador real SI puede leer y actualizar el plan de otro usuario', async () => {
     await seed(async (db) => {
-      await db.doc('users/admin1').set({ role: 'admin', plan: 'Empresa', active: true });
+      await db.doc('users/admin1').set({ role: 'user', plan: 'Gratis', active: true });
       await db.doc('users/bob').set({ role: 'user', plan: 'Gratis', active: true });
     });
-    const admin = testEnv.authenticatedContext('admin1').firestore();
+    const admin = testEnv.authenticatedContext('admin1', { super_admin: true }).firestore();
     await assertSucceeds(admin.doc('users/bob').get());
     await assertSucceeds(admin.doc('users/bob').update({ plan: 'Profesional' }));
   });
@@ -214,10 +240,9 @@ describe('firestore.rules — library (D2: aislamiento multiusuario)', () => {
 
   it('un administrador real SI puede leer un documento privado de cualquier usuario', async () => {
     await seed(async (db) => {
-      await db.doc('users/admin1').set({ role: 'admin', plan: 'Empresa', active: true });
       await db.doc('library/doc6').set({ ownerUid: 'bob', visibility: 'private' });
     });
-    const admin = testEnv.authenticatedContext('admin1').firestore();
+    const admin = testEnv.authenticatedContext('admin1', { super_admin: true }).firestore();
     await assertSucceeds(admin.doc('library/doc6').get());
   });
 
@@ -271,10 +296,9 @@ describe('firestore.rules — visual_requests (RC4 Fase 2: Planos IA / Takeoff r
 
   it('un administrador real SI puede leer el analisis de plano de cualquier usuario', async () => {
     await seed(async (db) => {
-      await db.doc('users/admin1').set({ role: 'admin', plan: 'Empresa', active: true });
       await db.doc('visual_requests/req4').set({ uid: 'bob', mode: 'takeoff', elementos: [] });
     });
-    const admin = testEnv.authenticatedContext('admin1').firestore();
+    const admin = testEnv.authenticatedContext('admin1', { super_admin: true }).firestore();
     await assertSucceeds(admin.doc('visual_requests/req4').get());
   });
 });
@@ -333,8 +357,7 @@ describe('firestore.rules — technicalMemory / challengeDecisions (Fase 6)', ()
 
   it('un admin SI puede leer technicalMemory directo (via el catch-all de administrador)', async () => {
     await seed((db) => db.doc('technicalMemory/m1').set({ status: 'PROPOSED', value: 5 }));
-    await seed((db) => db.doc('users/admin-uid').set({ role: 'admin' }));
-    const admin = testEnv.authenticatedContext('admin-uid').firestore();
+    const admin = testEnv.authenticatedContext('admin-uid', { super_admin: true }).firestore();
     await assertSucceeds(admin.doc('technicalMemory/m1').get());
   });
 
@@ -444,5 +467,86 @@ describe('firestore.rules — exportEvents (Fase 8)', () => {
     await assertSucceeds(alice.doc('exportEvents/e1').get());
     const bob = testEnv.authenticatedContext('bob').firestore();
     await assertFails(bob.doc('exportEvents/e1').get());
+  });
+});
+
+// Fase 2 (regionalizacion de APU): priceIntelligenceCache/priceIntelligenceUsage
+// no tienen una regla propia -- caen en el catch-all `match /{document=**}`
+// (solo isAdmin()). Verificacion explicita de la garantia del brief "Empresa
+// A no puede consultar costos privados de Empresa B": ni siquiera con
+// tenantScope.organizationId propio puede un usuario normal leer estas
+// colecciones directamente desde el cliente -- toda lectura/escritura real
+// pasa por el servidor (Admin SDK via /api/price-intelligence, que ya aisla
+// por tenantScope+region en el fingerprint, ver priceSearchCache.test.js y
+// priceIntelligenceCache.firestore.test.mjs TEST D).
+describe('firestore.rules — priceIntelligenceCache / priceIntelligenceUsage (Fase 2: aislamiento regional entre organizaciones)', () => {
+  it('un usuario normal de la Empresa A no puede leer un registro de cache de precios aunque sea de su propia organizacion (solo el servidor, via Admin SDK, lee esta coleccion)', async () => {
+    await seed((db) => db.doc('priceIntelligenceCache/fp-empresa-a').set({
+      tenantScope: { organizationId: 'ORG-A' }, region: 'Monterrey, Nuevo León, México', price: 350
+    }));
+    const aliceOrgA = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(aliceOrgA.doc('priceIntelligenceCache/fp-empresa-a').get());
+  });
+
+  it('un usuario de la Empresa B no puede leer el cache de precios regional de la Empresa A', async () => {
+    await seed((db) => db.doc('priceIntelligenceCache/fp-empresa-a').set({
+      tenantScope: { organizationId: 'ORG-A' }, region: 'Monterrey, Nuevo León, México', price: 350
+    }));
+    const bobOrgB = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(bobOrgB.doc('priceIntelligenceCache/fp-empresa-a').get());
+  });
+
+  it('nadie escribe priceIntelligenceCache/priceIntelligenceUsage desde el cliente', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('priceIntelligenceCache/fp-x').set({ price: 1 }));
+    await assertFails(alice.doc('priceIntelligenceUsage/u-x').set({ count: 1 }));
+  });
+});
+
+// Endurecimiento de roles: super_admin (administrador GLOBAL de ZOEMEC) debe
+// depender EXCLUSIVAMENTE del custom claim real de Firebase o del correo
+// exacto de la unica cuenta autorizada -- nunca de un documento de Firestore.
+// Estas pruebas demuestran, contra las reglas reales (nunca Admin SDK), que
+// ni un colaborador ni un company_manager (responsable de su propia empresa)
+// pueden fabricarse ese acceso escribiendo cualquier documento -- las reglas
+// de rules-unit-testing NUNCA pueden fijar un custom claim real (eso solo lo
+// hace el Admin SDK, fuera de banda), asi que cualquier intento aqui solo
+// puede pasar por Firestore, que es justo lo que se cerro.
+describe('firestore.rules — super_admin nunca se puede auto-asignar (Endurecimiento de roles)', () => {
+  it('un colaborador no puede volverse super_admin escribiendo role:"admin" en su propio perfil', async () => {
+    await seed((db) => db.doc('users/carol').set({ role: 'user', plan: 'Gratis', active: true }));
+    const carol = testEnv.authenticatedContext('carol').firestore();
+    await assertFails(carol.doc('users/carol').update({ role: 'admin' }));
+    await assertFails(carol.doc('users/carol').update({ role: 'superadmin' }));
+  });
+
+  it('un company_manager (responsable de su propia empresa) tampoco puede volverse super_admin -- ser responsable de una empresa nunca implica administrar ZOEMEC', async () => {
+    await seed(async (db) => {
+      await db.doc('users/alice').set({ role: 'user', plan: 'Gratis', active: true, organizationId: 'orgA', orgRole: 'company_manager' });
+      await db.doc('organizations/orgA').set({ id: 'orgA', name: 'Empresa A', status: 'ACTIVE_TRIAL' });
+      await db.doc('organizations/orgA/members/alice').set({ uid: 'alice', role: 'company_manager', status: 'active' });
+    });
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    // Ni siquiera un responsable de empresa real puede leer lo que solo un
+    // super admin deberia ver (payments, catch-all de administracion global).
+    await assertFails(alice.doc('payments/pay1').get());
+    await assertFails(alice.doc('config/platform').get());
+    // Y por supuesto tampoco puede escribirse a si mismo el rol de plataforma.
+    await assertFails(alice.doc('users/alice').update({ role: 'admin' }));
+  });
+
+  it('nadie puede otorgarse super_admin creando su documento de usuario ya con ese rol', async () => {
+    const dave = testEnv.authenticatedContext('dave').firestore();
+    await assertFails(dave.doc('users/dave').set({ role: 'admin', plan: 'Gratis', active: true }));
+    await assertFails(dave.doc('users/dave').set({ role: 'superadmin', plan: 'Gratis', active: true }));
+  });
+
+  it('ningun documento de Firestore puede otorgar acceso super_admin, ni siquiera escrito por otro super_admin real (solo el custom claim o el correo exacto cuentan)', async () => {
+    await seed((db) => db.doc('users/eve').set({ role: 'admin', plan: 'Gratis', active: true }));
+    const eve = testEnv.authenticatedContext('eve').firestore();
+    // eve tiene role:'admin' en Firestore pero NO el custom claim ni el
+    // correo autorizado -- isSuperAdmin() debe seguir negandole el catch-all.
+    await assertFails(eve.doc('payments/pay1').get());
+    await assertFails(eve.doc('config/platform').get());
   });
 });

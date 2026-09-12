@@ -393,3 +393,30 @@ test('TEST 12: lote de conceptos distintos, cada APU conserva sus propios datos 
   const ids = resultados.map(v2 => v2.id);
   assert.equal(new Set(ids).size, 3);
 });
+
+/* ======================================================================
+   Fase 2 -- APU regionalizados por ubicacion.
+   ====================================================================== */
+
+test('Fase 2: makeEmptyAPUv2/migrateLegacyApuToV2/normalizeAIApuToV2 siempre traen ubicacionEstructurada (nunca hay que verificar su existencia antes de leerla)', () => {
+  const vacio = makeEmptyAPUv2();
+  assert.deepEqual(vacio.ubicacionEstructurada, { country: null, state: null, city: null });
+
+  const migrado = migrateLegacyApuToV2({ id: 'APU-LEGACY', concept: 'x' });
+  assert.deepEqual(migrado.ubicacionEstructurada, { country: null, state: null, city: null });
+
+  const normalizado = normalizeAIApuToV2(rawAIFixture(), 'fallback', {});
+  assert.deepEqual(normalizado.ubicacionEstructurada, { country: null, state: null, city: null });
+});
+
+test('Fase 2: fuente de material/consumible/mano de obra/equipo/seguridad siempre trae nivelCobertura (null por defecto, nunca ausente)', () => {
+  const apu = makeEmptyAPUv2();
+  assert.equal('nivelCobertura' in apu, false); // el APU en si no tiene este campo, solo cada `fuente` de renglon
+
+  const normalizado = normalizeAIApuToV2(rawAIFixture(), 'fallback', {});
+  for(const kind of ['materials', 'consumables', 'labor', 'equipment', 'seguridad']){
+    (normalizado[kind] || []).forEach((row, i) => {
+      assert.ok('nivelCobertura' in (row.fuente || {}), `${kind}[${i}].fuente debe traer nivelCobertura (aunque sea null)`);
+    });
+  }
+});

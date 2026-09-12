@@ -34,6 +34,7 @@
     { "source": "/api/export-events", "destination": "/api/gateway" },
     { "source": "/api/health", "destination": "/api/gateway" },
     { "source": "/api/organizations", "destination": "/api/gateway" },
+    { "source": "/api/construction-proposal", "destination": "/api/gateway" },
     { "source": "/api/:path*", "destination": "/api/:path*" },
     { "source": "/src/:path*", "destination": "/src/:path*" },
     { "source": "/@vite/:path*", "destination": "/@vite/:path*" },

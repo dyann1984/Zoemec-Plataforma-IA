@@ -1,5 +1,6 @@
 import { APU_DEFAULT_FACTORS } from '../../src/lib/apuCalc.js';
 import { normalizeAIApuToV2 } from '../../src/domain/apuSchema.js';
+import { normalizeConstructionProposal, computeRequiresValidation } from '../../src/domain/constructionProposal.js';
 
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 
@@ -298,6 +299,108 @@ Reglas obligatorias:
   const json = extractJsonObject(content);
   if(!json) throw new Error('La API no devolvio JSON valido.');
   return normalizeAIApuToV2(json, cleanConcept, { referencePU });
+}
+
+/* Fase 3 (evolucion integral Levantamiento IA): "Propuesta constructiva con
+   IA" -- unico punto del repo que llama a OpenAI con VISION (imageUrls,
+   URLs publicas de descarga de Firebase Storage -- el modelo las descarga
+   el mismo, nunca se le manda el binario). Devuelve el JSON crudo YA
+   FILTRADO por normalizeConstructionProposal (src/domain/constructionProposal.js)
+   -- ese modulo es la unica fuente de verdad sobre que forma es valida,
+   este archivo no duplica esa logica.
+
+   Dimensiones PROPORCIONADAS por el usuario (knownDimensions) se fijan
+   DESPUES de la respuesta del modelo, nunca se le pide que las repita: un
+   dato que el usuario ya dio con certeza no debe depender de que la IA lo
+   transcriba bien -- mismo principio que ownerUid/organizationId en el
+   resto del backend (la fuente de verdad real nunca es lo que un modelo/
+   cliente afirma, es lo que el sistema ya sabe con certeza). */
+export async function generateConstructionProposal({ imageUrls = [], userPrompt = '', knownDimensions = {}, stylePreferences = null, referenceBudget = 0 } = {}){
+  if(!process.env.OPENAI_API_KEY) throw new Error('Falta OPENAI_API_KEY en Vercel.');
+  const cleanPrompt = String(userPrompt || '').trim();
+  if(!cleanPrompt) throw new Error('Describe que quieres construir en este espacio.');
+  const images = (Array.isArray(imageUrls) ? imageUrls : [])
+    .filter(u => typeof u === 'string' && /^https:\/\//.test(u))
+    .slice(0, 6);
+
+  const knownDimsEntries = ['largo', 'ancho', 'altura']
+    .map(key => [key, Number(knownDimensions?.[key])])
+    .filter(([, value]) => Number.isFinite(value) && value > 0);
+  const knownDimsText = knownDimsEntries.length
+    ? `Dimensiones REALES ya confirmadas por el usuario (nunca las inventes ni las corrijas, dalas por ciertas): ${knownDimsEntries.map(([k, v]) => `${k}=${v}m`).join(', ')}.`
+    : 'El usuario no dio ninguna medida real conocida -- si necesitas una escala para razonar proporciones, dilo en notes en vez de inventar un numero de "sentido comun".';
+  const styleText = stylePreferences ? `Preferencias de estilo del usuario (ya elegidas explicitamente, uselas para el sistema constructivo/acabados sugeridos): ${JSON.stringify(stylePreferences)}.` : '';
+  const budgetText = Number(referenceBudget) > 0 ? `Presupuesto objetivo de referencia: $${Number(referenceBudget)} MXN -- orientativo, no fuerces el sistema constructivo para encajar en el a costa de omitir algo necesario.` : '';
+
+  const prompt = `Eres un arquitecto/ingeniero de costos mexicano. Un usuario te muestra evidencia visual de un espacio (fotos adjuntas${images.length ? '' : ' -- NO se adjunto ninguna foto esta vez, trabaja SOLO con la descripcion de texto y advierte esa limitacion en notes'}) y describe que quiere construir ahi:
+
+"${cleanPrompt}"
+
+${knownDimsText}
+${styleText}
+${budgetText}
+
+Genera una propuesta constructiva preliminar. Para CADA dimension, declara "origen" usando EXACTAMENTE una de estas 4 palabras, con este significado estricto:
+- "detectado": lo puedes observar/medir de forma razonable EN LA FOTO (proporciones relativas visibles).
+- "proporcionado": es exactamente un valor de las "Dimensiones REALES ya confirmadas" de arriba.
+- "inferido": lo calculaste a partir de otro valor detectado/proporcionado con una relacion confiable (ej. superficie = largo x ancho).
+- "estimado": es tu mejor aproximacion SIN evidencia directa -- usa esto generosamente en vez de fingir certeza que no tienes.
+Nunca declares "detectado" o "proporcionado" si no es literalmente cierto -- preferir "estimado" a mentir sobre la certeza es obligatorio.
+
+Devuelve SOLO JSON valido con esta forma exacta:
+{
+  "descripcion": "resumen breve de la propuesta",
+  "dimensiones": {
+    "largo": { "valor": numeroEnMetrosOnull, "origen": "detectado|proporcionado|inferido|estimado" },
+    "ancho": { "valor": numeroEnMetrosOnull, "origen": "..." },
+    "altura": { "valor": numeroEnMetrosOnull, "origen": "..." },
+    "superficie": { "valor": numeroEnM2Onull, "origen": "..." },
+    "volumen": { "valor": numeroEnM3Onull, "origen": "..." }
+  },
+  "sistemaConstructivo": {
+    "preliminares": ["item 1", "..."],
+    "cimentacion": ["..."],
+    "estructura": ["..."],
+    "muros": ["..."],
+    "cubierta": ["..."],
+    "instalaciones": ["..."],
+    "acabados": ["..."]
+  },
+  "notes": ["supuestos explicitos, limitaciones de la evidencia disponible, y CUALQUIER cosa que requiera validacion profesional real antes de construir (cimentacion, estructura, instalaciones electricas/hidraulicas siempre la requieren)"]
+}
+
+Reglas obligatorias:
+- Cada categoria de "sistemaConstructivo" que no aplique a esta propuesta queda como arreglo vacio -- nunca inventes contenido de relleno "para no dejarla vacia".
+- "cimentacion" y "estructura", si los llenas, son SIEMPRE preliminares/conceptuales -- dilo en notes, nunca los presentes como un calculo estructural real.
+- Nunca proyectes un costo total en esta respuesta -- eso lo hace el motor de APU real de ZOEMEC despues, con precios reales.`;
+
+  const content = await requestChatCompletion({
+    temperature: 0.2,
+    maxTokens: 1400,
+    jsonResponse: true,
+    messages: [
+      { role: 'system', content: 'Eres un arquitecto/ingeniero de costos senior mexicano. Nunca declaras un dato como detectado o proporcionado si no lo es realmente -- la honestidad sobre el origen de cada dato es mas importante que sonar seguro. Respondes solo con JSON valido.' },
+      {
+        role: 'user',
+        content: images.length
+          ? [{ type: 'text', text: prompt }, ...images.map(url => ({ type: 'image_url', image_url: { url } }))]
+          : prompt
+      }
+    ]
+  });
+  const json = extractJsonObject(content);
+  if(!json) throw new Error('La API no devolvio JSON valido.');
+  const proposal = normalizeConstructionProposal(json);
+  // Las dimensiones que el usuario YA confirmo se fijan aqui, pisando lo que
+  // el modelo haya dicho -- ver comentario de la funcion arriba. Recalcula
+  // requiresProfessionalValidation despues del override: fijar una
+  // dimension a "proporcionado" puede cambiar el resultado (ya no depende
+  // de una estimacion), nunca se deja el valor viejo desactualizado.
+  for(const [key, value] of knownDimsEntries){
+    proposal.dimensiones[key] = { valor: value, origen: 'proporcionado' };
+  }
+  proposal.requiresProfessionalValidation = computeRequiresValidation(proposal.dimensiones, proposal.sistemaConstructivo);
+  return proposal;
 }
 
 export async function answerAssistant({ question='', history=[], context={} }){

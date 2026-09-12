@@ -18,6 +18,7 @@ import technicalMemoryHandler from '../server/api-lib/_route-technical-memory.mj
 import exportEventsHandler from '../server/api-lib/_route-export-events.mjs';
 import healthHandler from '../server/api-lib/_route-health.mjs';
 import organizationsHandler from '../server/api-lib/_route-organizations.mjs';
+import constructionProposalHandler from '../server/api-lib/_route-construction-proposal.mjs';
 
 const ROUTES = {
   '/api/apus': apusHandler,
@@ -27,6 +28,7 @@ const ROUTES = {
   '/api/export-events': exportEventsHandler,
   '/api/health': healthHandler,
   '/api/organizations': organizationsHandler,
+  '/api/construction-proposal': constructionProposalHandler,
 };
 
 export default async function handler(req, res){

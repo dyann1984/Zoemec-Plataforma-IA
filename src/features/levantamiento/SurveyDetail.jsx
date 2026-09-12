@@ -10,6 +10,7 @@ import { SURVEY_STATUS, SURVEY_SOURCE_TYPE, makeEmptySpace } from '../../domain/
 import { SCAN_MEDIA_KIND } from '../../domain/levantamientoMedia.js';
 import { aggregateSurveyTotals, recomputeSurvey } from '../../lib/levantamientoCalc.js';
 import { storage } from '../../firebase.js';
+import { ConstructionProposalPanel } from './ConstructionProposalPanel.jsx';
 
 const STATUS_I18N_KEY = {
   [SURVEY_STATUS.DRAFT]: 'statusDraft',
@@ -37,7 +38,7 @@ function formatDuration(seconds){
 }
 
 const BASE_TABS = ['datos', 'plano2d', 'vista3d', 'cuantificacion'];
-const TAB_I18N_KEY = { datos: 'tabData', plano2d: 'tabPlan2d', vista3d: 'tabView3d', cuantificacion: 'tabQuantification', multimedia: 'phoneScanTabMultimedia' };
+const TAB_I18N_KEY = { datos: 'tabData', plano2d: 'tabPlan2d', vista3d: 'tabView3d', cuantificacion: 'tabQuantification', multimedia: 'phoneScanTabMultimedia', propuesta: 'tabProposal' };
 
 /* Vista "Abrir" de un levantamiento ya guardado: permite editar nombre,
    espacios, puertas y ventanas, y persiste con onChange (que en
@@ -58,15 +59,20 @@ export function SurveyDetail({ survey, onBack, onChange, onSendToApu, currentUse
   const statusLabel = tr(`levantamiento.${STATUS_I18N_KEY[survey.status] || 'statusDraft'}`);
   const activeSpace = survey.spaces.find(s => s.id === activeSpaceId) || survey.spaces[0] || null;
   const scanMedia = survey.scanMedia || [];
-  const tabs = scanMedia.length ? [...BASE_TABS, 'multimedia'] : BASE_TABS;
+  // Fase 3 (Propuesta con IA): la pestana solo aparece si hay evidencia real
+  // que analizar -- foto/video capturados, o un modelo 3D importado. Un
+  // Survey manual sin ninguna de las dos no tiene nada que mandarle a la IA.
+  const hasEvidence = scanMedia.length > 0 || survey.sourceType === SURVEY_SOURCE_TYPE.IMPORT_3D;
+  const tabs = [...BASE_TABS, ...(scanMedia.length ? ['multimedia'] : []), ...(hasEvidence ? ['propuesta'] : [])];
 
   /* La downloadURL nunca se persiste (ver hallazgo del limite de 950KB de
      saveCloud en el plan de Fase 2B) -- se resuelve al vuelo solo cuando el
-     usuario abre la pestana Multimedia, una vez por item. Si el objeto ya
-     no existe en Storage (borrado externamente), queda sin URL y la tarjeta
-     lo indica en vez de romper el resto de la pestana. */
+     usuario abre la pestana Multimedia o Propuesta (esta ultima las manda a
+     la IA con vision), una vez por item. Si el objeto ya no existe en
+     Storage (borrado externamente), queda sin URL y la tarjeta/panel lo
+     indica en vez de romper el resto de la pestana. */
   useEffect(() => {
-    if(activeTab !== 'multimedia') return;
+    if(activeTab !== 'multimedia' && activeTab !== 'propuesta') return;
     scanMedia.forEach(item => {
       if(mediaUrls[item.id] !== undefined) return;
       getDownloadURL(ref(storage, item.storagePath))
@@ -75,6 +81,11 @@ export function SurveyDetail({ survey, onBack, onChange, onSendToApu, currentUse
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, survey.id]);
+
+  const photoImageUrls = scanMedia
+    .filter(item => item.kind === SCAN_MEDIA_KIND.PHOTO)
+    .map(item => mediaUrls[item.id])
+    .filter(Boolean);
 
   const persist = (next) => onChange(recomputeSurvey({ ...next, status: next.spaces.length ? SURVEY_STATUS.PROCESSED : SURVEY_STATUS.DRAFT, updatedAt: Date.now() }));
 
@@ -199,6 +210,10 @@ export function SurveyDetail({ survey, onBack, onChange, onSendToApu, currentUse
             </div>;
           })}
         </div>}
+    </div>}
+
+    {activeTab === 'propuesta' && <div className="panel">
+      <ConstructionProposalPanel imageUrls={photoImageUrls} hasEvidence={photoImageUrls.length > 0} stylePreferences={survey.stylePreferences || null} />
     </div>}
   </section>;
 }

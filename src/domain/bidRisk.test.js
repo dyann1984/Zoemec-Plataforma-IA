@@ -193,3 +193,53 @@ test('propiedad: mismo input produce siempre el mismo resultado (determinista)',
   const b = runBidRisk(apu, { now: '2026-01-01' });
   assert.deepEqual(a, b);
 });
+
+/* REGIONAL_PRICE_RISK (Fase 0, punto #26): estas tres pruebas cubren la
+   regla central del finding -- SIN ausencia-como-riesgo (ver test 1), y
+   graduado por proporcion real del costo directo (tests 2/3), nunca por
+   conteo de renglones. materialPriceIntelligence2.js#attachIntelligence2FieldsToRow
+   agrega regionalFallbackLevel/priceStatus DESPUES de finalizeProfessionalAPU
+   (accion explicita del usuario en ZoemecIntelligencePanel) -- se simula
+   igual aqui, mutando los renglones ya finalizados. */
+test('REGIONAL_PRICE_RISK: sin ningun renglon que haya corrido Intelligence2 todavia, no hay finding (ausencia de dato no es riesgo)', () => {
+  const apu = finalizeProfessionalAPU(healthyApuFixture());
+  const result = runBidRisk(apu);
+  assert.ok(!result.findings.some(f => f.category === BID_RISK_CATEGORY.REGIONAL_PRICE_RISK));
+});
+
+test('REGIONAL_PRICE_RISK: alta dependencia de referencias nacionales/estimaciones IA dispara el finding con severity CRITICAL', () => {
+  const apu = finalizeProfessionalAPU({
+    concept: 'concepto de prueba regional', unit: 'kg', cantidadObra: 10,
+    materials: [
+      { descripcion: 'Acero importado', consumo: 1, unidad: 'kg', precioUnitario: 800, desperdicioPct: 0, fuente: { estado: 'VERIFICADO' } },
+      { descripcion: 'Clavo', consumo: 1, unidad: 'kg', precioUnitario: 20, desperdicioPct: 0, fuente: { estado: 'VERIFICADO' } }
+    ],
+    labor: [], equipment: [], consumables: [], seguridad: [], factores: {}
+  });
+  apu.materials[0].regionalFallbackLevel = 'nacional';
+  apu.materials[0].priceStatus = 'MARKET_REFERENCE';
+  apu.materials[1].regionalFallbackLevel = 'ciudad';
+  apu.materials[1].priceStatus = 'VERIFIED_MARKET';
+  const result = runBidRisk(apu);
+  const f = result.findings.find(x => x.category === BID_RISK_CATEGORY.REGIONAL_PRICE_RISK);
+  assert.ok(f, 'debe existir el finding cuando ~97% del costo directo depende de una referencia nacional');
+  assert.equal(f.severity, BID_RISK_SEVERITY.CRITICAL);
+  assert.equal(f.reason, null); // tiene projectImpact real (cantidadObra=10), no requiere razon de "no estimable".
+});
+
+test('REGIONAL_PRICE_RISK: una dependencia nacional pequena (bajo el 20% de umbral) no genera finding', () => {
+  const apu = finalizeProfessionalAPU({
+    concept: 'concepto de prueba regional 2', unit: 'kg', cantidadObra: 10,
+    materials: [
+      { descripcion: 'Cemento local', consumo: 1, unidad: 'kg', precioUnitario: 900, desperdicioPct: 0, fuente: { estado: 'VERIFICADO' } },
+      { descripcion: 'Tornillo importado', consumo: 1, unidad: 'kg', precioUnitario: 50, desperdicioPct: 0, fuente: { estado: 'VERIFICADO' } }
+    ],
+    labor: [], equipment: [], consumables: [], seguridad: [], factores: {}
+  });
+  apu.materials[0].regionalFallbackLevel = 'ciudad';
+  apu.materials[0].priceStatus = 'VERIFIED_MARKET';
+  apu.materials[1].regionalFallbackLevel = 'nacional';
+  apu.materials[1].priceStatus = 'MARKET_REFERENCE';
+  const result = runBidRisk(apu);
+  assert.ok(!result.findings.some(f => f.category === BID_RISK_CATEGORY.REGIONAL_PRICE_RISK));
+});

@@ -30,6 +30,7 @@ import { createApuVersion, restoreApuVersion } from '../../src/domain/apuVersion
 import { loadOrgContext, assertOrgNotExpired, canAccessOrgScopedDoc } from './_orgGuard.mjs';
 import { RESOURCE_KINDS, PRICE_FIELD_BY_KIND } from '../../src/domain/materialPriceIntelligence2.js';
 import { recordPriceObservation } from './_priceObservationsStore.mjs';
+import { buildProjectLocationSnapshot, hasAnyLocation } from '../../src/domain/geography.js';
 
 const COLLECTION = 'apus';
 const VERSIONS_COLLECTION = 'apuVersions';
@@ -61,6 +62,28 @@ async function captureRegionalPriceObservations({ apuSnapshot, organizationId, a
     }
   }
   await Promise.all(jobs);
+}
+
+/* Fase 0 (APU regionalizado, defensa en profundidad): main.jsx YA arma
+   apu.ubicacionEstructurada con buildProjectLocationSnapshot antes de
+   generar (los 3 flujos de generacion, individual + 2 de lote), pero eso es
+   confianza en el cliente -- exactamente el tipo de dato que el resto de
+   este archivo nunca deja en manos del cliente (ownerUid/organizationId
+   siempre del token, nunca del body). Si por cualquier razon el APU que
+   llega a handleCreate NO trae ubicacion (llamador nuevo que lo olvido, un
+   cliente viejo, una integracion futura), el servidor la siembra el mismo
+   desde el proyecto real -- nunca deja un APU regionalizable sin ubicacion
+   solo porque el cliente no la mando. Nunca SOBREESCRIBE una ubicacion que
+   el cliente si mando (regla explicita de apuSchema.js: un APU ya generado
+   no cambia de region despues, ni siquiera aqui). */
+async function ensureApuLocationSnapshot(db, apu, projectId){
+  if(hasAnyLocation(apu?.ubicacionEstructurada)) return apu;
+  if(!projectId) return apu;
+  const projectSnap = await db.collection('projects').doc(String(projectId)).get().catch(() => null);
+  if(!projectSnap?.exists) return apu;
+  const { ubicacion, ubicacionEstructurada } = buildProjectLocationSnapshot(projectSnap.data());
+  if(!hasAnyLocation(ubicacionEstructurada)) return apu;
+  return { ...apu, ubicacionEstructurada, ubicacion: apu?.ubicacion || ubicacion };
 }
 
 async function handleList(req, res){
@@ -111,6 +134,7 @@ async function handleCreate(req, res){
   const docRef = db.collection(COLLECTION).doc(String(id));
   const auditRef = db.collection(AUDIT_COLLECTION).doc();
   const organizationId = orgContext ? orgContext.organizationId : null;
+  const apuWithLocation = await ensureApuLocationSnapshot(db, apu, projectId);
   const result = await db.runTransaction(async (tx) => {
     const snap = await tx.get(docRef);
     if(snap.exists){
@@ -119,7 +143,7 @@ async function handleCreate(req, res){
       return { apu: existing, version: null }; // idempotente: reintento de migracion no duplica
     }
     let built;
-    try{ built = createApuVersion(apu, [], { user: authz.email || authz.uid, reason: reason || 'Version inicial' }); }
+    try{ built = createApuVersion(apuWithLocation, [], { user: authz.email || authz.uid, reason: reason || 'Version inicial' }); }
     catch(err){ throw httpError(400, `No se pudo procesar el APU: ${err.message}`); }
     const entry = built.history[built.history.length - 1];
     const now = new Date().toISOString();

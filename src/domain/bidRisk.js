@@ -24,8 +24,15 @@ export const BID_RISK_CATEGORY = Object.freeze({
   POSSIBLE_UNDERESTIMATION: 'POSSIBLE_UNDERESTIMATION',
   UNCONFIRMED_ASSUMPTIONS: 'UNCONFIRMED_ASSUMPTIONS',
   COST_CONCENTRATION: 'COST_CONCENTRATION',
-  INSUFFICIENT_EVIDENCE: 'INSUFFICIENT_EVIDENCE'
+  INSUFFICIENT_EVIDENCE: 'INSUFFICIENT_EVIDENCE',
+  REGIONAL_PRICE_RISK: 'REGIONAL_PRICE_RISK'
 });
+
+// Umbral minimo de exposicion (% del costo directo) para que valga la pena
+// levantar el finding -- por debajo de esto, depender de un par de renglones
+// nacionales/sin evidencia es normal y no amerita alertar (ver ejemplo del
+// spec: "37% del presupuesto depende de referencias nacionales").
+const REGIONAL_RISK_MIN_SHARE = 0.20;
 
 const NOT_ESTIMABLE = 'NOT_ESTIMABLE_WITH_CURRENT_DATA';
 const round2 = v => (Number.isFinite(v) ? Number(v.toFixed(2)) : null);
@@ -197,6 +204,50 @@ function costConcentrationFinding(apu, totals, cantidadObra){
   });
 }
 
+/* REGIONAL_PRICE_RISK (Fase 0, punto #26 del spec de Inteligencia de
+   Costos): traduce la senal regional que ya calcula materialPriceIntelligence2.js
+   (row.regionalFallbackLevel: 'ciudad'|'estado'|'nacional'|null, row.priceStatus,
+   ver attachIntelligence2FieldsToRow) a riesgo de licitacion -- este modulo
+   NUNCA recalcula esa senal, solo la traduce, mismo criterio que el resto
+   del archivo con Audit/Challenge/Confidence.
+
+   Deliberadamente SIN SEÑAL si ningun renglon corrio Intelligence2 todavia
+   (regionalFallbackLevel/priceStatus ausentes en absolutamente todos los
+   renglones): la AUSENCIA de busqueda de precio no es evidencia de riesgo
+   regional, es solo ausencia de dato -- fabricar un finding ahi violaria la
+   regla del modulo (nunca inventar una cifra que el motor determinista no
+   pueda respaldar). El finding solo aparece cuando SI hubo busqueda real y
+   esa busqueda muestra dependencia real de referencias nacionales o
+   estimaciones de IA sin ninguna evidencia. */
+const REGIONAL_RISK_KINDS = ['materials', 'labor', 'equipment', 'consumables', 'seguridad'];
+function regionalPriceRiskFinding(apu, totals, cantidadObra){
+  const direct = totals.direct;
+  if(!(direct > 0)) return null;
+  const ctx = { cantidadContractual: Number(cantidadObra) || 0 };
+  const rows = REGIONAL_RISK_KINDS.flatMap(kind =>
+    (Array.isArray(apu[kind]) ? apu[kind] : [])
+      .filter(row => row && (row.regionalFallbackLevel != null || row.priceStatus != null))
+      .map(row => ({ kind, row, cost: Math.max(0, Number(ROW_COST_FN[kind](row, ctx)) || 0) })));
+  if(!rows.length) return null; // nadie corrio Intelligence2 sobre este APU todavia -- sin senal.
+
+  const atRisk = rows.filter(r => r.row.regionalFallbackLevel === 'nacional' || r.row.priceStatus === 'AI_ESTIMATE_UNVERIFIED');
+  const atRiskCost = atRisk.reduce((s, r) => s + r.cost, 0);
+  const share = atRiskCost / direct;
+  if(share < REGIONAL_RISK_MIN_SHARE) return null;
+
+  const severity = share >= 0.50 ? BID_RISK_SEVERITY.CRITICAL : share >= 0.30 ? BID_RISK_SEVERITY.HIGH : BID_RISK_SEVERITY.MEDIUM;
+  const projectImpact = Number(cantidadObra) > 0 ? atRiskCost * Number(cantidadObra) : null;
+  const pct = (share * 100).toFixed(0);
+  return finding({
+    id: 'regional-price-risk', severity, category: BID_RISK_CATEGORY.REGIONAL_PRICE_RISK,
+    description: `${pct}% del costo directo depende de referencias nacionales o estimaciones de IA por falta de informacion local/regional.`,
+    evidence: `renglonesEnRiesgo=${atRisk.length}/${rows.length}, costoEnRiesgo=${atRiskCost.toFixed(2)}, direct=${direct.toFixed(2)}`,
+    unitImpact: round2(atRiskCost), projectImpact,
+    recommendation: 'Buscar referencias de precio locales (ciudad/estado) para estos renglones antes de licitar, o solicitar cotizacion directa.',
+    source: 'inteligencia_regional'
+  });
+}
+
 export function runBidRisk(apu = {}, options = {}){
   const now = options.now ? new Date(options.now) : new Date();
   const totals = apu.calculated || calcAPUv2(apu);
@@ -214,6 +265,8 @@ export function runBidRisk(apu = {}, options = {}){
   if(aggregateFinding) findings.push(aggregateFinding);
   const costConcentration = costConcentrationFinding(apu, totals, apu.cantidadObra);
   if(costConcentration) findings.push(costConcentration);
+  const regionalPriceRisk = regionalPriceRiskFinding(apu, totals, apu.cantidadObra);
+  if(regionalPriceRisk) findings.push(regionalPriceRisk);
 
   const summary = { critical: 0, high: 0, medium: 0, low: 0 };
   findings.forEach(f => { summary[f.severity.toLowerCase()]++; });

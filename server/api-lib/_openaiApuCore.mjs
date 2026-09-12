@@ -126,8 +126,11 @@ Devuelve SOLO JSON valido con esta forma:
   "confidence": 0-100,
   "sat": "clave SAT sugerida",
   "materials": [["descripcion completa", cantidad, "unidad", precioUnitario, mermaPorcentaje]],
+  "materialsSource": ["catalogo" o "estimado_ia", uno por cada renglon de materials, en el mismo orden],
   "labor": [["descripcion completa", jornadas, "jor", salarioBase, fsr]],
+  "laborSource": ["catalogo" o "estimado_ia", uno por cada renglon de labor, en el mismo orden],
   "equipment": [["descripcion completa", cantidad, "unidad", costo]],
+  "equipmentSource": ["catalogo" o "estimado_ia", uno por cada renglon de equipment, en el mismo orden],
   "herramienta": ${APU_DEFAULT_FACTORS.herramienta},
   "indCampo": ${APU_DEFAULT_FACTORS.indCampo},
   "indOficina": ${APU_DEFAULT_FACTORS.indOficina},
@@ -152,7 +155,8 @@ Reglas obligatorias:
 - Las cantidades deben representar consumo o rendimiento por UNA unidad del concepto analizado.
 - En mano de obra usa jornadas por unidad, salario base diario y FSR separado.
 - En notes explica rendimientos asumidos, cuadrilla, alcance incluido y cualquier supuesto tecnico auditable.
-- No inventes precios extravagantes; usa mercado mexicano razonable si no hay catalogo.
+- "materialsSource"/"laborSource"/"equipmentSource" son OBLIGATORIOS y deben tener EXACTAMENTE el mismo numero de elementos que materials/labor/equipment, en el mismo orden. Usa "catalogo" SOLO cuando el precio de ese renglon salio de una coincidencia real en el CATALOGO DISPONIBLE de arriba; usa "estimado_ia" para cualquier precio que tu hayas calculado sin esa evidencia -- nunca marques "catalogo" sin una coincidencia real.
+- Cuando no haya coincidencia de catalogo para un renglon, entrega tu mejor estimacion de mercado mexicano actual (nunca dejes precioUnitario/salarioBase/costo en 0 ni un numero absurdo), pero ese renglon SIEMPRE debe ir marcado "estimado_ia" -- el sistema lo mostrara como pendiente de validacion, nunca como precio verificado.
 - El resultado debe ser editable, auditable y comparable con NeoData/OPUS.`;
 
   const content = await requestChatCompletion({
@@ -280,7 +284,7 @@ Reglas obligatorias:
 - Cada descripcion debe ser completa y profesional; evita textos cortados.
 - Materiales: 3 a 8 renglones. Mano de obra: 1 a 5 renglones. Equipo: 1 a 5 renglones. Consumibles: 0 a 5 renglones (0 es valido y esperado cuando no aplica).
 - En notes explica rendimientos asumidos, alcance incluido y cualquier supuesto tecnico auditable, uno por elemento.
-- No inventes precios extravagantes; usa mercado mexicano razonable si no hay catalogo.
+- Si no hay coincidencia de catalogo para un renglon, entrega tu mejor estimacion de mercado mexicano actual (nunca 0 ni un numero absurdo) con proveedor:null en su fuente correspondiente -- el sistema ya trata TODO precio de IA como pendiente de validacion hasta que un usuario lo confirme (normalizeAIApuToV2 ignora cualquier "estado" que intentes declarar aqui, asi que no lo incluyas).
 - El resultado debe ser editable, auditable y comparable con NeoData/OPUS.`;
 
   const content = await requestChatCompletion({
@@ -322,7 +326,29 @@ export async function answerAssistant({ question='', history=[], context={} }){
   return content || 'No pude generar respuesta.';
 }
 
-function sanitizeAPU(raw, fallbackConcept){
+/* Fase 0 (Inteligencia de Costos, hallazgo #24 -- "la IA no debe inventar el
+   precio"): generateAPU (v1, el que usa main.jsx en produccion hoy) no
+   tenia NINGUN mecanismo para distinguir un precio real de catalogo de uno
+   que el modelo invento -- ambos llegaban como el mismo numero plano en
+   materials/labor/equipment, indistinguibles para el resto del sistema
+   (apuConfidence.js, UI, exportacion). El prompt ahora exige un arreglo
+   paralelo *Source ("catalogo"|"estimado_ia") por cada renglon; esta
+   funcion lo normaliza a `priceOrigin` con el MISMO largo que cada seccion
+   -- por seguridad, cualquier renglon sin marca explicita (el modelo omitio
+   el campo, o el arreglo vino mas corto) se trata como "estimado_ia" nunca
+   como "catalogo": el default mas restrictivo, igual criterio que
+   isSuperAdminProfile/isActiveOrgMember en el resto del backend (nunca se
+   asume el estado mas privilegiado/confiable por ausencia de dato). */
+const VALID_PRICE_ORIGINS = new Set(['catalogo', 'estimado_ia']);
+function normalizePriceOrigin(sourceArr, rowCount){
+  const arr = Array.isArray(sourceArr) ? sourceArr : [];
+  return Array.from({ length: rowCount }, (_, i) => {
+    const value = String(arr[i] ?? '').trim().toLowerCase();
+    return VALID_PRICE_ORIGINS.has(value) ? value : 'estimado_ia';
+  });
+}
+
+export function sanitizeAPU(raw, fallbackConcept){
   const text = (value, fallback='') => String(value ?? fallback).trim();
   const num = (value, fallback=0) => {
     const n = Number(String(value ?? '').replace(/[^0-9.\-]/g, ''));
@@ -333,15 +359,24 @@ function sanitizeAPU(raw, fallbackConcept){
     : [];
   const original = text(fallbackConcept);
   const generated = text(raw.concept, original);
+  const materials = row(raw.materials, ['Material', 1, 'pza', 0, 0]);
+  const labor = row(raw.labor, ['Mano de obra', 0.01, 'jor', 0, 1]);
+  const equipment = row(raw.equipment, ['Equipo', 0, 'hr', 0]);
   return {
     concept: generated.length < 18 && original ? original : generated,
     unit: text(raw.unit || 'pza').replace('m2', 'm²').replace('m3', 'm³'),
     family: text(raw.family, 'APU generado con IA'),
     confidence: num(raw.confidence, 92),
     sat: text(raw.sat, '72100000'),
-    materials: row(raw.materials, ['Material', 1, 'pza', 0, 0]),
-    labor: row(raw.labor, ['Mano de obra', 0.01, 'jor', 0, 1]),
-    equipment: row(raw.equipment, ['Equipo', 0, 'hr', 0]),
+    materials, labor, equipment,
+    // priceOrigin: 'catalogo'|'estimado_ia' por renglon, mismo orden que su
+    // seccion -- ver normalizePriceOrigin. Aditivo: nunca cambia el array
+    // materials/labor/equipment que ya consumen apuCalc.js/la UI existente.
+    priceOrigin: {
+      materials: normalizePriceOrigin(raw.materialsSource, materials.length),
+      labor: normalizePriceOrigin(raw.laborSource, labor.length),
+      equipment: normalizePriceOrigin(raw.equipmentSource, equipment.length)
+    },
     herramienta: num(raw.herramienta, APU_DEFAULT_FACTORS.herramienta),
     indCampo: num(raw.indCampo, APU_DEFAULT_FACTORS.indCampo),
     indOficina: num(raw.indOficina, APU_DEFAULT_FACTORS.indOficina),

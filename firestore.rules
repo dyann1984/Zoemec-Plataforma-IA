@@ -249,6 +249,31 @@ service cloud.firestore {
       allow delete: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
     }
 
+    // Fase B (Cuantificador Parametrico): auxiliares/recetas reutilizables
+    // (ej. "Concreto f'c=200"). organizationId:null = base/global, legible
+    // por cualquier usuario autenticado (nunca contiene datos de una
+    // organizacion especifica); organizationId:<id> = copia privada de esa
+    // organizacion, aislada igual que evidenceItems/priceObservations. A
+    // diferencia de esas dos colecciones, aqui el CLIENTE si escribe
+    // directo (son recetas editables por el usuario, no inteligencia
+    // derivada server-side) -- mismo criterio que Biblioteca (library).
+    match /auxiliares/{docId} {
+      allow read: if isSuperAdmin()
+        || (signedIn() && resource.data.get('organizationId', null) == null)
+        || (signedIn() && isActiveOrgMember(resource.data.get('organizationId', null)));
+      allow create: if signedIn()
+        && request.resource.data.createdBy == request.auth.uid
+        && (request.resource.data.get('organizationId', null) == null
+            ? isSuperAdmin()
+            : isActiveOrgMember(request.resource.data.organizationId));
+      allow update: if signedIn()
+        && resource.data.get('organizationId', null) != null
+        && isActiveOrgMember(resource.data.organizationId)
+        && request.resource.data.organizationId == resource.data.organizationId;
+      allow delete: if isSuperAdmin()
+        || (signedIn() && resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+    }
+
     match /visual_requests/{docId} {
       allow read: if isSuperAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
       allow create: if signedIn() && request.resource.data.uid == request.auth.uid;

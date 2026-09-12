@@ -636,6 +636,19 @@ section{padding:26px 28px 64px}
 .muted{color:var(--muted);font-size:.85rem}
 .hint{color:var(--muted)}
 
+/* Fase B -- Cuantificador Parametrico ZOEMEC: shell de asistente por
+   pasos (ver src/components/ui/WizardShell.jsx). */
+.wizard-steps{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px}
+.wizard-step{display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:var(--card);border:1px solid var(--line);color:var(--muted);font-size:.78rem}
+.wizard-step.active{border-color:var(--accent-solid);color:var(--ink);font-weight:600}
+.wizard-step.done{color:var(--accent-solid)}
+.wizard-step-index{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:var(--line);font-size:.7rem}
+.wizard-step.active .wizard-step-index{background:var(--accent-solid);color:#fff}
+.wizard-step.done .wizard-step-index{background:var(--accent-solid);color:#fff}
+.wizard-step-content{min-height:120px}
+.quant-assumed-badge{display:inline-block;font-size:.66rem;padding:1px 6px;border-radius:999px;background:var(--gold-soft,#fef3c7);color:var(--gold-ink,#92400e);margin-left:4px}
+.quant-summary{font-size:.78rem;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}
 .stat-card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;box-shadow:var(--shadow-sm);position:relative;overflow:hidden}
 .stat-card::after{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--teal)}

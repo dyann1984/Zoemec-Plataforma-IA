@@ -62,6 +62,7 @@ import { toApuSeed, applyPlanoElementReview } from './domain/planoReview.js';
 import { calibrateScale, measureElement } from './domain/planoMeasurement.js';
 import { createTakeoffRecord, applyManualCorrection, upsertTakeoffRecord, findLatestTakeoffForFile, hashFileContent } from './domain/planoTakeoffStore.js';
 import { LevantamientoModule } from './features/levantamiento/LevantamientoModule.jsx';
+import { QuantifierWizard } from './features/quantifier/QuantifierWizard.jsx';
 import {
   emptyApuWorkspaceState, removeBatchApus, describeAmbiguousSingleExport,
   duplicateGroupKey, groupConceptsByDuplicateKey, defaultBatchSelection, isExportableConceptItem,
@@ -931,7 +932,7 @@ function App(){
   else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView} apus={apus} clients={clients} projects={projects} activeProject={activeProject} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} orgSession={orgSession}>
     {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} activeProject={activeProject} user={user} demoMode={DEMO_MODE} demoContext={DEMO_MODE ? createDemoContext() : null} />}
     {module === 'levantamiento' && <LevantamientoModule surveys={surveys} setSurveys={setSurveys} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} onSendToApu={()=>setModule('apu')} currentUserEmail={user?.email || null} organizationId={orgSession?.organization?.id || null} />}
-    {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} rawApus={rawApus} linkApuToProject={linkApuToProject} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} onConfigureLocation={()=>setModule('cartera')} />}
+    {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} rawApus={rawApus} linkApuToProject={linkApuToProject} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} onConfigureLocation={()=>setModule('cartera')} organizationId={orgSession?.organization?.id || null} />}
     {module === 'presupuestos' && <Budgets company={companyView} budgets={budgets} setBudgets={setBudgets} items={budgetItems} setItems={setBudgetItems} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} />}
     {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={(pid)=>{ setRawApus(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgets(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawCatalog(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgetItems(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawSurveys(l=>l.filter(x=>(x?.projectId??null)!==pid)); }} />}
     {module === 'biblioteca' && <Library user={user} catalog={catalog} setCatalog={setCatalog} setModule={setModule} />}
@@ -2070,7 +2071,7 @@ function ResourceCards({apu}){
   </div>;
 }
 
-function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog,projects,rawApus,linkApuToProject,activeProjectId,activeProject,onNeedProject,onConfigureLocation}){
+function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog,projects,rawApus,linkApuToProject,activeProjectId,activeProject,onNeedProject,onConfigureLocation,organizationId=null}){
   const { t: tr } = useI18n();
   const { beginJob, completeJob, failJob, getUnseen, consumeJob } = useAiJobs();
   const requireProject=()=>{
@@ -2079,6 +2080,13 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     return false;
   };
   const [concept,setConcept]=useState('');
+  // entryMode (Fase B -- Cuantificador Parametrico ZOEMEC): "Generar APU
+  // con IA" y "Cuantificador Parametrico" conviven como opciones hermanas,
+  // nunca se reemplaza una por la otra (instruccion explicita del pedido
+  // "no quiero una segunda plataforma dentro de ZOEMEC"). 'ia' es el valor
+  // por defecto -- el flujo existente queda exactamente igual que antes,
+  // esta variable solo decide cual panel se muestra.
+  const [entryMode,setEntryMode]=useState('ia');
   // Unidad/Cantidad explicitas (opcionales): parseConceptText adivina unidad y
   // cantidad del texto pegado, pero un concepto en lenguaje natural puede traer
   // numeros que no son la cantidad (ej. "tuberia de 3 a 6 pulgadas" hace que el
@@ -3229,8 +3237,22 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         <button type="button" className="soft" onClick={discardRecoveredJob}>{tr('jobs.recoveredDiscard')}</button>
       </div>
     </div>}
-    {/* H. Generacion: inicio natural del flujo, siempre visible arriba */}
-    <div className="panel ai-panel" ref={conceptCardRef}>
+    {/* H. Generacion: inicio natural del flujo, siempre visible arriba.
+        Fase B (Cuantificador Parametrico ZOEMEC): "Generar APU con IA" y
+        "Cuantificador Parametrico" son opciones HERMANAS, nunca una
+        reemplaza a la otra -- entryMode solo decide cual panel se
+        muestra, el panel de IA de abajo (ai-panel) queda exactamente
+        igual que antes cuando entryMode==='ia' (default). */}
+    <div className="visual-actions" style={{marginBottom:10}}>
+      <button type="button" className={entryMode==='ia'?'':'soft'} onClick={()=>setEntryMode('ia')}>{tr('apu.quantModeChooserAI')}</button>
+      <button type="button" className={entryMode==='parametrico'?'':'soft'} onClick={()=>setEntryMode('parametrico')}>{tr('apu.quantModeChooserParametric')}</button>
+    </div>
+    {entryMode==='parametrico' && <div className="panel">
+      <QuantifierWizard user={user} catalog={catalog} organizationId={organizationId} activeProjectId={activeProjectId}
+        onCancel={()=>setEntryMode('ia')}
+        onApuGenerated={(generatedApu)=>{ setApu(generatedApu); setShowExecutive(true); setEntryMode('ia'); }} />
+    </div>}
+    {entryMode==='ia' && <div className="panel ai-panel" ref={conceptCardRef}>
       <div className="ai-panel-head"><HardHat size={36}/><div><b>{tr('apu.panelTitle')}</b><small className="muted">{tr('apu.panelDesc')}</small></div></div>
       <textarea ref={conceptTextareaRef} className="ai-concept" value={concept} onChange={e=>setConcept(e.target.value)} placeholder={tr('apu.conceptPlaceholder')}/>
       <div className="ai-unit-qty-row">
@@ -3343,7 +3365,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
           <button className="soft" onClick={resetAPUForm}>{tr('apu.close')}</button>
         </div>
       </div>}
-    </div>
+    </div>}
 
     <RevisionBandeja apus={apus} user={user} onUpdateApu={saved => { if(!requireProject()) return; setApus([saved, ...apus.filter(x => x.id !== saved.id)]); if(saved.id===professionalApu.id) setApuV2(saved); }} />
 

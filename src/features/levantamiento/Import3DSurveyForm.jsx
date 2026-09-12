@@ -24,6 +24,8 @@ import { SURVEY_SOURCE_TYPE, SURVEY_STATUS, makeEmptySurvey } from '../../domain
 import { recomputeSurvey } from '../../lib/levantamientoCalc.js';
 import { validateImportFile, MAX_IMPORT_FILE_SIZE_BYTES } from '../../domain/levantamientoImporters.js';
 import { computeUniformScaleFactor, deriveSpaceFromImportedModel, buildSurveyImportMeta } from '../../domain/levantamientoImportConversion.js';
+import { hasAnyStylePreference } from '../../domain/evidenceStylePreferences.js';
+import { EvidenceStylePanel } from './EvidenceStylePanel.jsx';
 
 const STEP = Object.freeze({ UPLOAD: 'upload', LOADING: 'loading', SCALE: 'scale', REVIEW: 'review' });
 
@@ -48,6 +50,7 @@ export function Import3DSurveyForm({ projectId, onCancel, onSave }){
   const [confirmedScaleFactor, setConfirmedScaleFactor] = useState(1);
   const [space, setSpace] = useState(null);
   const [name, setName] = useState('');
+  const [stylePreferences, setStylePreferences] = useState(null); // Fase 2, ver PhoneScanSurveyForm.jsx
   const [description, setDescription] = useState('');
   const [nameError, setNameError] = useState(false);
   const loadedObjectRef = useRef(null);
@@ -149,7 +152,8 @@ export function Import3DSurveyForm({ projectId, onCancel, onSave }){
     });
     const survey = makeEmptySurvey({
       projectId, name: name.trim(), description: description.trim(),
-      sourceType: SURVEY_SOURCE_TYPE.IMPORT_3D, importMeta
+      sourceType: SURVEY_SOURCE_TYPE.IMPORT_3D, importMeta,
+      stylePreferences: hasAnyStylePreference(stylePreferences) ? stylePreferences : null
     });
     survey.spaces = [space];
     survey.status = SURVEY_STATUS.PROCESSED;
@@ -240,6 +244,7 @@ export function Import3DSurveyForm({ projectId, onCancel, onSave }){
           <div><small>{tr('levantamiento.import3dMetaSizeLabel')}</small><b>{formatBytes(fileMeta.size)}</b></div>
         </div>
         <SpaceCard space={space} onUpdate={setSpace} onRemove={null} />
+        <EvidenceStylePanel value={stylePreferences} onChange={setStylePreferences} />
         <div className="form-actions">
           <button className="secondary" onClick={onCancel}>{tr('levantamiento.cancel')}</button>
           <button onClick={save}>{tr('levantamiento.save')}</button>

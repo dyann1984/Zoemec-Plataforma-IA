@@ -152,7 +152,13 @@ export function makeEmptySpace({ name = '', length = 0, width = 0, height = 0 } 
    de guardarlo (para subir cada foto/video a Storage en cuanto se captura,
    bajo esa misma ruta), asi que lo pre-genera con uid() y lo pasa aqui para
    que el survey final quede con el id que ya usaron las rutas de Storage. */
-export function makeEmptySurvey({ id = null, projectId = null, name = '', description = '', sourceType = SURVEY_SOURCE_TYPE.MANUAL, importMeta = null, scanMedia = [] } = {}){
+/* stylePreferences (Fase 2 -- puente hacia Propuesta con IA): null = el
+   usuario nunca abrio el panel "Estilo y materiales" (comportamiento previo
+   a esta fase, intacto). Cuando SI lo abre, PhoneScanSurveyForm/
+   Import3DSurveyForm guardan aqui el resultado de
+   normalizeStylePreferences (ver evidenceStylePreferences.js) -- este
+   archivo no valida su contenido, esa normalizacion ya la hizo el llamador. */
+export function makeEmptySurvey({ id = null, projectId = null, name = '', description = '', sourceType = SURVEY_SOURCE_TYPE.MANUAL, importMeta = null, scanMedia = [], stylePreferences = null } = {}){
   const now = Date.now();
   return {
     id: id || ('LEV-' + uid()),
@@ -162,6 +168,7 @@ export function makeEmptySurvey({ id = null, projectId = null, name = '', descri
     sourceType,
     importMeta,
     scanMedia,
+    stylePreferences,
     status: SURVEY_STATUS.DRAFT,
     spaces: [],
     createdAt: now,

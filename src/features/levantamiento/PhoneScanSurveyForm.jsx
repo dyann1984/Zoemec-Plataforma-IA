@@ -27,6 +27,8 @@ import {
   SCAN_MEDIA_KIND, MAX_SCAN_DURATION_SECONDS, MAX_SCAN_VIDEO_BYTES, MAX_SCAN_PHOTO_BYTES,
   MAX_SCAN_ITEMS, validateScanMediaFile, buildScanMediaItem
 } from '../../domain/levantamientoMedia.js';
+import { hasAnyStylePreference } from '../../domain/evidenceStylePreferences.js';
+import { EvidenceStylePanel } from './EvidenceStylePanel.jsx';
 
 const STEP = Object.freeze({ CAPTURE: 'captura', REVIEW: 'revisar' });
 
@@ -75,6 +77,12 @@ export function PhoneScanSurveyForm({ projectId, onCancel, onSave }){
   const [dragActive, setDragActive] = useState(false);
   const [items, setItems] = useState([]); // {localId,kind,blob,previewUrl,sizeBytes,durationSeconds,mimeType,status,progress,storagePath,errorReason}
   const [name, setName] = useState('');
+  // Fase 2: null hasta que el usuario abra/toque el panel "Estilo y
+  // materiales" -- ver hasAnyStylePreference (distingue "nunca lo abrio" de
+  // "lo abrio y no eligio nada", aunque para el Survey guardado ambos casos
+  // hoy se comportan igual: no se manda nada a la IA todavia, Fase 3 unica
+  // consumidora real).
+  const [stylePreferences, setStylePreferences] = useState(null);
   const [description, setDescription] = useState('');
   const [nameError, setNameError] = useState(false);
   const photoInputRef = useRef(null);
@@ -292,7 +300,8 @@ export function PhoneScanSurveyForm({ projectId, onCancel, onSave }){
     }));
     const survey = makeEmptySurvey({
       id: surveyIdRef.current, projectId, name: name.trim(), description: description.trim(),
-      sourceType: SURVEY_SOURCE_TYPE.MOBILE_SCAN, scanMedia
+      sourceType: SURVEY_SOURCE_TYPE.MOBILE_SCAN, scanMedia,
+      stylePreferences: hasAnyStylePreference(stylePreferences) ? stylePreferences : null
     });
     survey.status = SURVEY_STATUS.DRAFT;
     onSave(recomputeSurvey(survey));
@@ -411,6 +420,7 @@ export function PhoneScanSurveyForm({ projectId, onCancel, onSave }){
           <div className="nf wide"><label>{tr('levantamiento.descriptionLabel')}</label><input value={description} onChange={e => setDescription(e.target.value)} placeholder={tr('levantamiento.descriptionPlaceholder')} /></div>
         </div>
         <div className="phonescan-thumb-grid">{items.map(renderThumb)}</div>
+        <EvidenceStylePanel value={stylePreferences} onChange={setStylePreferences} />
         <div className="form-actions">
           <button className="secondary" onClick={() => setStep(STEP.CAPTURE)}>{tr('levantamiento.cancel')}</button>
           <button onClick={save} disabled={hasPendingUploads || hasUnresolvedErrors}>{tr('levantamiento.save')}</button>

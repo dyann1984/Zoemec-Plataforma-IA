@@ -37,7 +37,12 @@ function computeEstadoPorValor(paramDefs, params){
   return estadoPorValor;
 }
 
-function resolveParams(paramDefs, params){
+/* Exportada (no solo de uso interno de calculate()): src/features/quantifier/
+   ElementSketch.jsx la necesita para dibujar el croquis con los MISMOS
+   valores resueltos (default o override) que produjeron las cantidades del
+   APU -- nunca una copia separada de los defaults que pudiera desincronizarse
+   si estos cambian aqui. */
+export function resolveParams(paramDefs, params){
   const resolved = {};
   paramDefs.forEach(def => { resolved[def.key] = params?.[def.key] !== undefined ? params[def.key] : def.default; });
   return resolved;

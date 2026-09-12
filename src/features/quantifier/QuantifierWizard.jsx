@@ -18,6 +18,7 @@ import { useI18n } from '../../i18n/I18nContext.jsx';
 import { useDraftAutosave, clearDraftAutosave } from '../../hooks/useDraftAutosave.js';
 import { AutosaveIndicator } from '../../components/ui/AutosaveIndicator.jsx';
 import { WizardShell } from '../../components/ui/WizardShell.jsx';
+import { ElementSketch } from './ElementSketch.jsx';
 import { PARAMETRIC_FAMILIES, listElementsByFamily, getParametricElement } from '../../domain/parametricElements.js';
 import { listAvailableAuxiliaries, resolveAuxiliaryCost } from '../../domain/auxiliaries.js';
 import { assembleAPUFromParametricResult } from '../../domain/parametricApuAssembler.js';
@@ -150,7 +151,7 @@ export function QuantifierWizard({ user, catalog, organizationId = null, activeP
         <button onClick={handleGenerate} disabled={!previewApu}>{tr('levantamiento.quantGenerateBtn')}</button>
       </div>}
 
-      {d.step === 7 && <div className="phonescan-disclaimer">{tr('levantamiento.quantSketchStubMsg')}</div>}
+      {d.step === 7 && elementDef && <ElementSketch elementId={d.elementoId} inputs={d.inputs} params={d.params} />}
     </WizardShell>
 
     <div className="form-actions">

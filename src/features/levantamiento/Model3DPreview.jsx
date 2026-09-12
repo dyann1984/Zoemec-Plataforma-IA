@@ -12,13 +12,30 @@
    el inicio -- Survey3DViewer.jsx documenta este mismo bug (un Space de 8x8
    queda fuera de cuadro si la camara apunta a (0,0,0)) como algo encontrado
    en QA; aqui se evita repetirlo. */
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 import {
   createRenderer, createScene, createPerspectiveCamera, createOrbitControls,
   addImportedModelLighting, createGridHelper, CAMERA_VIEW_PRESETS, applyCameraView
 } from '../../lib/three3dSceneKit.js';
+import {
+  VISUALIZATION_MODE, MATERIAL_COLOR_PRESETS, DEFAULT_TECHNICAL_COLOR_HEX,
+  detectMaterialQuality, detectAvailablePartCategories, applyVisualizationMode, disposeVisualizationOverrides
+} from '../../lib/three3dVisualizationModes.js';
+
+const VISUALIZATION_MODE_ORDER = [
+  VISUALIZATION_MODE.REALISTIC, VISUALIZATION_MODE.SOLID, VISUALIZATION_MODE.TECHNICAL,
+  VISUALIZATION_MODE.EDGES, VISUALIZATION_MODE.TRANSPARENT, VISUALIZATION_MODE.WIREFRAME
+];
+const MODE_LABEL_KEY = {
+  [VISUALIZATION_MODE.REALISTIC]: 'viz3dModeRealistic', [VISUALIZATION_MODE.SOLID]: 'viz3dModeSolid',
+  [VISUALIZATION_MODE.TECHNICAL]: 'viz3dModeTechnical', [VISUALIZATION_MODE.EDGES]: 'viz3dModeEdges',
+  [VISUALIZATION_MODE.TRANSPARENT]: 'viz3dModeTransparent', [VISUALIZATION_MODE.WIREFRAME]: 'viz3dModeWireframe'
+};
+function partLabelKey(category){ return 'viz3dPart' + category.charAt(0).toUpperCase() + category.slice(1); }
+function colorLabelKey(presetId){ return 'viz3dColor' + presetId.charAt(0).toUpperCase() + presetId.slice(1); }
+function hexToCss(hex){ return '#' + hex.toString(16).padStart(6, '0'); }
 
 /* INCIDENTE 3 (visor 3D) -- "rotados/invertidos": el formato OBJ no declara
    cual eje es "arriba" (ver applyDefaultUpAxisCorrection en
@@ -46,6 +63,34 @@ export function Model3DPreview({ object3D, boundingBox, onBoundingBoxChange = nu
   const mountRef = useRef(null);
   const cameraRef = useRef(null);
   const controlsRef = useRef(null);
+
+  // Fase 1 (visor 3D profesional): "interpretar antes que preguntar" -- el
+  // modo inicial NO es siempre "realista": si el archivo no trae materiales
+  // reales detectables (heuristica en three3dVisualizationModes.js), arranca
+  // directo en "tecnico" (material ZOEMEC), nunca en un gris por defecto sin
+  // explicacion. Se recalcula solo cuando cambia el objeto cargado.
+  const materialQuality = useMemo(() => object3D ? detectMaterialQuality(object3D) : null, [object3D]);
+  const availableParts = useMemo(() => object3D ? detectAvailablePartCategories(object3D) : [], [object3D]);
+  const [mode, setMode] = useState(VISUALIZATION_MODE.REALISTIC);
+  const [colorHex, setColorHex] = useState(DEFAULT_TECHNICAL_COLOR_HEX);
+  const [showEdges, setShowEdges] = useState(false);
+  const [partColorOverrides, setPartColorOverrides] = useState({});
+
+  useEffect(() => {
+    if(!materialQuality) return;
+    setMode(materialQuality.hasRealMaterials ? VISUALIZATION_MODE.REALISTIC : VISUALIZATION_MODE.TECHNICAL);
+    setPartColorOverrides({});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [object3D]);
+
+  // Aplica el modo/color/aristas activos cada vez que cambian -- separado
+  // del efecto de montaje (mas abajo): cambiar de "Solido" a "Alambre" no
+  // necesita recrear el renderer/camara/controles, solo mutar materiales,
+  // que ya se ven en el siguiente frame del loop de animacion existente.
+  useEffect(() => {
+    if(!object3D) return;
+    applyVisualizationMode(object3D, { mode, colorHex, showEdges, partColorOverrides });
+  }, [object3D, mode, colorHex, showEdges, partColorOverrides]);
 
   const center = boundingBox ? {
     x: (boundingBox.min.x + boundingBox.max.x) / 2,
@@ -94,6 +139,7 @@ export function Model3DPreview({ object3D, boundingBox, onBoundingBoxChange = nu
       cancelAnimationFrame(frameId);
       controls.dispose();
       scene.remove(object3D);
+      disposeVisualizationOverrides(object3D);
       renderer.dispose();
       cameraRef.current = null;
       controlsRef.current = null;
@@ -148,6 +194,58 @@ export function Model3DPreview({ object3D, boundingBox, onBoundingBoxChange = nu
       <button type="button" className="soft" onClick={() => rotateModel('y')}>{tr('levantamiento.view3dRotateY')}</button>
       <button type="button" className="soft" onClick={() => rotateModel('z')}>{tr('levantamiento.view3dRotateZ')}</button>
     </div>}
+
+    {/* Fase 1 (visor 3D profesional): modos de visualizacion -- nunca mutan
+        el archivo original, solo el material en memoria (ver
+        three3dVisualizationModes.js#applyVisualizationMode). */}
+    <div className="visual-actions" style={{ marginBottom: 6, flexWrap: 'wrap' }}>
+      {VISUALIZATION_MODE_ORDER.map(m => (
+        <button key={m} type="button" className={mode === m ? '' : 'soft'} onClick={() => setMode(m)}>
+          {tr(`levantamiento.${MODE_LABEL_KEY[m]}`)}
+        </button>
+      ))}
+    </div>
+
+    {materialQuality && !materialQuality.hasRealMaterials && mode !== VISUALIZATION_MODE.REALISTIC &&
+      <p className="muted" style={{ fontSize: '.72rem', marginBottom: 6 }}>{tr('levantamiento.viz3dTechnicalAutoHint')}</p>}
+
+    {mode !== VISUALIZATION_MODE.REALISTIC && <div className="visual-actions" style={{ marginBottom: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+      <span className="muted" style={{ fontSize: '.72rem' }}>{tr('levantamiento.viz3dColorLabel')}:</span>
+      {MATERIAL_COLOR_PRESETS.map(preset => (
+        <button
+          key={preset.id} type="button" title={tr(`levantamiento.${colorLabelKey(preset.id)}`)}
+          onClick={() => setColorHex(preset.hex)}
+          style={{
+            width: 22, height: 22, borderRadius: '50%', padding: 0, cursor: 'pointer',
+            background: hexToCss(preset.hex), border: colorHex === preset.hex ? '2px solid var(--accent, #7c3aed)' : '1px solid #0002'
+          }}
+        />
+      ))}
+      <input
+        type="color" value={hexToCss(colorHex)} onChange={e => setColorHex(parseInt(e.target.value.slice(1), 16))}
+        title={tr('levantamiento.viz3dColorCustomLabel')} style={{ width: 26, height: 26, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+      />
+      {mode !== VISUALIZATION_MODE.EDGES && <label style={{ fontSize: '.72rem', display: 'flex', alignItems: 'center', gap: 4, marginLeft: 8 }}>
+        <input type="checkbox" checked={showEdges} onChange={e => setShowEdges(e.target.checked)} />
+        {tr('levantamiento.viz3dShowEdgesToggle')}
+      </label>}
+    </div>}
+
+    {mode !== VISUALIZATION_MODE.REALISTIC && availableParts.length > 0 && <div className="visual-actions" style={{ marginBottom: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+      <span className="muted" style={{ fontSize: '.72rem' }}>{tr('levantamiento.viz3dPartsLabel')}:</span>
+      {availableParts.map(category => (
+        <span key={category} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <span style={{ fontSize: '.72rem' }}>{tr(`levantamiento.${partLabelKey(category)}`)}</span>
+          <input
+            type="color"
+            value={hexToCss(partColorOverrides[category] ?? colorHex)}
+            onChange={e => setPartColorOverrides(prev => ({ ...prev, [category]: parseInt(e.target.value.slice(1), 16) }))}
+            style={{ width: 22, height: 22, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+          />
+        </span>
+      ))}
+    </div>}
+
     <div ref={mountRef} style={{ width: '100%', minHeight: 360 }} />
   </div>;
 }

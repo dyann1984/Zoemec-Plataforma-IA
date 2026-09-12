@@ -200,7 +200,18 @@ export function buildBaseAuxiliaries(){
       ['Barrote de madera 3"x3"', 2.2, 'ml', 0, 5],
       ['Clavo de 2.5"', 0.15, 'kg', 0, 0],
       ['Desmoldante', 0.10, 'l', 0, 0]
-    ], 'Costo de UN uso de cimbra por m². El número de reusos reales se aplica en el elemento paramétrico (ver parametricElements.js), no aquí.')
+    ], 'Costo de UN uso de cimbra por m². El número de reusos reales se aplica en el elemento paramétrico (ver parametricElements.js), no aquí.'),
+    // Bloque Cimentación completa: concreto POBRE (f'c=100, "plantilla") --
+    // dosificacion deliberadamente distinta a CONC-200 (menos cemento por
+    // m³), NUNCA una reutilizacion disfrazada de CONC-200 -- una plantilla
+    // real usa un concreto mas pobre a proposito (solo nivela, no carga
+    // estructuralmente).
+    base('CONC-100', "Concreto pobre f'c=100 kg/cm² (plantilla)", 'm³', 'concreto', [
+      ['Cemento gris CPC 30R', 4.0, 'saco', 0, 3],
+      ['Arena de río', 0.60, 'm³', 0, 5],
+      ['Grava 3/4"', 0.80, 'm³', 0, 5],
+      ['Agua', 160, 'l', 0, 0]
+    ], "Dosificación de referencia para plantilla/concreto de limpieza (menor contenido de cemento que CONC-200 a proposito -- no es estructural).")
   ];
 }
 

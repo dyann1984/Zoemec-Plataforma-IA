@@ -6,14 +6,16 @@
    cantidades + una lista normalizada de `consumos` que
    parametricApuAssembler.js convierte en renglones de APU.
 
-   Alcance de este primer corte (Fase B, 1 elemento representativo por
-   familia, ver plan aprobado): zapata_aislada, columna (solo rectangular
-   -- circular queda como extension natural futura, no se sobre-construye
-   ahora) y muro (huecos como un area agregada, no una lista de vanos
-   editable -- misma logica de "no construir de mas en el primer corte").
-   El registro esta deliberadamente armado para poder agregar los otros 14
-   elementos del pedido sin rediseno: cada elemento nuevo solo necesita su
-   propio {id,family,label,inputs,params,calculate}. */
+   Avance por familias (aprobado con zapata_aislada/columna/muro como
+   arquitectura de referencia -- ver plan): Cimentacion completa ahora
+   incluye zapata_aislada, zapata_corrida, losa_cimentacion,
+   cimiento_piedra (unica seccion trapezoidal, no rectangular -- forma
+   real del elemento) y plantilla (concreto pobre CONC-100, sin acero ni
+   cimbra). Estructura/Albanileria siguen con columna (solo rectangular --
+   circular queda como extension futura) y muro (huecos como area
+   agregada). El registro esta armado para agregar los elementos
+   restantes sin rediseno: cada elemento nuevo solo necesita su propio
+   {id,family,label,inputs,params,calculate}. */
 import { STEEL_DENSITY_KG_PER_M3, rebarLinearWeightKgPerM } from './unitConversion.js';
 
 export const PARAMETRIC_FAMILIES = Object.freeze({
@@ -87,6 +89,169 @@ const zapataAislada = {
         { tipo: 'labor_cimbra', cantidad: areaCimbraLateral }
       ],
       estadoPorValor: computeEstadoPorValor(ZAPATA_AISLADA_PARAMS, params)
+    };
+  }
+};
+
+const ZAPATA_CORRIDA_PARAMS = [
+  { key: 'pctAceroVolumen', label: 'Porcentaje de acero (peso/volumen de concreto)', unit: '%', default: 0.8, expertOnly: true },
+  { key: 'usosCimbra', label: 'Usos de la cimbra', default: 4, expertOnly: true },
+  { key: 'auxConcretoClave', label: 'Auxiliar de concreto', default: 'CONC-200' },
+  { key: 'auxCimbraClave', label: 'Auxiliar de cimbra', default: 'CIMBRA-COMUN' }
+];
+
+const zapataCorrida = {
+  id: 'zapata_corrida', family: PARAMETRIC_FAMILIES.CIMENTACION, label: 'Zapata corrida', outputUnit: 'pza',
+  inputs: [
+    { key: 'largo', label: 'Largo (longitud del tramo)', unit: 'm', min: 0.5 },
+    { key: 'ancho', label: 'Ancho', unit: 'm', min: 0.3 },
+    { key: 'peralte', label: 'Peralte', unit: 'm', min: 0.15 }
+  ],
+  params: ZAPATA_CORRIDA_PARAMS,
+  calculate(inputs, params){
+    const p = resolveParams(ZAPATA_CORRIDA_PARAMS, params);
+    const { largo, ancho, peralte } = inputs;
+    const volumenConcreto = largo * ancho * peralte;
+    const pesoAcero = volumenConcreto * (p.pctAceroVolumen / 100) * STEEL_DENSITY_KG_PER_M3;
+    // A diferencia de zapata_aislada, una zapata CORRIDA es continua a lo
+    // largo del muro que soporta -- solo sus 2 caras LARGAS quedan
+    // expuestas a cimbra (los extremos se conectan con el resto del
+    // cimiento perimetral corrido, nunca se cimbran por separado como los
+    // 4 lados de una zapata aislada).
+    const areaCimbraLateral = 2 * largo * peralte;
+    return {
+      cantidades: { volumenConcreto, pesoAcero, areaCimbraLateral },
+      consumos: [
+        { tipo: 'auxiliar', clave: p.auxConcretoClave, cantidad: volumenConcreto, unidad: 'm³' },
+        { tipo: 'material', desc: 'Varilla corrugada de refuerzo', cantidad: pesoAcero, unidad: 'kg' },
+        { tipo: 'auxiliar', clave: p.auxCimbraClave, cantidad: areaCimbraLateral / p.usosCimbra, unidad: 'm²' },
+        { tipo: 'labor_sistema', sistemaId: 'concreto', cantidad: volumenConcreto },
+        { tipo: 'labor_sistema', sistemaId: 'acero', cantidad: pesoAcero },
+        { tipo: 'labor_cimbra', cantidad: areaCimbraLateral }
+      ],
+      estadoPorValor: computeEstadoPorValor(ZAPATA_CORRIDA_PARAMS, params)
+    };
+  }
+};
+
+const LOSA_CIMENTACION_PARAMS = [
+  { key: 'kgAceroPorM2PorCapa', label: 'Acero por m² por capa', unit: 'kg/m²', default: 8, expertOnly: true },
+  { key: 'numCapasAcero', label: 'Número de capas (parrillas) de acero', default: 2, expertOnly: true },
+  { key: 'usosCimbra', label: 'Usos de la cimbra perimetral', default: 4, expertOnly: true },
+  { key: 'auxConcretoClave', label: 'Auxiliar de concreto', default: 'CONC-200' },
+  { key: 'auxCimbraClave', label: 'Auxiliar de cimbra', default: 'CIMBRA-COMUN' }
+];
+
+const losaCimentacion = {
+  id: 'losa_cimentacion', family: PARAMETRIC_FAMILIES.CIMENTACION, label: 'Losa de cimentación', outputUnit: 'm²',
+  inputs: [
+    { key: 'largo', label: 'Largo', unit: 'm', min: 0.5 },
+    { key: 'ancho', label: 'Ancho', unit: 'm', min: 0.5 },
+    { key: 'espesor', label: 'Espesor', unit: 'm', min: 0.10 }
+  ],
+  params: LOSA_CIMENTACION_PARAMS,
+  calculate(inputs, params){
+    const p = resolveParams(LOSA_CIMENTACION_PARAMS, params);
+    const { largo, ancho, espesor } = inputs;
+    const areaLosa = largo * ancho;
+    const volumenConcreto = areaLosa * espesor;
+    // Las losas de cimentacion se arman con doble parrilla (superior +
+    // inferior) tipicamente -- se modela por kg/m² por capa (practica
+    // habitual de estimacion para losas), NUNCA por %volumen como una
+    // zapata aislada (ese metodo es para un elemento concentrado, no para
+    // una parrilla distribuida en un area grande).
+    const pesoAcero = areaLosa * p.kgAceroPorM2PorCapa * p.numCapasAcero;
+    // Solo el canto perimetral necesita cimbra -- el fondo va directo
+    // contra el terreno/plantilla, nunca se cimbra por debajo.
+    const areaCimbraLateral = 2 * (largo + ancho) * espesor;
+    return {
+      cantidades: { areaLosa, volumenConcreto, pesoAcero, areaCimbraLateral },
+      consumos: [
+        { tipo: 'auxiliar', clave: p.auxConcretoClave, cantidad: volumenConcreto, unidad: 'm³' },
+        { tipo: 'material', desc: 'Varilla corrugada de refuerzo', cantidad: pesoAcero, unidad: 'kg' },
+        { tipo: 'auxiliar', clave: p.auxCimbraClave, cantidad: areaCimbraLateral / p.usosCimbra, unidad: 'm²' },
+        { tipo: 'labor_sistema', sistemaId: 'concreto', cantidad: volumenConcreto },
+        { tipo: 'labor_sistema', sistemaId: 'acero', cantidad: pesoAcero },
+        { tipo: 'labor_cimbra', cantidad: areaCimbraLateral }
+      ],
+      estadoPorValor: computeEstadoPorValor(LOSA_CIMENTACION_PARAMS, params)
+    };
+  }
+};
+
+const CIMIENTO_PIEDRA_PARAMS = [
+  { key: 'fraccionMorteroPct', label: 'Fracción de mortero en el volumen total', unit: '%', default: 35, expertOnly: true },
+  { key: 'auxMorteroClave', label: 'Auxiliar de mortero', default: 'MORT-1-4' },
+  { key: 'descPiedra', label: 'Material de piedra', default: 'Piedra bola/brasa para cimiento' }
+];
+
+const cimientoPiedra = {
+  id: 'cimiento_piedra', family: PARAMETRIC_FAMILIES.CIMENTACION, label: 'Cimiento de piedra', outputUnit: 'pza',
+  inputs: [
+    { key: 'largo', label: 'Largo (longitud del tramo)', unit: 'm', min: 0.5 },
+    { key: 'anchoBase', label: 'Ancho en la base', unit: 'm', min: 0.3 },
+    { key: 'anchoCorona', label: 'Ancho en la corona', unit: 'm', min: 0.2 },
+    { key: 'altura', label: 'Altura', unit: 'm', min: 0.3 }
+  ],
+  params: CIMIENTO_PIEDRA_PARAMS,
+  calculate(inputs, params){
+    const p = resolveParams(CIMIENTO_PIEDRA_PARAMS, params);
+    const { largo, anchoBase, anchoCorona, altura } = inputs;
+    // Seccion TRAPEZOIDAL (mas ancho en la base que en la corona) -- la
+    // forma real de un cimiento de piedra, nunca un prisma rectangular
+    // simplificado: volumen = largo x altura x promedio de los dos anchos
+    // (formula estandar de un prisma de seccion trapezoidal).
+    const areaSeccion = ((anchoBase + anchoCorona) / 2) * altura;
+    const volumenTotal = largo * areaSeccion;
+    const volumenMortero = volumenTotal * (p.fraccionMorteroPct / 100);
+    const volumenPiedra = volumenTotal - volumenMortero;
+    return {
+      cantidades: { areaSeccion, volumenTotal, volumenPiedra, volumenMortero },
+      consumos: [
+        { tipo: 'material', desc: p.descPiedra, cantidad: volumenPiedra, unidad: 'm³' },
+        { tipo: 'auxiliar', clave: p.auxMorteroClave, cantidad: volumenMortero, unidad: 'm³' },
+        // Mano de obra: se reutiliza la misma cuadrilla de mamposteria que
+        // 'block' en SYSTEM_RESOURCES (colocacion de piedra es tambien
+        // trabajo de albanileria/mamposteria) -- nunca se inventa una
+        // cuadrilla nueva. Escalada por el area de elevacion del tramo
+        // (largo x altura), la misma base de calculo que un muro.
+        { tipo: 'labor_sistema', sistemaId: 'block', cantidad: largo * altura }
+        // NUNCA cimbra: un cimiento de piedra tradicional se construye
+        // directo contra las paredes de la excavacion, sin formaleta.
+      ],
+      estadoPorValor: computeEstadoPorValor(CIMIENTO_PIEDRA_PARAMS, params)
+    };
+  }
+};
+
+const PLANTILLA_PARAMS = [
+  { key: 'auxConcretoClave', label: 'Auxiliar de concreto (pobre)', default: 'CONC-100' }
+];
+
+const plantilla = {
+  id: 'plantilla', family: PARAMETRIC_FAMILIES.CIMENTACION, label: 'Plantilla (concreto de limpieza)', outputUnit: 'm²',
+  inputs: [
+    { key: 'largo', label: 'Largo', unit: 'm', min: 0.3 },
+    { key: 'ancho', label: 'Ancho', unit: 'm', min: 0.3 },
+    { key: 'espesor', label: 'Espesor', unit: 'm', min: 0.03, default: 0.05 }
+  ],
+  params: PLANTILLA_PARAMS,
+  calculate(inputs, params){
+    const p = resolveParams(PLANTILLA_PARAMS, params);
+    const { largo, ancho, espesor } = inputs;
+    const area = largo * ancho;
+    const volumenConcreto = area * espesor;
+    return {
+      cantidades: { area, volumenConcreto },
+      consumos: [
+        { tipo: 'auxiliar', clave: p.auxConcretoClave, cantidad: volumenConcreto, unidad: 'm³' },
+        { tipo: 'labor_sistema', sistemaId: 'concreto', cantidad: volumenConcreto }
+        // NUNCA acero, NUNCA cimbra: una plantilla es concreto pobre sin
+        // refuerzo, colada directo contra la excavacion, sin formaleta --
+        // solo nivela y limpia la superficie para el elemento real que va
+        // encima (zapata/losa).
+      ],
+      estadoPorValor: computeEstadoPorValor(PLANTILLA_PARAMS, params)
     };
   }
 };
@@ -195,6 +360,10 @@ const muro = {
 
 export const PARAMETRIC_ELEMENTS = Object.freeze({
   zapata_aislada: zapataAislada,
+  zapata_corrida: zapataCorrida,
+  losa_cimentacion: losaCimentacion,
+  cimiento_piedra: cimientoPiedra,
+  plantilla,
   columna,
   muro
 });

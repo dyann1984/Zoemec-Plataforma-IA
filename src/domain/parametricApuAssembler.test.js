@@ -8,7 +8,8 @@ import { calcAPU, rowImporte } from '../lib/apuCalc.js';
 const FAKE_CATALOG = [
   { desc: 'Cemento gris CPC 30R', unidad: 'saco', precio: 245, estado: 'VERIFICADO', tipo: 'material' },
   { desc: 'Arena de río', unidad: 'm³', precio: 470, tipo: 'material' },
-  { desc: 'Grava 3/4"', unidad: 'm³', precio: 510, tipo: 'material' }
+  { desc: 'Grava 3/4"', unidad: 'm³', precio: 510, tipo: 'material' },
+  { desc: 'Piedra bola/brasa para cimiento', unidad: 'm³', precio: 380, tipo: 'material' }
 ];
 
 test('assembleAPUFromParametricResult (zapata_aislada): produce un APU con la MISMA forma que uno generado por IA', () => {
@@ -178,9 +179,13 @@ test('5. modo sencillo y modo experto producen EXACTAMENTE el mismo resultado cu
   });
 });
 
-test('6. zapata, columna y muro respetan la MISMA politica de desperdicio en cada renglon derivado de un auxiliar', () => {
+test('6. todos los elementos de Cimentacion (+ Columna/Muro de referencia) respetan la MISMA politica de desperdicio en cada renglon derivado de un auxiliar', () => {
   const casos = [
     [PARAMETRIC_ELEMENTS.zapata_aislada, { largo: 1.2, ancho: 1.2, peralte: 0.4 }],
+    [PARAMETRIC_ELEMENTS.zapata_corrida, { largo: 3, ancho: 0.6, peralte: 0.3 }],
+    [PARAMETRIC_ELEMENTS.losa_cimentacion, { largo: 5, ancho: 4, espesor: 0.15 }],
+    [PARAMETRIC_ELEMENTS.cimiento_piedra, { largo: 4, anchoBase: 0.6, anchoCorona: 0.3, altura: 0.5 }],
+    [PARAMETRIC_ELEMENTS.plantilla, { largo: 3, ancho: 2, espesor: 0.05 }],
     [PARAMETRIC_ELEMENTS.columna, { base: 0.3, peralte: 0.3, altura: 3 }],
     [PARAMETRIC_ELEMENTS.muro, { largo: 4, altura: 2.5, areaVanos: 1 }]
   ];
@@ -202,5 +207,67 @@ test('6. zapata, columna y muro respetan la MISMA politica de desperdicio en cad
       });
     });
     assert.doesNotThrow(() => calcAPU(apu));
+  });
+});
+
+/* ============================================================
+   REGLA DE PARIDAD (pedido explicito, bloque Cimentacion completa):
+   "resultado paramétrico == cantidadBase del APU" para CADA elemento --
+   si el calculo, el croquis o el APU llegaran a divergir, esta prueba
+   debe fallar. Se verifica para TODOS los consumos de TODOS los
+   elementos (no solo el primero de cada uno): un consumo tipo 'material'
+   compara directo contra el renglon; un consumo tipo 'auxiliar' compara
+   cada ingrediente de su composicion (cantidadPorUnidad x consumo.cantidad)
+   contra su propio renglon expandido. */
+const PARIDAD_CASOS = [
+  [PARAMETRIC_ELEMENTS.zapata_aislada, { largo: 1.2, ancho: 1.2, peralte: 0.4 }],
+  [PARAMETRIC_ELEMENTS.zapata_corrida, { largo: 3, ancho: 0.6, peralte: 0.3 }],
+  [PARAMETRIC_ELEMENTS.losa_cimentacion, { largo: 5, ancho: 4, espesor: 0.15 }],
+  [PARAMETRIC_ELEMENTS.cimiento_piedra, { largo: 4, anchoBase: 0.6, anchoCorona: 0.3, altura: 0.5 }],
+  [PARAMETRIC_ELEMENTS.plantilla, { largo: 3, ancho: 2, espesor: 0.05 }],
+  [PARAMETRIC_ELEMENTS.columna, { base: 0.3, peralte: 0.3, altura: 3 }],
+  [PARAMETRIC_ELEMENTS.muro, { largo: 4, altura: 2.5, areaVanos: 1 }]
+];
+
+PARIDAD_CASOS.forEach(([elementDef, inputs]) => {
+  test(`REGLA DE PARIDAD (${elementDef.id}): resultado del cuantificador == cantidadBase de CADA renglon del APU`, () => {
+    const auxiliares = buildBaseAuxiliaries();
+    const calcResult = elementDef.calculate(inputs, {});
+    const apu = assembleAPUFromParametricResult({ elementDef, inputs, params: {}, calcResult, catalog: FAKE_CATALOG, auxiliaries: auxiliares });
+
+    calcResult.consumos.forEach(consumo => {
+      if(!(consumo.cantidad > 0)) return; // el ensamblador tampoco genera renglon para consumos en 0 (ver expandConsumo)
+      if(consumo.tipo === 'material'){
+        const row = apu.materials.find(r => r[0] === consumo.desc);
+        assert.ok(row, `${elementDef.id}: falta el renglon de material "${consumo.desc}"`);
+        assert.ok(Math.abs(row[1] - consumo.cantidad) < 1e-9,
+          `${elementDef.id}/${consumo.desc}: resultado del cuantificador (${consumo.cantidad}) debe ser EXACTAMENTE la cantidadBase del renglon (${row[1]})`);
+      }
+      if(consumo.tipo === 'auxiliar'){
+        const aux = auxiliares.find(a => a.clave === consumo.clave);
+        assert.ok(aux, `${elementDef.id}: auxiliar "${consumo.clave}" no encontrado`);
+        aux.composicion.forEach(ingrediente => {
+          const cantidadBaseEsperada = ingrediente.cantidadPorUnidad * consumo.cantidad;
+          const row = apu.materials.find(r => r[0] === ingrediente.desc);
+          assert.ok(row, `${elementDef.id}: falta el renglon de "${ingrediente.desc}" (auxiliar ${consumo.clave})`);
+          assert.ok(Math.abs(row[1] - cantidadBaseEsperada) < 1e-9,
+            `${elementDef.id}/${ingrediente.desc}: resultado del cuantificador (${cantidadBaseEsperada}) debe ser EXACTAMENTE la cantidadBase del renglon (${row[1]})`);
+        });
+      }
+    });
+  });
+
+  test(`REGLA DE PARIDAD (${elementDef.id}): el croquis usa los MISMOS parametros resueltos que produjeron las cantidades del APU`, async () => {
+    const { buildElementSketch } = await import('./parametricSketch.js');
+    const calcResult1 = elementDef.calculate(inputs, {});
+    const calcResult2 = elementDef.calculate(inputs, {});
+    assert.deepEqual(calcResult1.cantidades, calcResult2.cantidades, `${elementDef.id}: calculate() debe ser determinista`);
+    // El croquis (buildElementSketch) resuelve params con la MISMA funcion
+    // resolveParams que calculate() -- si algun elemento nuevo declarara su
+    // propio default por separado en parametricSketch.js, esta prueba lo
+    // detectaria en cuanto ese default divergiera del real (ver prueba
+    // dedicada "nunca puede desincronizarse" en parametricSketch.test.js
+    // para la comparacion directa contra el builder puro).
+    assert.doesNotThrow(() => buildElementSketch(elementDef.id, inputs, {}), `${elementDef.id}: el croquis debe poder generarse con los mismos inputs/params que el calculo`);
   });
 });

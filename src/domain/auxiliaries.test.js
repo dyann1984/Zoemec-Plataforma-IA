@@ -103,11 +103,19 @@ test('resolveAuxiliaryCost: expone cantidadBase (sin desperdicio) y desperdicioP
 });
 function close3(actual, expected){ assert.ok(Math.abs(actual - expected) < 1e-9); }
 
-test('buildBaseAuxiliaries: expone exactamente los 3 auxiliares base del pedido (concreto, mortero, cimbra)', () => {
+test('buildBaseAuxiliaries: expone los auxiliares base (concreto, mortero, cimbra, concreto pobre para plantilla)', () => {
   const base = buildBaseAuxiliaries();
   const claves = base.map(a => a.clave).sort();
-  assert.deepEqual(claves, ['CIMBRA-COMUN', 'CONC-200', 'MORT-1-4']);
+  assert.deepEqual(claves, ['CIMBRA-COMUN', 'CONC-100', 'CONC-200', 'MORT-1-4']);
   base.forEach(a => assert.equal(validateAuxiliaryDefinition(a).valid, true));
+});
+
+test('CONC-100 (plantilla) es una dosificacion REAL distinta de CONC-200, nunca una reutilizacion disfrazada', () => {
+  const base = buildBaseAuxiliaries();
+  const conc100 = base.find(a => a.clave === 'CONC-100');
+  const conc200 = base.find(a => a.clave === 'CONC-200');
+  const cementoDe = (aux) => aux.composicion.find(c => c.desc.toLowerCase().includes('cemento')).cantidadPorUnidad;
+  assert.ok(cementoDe(conc100) < cementoDe(conc200), 'la plantilla debe llevar menos cemento por m³ que el concreto estructural');
 });
 
 test('restoreBaseAuxiliaries: nunca sobreescribe un auxiliar existente con la misma clave, aunque su contenido sea distinto al de fabrica', () => {
@@ -119,5 +127,5 @@ test('restoreBaseAuxiliaries: nunca sobreescribe un auxiliar existente con la mi
 
 test('restoreBaseAuxiliaries: agrega los auxiliares base que falten sin tocar los que ya existen', () => {
   const result = restoreBaseAuxiliaries([]);
-  assert.equal(result.length, 3);
+  assert.equal(result.length, buildBaseAuxiliaries().length);
 });

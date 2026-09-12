@@ -79,11 +79,16 @@ const FAKE_CATALOG = [
   { desc: 'Cemento gris CPC 30R', unidad: 'saco', precio: 248, estado: 'VERIFICADO', tipo: 'material' },
   { desc: 'Arena de río', unidad: 'm³', precio: 465, tipo: 'material' },
   { desc: 'Grava 3/4"', unidad: 'm³', precio: 505, tipo: 'material' },
-  { desc: 'Block hueco de concreto 15x20x40 cm', unidad: 'pza', precio: 17.2, tipo: 'material' }
+  { desc: 'Block hueco de concreto 15x20x40 cm', unidad: 'pza', precio: 17.2, tipo: 'material' },
+  { desc: 'Piedra bola/brasa para cimiento', unidad: 'm³', precio: 380, tipo: 'material' }
 ];
 
 const CASES = [
   { id: 'zapata_aislada', inputs: { largo: 1.2, ancho: 1.2, peralte: 0.4 } },
+  { id: 'zapata_corrida', inputs: { largo: 3, ancho: 0.6, peralte: 0.3 } },
+  { id: 'losa_cimentacion', inputs: { largo: 5, ancho: 4, espesor: 0.15 } },
+  { id: 'cimiento_piedra', inputs: { largo: 4, anchoBase: 0.6, anchoCorona: 0.3, altura: 0.5 } },
+  { id: 'plantilla', inputs: { largo: 3, ancho: 2, espesor: 0.05 } },
   { id: 'columna', inputs: { base: 0.3, peralte: 0.3, altura: 3 } },
   { id: 'muro', inputs: { largo: 4, altura: 2.5, areaVanos: 1 } }
 ];

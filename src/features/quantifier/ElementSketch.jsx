@@ -14,6 +14,7 @@ function renderElement(el, i){
   if(el.type === 'rect') return <rect key={i} x={el.x} y={el.y} width={el.w} height={el.h} fill={el.fill || 'none'} stroke={el.stroke} strokeWidth={el.strokeWidth} />;
   if(el.type === 'line') return <line key={i} x1={el.x1} y1={el.y1} x2={el.x2} y2={el.y2} stroke={el.stroke} strokeWidth={el.strokeWidth} />;
   if(el.type === 'circle') return <circle key={i} cx={el.cx} cy={el.cy} r={el.r} fill={el.fill} />;
+  if(el.type === 'polygon') return <polygon key={i} points={el.points.map(([x, y]) => `${x},${y}`).join(' ')} fill={el.fill || 'none'} stroke={el.stroke} strokeWidth={el.strokeWidth} />;
   if(el.type === 'text') return <text key={i} x={el.x} y={el.y} fontSize={el.size} textAnchor={el.anchor || 'middle'} fill={el.fill}>{el.text}</text>;
   return null;
 }

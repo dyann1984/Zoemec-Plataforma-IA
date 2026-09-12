@@ -65,6 +65,115 @@ export function buildZapataAisladaSketch(inputs = {}){
   return [planta, seccion];
 }
 
+/* Planta (largo x ancho) + Seccion (ancho x peralte, SIN dado -- a
+   diferencia de zapata_aislada, una zapata CORRIDA no tiene un pedestal
+   de columna encima, es continua bajo un muro). */
+export function buildZapataCorridaSketch(inputs = {}){
+  const largo = Number(inputs.largo) || 0, ancho = Number(inputs.ancho) || 0, peralte = Number(inputs.peralte) || 0;
+  if(!(largo > 0) || !(ancho > 0) || !(peralte > 0)) return [];
+  const maxPlanta = Math.max(largo, ancho, 0.5);
+  const padP = maxPlanta * 0.25 + 0.25;
+  const fontP = maxPlanta * 0.07;
+  const strokeP = maxPlanta * 0.012;
+  const planta = view('planta', 'Planta', largo + padP * 2, ancho + padP * 2, [
+    { type: 'rect', x: padP, y: padP, w: largo, h: ancho, fill: 'none', stroke: INK, strokeWidth: strokeP },
+    dimText(padP + largo / 2, padP - padP * 0.25, `${fmt(largo)} m`, fontP),
+    dimText(padP * 0.4, padP + ancho / 2, `${fmt(ancho)} m`, fontP),
+    dimText(padP + largo / 2, padP + ancho / 2, 'ZAPATA CORRIDA', fontP * 0.85, MUTED)
+  ]);
+
+  const maxSeccion = Math.max(ancho, peralte, 0.4);
+  const padS = maxSeccion * 0.35 + 0.2;
+  const fontS = maxSeccion * 0.1;
+  const strokeS = maxSeccion * 0.025;
+  const seccion = view('seccion', 'Sección', ancho + padS * 2, peralte + padS * 2, [
+    { type: 'rect', x: padS, y: padS, w: ancho, h: peralte, fill: 'none', stroke: INK, strokeWidth: strokeS },
+    ...[0.15, 0.5, 0.85].map(t => ({ type: 'circle', cx: padS + ancho * t, cy: padS + peralte - peralte * 0.2, r: maxSeccion * 0.02, fill: REBAR })),
+    dimText(padS + ancho / 2, padS + peralte + padS * 0.35, `${fmt(peralte)} m`, fontS),
+    dimText(padS + ancho + padS * 0.55, padS + peralte / 2, `${fmt(ancho)} m`, fontS * 0.85)
+  ]);
+  return [planta, seccion];
+}
+
+/* Planta (largo x ancho) + Seccion delgada (espesor, con DOBLE parrilla de
+   acero -- superior e inferior, la forma real de una losa de
+   cimentacion). */
+export function buildLosaCimentacionSketch(inputs = {}){
+  const largo = Number(inputs.largo) || 0, ancho = Number(inputs.ancho) || 0, espesor = Number(inputs.espesor) || 0;
+  if(!(largo > 0) || !(ancho > 0) || !(espesor > 0)) return [];
+  const maxPlanta = Math.max(largo, ancho, 0.5);
+  const padP = maxPlanta * 0.25 + 0.25;
+  const fontP = maxPlanta * 0.07;
+  const strokeP = maxPlanta * 0.012;
+  const planta = view('planta', 'Planta', largo + padP * 2, ancho + padP * 2, [
+    { type: 'rect', x: padP, y: padP, w: largo, h: ancho, fill: 'none', stroke: INK, strokeWidth: strokeP },
+    dimText(padP + largo / 2, padP - padP * 0.25, `${fmt(largo)} m`, fontP),
+    dimText(padP * 0.4, padP + ancho / 2, `${fmt(ancho)} m`, fontP),
+    dimText(padP + largo / 2, padP + ancho / 2, 'LOSA DE CIMENTACIÓN', fontP * 0.85, MUTED)
+  ]);
+
+  const maxSeccion = Math.max(ancho, espesor * 4, 0.5); // espesor real de una losa suele ser mucho menor que su ancho -- se exagera x4 solo para que la seccion sea visible, nunca a escala real
+  const padS = maxSeccion * 0.3 + 0.2;
+  const fontS = maxSeccion * 0.08;
+  const strokeS = maxSeccion * 0.02;
+  const espesorDibujado = Math.max(espesor, maxSeccion * 0.08);
+  const seccion = view('seccion', 'Sección (espesor exagerado para claridad)', ancho + padS * 2, espesorDibujado + padS * 2, [
+    { type: 'rect', x: padS, y: padS, w: ancho, h: espesorDibujado, fill: 'none', stroke: INK, strokeWidth: strokeS },
+    ...[0.1, 0.3, 0.5, 0.7, 0.9].map(t => ({ type: 'circle', cx: padS + ancho * t, cy: padS + espesorDibujado * 0.18, r: maxSeccion * 0.012, fill: REBAR })),
+    ...[0.1, 0.3, 0.5, 0.7, 0.9].map(t => ({ type: 'circle', cx: padS + ancho * t, cy: padS + espesorDibujado * 0.82, r: maxSeccion * 0.012, fill: REBAR })),
+    dimText(padS + ancho / 2, padS + espesorDibujado + padS * 0.35, `espesor real: ${fmt(espesor)} m`, fontS)
+  ]);
+  return [planta, seccion];
+}
+
+/* Seccion TRANSVERSAL trapezoidal (base mas ancha que la corona -- la
+   forma real de un cimiento de piedra, nunca un rectangulo). Unico
+   elemento del Cuantificador que usa el primitivo 'polygon'. */
+export function buildCimientoPiedraSketch(inputs = {}){
+  const anchoBase = Number(inputs.anchoBase) || 0, anchoCorona = Number(inputs.anchoCorona) || 0, altura = Number(inputs.altura) || 0;
+  if(!(anchoBase > 0) || !(anchoCorona > 0) || !(altura > 0)) return [];
+  const maxDim = Math.max(anchoBase, altura, 0.4);
+  const pad = maxDim * 0.35 + 0.2;
+  const font = maxDim * 0.1;
+  const stroke = maxDim * 0.02;
+  const width = anchoBase + pad * 2, height = altura + pad * 2;
+  const baseY = pad + altura;
+  const xBaseIzq = pad, xBaseDer = pad + anchoBase; // la base ocupa todo el ancho dibujado, es la referencia
+  const xCoronaIzq = pad + (anchoBase - anchoCorona) / 2;
+  const xCoronaDer = xCoronaIzq + anchoCorona;
+  const points = [
+    [xBaseIzq, baseY], [xBaseDer, baseY], [xCoronaDer, pad], [xCoronaIzq, pad]
+  ];
+  const seccion = view('seccion-transversal', 'Sección transversal (trapezoidal)', width, height, [
+    { type: 'polygon', points, fill: 'none', stroke: INK, strokeWidth: stroke },
+    dimText(pad + anchoBase / 2, baseY + pad * 0.35, `${fmt(anchoBase)} m (base)`, font),
+    dimText(pad + anchoBase / 2, pad - pad * 0.2, `${fmt(anchoCorona)} m (corona)`, font * 0.9),
+    dimText(xBaseDer + pad * 0.55, pad + altura / 2, `${fmt(altura)} m`, font * 0.85),
+    dimText(pad + anchoBase / 2, pad + altura / 2, 'CIMIENTO DE PIEDRA', font * 0.75, MUTED)
+  ]);
+  return [seccion];
+}
+
+/* Planta unica (largo x ancho) -- una plantilla es una capa delgada sin
+   seccion propia relevante (su espesor tipico, 5-10cm, no aporta nada
+   visible a esta escala); se anota como texto en vez de dibujar una
+   seccion casi invisible. */
+export function buildPlantillaSketch(inputs = {}){
+  const largo = Number(inputs.largo) || 0, ancho = Number(inputs.ancho) || 0, espesor = Number(inputs.espesor) || 0;
+  if(!(largo > 0) || !(ancho > 0) || !(espesor > 0)) return [];
+  const maxPlanta = Math.max(largo, ancho, 0.5);
+  const pad = maxPlanta * 0.25 + 0.25;
+  const font = maxPlanta * 0.07;
+  const stroke = maxPlanta * 0.012;
+  const planta = view('planta', 'Planta', largo + pad * 2, ancho + pad * 2, [
+    { type: 'rect', x: pad, y: pad, w: largo, h: ancho, fill: 'none', stroke: INK, strokeWidth: stroke },
+    dimText(pad + largo / 2, pad - pad * 0.25, `${fmt(largo)} m`, font),
+    dimText(pad * 0.4, pad + ancho / 2, `${fmt(ancho)} m`, font),
+    dimText(pad + largo / 2, pad + ancho / 2, `PLANTILLA (espesor ${fmt(espesor)} m)`, font * 0.85, MUTED)
+  ]);
+  return [planta];
+}
+
 /* Elevacion (base x altura, con varillas longitudinales + estribos
    indicados) + una pequena Seccion transversal (base x peralte, con un
    punto de armado por esquina -- indicativo, no la disposicion real). */
@@ -149,6 +258,10 @@ export function buildElementSketch(elementId, inputs, params){
   if(!elementDef) return [];
   const resolvedParams = resolveParams(elementDef.params, params);
   if(elementId === 'zapata_aislada') return buildZapataAisladaSketch(inputs);
+  if(elementId === 'zapata_corrida') return buildZapataCorridaSketch(inputs);
+  if(elementId === 'losa_cimentacion') return buildLosaCimentacionSketch(inputs);
+  if(elementId === 'cimiento_piedra') return buildCimientoPiedraSketch(inputs);
+  if(elementId === 'plantilla') return buildPlantillaSketch(inputs);
   if(elementId === 'columna') return buildColumnaSketch(inputs, resolvedParams);
   if(elementId === 'muro') return buildMuroSketch(inputs, resolvedParams);
   return [];

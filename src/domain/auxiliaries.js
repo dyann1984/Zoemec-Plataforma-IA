@@ -18,7 +18,40 @@
      confianza de cada ingrediente resuelto -- nunca un enum nuevo.
 
    Puro: sin React, sin Firebase. src/services/auxiliariesApi.js es quien
-   lee/escribe Firestore; este modulo solo calcula y valida. */
+   lee/escribe Firestore; este modulo solo calcula y valida.
+
+   ============================================================
+   POLITICA DE DESPERDICIO/MERMA -- FUENTE UNICA DE VERDAD
+   ============================================================
+   composicion[i].cantidadPorUnidad es SIEMPRE una cantidad NETA/BASE (sin
+   desperdicio incluido) -- ej. "7.0 sacos de cemento por m3 de concreto",
+   nunca "7.0 sacos YA con el 3% de merma sumado". composicion[i].desperdicioPct
+   viaja APARTE, nunca fusionado dentro de la cantidad.
+
+   El desperdicio se aplica UNA SOLA VEZ, en la capa de calculo del APU
+   (src/lib/apuCalc.js#calcMaterialRow para v2, #rowImporte para v1:
+   `cantidad * precio * (1 + desperdicioPct/100)`), nunca aqui. Por eso
+   resolveAuxiliaryCost() expone `cantidadBase` (neta, SIN desperdicio) y
+   `desperdicioPct` como campos SEPARADOS en cada renglon del desglose --
+   quien arme un renglon de APU real a partir de esto
+   (parametricApuAssembler.js) DEBE usar `cantidadBase` para la cantidad
+   del renglon y `desperdicioPct` para el campo de merma del renglon,
+   dejando que calcAPU/calcAPUv2 (el motor YA desplegado, nunca duplicado)
+   aplique el factor (1+%) exactamente una vez. Usar el campo `cantidad`
+   de este modulo (que SI trae el desperdicio ya incluido, pensado solo
+   para mostrar "cuanto cuesta este auxiliar" en una vista previa) como
+   cantidad de un renglon de APU duplicaria la merma -- ver
+   parametricApuAssembler.test.js#"nunca duplica desperdicio" para la
+   prueba de regresion explicita de esto.
+
+   Alternativa descartada: que el auxiliar guarde la cantidad YA con
+   desperdicio y el renglon de APU se cree con desperdicioPct:0. Se
+   descarta porque pierde trazabilidad por insumo (un reporte/exportacion
+   que lea el renglon del APU ya no podria distinguir "este material tiene
+   3% de merma" de "este material no tiene merma", ambos se verian
+   identicos con desperdicioPct:0) -- la opcion elegida (cantidad neta +
+   desperdicioPct explicito, aplicado una vez aguas abajo) es la unica que
+   preserva esa trazabilidad exigida por el pedido. */
 import { findCatalogMatches } from './catalogLookup.js';
 import { normalizeUnitLabel } from '../lib/excelImport.js';
 import { APU_DATA_STATE } from './apuSchema.js';
@@ -126,13 +159,9 @@ export function resolveAuxiliaryCost(aux, catalog, options = {}){
     const desperdicioPctNum = Number(desperdicioPct) || 0;
     const cantidadConDesperdicio = cantidadPorUnidad * (1 + desperdicioPctNum / 100);
     const importe = cantidadConDesperdicio * precioUnitario;
-    // cantidadBase + desperdicioPct por separado (ademas de `cantidad`, ya
-    // con desperdicio incluido, para mostrar el desglose de costo): quien
-    // arme un renglon de APU real a partir de esto (parametricApuAssembler.js)
-    // debe escalar cantidadBase por el consumo del elemento y dejar que el
-    // motor de calculo estandar (apuCalc.js#calcMaterialRow) aplique el
-    // desperdicio UNA sola vez -- aplicarlo aqui Y otra vez alla lo
-    // duplicaria.
+    // `cantidad` (con desperdicio, solo para vista previa de costo) vs
+    // `cantidadBase`+`desperdicioPct` (para armar un renglon de APU real) --
+    // ver "POLITICA DE DESPERDICIO/MERMA" al inicio de este archivo.
     return { desc, cantidad: cantidadConDesperdicio, cantidadBase: cantidadPorUnidad, desperdicioPct: desperdicioPctNum, unidad, precioUnitario, importe, fuente };
   });
   const costoPorUnidad = desglose.reduce((sum, row) => sum + row.importe, 0);

@@ -5,7 +5,18 @@
    modifican esos archivos, ver plan aprobado) para que el resultado sea
    indistinguible en forma de un APU generado por IA: Confidence Engine,
    Bid Risk, exportaciones PDF/Excel funcionan sin ningun cambio porque
-   consumen materials/labor/equipment/family de forma generica. */
+   consumen materials/labor/equipment/family de forma generica.
+
+   POLITICA DE DESPERDICIO/MERMA: fuente unica de verdad documentada en
+   src/domain/auxiliaries.js (encabezado del archivo). Resumen operativo
+   para este modulo: cada renglon de material que este ensamblador arma a
+   partir de un auxiliar usa `ingrediente.cantidadBase` (NETA, sin
+   desperdicio) como cantidad del renglon y `ingrediente.desperdicioPct`
+   como el campo de merma del renglon -- NUNCA `ingrediente.cantidad` (que
+   ya trae el desperdicio incluido, pensado solo para vistas previas de
+   costo). El desperdicio lo aplica una unica vez el motor de calculo
+   estandar ya desplegado (src/lib/apuCalc.js -- rowImporte para v1,
+   calcMaterialRow para v2), nunca este archivo. */
 import { standardizeAPU, applyMarketPrices } from './apuGeneration.js';
 import { findCatalogMatches } from './catalogLookup.js';
 import { normalizeUnitLabel } from '../lib/excelImport.js';

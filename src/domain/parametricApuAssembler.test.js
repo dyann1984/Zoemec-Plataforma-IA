@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { assembleAPUFromParametricResult } from './parametricApuAssembler.js';
 import { PARAMETRIC_ELEMENTS } from './parametricElements.js';
-import { buildBaseAuxiliaries } from './auxiliaries.js';
-import { calcAPU } from '../lib/apuCalc.js';
+import { buildBaseAuxiliaries, makeAuxiliaryDefinition } from './auxiliaries.js';
+import { calcAPU, rowImporte } from '../lib/apuCalc.js';
 
 const FAKE_CATALOG = [
   { desc: 'Cemento gris CPC 30R', unidad: 'saco', precio: 245, estado: 'VERIFICADO', tipo: 'material' },
@@ -89,4 +89,118 @@ test('assembleAPUFromParametricResult: un auxiliar referenciado que NO existe en
   const missing = apu.materials.find(r => r[0].includes('no encontrado'));
   assert.ok(missing);
   assert.equal(missing[3], 0); // nunca un precio inventado
+});
+
+/* ============================================================
+   POLITICA DE DESPERDICIO/MERMA -- pruebas de regresion explicitas
+   (ver "POLITICA DE DESPERDICIO/MERMA" en auxiliaries.js y en el
+   encabezado de parametricApuAssembler.js). Fuente unica de verdad:
+   auxiliares guardan cantidad NETA; el desperdicio se aplica UNA sola vez,
+   en la capa de calculo del APU (rowImporte/calcMaterialRow en
+   src/lib/apuCalc.js), nunca en auxiliaries.js ni en el ensamblador. */
+
+function auxiliarConDesperdicio(desperdicioPct){
+  return makeAuxiliaryDefinition({
+    clave: 'TEST-AUX', nombre: 'Auxiliar de prueba', unidad: 'm³', categoria: 'concreto',
+    composicion: [['Cemento gris CPC 30R', 10, 'saco', 0, desperdicioPct]]
+  });
+}
+
+function assembleWithAuxiliar(desperdicioPct, consumoCantidad = 2){
+  const elementDef = PARAMETRIC_ELEMENTS.zapata_aislada;
+  const inputs = { largo: 1, ancho: 1, peralte: 0.4 };
+  // consumos manual (no via elementDef.calculate) para aislar la variable
+  // bajo prueba (el desperdicio del auxiliar) del resto de la formula de
+  // zapata_aislada -- estas pruebas validan la POLITICA de desperdicio,
+  // no la formula geometrica (ya cubierta en parametricElements.test.js).
+  const calcResult = { cantidades: {}, consumos: [{ tipo: 'auxiliar', clave: 'TEST-AUX', cantidad: consumoCantidad, unidad: 'm³' }], estadoPorValor: {} };
+  const apu = assembleAPUFromParametricResult({
+    elementDef, inputs, params: {}, calcResult, catalog: FAKE_CATALOG, auxiliaries: [auxiliarConDesperdicio(desperdicioPct)]
+  });
+  const row = apu.materials.find(r => r[0].toLowerCase().includes('cemento'));
+  return { apu, row };
+}
+
+test('1. auxiliar SIN desperdicio (0%): el renglon de APU queda con desperdicioPct=0 y la cantidad neta exacta', () => {
+  const { row } = assembleWithAuxiliar(0, 2);
+  assert.equal(row[4], 0); // desperdicioPct del renglon
+  assert.equal(row[1], 10 * 2); // cantidadBase (10 saco/m3) x consumo (2 m3) -- sin inflar
+});
+
+test('2. auxiliar CON desperdicio configurado (10%): el renglon de APU guarda la cantidad NETA (sin inflar) y el desperdicioPct por separado', () => {
+  const { row } = assembleWithAuxiliar(10, 2);
+  assert.equal(row[4], 10); // desperdicioPct del renglon = el del auxiliar, intacto
+  assert.equal(row[1], 10 * 2); // cantidad del renglon sigue siendo la NETA (20), NUNCA 20*1.10=22
+});
+
+test('3. el APU final NO duplica la merma: rowImporte aplica (1+10%) EXACTAMENTE UNA VEZ, nunca al cuadrado', () => {
+  const { row } = assembleWithAuxiliar(10, 2);
+  const importe = rowImporte('materials', row);
+  const esperadoUnaVez = 20 * 245 * 1.10; // cantidad neta x precio x (1+10%) -- una sola aplicacion
+  const esperadoDosVeces = 20 * 245 * 1.10 * 1.10; // lo que saldria si se duplicara
+  assert.ok(Math.abs(importe - esperadoUnaVez) < 1e-9, `esperado ${esperadoUnaVez}, recibido ${importe}`);
+  assert.notEqual(Math.round(importe), Math.round(esperadoDosVeces));
+});
+
+test('4. cambiar el desperdicio del auxiliar modifica el importe final UNA sola vez (escalado lineal, no al cuadrado)', () => {
+  const { row: row5 } = assembleWithAuxiliar(5, 2);
+  const { row: row10 } = assembleWithAuxiliar(10, 2);
+  const importe5 = rowImporte('materials', row5);
+  const importe10 = rowImporte('materials', row10);
+  const ratioObservado = importe10 / importe5;
+  const ratioEsperadoUnaVez = 1.10 / 1.05; // si el desperdicio se aplicara UNA vez
+  const ratioSiSeDuplicara = Math.pow(1.10 / 1.05, 2); // si se aplicara dos veces
+  assert.ok(Math.abs(ratioObservado - ratioEsperadoUnaVez) < 1e-9, `ratio esperado ${ratioEsperadoUnaVez}, recibido ${ratioObservado}`);
+  assert.ok(Math.abs(ratioObservado - ratioSiSeDuplicara) > 1e-6);
+});
+
+test('5. modo sencillo y modo experto producen EXACTAMENTE el mismo resultado cuando el experto usa los mismos valores que el default', () => {
+  const casos = [
+    [PARAMETRIC_ELEMENTS.zapata_aislada, { largo: 1.5, ancho: 1.5, peralte: 0.45 }],
+    [PARAMETRIC_ELEMENTS.columna, { base: 0.35, peralte: 0.35, altura: 2.8 }],
+    [PARAMETRIC_ELEMENTS.muro, { largo: 5, altura: 2.6, areaVanos: 2 }]
+  ];
+  casos.forEach(([elementDef, inputs]) => {
+    const sencillo = elementDef.calculate(inputs, {}); // modo sencillo: sin overrides, usa defaults
+    const paramsExplicitos = Object.fromEntries(elementDef.params.map(p => [p.key, p.default])); // modo experto: mismos valores, tecleados explicitamente
+    const experto = elementDef.calculate(inputs, paramsExplicitos);
+    assert.deepEqual(sencillo.cantidades, experto.cantidades, `${elementDef.id}: cantidades deben coincidir`);
+    assert.deepEqual(sencillo.consumos, experto.consumos, `${elementDef.id}: consumos deben coincidir`);
+    // computeEstadoPorValor no puede distinguir "el usuario nunca toco este
+    // parametro" de "el usuario tecleo en modo experto exactamente el mismo
+    // valor que el default" -- ambos casos producen el MISMO valor numerico
+    // final, asi que es correcto (conservador, nunca finge confirmacion que
+    // no existe) que ambos queden marcados ASUMIDO por igual. Lo que
+    // realmente prueba "mismo resultado con los mismos parametros" son
+    // cantidades/consumos (arriba) -- aqui solo se confirma que ambos modos
+    // son CONSISTENTES entre si, no que "experto" borre la marca.
+    assert.deepEqual(sencillo.estadoPorValor, experto.estadoPorValor, `${elementDef.id}: estadoPorValor debe ser consistente entre modos cuando el valor final es identico`);
+  });
+});
+
+test('6. zapata, columna y muro respetan la MISMA politica de desperdicio en cada renglon derivado de un auxiliar', () => {
+  const casos = [
+    [PARAMETRIC_ELEMENTS.zapata_aislada, { largo: 1.2, ancho: 1.2, peralte: 0.4 }],
+    [PARAMETRIC_ELEMENTS.columna, { base: 0.3, peralte: 0.3, altura: 3 }],
+    [PARAMETRIC_ELEMENTS.muro, { largo: 4, altura: 2.5, areaVanos: 1 }]
+  ];
+  const auxiliares = buildBaseAuxiliaries();
+  casos.forEach(([elementDef, inputs]) => {
+    const calcResult = elementDef.calculate(inputs, {});
+    const apu = assembleAPUFromParametricResult({ elementDef, inputs, params: {}, calcResult, catalog: FAKE_CATALOG, auxiliaries: auxiliares });
+    // Para cada renglon de material derivado de un auxiliar (identificable
+    // porque su desc coincide con un ingrediente de composicion de algun
+    // auxiliar usado), confirma que el renglon SI trae desperdicioPct (no
+    // esta forzado a 0 escondiendo la merma real del ingrediente) y que
+    // calcAPU corre sin lanzar sobre el resultado completo.
+    const auxiliaresUsados = calcResult.consumos.filter(c => c.tipo === 'auxiliar').map(c => auxiliares.find(a => a.clave === c.clave)).filter(Boolean);
+    auxiliaresUsados.forEach(aux => {
+      aux.composicion.forEach(ingrediente => {
+        const row = apu.materials.find(r => r[0] === ingrediente.desc);
+        assert.ok(row, `${elementDef.id}: falta el renglon para ${ingrediente.desc}`);
+        assert.equal(row[4], ingrediente.desperdicioPct, `${elementDef.id}/${ingrediente.desc}: desperdicioPct debe venir intacto del auxiliar`);
+      });
+    });
+    assert.doesNotThrow(() => calcAPU(apu));
+  });
 });

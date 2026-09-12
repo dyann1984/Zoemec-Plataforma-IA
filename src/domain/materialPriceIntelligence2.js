@@ -23,8 +23,11 @@ import { CACHE_RESULT } from './priceSearchCache.js';
 import { PRICE_SEARCH_DEFERRED, PRICE_SEARCH_SKIPPED_CATEGORY } from './priceSearchBudget.js';
 import { resolveAuthoritativeInput } from './unitAuthority.js';
 
-const RESOURCE_KINDS = Object.freeze(['materials', 'labor', 'equipment', 'seguridad']);
-const PRICE_FIELD_BY_KIND = Object.freeze({ materials: 'precioUnitario', seguridad: 'precioUnitario', labor: 'salarioBase', equipment: 'tarifa' });
+// Exportados (FASE 3, aprendizaje progresivo seguro): server/api-lib/
+// _route-apus.mjs los reusa para saber, por cada renglon de un APU ya
+// guardado, en que campo vive su precio -- nunca se duplica este mapeo.
+export const RESOURCE_KINDS = Object.freeze(['materials', 'labor', 'equipment', 'seguridad']);
+export const PRICE_FIELD_BY_KIND = Object.freeze({ materials: 'precioUnitario', seguridad: 'precioUnitario', labor: 'salarioBase', equipment: 'tarifa' });
 
 function priceDispersionPct(references){
   const alto = (Array.isArray(references) ? references : []).filter(r => r?.match?.verdict === 'ALTO' && Number(r.precioNormalizado) > 0);
@@ -144,7 +147,13 @@ export async function resolveResourcePrice({
       // de ESTE recurso -- nunca se recalcula aqui, solo se transporta.
       regionalConfidence: searchResult?.regionalConfidence ?? null,
       regionalFallbackLevel: searchResult?.regionalFallbackLevel ?? null,
-      ubicacionConsultada: searchResult?.ubicacionConsultada ?? null
+      ubicacionConsultada: searchResult?.ubicacionConsultada ?? null,
+      // FASE 3 (aprendizaje progresivo seguro): evidencia interna agregada y
+      // anonimizada (ver server/api-lib/_priceObservationsStore.mjs), ya
+      // calculada por el servidor -- se transporta tal cual al cache para
+      // que un CACHE_HIT futuro siga trayendo las mismas 5 lineas de
+      // trazabilidad, sin volver a consultarla.
+      regionalIntelligence: searchResult?.regionalIntelligence ?? null
     }, { ttlMs: ttlMsFor ? ttlMsFor(resource) : undefined });
 
     return { cacheResult: cached.result, queryHash: cached.queryHash, origin, deferred: false, ...entry };
@@ -198,6 +207,13 @@ function attachIntelligence2FieldsToRow(row, resolved){
   // ciudad/pais, eso es justo lo que hay que mostrar, no ocultarlo.
   row.regionalConfidence = resolved.regionalConfidence ?? null;
   row.regionalFallbackLevel = resolved.regionalFallbackLevel ?? null;
+  // FASE 3 (aprendizaje progresivo seguro): evidencia INTERNA de ZOEMEC
+  // (observaciones reales de otras organizaciones, agregadas y anonimizadas
+  // -- nunca datos de una sola empresa, ver priceRegionalAggregate.js#MIN_
+  // DISTINCT_ORGS_REGIONAL). Aditivo puro: null cuando no hay bucket usable
+  // todavia, y NUNCA sustituye precioRecomendado/fuente -- solo las 5 lineas
+  // de trazabilidad que la UI puede mostrar junto a la evidencia existente.
+  row.regionalIntelligence = resolved.regionalIntelligence ?? null;
   // region: el contexto de ubicacion (Ciudad, Estado, Pais) que REALMENTE se
   // uso al buscar este precio -- no el proveedor (eso ya vive en
   // fuente.proveedor) ni la ubicacion del proyecto en abstracto, sino la que

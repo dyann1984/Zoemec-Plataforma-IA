@@ -318,6 +318,33 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // FASE 3 (aprendizaje progresivo seguro) -- inteligencia de costos.
+    // Escritura SIEMPRE via server/api-lib/_priceObservationsStore.mjs
+    // (Admin SDK, llamado desde _route-apus.mjs justo despues de guardar un
+    // APU con exito) -- el cliente JAMAS escribe estas dos colecciones
+    // directo, mismo patron que organizations/projects/apus/technicalMemory.
+    //
+    // priceObservations: dato PRIVADO de UNA organizacion (precio real que
+    // esa empresa observo) -- solo esa organizacion (o un super_admin) puede
+    // leerlo, mismo criterio que projects/apus (isActiveOrgMember contra el
+    // organizationId real del documento, nunca un valor que el cliente
+    // pudiera inventar en la query).
+    match /priceObservations/{docId} {
+      allow read: if isSuperAdmin() || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+
+    // priceRegionalAggregates: ANONIMO por diseno -- src/domain/priceRegionalAggregate.js
+    // (assertAggregateNeverLeaksOrgId) garantiza que este documento nunca
+    // contiene un organizationId individual, solo conteos agregados de al
+    // menos 5 organizaciones distintas (MIN_DISTINCT_ORGS_REGIONAL) antes de
+    // `usable:true`. Por eso es seguro que cualquier cuenta autenticada lo
+    // lea directamente, sin necesidad de pasar por un endpoint.
+    match /priceRegionalAggregates/{docId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
     match /{document=**} {
       allow read, write: if isSuperAdmin();
     }

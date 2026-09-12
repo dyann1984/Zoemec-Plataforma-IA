@@ -303,3 +303,70 @@ describe('POST /api/apus action=link-project', () => {
     assert.equal(res.statusCode, 404);
   });
 });
+
+/* FASE 3 (aprendizaje progresivo seguro) -- captura de observaciones de
+   precio al guardar un APU. Necesita un usuario con organizacion real
+   (isEligibleForObservation/recordPriceObservation exigen organizationId,
+   ver server/api-lib/_route-apus.mjs#captureRegionalPriceObservations) --
+   se siembra directo con Admin SDK (bypassa reglas, mismo criterio que
+   seedProject arriba). */
+describe('POST /api/apus action=create -- captura de observaciones de precio (Fase 3)', () => {
+  async function seedOrgMember(db, uid, email, organizationId){
+    await db.doc(`organizations/${organizationId}`).set({ id: organizationId, name: 'Empresa QA Fase 3', status: 'ACTIVE_TRIAL' });
+    await db.doc(`organizations/${organizationId}/members/${uid}`).set({ uid, role: 'company_manager', status: 'active' });
+    await db.doc(`users/${uid}`).set({ uid, email, organizationId, role: 'user', plan: 'Gratis', active: true }, { merge: true });
+  }
+
+  it('un renglon VERIFICADO con proveedor real SI genera una observacion de precio privada de esa organizacion', async () => {
+    const { uid, idToken } = await createUserAndGetIdToken({ email: uniq('obs-verificado') });
+    const db = getAdminDb();
+    await seedOrgMember(db, uid, uniq('org-obs1'), 'org-obs-1');
+    const apu = apuFixture({
+      materials: [{ descripcion: 'Cemento Gris CPC 30R', unidad: 'saco', precioUnitario: 245, fuente: { estado: 'VERIFICADO', proveedor: 'Distribuidora QA', fecha: '2026-01-10' } }],
+    });
+    await call(post(idToken, { action: 'create', id: 'APU-OBS-1', apu }));
+    const snap = await db.collection('priceObservations').where('organizationId', '==', 'org-obs-1').get();
+    assert.equal(snap.size, 1);
+    assert.equal(snap.docs[0].data().conceptoNormalizado, 'cemento gris cpc 30r');
+    assert.equal(snap.docs[0].data().precio, 245);
+  });
+
+  it('un renglon ESTIMADO_IA (sin verificar) NUNCA genera una observacion -- regla central "no entrenar con cualquier dato"', async () => {
+    const { uid, idToken } = await createUserAndGetIdToken({ email: uniq('obs-estimado') });
+    const db = getAdminDb();
+    await seedOrgMember(db, uid, uniq('org-obs2'), 'org-obs-2');
+    const apu = apuFixture({
+      materials: [{ descripcion: 'Varilla 3/8', unidad: 'pza', precioUnitario: 90, fuente: { estado: 'ESTIMADO_IA' } }],
+    });
+    await call(post(idToken, { action: 'create', id: 'APU-OBS-2', apu }));
+    const snap = await db.collection('priceObservations').where('organizationId', '==', 'org-obs-2').get();
+    assert.equal(snap.size, 0);
+  });
+
+  it('guardar una NUEVA version del mismo APU sin cambiar el renglon no duplica la observacion (deduplicacion real)', async () => {
+    const { uid, idToken } = await createUserAndGetIdToken({ email: uniq('obs-dedup') });
+    const db = getAdminDb();
+    await seedOrgMember(db, uid, uniq('org-obs3'), 'org-obs-3');
+    const apu = apuFixture({
+      materials: [{ descripcion: 'Cal hidratada', unidad: 'saco', precioUnitario: 120, fuente: { estado: 'IMPORTADO', proveedor: 'Catalogo QA', fecha: '2026-01-10' } }],
+    });
+    const created = await call(post(idToken, { action: 'create', id: 'APU-OBS-3', apu }));
+    await call(post(idToken, {
+      action: 'save-version', id: 'APU-OBS-3', apu, reason: 'sin cambios reales',
+      expectedParentVersionId: created.body.apu.currentVersion,
+    }));
+    const snap = await db.collection('priceObservations').where('organizationId', '==', 'org-obs-3').get();
+    assert.equal(snap.size, 1);
+  });
+
+  it('un usuario SIN organizacion (individual) no genera ninguna observacion -- no hay empresa privada a la que atribuirla', async () => {
+    const { idToken } = await createUserAndGetIdToken({ email: uniq('obs-individual') });
+    const db = getAdminDb();
+    const apu = apuFixture({
+      materials: [{ descripcion: 'Arena de rio', unidad: 'm3', precioUnitario: 350, fuente: { estado: 'VERIFICADO', proveedor: 'Proveedor QA' } }],
+    });
+    await call(post(idToken, { action: 'create', id: 'APU-OBS-4', apu }));
+    const snap = await db.collection('priceObservations').where('conceptoNormalizado', '==', 'arena de rio').get();
+    assert.equal(snap.size, 0);
+  });
+});

@@ -28,6 +28,8 @@ import { getAdminDb } from './_firebaseAdmin.mjs';
 import { appendAudit } from './_decisionAudit.mjs';
 import { createApuVersion, restoreApuVersion } from '../../src/domain/apuVersioning.js';
 import { loadOrgContext, assertOrgNotExpired, canAccessOrgScopedDoc } from './_orgGuard.mjs';
+import { RESOURCE_KINDS, PRICE_FIELD_BY_KIND } from '../../src/domain/materialPriceIntelligence2.js';
+import { recordPriceObservation } from './_priceObservationsStore.mjs';
 
 const COLLECTION = 'apus';
 const VERSIONS_COLLECTION = 'apuVersions';
@@ -36,6 +38,29 @@ const AUDIT_COLLECTION = 'apuAudit';
 function httpError(status, message){ const e = new Error(message); e.status = status; return e; }
 function versionDocId(apuId, version){
   return `${String(apuId).replace(/[^a-zA-Z0-9_-]/g, '_')}__${String(version)}`;
+}
+
+/* FASE 3 (aprendizaje progresivo seguro): captura observaciones de precio
+   reales justo despues de que un APU se guardo con exito -- SIEMPRE despues
+   de la transaccion (nunca dentro: es un efecto secundario best-effort, ver
+   recordPriceObservation, que ya nunca lanza). Sin organizationId (usuario
+   individual, sin empresa) no hay a que organizacion privada atribuir la
+   observacion -- se omite por completo, comportamiento identico a "esta
+   fase no existe" para cuentas individuales, exactamente igual que el resto
+   del trial empresarial (Fase 1) trata a un usuario sin organizacion. */
+async function captureRegionalPriceObservations({ apuSnapshot, organizationId, apuId, projectId }){
+  if(!organizationId || !apuSnapshot) return;
+  const location = apuSnapshot.ubicacionEstructurada || {};
+  const currency = apuSnapshot.moneda || 'MXN';
+  const jobs = [];
+  for(const kind of RESOURCE_KINDS){
+    const rows = Array.isArray(apuSnapshot[kind]) ? apuSnapshot[kind] : [];
+    const priceField = PRICE_FIELD_BY_KIND[kind];
+    for(const row of rows){
+      jobs.push(recordPriceObservation({ row, kind, priceField, organizationId, location, currency, apuId, projectId }));
+    }
+  }
+  await Promise.all(jobs);
 }
 
 async function handleList(req, res){
@@ -113,6 +138,9 @@ async function handleCreate(req, res){
     });
     return { apu: apuDoc, version: versionDoc };
   });
+  if(result.version){
+    await captureRegionalPriceObservations({ apuSnapshot: result.apu.snapshot, organizationId: result.apu.organizationId, apuId: result.apu.id, projectId: result.apu.projectId });
+  }
   res.status(201).json(result);
 }
 
@@ -171,6 +199,7 @@ async function handleSaveVersion(req, res){
     });
     return { apu: nextApuDoc, version: versionDoc };
   });
+  await captureRegionalPriceObservations({ apuSnapshot: result.apu.snapshot, organizationId: result.apu.organizationId, apuId: result.apu.id, projectId: result.apu.projectId });
   res.status(200).json(result);
 }
 

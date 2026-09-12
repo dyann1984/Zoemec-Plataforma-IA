@@ -541,7 +541,7 @@ function EvidenciaTab({ apu }){
   if(!rows.length) return <div className="zi-empty-box">Este APU no tiene renglones todavía.</div>;
   return <div style={{ overflowX: 'auto' }}>
     <table className="zi-evidence-table">
-      <thead><tr><th>Tipo</th><th>Recurso</th><th>Precio/Salario</th><th>Rendimiento</th><th>Fuente</th><th>Región</th><th>Estado</th></tr></thead>
+      <thead><tr><th>Tipo</th><th>Recurso</th><th>Precio/Salario</th><th>Rendimiento</th><th>Fuente</th><th>Región</th><th>Estado</th><th>Inteligencia regional</th></tr></thead>
       <tbody>{rows.map(({ kind, index, row }) => <tr key={`${kind}-${index}`}>
         <td>{kind}</td><td>{row.descripcion || '—'}</td>
         <td>{money(row.precioUnitario ?? row.salarioBase ?? row.tarifa ?? 0)}</td>
@@ -553,9 +553,23 @@ function EvidenciaTab({ apu }){
             inventado aqui. */}
         <td>{row.fuente?.region ? <>{row.fuente.region}{row.fuente?.nivelCobertura ? <><br/><small>{row.fuente.nivelCobertura}</small></> : ''}</> : '—'}</td>
         <td>{apuDataStateLabel(row.fuente?.estado)}</td>
+        {/* FASE 3 (aprendizaje progresivo seguro): evidencia INTERNA de
+            ZOEMEC (observaciones reales de OTRAS organizaciones, agregadas y
+            anonimizadas -- nunca datos de una sola empresa, ver
+            src/domain/priceRegionalAggregate.js). Aditivo puro: una columna
+            mas junto a la evidencia ya existente, nunca la reemplaza. '—'
+            cuando todavia no hay suficientes organizaciones distintas
+            (menos de 5) para que el bucket sea `usable`. */}
+        <td>{row.regionalIntelligence ? <RegionalIntelligenceCell data={row.regionalIntelligence} /> : '—'}</td>
       </tr>)}</tbody>
     </table>
   </div>;
+}
+
+function RegionalIntelligenceCell({ data }){
+  return <small className="zi-regional-intel" title={data.lines.join('\n')}>
+    {data.lines.map((line, i) => <React.Fragment key={i}>{line}{i < data.lines.length - 1 ? <br /> : null}</React.Fragment>)}
+  </small>;
 }
 
 function HistorialTab({ history, onRestore }){

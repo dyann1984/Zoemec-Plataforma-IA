@@ -47,6 +47,8 @@ import { createPriceSearchCache, CACHE_RESULT, PRICE_CACHE_TTL_MS } from '../../
 import { searchMarketReferences } from './_priceIntelligenceCore.mjs';
 import { derivePriceStatus } from '../../src/domain/priceStatus.js';
 import { computePriceConfidence } from '../../src/domain/priceConfidence.js';
+import { fold } from '../../src/domain/priceObservation.js';
+import { lookupRegionalIntelligence } from './_priceObservationsStore.mjs';
 
 const USAGE_COLLECTION = 'priceIntelligenceUsage';
 const DEFAULT_MAX_DAILY_SEARCHES = Number(process.env.PRICE_INTELLIGENCE_MAX_DAILY_SEARCHES) || 200;
@@ -119,6 +121,19 @@ export async function searchMarketReferencesWithCache({
   const cache = createPriceSearchCache({ store: store || createFirestorePriceCacheStore(database), defaultTtlMs: PRICE_CACHE_TTL_MS.NORMAL });
   const fingerprintInput = { normalizedDescription: description, technicalSpecification, unit, region: region || location, country, state, city, currency, tenantScope };
 
+  // FASE 3 (aprendizaje progresivo seguro): evidencia interna de ZOEMEC
+  // (observaciones reales de otras organizaciones, agregadas y anonimizadas
+  // -- ver src/domain/priceRegionalAggregate.js), consultada UNA sola vez
+  // por request y adjuntada a CUALQUIER camino de retorno (cache hit, miss,
+  // o presupuesto agotado) -- es evidencia ADITIVA, nunca sustituye
+  // precioRecomendado ni depende de si hubo o no busqueda web nueva.
+  // lookupRegionalIntelligence nunca lanza (degradacion segura); null cuando
+  // no hay ningun bucket usable (< 5 organizaciones distintas) para esta
+  // combinacion.
+  const regionalIntelligence = await lookupRegionalIntelligence({
+    db: database, conceptoNormalizado: fold(description), unidadNormalizada: fold(unit), moneda: currency, country, state, city,
+  });
+
   const lookup = await cache.lookup(fingerprintInput);
   if(lookup.result === CACHE_RESULT.HIT){
     const entry = lookup.entry;
@@ -127,7 +142,7 @@ export async function searchMarketReferencesWithCache({
       precioRecomendado: entry.selectedReference?.precioNormalizado ?? null,
       nivelEvidencia: entry.priceStatus === 'VERIFIED_MARKET' ? 'MERCADO' : entry.priceStatus === 'MARKET_REFERENCE' ? 'REFERENCIAL' : 'ESTIMADO_IA',
       regionalConfidence: entry.regionalConfidence ?? null, regionalFallbackLevel: entry.regionalFallbackLevel ?? null,
-      ubicacionConsultada: entry.ubicacionConsultada ?? null,
+      ubicacionConsultada: entry.ubicacionConsultada ?? null, regionalIntelligence,
       cacheStatus: CACHE_RESULT.HIT, webSearchPerformed: false, cacheWriteStatus: CACHE_WRITE_STATUS.NOT_APPLICABLE,
       queryHash: lookup.queryHash, searchedAt: entry.searchedAt, expiresAt: entry.expiresAt
     };
@@ -143,12 +158,12 @@ export async function searchMarketReferencesWithCache({
     return {
       fichaTecnica: {}, referencias: [], precioRecomendado: null, nivelEvidencia: 'ESTIMADO_IA',
       cacheStatus, webSearchPerformed: false, cacheWriteStatus: CACHE_WRITE_STATUS.NOT_APPLICABLE,
-      deferred: true, reason: 'DAILY_SEARCH_BUDGET_EXHAUSTED',
+      deferred: true, reason: 'DAILY_SEARCH_BUDGET_EXHAUSTED', regionalIntelligence,
       queryHash: lookup.queryHash
     };
   }
 
-  const searchResult = await searchImpl({ description, unit, kind, location: region || location, country, state, city, dateBase, categoriaLaboral });
+  const searchResult = await searchImpl({ description, unit, kind, location: region || location, country, state, city, dateBase, categoriaLaboral, regionalIntelligence });
   const priceStatus = derivePriceStatus({ price: searchResult.precioRecomendado ?? 0, references: searchResult.referencias || [] });
   const confidence = computePriceConfidence({ references: searchResult.referencias || [] });
   const selectedReference = (searchResult.referencias || []).find(r => r?.match?.verdict === 'ALTO') || null;
@@ -170,7 +185,7 @@ export async function searchMarketReferencesWithCache({
   }
 
   return {
-    ...searchResult, cacheStatus, webSearchPerformed: true, cacheWriteStatus,
+    ...searchResult, cacheStatus, webSearchPerformed: true, cacheWriteStatus, regionalIntelligence,
     queryHash: entry.queryHash, searchedAt: entry.searchedAt, expiresAt: entry.expiresAt
   };
 }

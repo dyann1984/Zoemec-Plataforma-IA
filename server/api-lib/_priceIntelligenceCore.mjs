@@ -92,7 +92,7 @@ function tipoTextoPara(kind){
   return 'precio unitario de venta de este material de construccion';
 }
 
-export async function searchMarketReferences({ description = '', unit = '', kind = 'materials', location = '', country = '', state = '', city = '', dateBase = '', categoriaLaboral = '' } = {}){
+export async function searchMarketReferences({ description = '', unit = '', kind = 'materials', location = '', country = '', state = '', city = '', dateBase = '', categoriaLaboral = '', regionalIntelligence = null } = {}){
   if(!process.env.OPENAI_API_KEY) throw new Error('Falta OPENAI_API_KEY en Vercel.');
   const desc = String(description || '').trim();
   if(!desc) throw new Error('Falta la descripcion del insumo a consultar.');
@@ -115,7 +115,19 @@ export async function searchMarketReferences({ description = '', unit = '', kind
   const locationContext = structuredLocation || location;
   const isMexico = !country || country === MEXICO_CODE;
 
+  // FASE 3 (aprendizaje progresivo seguro): evidencia interna de ZOEMEC ya
+  // agregada y anonimizada (src/domain/priceRegionalAggregate.js, minimo 5
+  // organizaciones distintas antes de ser `usable`) -- se ofrece como
+  // CONTEXTO de cruce para la IA, nunca reemplaza la busqueda web real que
+  // sigue ocurriendo siempre en este mismo paso. Ausente (null) = sin
+  // evidencia interna todavia, comportamiento identico al de antes de esta
+  // fase.
+  const regionalIntelligenceNote = regionalIntelligence
+    ? `\nZOEMEC ya tiene evidencia interna propia para este insumo: mediana $${regionalIntelligence.mediana} (${regionalIntelligence.nObservaciones} observaciones reales de ${regionalIntelligence.nOrganizaciones} organizaciones distintas, confianza ${regionalIntelligence.confianza}, rango ${regionalIntelligence.rango?.minimo}-${regionalIntelligence.rango?.maximo}). Usala como referencia de cruce -- si tus fuentes web difieren mucho, dilo, pero sigue reportando tus propias fuentes reales.\n`
+    : '';
+
   const prompt = `Vas a resolver el precio de un insumo de construccion en 2 pasos, en UNA sola respuesta JSON.
+${regionalIntelligenceNote}
 
 PASO 1 -- FICHA TECNICA del recurso, a partir de esta descripcion:
 "${desc}"${unit ? ` (unidad requerida para el calculo: ${unit})` : ''}

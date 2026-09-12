@@ -55,6 +55,11 @@ function makeFakeVideoFile(){
 
 function QaHarness(){
   const [authState, setAuthState] = useState('signing-in');
+  // P0 (persistencia de galeria multimedia): "mounted" simula cambiar de
+  // pestana/modulo -- desmonta PhoneScanSurveyForm por completo y lo vuelve
+  // a montar. Si la foto ya subida reaparece SOLA (sin volver a subirla),
+  // evidenceItems + la reconstruccion de galeria funcionan de verdad.
+  const [mounted, setMounted] = useState(true);
 
   useEffect(() => {
     (async () => {
@@ -77,8 +82,12 @@ function QaHarness(){
       <button onClick={() => injectFileIntoInput('input[type=file][accept="video/*"]', makeFakeVideoFile())}>
         QA: generar video de prueba y subirlo
       </button>
+      <button onClick={() => setMounted(m => !m)}>
+        {mounted ? 'P0: Simular cambio de pestaña (desmontar wizard)' : 'P0: Volver (remontar wizard)'}
+      </button>
     </div>}
-    {authState === 'ready' && <PhoneScanSurveyForm projectId="QA-PROJECT" onCancel={() => {}} onSave={(survey) => console.log('QA onSave', survey)} />}
+    {authState === 'ready' && mounted && <PhoneScanSurveyForm projectId="QA-PROJECT" organizationId={null} onCancel={() => {}} onSave={(survey) => console.log('QA onSave', survey)} />}
+    {authState === 'ready' && !mounted && <p className="muted">(wizard desmontado -- como si hubieras cambiado de módulo)</p>}
   </div>;
 }
 

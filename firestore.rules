@@ -213,6 +213,42 @@ service cloud.firestore {
       allow delete: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
     }
 
+    // Fase P0 (persistencia real de evidencia de Levantamiento IA, "el
+    // archivo existe en Storage pero desaparece visualmente"): metadata de
+    // CADA foto/video, escrita en cuanto termina de subir a Storage --
+    // independiente de si el usuario llega a guardar el levantamiento
+    // completo (Survey.scanMedia solo se escribe hasta el "Guardar" final).
+    // Mismo patron que library/{docId} arriba: cliente SI escribe directo
+    // (nunca el blob, solo storagePath+metadata), ownerUid nunca se puede
+    // pisar, y los campos de identidad (surveyId/storagePath/kind) quedan
+    // inmutables despues de creados -- solo `status`/`updatedAt` cambian
+    // (uploading -> uploaded/error). Lectura: dueno, un companero de la
+    // MISMA organizacion (equipo compartido, igual criterio que projects/
+    // apus), o super_admin.
+    match /evidenceItems/{itemId} {
+      /* "allow read" cubre tanto get como list. Para list, el motor de
+         reglas no puede garantizar que resource.data traiga cada campo
+         resuelto sin costo -- acceder con punto (resource.data.ownerUid)
+         revienta con "Property ownerUid is undefined on object" incluso
+         cuando el documento SI tiene ese campo (confirmado leyendo el doc
+         directo via REST admin durante el diagnostico de este bug). La
+         forma segura es .get(campo, default), igual criterio que ya se
+         usaba aqui mismo para organizationId. */
+      allow read: if isSuperAdmin()
+        || (signedIn() && resource.data.get('ownerUid', null) == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.get('organizationId', null)));
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.uploadedBy == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.surveyId == resource.data.surveyId
+        && request.resource.data.storagePath == resource.data.storagePath
+        && request.resource.data.kind == resource.data.kind;
+      allow delete: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+    }
+
     match /visual_requests/{docId} {
       allow read: if isSuperAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
       allow create: if signedIn() && request.resource.data.uid == request.auth.uid;

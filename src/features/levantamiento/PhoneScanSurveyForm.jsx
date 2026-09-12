@@ -18,10 +18,13 @@
    survey se guarda con spaces:[] y status:DRAFT, igual criterio que
    ManualSurveyForm/SurveyDetail usan para "sin espacios todavia". */
 import { useEffect, useRef, useState } from 'react';
+import { getDownloadURL, ref } from 'firebase/storage';
 import { useI18n } from '../../i18n/I18nContext.jsx';
-import { auth } from '../../firebase.js';
+import { auth, storage } from '../../firebase.js';
 import { uid } from '../../utils/id.js';
 import { SURVEY_SOURCE_TYPE, SURVEY_STATUS, makeEmptySurvey } from '../../domain/levantamientoSchema.js';
+import { recordEvidenceItem, fetchEvidenceItemsForSurvey, deleteEvidenceItem } from '../../services/evidenceItemsApi.js';
+import { EVIDENCE_KIND } from '../../domain/evidenceItem.js';
 import { recomputeSurvey } from '../../lib/levantamientoCalc.js';
 import {
   SCAN_MEDIA_KIND, MAX_SCAN_DURATION_SECONDS, MAX_SCAN_VIDEO_BYTES, MAX_SCAN_PHOTO_BYTES,
@@ -54,7 +57,7 @@ function extForMimeType(mimeType, kind){
   return 'webm';
 }
 
-export function PhoneScanSurveyForm({ projectId, onCancel, onSave }){
+export function PhoneScanSurveyForm({ projectId, organizationId = null, onCancel, onSave }){
   const { t: tr } = useI18n();
   const user = auth.currentUser ? { uid: auth.currentUser.uid } : null;
   // P0 (correccion de regresion, "cargar evidencia -> cambiar pestana ->
@@ -71,7 +74,28 @@ export function PhoneScanSurveyForm({ projectId, onCancel, onSave }){
   // RECIENTE (un solo slot) es una limitacion deliberada, igual criterio
   // que el borrador de APU (ver main.jsx).
   const [pendingDraft, setPendingDraft] = useDraftAutosave(user, 'phonescan', 'pending', null);
+  // isResumingRef: capturado UNA sola vez, en el mismo instante en que se
+  // decide si surveyIdRef.current viene de un intento anterior o es nuevo
+  // -- necesario para el efecto de restauracion de abajo (leer
+  // pendingDraft.surveyId de nuevo ahi, tras que el usuario ya empezo a
+  // escribir, podria dar un falso positivo).
+  const isResumingRef = useRef(Boolean(pendingDraft?.surveyId));
   const surveyIdRef = useRef(pendingDraft?.surveyId || ('LEV-' + uid()));
+
+  /* P0 (cierre real de "el archivo existe en Storage pero desaparece
+     visualmente"): antes, surveyId solo se guardaba en el borrador cuando
+     el usuario escribia nombre/descripcion (ver setFormDraft) -- eso deja
+     una foto/video ya subido en Storage SIN ningun surveyId persistido si
+     el usuario cambia de modulo ANTES de llegar a "Revisar", asi que el
+     efecto de restauracion de abajo nunca tiene un surveyId con el cual
+     reconstruir la galeria. Sembrar el borrador con surveyIdRef.current en
+     cuanto este wizard se monta (una sola vez, solo si no se esta
+     reanudando uno ya existente) garantiza que exista un surveyId
+     persistido ANTES de que el usuario capture nada. */
+  useEffect(() => {
+    if(!isResumingRef.current) setPendingDraft(prev => ({ ...(prev || {}), surveyId: surveyIdRef.current }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -92,15 +116,10 @@ export function PhoneScanSurveyForm({ projectId, onCancel, onSave }){
   const [recordingElapsed, setRecordingElapsed] = useState(0);
   const [captureError, setCaptureError] = useState(null);
   const [dragActive, setDragActive] = useState(false);
-  const [items, setItems] = useState([]); // {localId,kind,blob,previewUrl,sizeBytes,durationSeconds,mimeType,status,progress,storagePath,errorReason} -- nunca serializable, no autoguardado (ver nota P0 mas arriba)
+  const [items, setItems] = useState([]); // {localId,kind,blob,previewUrl,sizeBytes,durationSeconds,mimeType,status,progress,storagePath,errorReason} -- el blob nunca es serializable, pero cada item YA SUBIDO tiene su metadata espejo en evidenceItems (ver mas abajo), que si sobrevive un desmontaje completo.
   // nombre/descripcion/estilo son lo unico de este wizard que es JSON-
   // serializable y barato de restaurar -- viven DENTRO del mismo borrador
-  // 'pending' que ya guarda el surveyId (ver arriba). Los `items` (fotos/
-  // video ya subidos) NO se restauran todavia si el wizard llega a
-  // desmontarse por completo (limite conocido, ver reporte) -- sus blobs no
-  // son serializables y persistirlos exigiria resolver cada uno por
-  // download URL al reabrir; ya quedan a salvo en Storage de todas formas,
-  // solo no reaparecen solos en este wizard si se cierra sin guardar.
+  // 'pending' que ya guarda el surveyId (ver arriba).
   const formDraft = pendingDraft;
   const setFormDraft = (updater) => setPendingDraft(prev => {
     const base = prev || { surveyId: surveyIdRef.current };
@@ -120,6 +139,37 @@ export function PhoneScanSurveyForm({ projectId, onCancel, onSave }){
   const setStylePreferences = (value) => setFormDraft(prev => ({ ...(prev || {}), stylePreferences: value }));
   const [nameError, setNameError] = useState(false);
   const photoInputRef = useRef(null);
+
+  /* P0 (cierre real de "el archivo existe en Storage pero desaparece
+     visualmente"): si este montaje reutiliza un surveyId de un intento
+     anterior (isResumingRef, ver arriba), reconstruye `items` desde
+     evidenceItems -- Firestore metadata -> Storage URL -> galeria, exactamente
+     el flujo pedido. Cada item restaurado nace SIN blob (no sobrevive un
+     desmontaje) pero con status:'uploaded' real y su propio storagePath, asi
+     que "Guardar" y "Eliminar" funcionan igual que con un item recien
+     capturado en esta misma sesion. Corre UNA sola vez por montaje. */
+  useEffect(() => {
+    if(!isResumingRef.current) return;
+    const ownerUid = auth.currentUser?.uid;
+    if(!ownerUid) return;
+    let alive = true;
+    fetchEvidenceItemsForSurvey(surveyIdRef.current, ownerUid).then(async (restored) => {
+      if(!alive || !restored.length) return;
+      const rebuilt = await Promise.all(restored.map(async (evidence) => {
+        const previewUrl = await getDownloadURL(ref(storage, evidence.storagePath)).catch(() => null);
+        if(!previewUrl) return null; // el objeto ya no existe en Storage -- no se reconstruye un item roto
+        return {
+          localId: evidence.id, kind: evidence.kind, blob: null, previewUrl,
+          sizeBytes: evidence.sizeBytes, durationSeconds: evidence.durationSeconds, mimeType: evidence.mimeType,
+          status: 'uploaded', progress: 1, storagePath: evidence.storagePath, errorReason: null
+        };
+      }));
+      const valid = rebuilt.filter(Boolean);
+      if(alive && valid.length) setItems(list => [...list, ...valid.filter(v => !list.some(it => it.localId === v.localId))]);
+    });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* startCamera: FIX "cámara negra" -- antes, getUserMedia se disparaba
      automaticamente al montar el componente, y el resultado (stream) se
@@ -194,6 +244,14 @@ export function PhoneScanSurveyForm({ projectId, onCancel, onSave }){
     }
     if(result.ok){
       setItems(list => list.map(it => it.localId === localId ? { ...it, status: 'uploaded', storagePath: result.storagePath, sizeBytes: result.sizeBytes } : it));
+      // P0: metadata espejo en Firestore EN CUANTO termina de subir -- best
+      // effort, nunca bloquea ni revierte la subida real si esto falla (ver
+      // recordEvidenceItem). Es lo que permite reconstruir la galeria si el
+      // wizard se desmonta ANTES de que el usuario llegue a "Guardar".
+      recordEvidenceItem({
+        id: localId, surveyId: surveyIdRef.current, projectId, organizationId, ownerUid: currentUid,
+        kind, storagePath: result.storagePath, mimeType, sizeBytes: result.sizeBytes, durationSeconds, status: 'uploaded'
+      });
     } else {
       setItems(list => list.map(it => it.localId === localId ? { ...it, status: 'error', errorReason: result.reason } : it));
     }
@@ -301,6 +359,7 @@ export function PhoneScanSurveyForm({ projectId, onCancel, onSave }){
     setItems(list => list.filter(it => it.localId !== localId));
     if(item.status === 'uploaded'){
       import('../../lib/levantamientoMediaUpload.js').then(m => m.deleteScanMedia(item.storagePath));
+      deleteEvidenceItem(localId);
     } else if(item.status === 'uploading'){
       removedIdsRef.current.add(localId);
     }
@@ -325,6 +384,7 @@ export function PhoneScanSurveyForm({ projectId, onCancel, onSave }){
     items.forEach(item => {
       if(item.status === 'uploaded'){
         import('../../lib/levantamientoMediaUpload.js').then(m => m.deleteScanMedia(item.storagePath));
+        deleteEvidenceItem(item.localId);
       } else if(item.status === 'uploading'){
         removedIdsRef.current.add(item.localId);
       }

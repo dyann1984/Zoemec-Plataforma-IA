@@ -9,8 +9,9 @@ import { useI18n } from '../../i18n/I18nContext.jsx';
 import { SURVEY_STATUS, SURVEY_SOURCE_TYPE, makeEmptySpace } from '../../domain/levantamientoSchema.js';
 import { SCAN_MEDIA_KIND } from '../../domain/levantamientoMedia.js';
 import { aggregateSurveyTotals, recomputeSurvey } from '../../lib/levantamientoCalc.js';
-import { storage } from '../../firebase.js';
+import { auth, storage } from '../../firebase.js';
 import { ConstructionProposalPanel } from './ConstructionProposalPanel.jsx';
+import { fetchEvidenceItemsForSurvey } from '../../services/evidenceItemsApi.js';
 
 const STATUS_I18N_KEY = {
   [SURVEY_STATUS.DRAFT]: 'statusDraft',
@@ -59,11 +60,33 @@ export function SurveyDetail({ survey, onBack, onChange, onSendToApu, currentUse
   const statusLabel = tr(`levantamiento.${STATUS_I18N_KEY[survey.status] || 'statusDraft'}`);
   const activeSpace = survey.spaces.find(s => s.id === activeSpaceId) || survey.spaces[0] || null;
   const scanMedia = survey.scanMedia || [];
+  // P0 (cierre real de "el archivo existe en Storage pero desaparece
+  // visualmente"): evidenceItems (metadata escrita EN CUANTO cada foto/
+  // video termina de subir, ver PhoneScanSurveyForm.jsx) es la fuente
+  // adicional/mas confiable -- survey.scanMedia solo se llena hasta el
+  // "Guardar" final del wizard, asi que un archivo subido antes de eso
+  // podia quedar huerfano de metadata. Se mezclan por storagePath (unico
+  // campo que de verdad comparten las dos formas -- los `id` NO coinciden,
+  // cada uno se genera por separado) -- nunca se duplica un mismo archivo.
+  const [extraEvidence, setExtraEvidence] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    const ownerUid = auth.currentUser?.uid;
+    if(ownerUid) fetchEvidenceItemsForSurvey(survey.id, ownerUid).then(list => { if(alive) setExtraEvidence(list); });
+    return () => { alive = false; };
+  }, [survey.id]);
+  const knownPaths = new Set(scanMedia.map(m => m.storagePath));
+  const galleryItems = [
+    ...scanMedia,
+    ...extraEvidence.filter(e => !knownPaths.has(e.storagePath)).map(e => ({
+      id: e.id, kind: e.kind, storagePath: e.storagePath, mimeType: e.mimeType, sizeBytes: e.sizeBytes, durationSeconds: e.durationSeconds
+    }))
+  ];
   // Fase 3 (Propuesta con IA): la pestana solo aparece si hay evidencia real
   // que analizar -- foto/video capturados, o un modelo 3D importado. Un
   // Survey manual sin ninguna de las dos no tiene nada que mandarle a la IA.
-  const hasEvidence = scanMedia.length > 0 || survey.sourceType === SURVEY_SOURCE_TYPE.IMPORT_3D;
-  const tabs = [...BASE_TABS, ...(scanMedia.length ? ['multimedia'] : []), ...(hasEvidence ? ['propuesta'] : [])];
+  const hasEvidence = galleryItems.length > 0 || survey.sourceType === SURVEY_SOURCE_TYPE.IMPORT_3D;
+  const tabs = [...BASE_TABS, ...(galleryItems.length ? ['multimedia'] : []), ...(hasEvidence ? ['propuesta'] : [])];
 
   /* La downloadURL nunca se persiste (ver hallazgo del limite de 950KB de
      saveCloud en el plan de Fase 2B) -- se resuelve al vuelo solo cuando el
@@ -73,16 +96,16 @@ export function SurveyDetail({ survey, onBack, onChange, onSendToApu, currentUse
      indica en vez de romper el resto de la pestana. */
   useEffect(() => {
     if(activeTab !== 'multimedia' && activeTab !== 'propuesta') return;
-    scanMedia.forEach(item => {
+    galleryItems.forEach(item => {
       if(mediaUrls[item.id] !== undefined) return;
       getDownloadURL(ref(storage, item.storagePath))
         .then(url => setMediaUrls(prev => ({ ...prev, [item.id]: url })))
         .catch(() => setMediaUrls(prev => ({ ...prev, [item.id]: null })));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, survey.id]);
+  }, [activeTab, survey.id, extraEvidence]);
 
-  const photoImageUrls = scanMedia
+  const photoImageUrls = galleryItems
     .filter(item => item.kind === SCAN_MEDIA_KIND.PHOTO)
     .map(item => mediaUrls[item.id])
     .filter(Boolean);
@@ -190,10 +213,10 @@ export function SurveyDetail({ survey, onBack, onChange, onSendToApu, currentUse
 
     {activeTab === 'multimedia' && <div className="panel">
       <div className="phonescan-disclaimer">{tr('levantamiento.phoneScanDisclaimer')}</div>
-      {!scanMedia.length
+      {!galleryItems.length
         ? <p className="muted">{tr('levantamiento.phoneScanNoMediaMsg')}</p>
         : <div className="phonescan-thumb-grid">
-          {scanMedia.map(item => {
+          {galleryItems.map(item => {
             const url = mediaUrls[item.id];
             return <div key={item.id} className="phonescan-thumb">
               {url === undefined

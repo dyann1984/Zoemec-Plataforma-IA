@@ -6,7 +6,7 @@ import { useI18n } from '../../i18n/I18nContext.jsx';
 import { SURVEY_IMPORT_FORMATS, isImportFormatAvailable } from '../../domain/levantamientoImporters.js';
 import { PHONE_SCAN_AVAILABLE } from '../../domain/levantamientoMedia.js';
 
-export function NewSurveyModal({ projectId, onClose, onCreate }){
+export function NewSurveyModal({ projectId, organizationId = null, onClose, onCreate }){
   const { t: tr } = useI18n();
   const [mode, setMode] = useState(null); // null (elegir metodo) | 'manual' | 'import3d' | 'phonescan'
 
@@ -17,7 +17,7 @@ export function NewSurveyModal({ projectId, onClose, onCreate }){
     return <Import3DSurveyForm projectId={projectId} onCancel={() => setMode(null)} onSave={onCreate} />;
   }
   if(mode === 'phonescan'){
-    return <PhoneScanSurveyForm projectId={projectId} onCancel={() => setMode(null)} onSave={onCreate} />;
+    return <PhoneScanSurveyForm projectId={projectId} organizationId={organizationId} onCancel={() => setMode(null)} onSave={onCreate} />;
   }
 
   const importFormatsLabel = SURVEY_IMPORT_FORMATS.map(f => f.label).join(', ');

@@ -11,7 +11,7 @@ import { SURVEY_SOURCE_TYPE } from '../../domain/levantamientoSchema.js';
    al proyecto activo (useProjectScoped en main.jsx, mismo patron que
    apus/budgets/catalog) -- este componente no filtra por proyecto, solo
    consume la vista ya aislada. */
-export function LevantamientoModule({ surveys, setSurveys, activeProjectId, onNeedProject, onSendToApu, currentUserEmail }){
+export function LevantamientoModule({ surveys, setSurveys, activeProjectId, onNeedProject, onSendToApu, currentUserEmail, organizationId = null }){
   const { t: tr } = useI18n();
   const list = surveys || [];
   const [showNew, setShowNew] = useState(false);
@@ -66,6 +66,6 @@ export function LevantamientoModule({ surveys, setSurveys, activeProjectId, onNe
     {list.length
       ? <div className="survey-grid">{list.map(s => <LevantamientoCard key={s.id} survey={s} onOpen={() => openSurveyAt(s.id, 'datos')} onOpen3d={() => openSurveyAt(s.id, 'vista3d')} onRemove={() => removeSurvey(s.id)} />)}</div>
       : <div className="panel"><EmptyState icon="bim" title={tr('levantamiento.emptyTitle')} text={tr('levantamiento.emptyText')} actionLabel={tr('levantamiento.emptyAction')} onAction={openNew} /></div>}
-    {showNew && <NewSurveyModal projectId={activeProjectId} onClose={() => setShowNew(false)} onCreate={addSurvey} />}
+    {showNew && <NewSurveyModal projectId={activeProjectId} organizationId={organizationId} onClose={() => setShowNew(false)} onCreate={addSurvey} />}
   </section>;
 }

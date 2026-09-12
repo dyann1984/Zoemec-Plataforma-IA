@@ -52,6 +52,32 @@ export function addStandardLighting(scene){
   scene.add(dir);
 }
 
+/* INCIDENTE 3 (visor 3D) -- variante para modelos IMPORTADOS de tamano
+   arbitrario (0.1m a 500m+, ver Model3DPreview.jsx). addStandardLighting
+   (arriba) usa una posicion de luz FIJA (5,10,5) -- correcta para el tamano
+   "tipico" de un Space dibujado a mano (unos pocos metros, siempre el mismo
+   codigo lo genera), pero inutil para un archivo importado: en un modelo de
+   200m esa luz practicamente coincide con el origen (ilumina un punto, deja
+   el resto en sombra), y en uno de 0.05m queda kilometros de distancia
+   relativa (funciona, pero por casualidad). Aqui la posicion/alcance de la
+   luz escala con maxDimension (el mismo valor que ya usa Model3DPreview para
+   encuadrar la camara), y se agrega una luz de relleno en la direccion
+   opuesta (fillLight, menor intensidad) para que ninguna cara quede 100% sin
+   luz solo por la orientacion con la que el modelo llego -- reduce el
+   sintoma "oscuros" para cualquier orientacion, no solo la que la luz
+   principal favorece. NUNCA sustituye a addStandardLighting para los
+   visores existentes (Survey3DViewer/Technical3DViewer siguen exactamente
+   igual, cero riesgo de regresion ahi). */
+export function addImportedModelLighting(scene, maxDimension = 6){
+  scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+  const key = new THREE.DirectionalLight(0xffffff, 0.9);
+  key.position.set(maxDimension, maxDimension * 1.5, maxDimension);
+  scene.add(key);
+  const fill = new THREE.DirectionalLight(0xffffff, 0.4);
+  fill.position.set(-maxDimension, maxDimension * 0.5, -maxDimension);
+  scene.add(fill);
+}
+
 export function createGridHelper(size = 20, divisions = 20){
   return new THREE.GridHelper(size, divisions, 0xbbbbbb, 0xdddddd);
 }

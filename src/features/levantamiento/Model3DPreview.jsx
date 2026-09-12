@@ -13,13 +13,35 @@
    queda fuera de cuadro si la camara apunta a (0,0,0)) como algo encontrado
    en QA; aqui se evita repetirlo. */
 import { useEffect, useRef } from 'react';
+import * as THREE from 'three';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 import {
   createRenderer, createScene, createPerspectiveCamera, createOrbitControls,
-  addStandardLighting, createGridHelper, CAMERA_VIEW_PRESETS, applyCameraView
+  addImportedModelLighting, createGridHelper, CAMERA_VIEW_PRESETS, applyCameraView
 } from '../../lib/three3dSceneKit.js';
 
-export function Model3DPreview({ object3D, boundingBox }){
+/* INCIDENTE 3 (visor 3D) -- "rotados/invertidos": el formato OBJ no declara
+   cual eje es "arriba" (ver applyDefaultUpAxisCorrection en
+   levantamientoModelLoader.js, que ya aplica la convencion Z-up->Y-up mas
+   comun por defecto). Cuando esa convencion no aplica al archivo real, el
+   usuario necesita una forma de corregirlo el mismo, sin editor externo --
+   estos botones rotan el modelo 90 grados por eje. `onBoundingBoxChange`
+   (opcional) permite que el wizard que lo use recalcule dimensiones/escala
+   con el bounding box YA rotado -- sin esto, confirmar escala contra una
+   caja que ya no corresponde a la orientacion visible seria el mismo bug
+   "deformados" con otro disfraz. */
+function recomputeBoundingBox(object3D){
+  const box = new THREE.Box3().setFromObject(object3D);
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  return {
+    min: { x: box.min.x, y: box.min.y, z: box.min.z },
+    max: { x: box.max.x, y: box.max.y, z: box.max.z },
+    size: { x: size.x, y: size.y, z: size.z }
+  };
+}
+
+export function Model3DPreview({ object3D, boundingBox, onBoundingBoxChange = null }){
   const { t: tr } = useI18n();
   const mountRef = useRef(null);
   const cameraRef = useRef(null);
@@ -58,7 +80,7 @@ export function Model3DPreview({ object3D, boundingBox }){
     controls.target.set(center.x, center.y, center.z);
     controls.minDistance = Math.max(0.1, maxDimension * 0.1);
     controls.maxDistance = maxDimension * 10;
-    addStandardLighting(scene);
+    addImportedModelLighting(scene, maxDimension);
     scene.add(createGridHelper(Math.max(20, maxDimension * 2), 20));
     scene.add(object3D);
 
@@ -89,6 +111,29 @@ export function Model3DPreview({ object3D, boundingBox }){
     }, center);
   };
 
+  /* rotateModel: correccion MANUAL de orientacion (ver comentario arriba de
+     este archivo) -- rota el Object3D real 90 grados sobre el eje elegido,
+     recalcula su bounding box (rotar cambia cual dimension es "ancho" y
+     cual es "alto") y RECENTRA la camara/OrbitControls al nuevo centro --
+     sin esto, tras rotar el modelo podria quedar fuera de cuadro (el pivote
+     de rotacion es el origen local del objeto, no necesariamente el centro
+     visual). onBoundingBoxChange informa al wizard que lo use (Import3DSurveyForm)
+     para que la escala/Space que se derive despues use las dimensiones
+     REALES ya corregidas, nunca las de antes de rotar. */
+  const rotateModel = (axis) => {
+    if(!object3D) return;
+    if(axis === 'x') object3D.rotateX(Math.PI / 2);
+    else if(axis === 'y') object3D.rotateY(Math.PI / 2);
+    else object3D.rotateZ(Math.PI / 2);
+    object3D.updateMatrixWorld(true);
+    const nextBox = recomputeBoundingBox(object3D);
+    const nextCenter = {
+      x: (nextBox.min.x + nextBox.max.x) / 2, y: (nextBox.min.y + nextBox.max.y) / 2, z: (nextBox.min.z + nextBox.max.z) / 2
+    };
+    if(controlsRef.current) controlsRef.current.target.set(nextCenter.x, nextCenter.y, nextCenter.z);
+    onBoundingBoxChange?.(nextBox);
+  };
+
   return <div className="model3d-preview">
     <div className="visual-actions" style={{ marginBottom: 6 }}>
       <button type="button" className="soft" onClick={() => setView(CAMERA_VIEW_PRESETS.isometric)}>{tr('levantamiento.view3dReset')}</button>
@@ -96,6 +141,12 @@ export function Model3DPreview({ object3D, boundingBox }){
       <button type="button" className="soft" onClick={() => setView(CAMERA_VIEW_PRESETS.front)}>{tr('levantamiento.view3dFront')}</button>
       <button type="button" className="soft" onClick={() => setView(CAMERA_VIEW_PRESETS.isometric)}>{tr('levantamiento.view3dIso')}</button>
     </div>
+    {onBoundingBoxChange && <div className="visual-actions" style={{ marginBottom: 6 }}>
+      <span className="muted" style={{ fontSize: '.72rem', alignSelf: 'center' }}>{tr('levantamiento.view3dRotateHint')}</span>
+      <button type="button" className="soft" onClick={() => rotateModel('x')}>{tr('levantamiento.view3dRotateX')}</button>
+      <button type="button" className="soft" onClick={() => rotateModel('y')}>{tr('levantamiento.view3dRotateY')}</button>
+      <button type="button" className="soft" onClick={() => rotateModel('z')}>{tr('levantamiento.view3dRotateZ')}</button>
+    </div>}
     <div ref={mountRef} style={{ width: '100%', minHeight: 360 }} />
   </div>;
 }

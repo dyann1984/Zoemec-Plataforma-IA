@@ -58,7 +58,41 @@ function recomputeBoundingBox(object3D){
   };
 }
 
-export function Model3DPreview({ object3D, boundingBox, onBoundingBoxChange = null }){
+/* "Estado del modelo" (Incidente 3, cierre real): nunca declarar un
+   archivo "bien" sin evidencia -- diagnostics viene de
+   src/lib/levantamientoModelLoader.js#loadModel3D (que a su vez usa
+   src/domain/model3dDiagnostics.js, la logica real de deteccion). Ausente
+   (undefined) para llamadores viejos que todavia no pasan boundingBox
+   propio -- no revienta, simplemente no se muestra el panel. */
+function ModelStatusPanel({ diagnostics, tr }){
+  if(!diagnostics) return null;
+  const orientationLabelKey = {
+    valida: 'model3dStatusOrientationValid', corregida: 'model3dStatusOrientationCorrected', dudosa: 'model3dStatusOrientationUncertain'
+  }[diagnostics.orientation.status];
+  const materialsLabelKey = diagnostics.materials.status === 'validos' ? 'model3dStatusMaterialsValid' : 'model3dStatusMaterialsMissing';
+  const normalsLabelKey = diagnostics.normals.status === 'validas' ? 'model3dStatusNormalsValid' : 'model3dStatusNormalsCorrected';
+  const scaleLabelKey = diagnostics.scale.status === 'confirmada' ? 'model3dStatusScaleConfirmed' : 'model3dStatusScaleUnknown';
+  const geometryLabelKey = diagnostics.geometry.status === 'valida' ? 'model3dStatusGeometryValid' : 'model3dStatusGeometryAtypical';
+  const isWarning = (status) => status === 'dudosa' || status === 'atipica' || status === 'ausentes' || status === 'corregidas' || status === 'corregida';
+  const row = (labelKey, valueLabelKey, status, detail) => <div className="model3d-status-row" key={labelKey}>
+    <span className="muted" style={{ fontSize: '.72rem' }}>{tr(`levantamiento.${labelKey}`)}:</span>
+    <span style={{ fontSize: '.78rem', fontWeight: 600, color: isWarning(status) ? 'var(--warning, #b45309)' : 'var(--success, #15803d)' }}>{tr(`levantamiento.${valueLabelKey}`)}</span>
+    {detail && <span className="muted" style={{ fontSize: '.68rem', flexBasis: '100%' }}>{detail}</span>}
+  </div>;
+  return <div className="model3d-status-panel panel" style={{ padding: 10, marginBottom: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+    <b style={{ fontSize: '.78rem' }}>{tr('levantamiento.model3dStatusTitle')}</b>
+    {row('model3dStatusOrientationLabel', orientationLabelKey, diagnostics.orientation.status,
+      diagnostics.orientation.status === 'corregida' ? tr('levantamiento.model3dStatusOrientationCorrectedDetail', { axis: diagnostics.orientation.detectedAxis.toUpperCase() })
+        : diagnostics.orientation.status === 'dudosa' ? tr('levantamiento.model3dStatusOrientationUncertainDetail') : null)}
+    {row('model3dStatusGeometryLabel', geometryLabelKey, diagnostics.geometry.status,
+      diagnostics.geometry.status === 'atipica' ? tr('levantamiento.model3dStatusGeometryAtypicalDetail', { groupA: diagnostics.geometry.detail?.groupA || '?', groupB: diagnostics.geometry.detail?.groupB || '?' }) : null)}
+    {row('model3dStatusMaterialsLabel', materialsLabelKey, diagnostics.materials.status)}
+    {row('model3dStatusNormalsLabel', normalsLabelKey, diagnostics.normals.status)}
+    {row('model3dStatusScaleLabel', scaleLabelKey, diagnostics.scale.status)}
+  </div>;
+}
+
+export function Model3DPreview({ object3D, boundingBox, diagnostics = null, onBoundingBoxChange = null }){
   const { t: tr } = useI18n();
   const mountRef = useRef(null);
   const cameraRef = useRef(null);
@@ -182,6 +216,7 @@ export function Model3DPreview({ object3D, boundingBox, onBoundingBoxChange = nu
   };
 
   return <div className="model3d-preview">
+    <ModelStatusPanel diagnostics={diagnostics} tr={tr} />
     <div className="visual-actions" style={{ marginBottom: 6 }}>
       <button type="button" className="soft" onClick={() => setView(CAMERA_VIEW_PRESETS.isometric)}>{tr('levantamiento.view3dReset')}</button>
       <button type="button" className="soft" onClick={() => setView(CAMERA_VIEW_PRESETS.top)}>{tr('levantamiento.view3dTop')}</button>

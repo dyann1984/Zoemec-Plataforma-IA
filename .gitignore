@@ -26,3 +26,11 @@ design-assets/
 # catalogos/Excel reales de un cliente, nunca deben entrar al historial.
 audit-ebdi-existing.mjs
 evidence-ebdi-audit/
+
+# Archivo 3D real del usuario (casa_toledo_desde_plano.glb/.obj) usado para
+# diagnosticar el Incidente 3 con datos reales, no fixtures sinteticas --
+# es un diseno real, nunca debe entrar al historial de git. dev-qa/qa-
+# model3d-real.jsx/.html asumen que estos archivos existen localmente en
+# esta carpeta; sin ellos, ese arnes especifico simplemente no carga nada
+# (no rompe build ni tests).
+dev-qa/fixtures-real/

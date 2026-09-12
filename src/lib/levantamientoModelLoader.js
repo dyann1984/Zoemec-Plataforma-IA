@@ -14,6 +14,8 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
+import { detectMaterialQuality } from './three3dVisualizationModes.js';
+import { diagnoseModel3D } from '../domain/model3dDiagnostics.js';
 
 /* DRACOLoader necesita los decoders WASM/JS servidos desde algun lado --
    usamos el CDN oficial de Google (mismo que la documentacion de three.js
@@ -60,14 +62,50 @@ function computeBoundingBox(object3D){
    exportacion/conversion de ejes es literalmente CULLED (ni se dibuja) desde
    el lado "de adentro", lo que en un modelo con normales mixtas se percibe
    como huecos negros o piezas "que faltan". */
+/* Devuelve si ALGUNA malla llego sin normales -- lo consume diagnoseModel3D
+   para reportar "Normales: corregidas" vs "Normales: originales del
+   archivo" en vez de recalcular en silencio como si el archivo siempre
+   hubiera venido bien. */
 function fixMaterialsAndNormals(object3D){
+  let anyNormalsWereMissing = false;
   object3D.traverse(node => {
     if(!node.isMesh || !node.geometry) return;
     const geom = node.geometry;
-    if(!geom.attributes?.normal) geom.computeVertexNormals();
+    if(!geom.attributes?.normal){ anyNormalsWereMissing = true; geom.computeVertexNormals(); }
     const materials = Array.isArray(node.material) ? node.material : [node.material];
     materials.forEach(mat => { if(mat) mat.side = THREE.DoubleSide; });
   });
+  return anyNormalsWereMissing;
+}
+
+/* Bounding box MUNDIAL de cada malla de primer nivel (no del objeto
+   completo) -- es la evidencia real que consume detectUpAxis/
+   detectGeometryAtypical en model3dDiagnostics.js: para saber si "los
+   pisos se apilan" hace falta comparar mallas entre si, no solo la caja
+   total del modelo completo. */
+function collectMeshGroups(object3D){
+  const groups = [];
+  object3D.traverse(node => {
+    if(!node.isMesh || !node.geometry) return;
+    const box = new THREE.Box3().setFromObject(node);
+    groups.push({
+      name: node.name || '(sin nombre)',
+      min: [box.min.x, box.min.y, box.min.z],
+      max: [box.max.x, box.max.y, box.max.z]
+    });
+  });
+  return groups;
+}
+
+/* Aplica la correccion de orientacion que model3dDiagnostics.js detecto
+   con evidencia real (nunca a ciegas por formato, ver comentario extenso
+   en ese modulo) -- mismas rotaciones que ya usa
+   applyDefaultUpAxisCorrection para Z-up, mas el caso simetrico para
+   X-up. */
+function applyDetectedUpAxisCorrection(object3D, detectedAxis){
+  if(detectedAxis === 'z') object3D.rotateX(-Math.PI / 2);
+  else if(detectedAxis === 'x') object3D.rotateZ(Math.PI / 2);
+  object3D.updateMatrixWorld(true);
 }
 
 /* INCIDENTE 3 -- causa raiz "rotados/invertidos/deformados" en archivos OBJ:
@@ -123,7 +161,24 @@ export async function loadModel3D(file, formatId, { onProgress } = {}){
       : await loadGLTFOrGLB(url, onProgress);
 
     applyDefaultUpAxisCorrection(object3D, formatId);
-    fixMaterialsAndNormals(object3D);
+    const materialQuality = detectMaterialQuality(object3D);
+    const anyNormalsWereMissing = fixMaterialsAndNormals(object3D);
+
+    // INCIDENTE 3 (cierre real, "no fingir que esta bien"): la correccion
+    // de eje por formato de arriba (Z-up->Y-up SOLO para OBJ) confia en la
+    // convencion del formato, no en los datos reales -- un GLB/GLTF real
+    // diagnosticado en produccion (casa_toledo_desde_plano.glb) demostro
+    // que un exportador puede escribir datos Z-up dentro de un contenedor
+    // glTF sin convertir ejes, violando la especificacion en silencio. Esta
+    // segunda pasada usa EVIDENCIA real (como se apilan las mallas entre
+    // si, ver model3dDiagnostics.js) en vez de confiar ciegamente en el
+    // formato, y solo corrige cuando la evidencia es clara -- nunca "porque
+    // el formato dice que deberia estar bien".
+    const diagnostics = diagnoseModel3D({
+      formatId, groups: collectMeshGroups(object3D),
+      hasRealMaterials: materialQuality.hasRealMaterials, anyNormalsWereMissing
+    });
+    if(diagnostics.rotationCorrection) applyDetectedUpAxisCorrection(object3D, diagnostics.rotationCorrection);
 
     const { meshCount, triangleCount } = countMeshesAndTriangles(object3D);
     // Bounding box SIEMPRE calculado DESPUES de la correccion de ejes -- si
@@ -138,7 +193,7 @@ export async function loadModel3D(file, formatId, { onProgress } = {}){
       return { ok: false, reason: 'modelo_vacio', message: 'El archivo no contiene geometria visible.' };
     }
 
-    return { ok: true, object3D, meshCount, triangleCount, boundingBox };
+    return { ok: true, object3D, meshCount, triangleCount, boundingBox, diagnostics };
   } catch(err){
     return { ok: false, reason: 'error_de_carga', message: err?.message || 'No se pudo leer el archivo 3D.' };
   } finally {

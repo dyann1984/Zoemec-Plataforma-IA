@@ -232,7 +232,7 @@ export function Import3DSurveyForm({ projectId, onCancel, onSave }){
 
       {step === STEP.SCALE && loadResult && <>
         <h3>{tr('levantamiento.import3dPreviewTitle')}</h3>
-        <Model3DPreview object3D={loadResult.object3D} boundingBox={loadResult.boundingBox}
+        <Model3DPreview object3D={loadResult.object3D} boundingBox={loadResult.boundingBox} diagnostics={loadResult.diagnostics}
           onBoundingBoxChange={nextBox => setLoadResult(prev => ({ ...prev, boundingBox: nextBox }))} />
         <div className="import3d-meta-grid">
           <div><small>{tr('levantamiento.import3dBoundingBoxLabel')}</small><b>{loadResult.boundingBox.size.x.toFixed(2)} × {loadResult.boundingBox.size.z.toFixed(2)} × {loadResult.boundingBox.size.y.toFixed(2)} m</b></div>

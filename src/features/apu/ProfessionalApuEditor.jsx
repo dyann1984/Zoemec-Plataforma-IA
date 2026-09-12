@@ -6,6 +6,7 @@ import {money,num} from '../../lib/apuExport.js';
 import {scopedKey} from '../../utils/scopedStorage.js';
 import {Technical3DViewer} from '../visual3d/Technical3DViewer.jsx';
 import {ZoemecIntelligencePanel} from './ZoemecIntelligencePanel.jsx';
+import {RegionalContextPanel} from './RegionalContextPanel.jsx';
 import {apiPost,apiGetSafe} from '../../services/apiClient.js';
 import {exportApuAuditDossierPdf} from '../../lib/apuDossierPdf.js';
 import {exportApuAuditDossierExcel} from '../../lib/apuDossierXlsx.js';
@@ -109,7 +110,7 @@ function PriceReviewPanel({apu,onChange}){
  </section>;
 }
 
-export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindPrices,user,exportBlocked,exportBlockedReason}){
+export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindPrices,user,exportBlocked,exportBlockedReason,onConfigureLocation}){
  const final=useMemo(()=>finalizeProfessionalAPU(apu),[apu]);const [notice,setNotice]=useState(null),[modal,setModal]=useState(''),[quotes,setQuotes]=useState([]);
  const [moreOpen,setMoreOpen]=useState(false);
  const [selectedApuElement,setSelectedApuElement]=useState(null);
@@ -244,9 +245,27 @@ export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindP
  // por que); el guard interno sigue siendo la barrera real, nunca se retira.
  const isEmptyApu=isStructurallyEmptyApu(final);
  const emptyApuTitle='Este APU no tiene concepto ni contenido técnico (materiales/mano de obra/equipo/EPP) todavía -- no hay nada que exportar.';
- const table=(k,title)=><Accordion key={k} title={title} summary={sectionSummary(k)} defaultOpen={k==='labor'}><div className="apu-table-scroll"><table className="data-table"><thead><tr>{SPEC[k].map(([f,l])=><th key={f}>{l}</th>)}<th>Fuente</th><th>Fecha</th><th>Estado</th><th/></tr></thead><tbody>{rows(k).map((r,i)=><tr key={r.clave||i}>{SPEC[k].map(([f])=><td key={f}><input value={r[f]??''} onChange={e=>update(k,i,f,e.target.value)}/></td>)}<td><input value={r.fuente?.proveedor||''} placeholder={r.fuente?.estado===APU_DATA_STATE.BIBLIOTECA?'Biblioteca ZOEMEC':''} onChange={e=>{const n=structuredClone(apu),x=k==='tools'?n.herramientaMenor.detalle[i]:n[k][i];x.fuente={...(x.fuente||{}),proveedor:e.target.value,estado:x.fuente?.estado||APU_DATA_STATE.REQUIERE_VALIDACION};onChange(n)}}/></td><td><input value={r.fuente?.fecha||''} onChange={e=>{const n=structuredClone(apu),x=k==='tools'?n.herramientaMenor.detalle[i]:n[k][i];x.fuente={...(x.fuente||{}),fecha:e.target.value};onChange(n)}}/></td><td title={r.fuente?.matchMethod?`Método de coincidencia: ${r.fuente.matchMethod} · Confianza: ${r.fuente.confidence??0}% · Origen del precio: ${r.fuente.origenPrecio||''}${r.fuente.catalogItemId?` · Insumo de catálogo: ${r.fuente.catalogItemId}`:''}`:undefined}>{apuDataStateLabel(r.fuente?.estado)}</td><td><button onClick={()=>remove(k,i)}>×</button></td></tr>)}</tbody></table></div><button onClick={()=>add(k)}>+ Agregar</button></Accordion>;
+ // P1 (regionalizacion visible por insumo, "nunca ocultar el fallback"):
+ // traduce regionalFallbackLevel/regionalConfidence/regionalIntelligence
+ // (ya calculados por materialPriceIntelligence2.js) a una celda SIEMPRE
+ // visible en la tabla -- nunca solo un tooltip. '—' explicito (con su
+ // propio title) cuando el renglon nunca corrio busqueda de precio, para
+ // no confundir "sin buscar todavia" con "referencia nacional".
+ const regionalCell=(r)=>{
+  if(r.regionalFallbackLevel==null && r.priceStatus==null) return {text:'—',title:'Este insumo no ha buscado precio regional todavía.'};
+  const level=r.regionalFallbackLevel||'nacional';
+  const text=level==='ciudad'?'Ciudad':level==='estado'?'Usando referencia estatal':'Usando referencia nacional';
+  const conf=r.regionalConfidence?({ALTA:'Alta',MEDIA:'Media',BAJA:'Baja'})[r.regionalConfidence]:null;
+  const refs=r.regionalIntelligence?.nObservaciones;
+  return {
+   text:conf?`${text} · ${conf}`:text,
+   title:`Región consultada: ${r.fuente?.region||'—'}${refs!=null?` · ${refs} referencia(s) internas`:''}${r.priceStatus?` · ${r.priceStatus}`:''}`
+  };
+ };
+ const table=(k,title)=><Accordion key={k} title={title} summary={sectionSummary(k)} defaultOpen={k==='labor'}><div className="apu-table-scroll"><table className="data-table"><thead><tr>{SPEC[k].map(([f,l])=><th key={f}>{l}</th>)}<th>Fuente</th><th>Fecha</th><th>Estado</th><th>Región</th><th/></tr></thead><tbody>{rows(k).map((r,i)=>{const rc=regionalCell(r);return <tr key={r.clave||i}>{SPEC[k].map(([f])=><td key={f}><input value={r[f]??''} onChange={e=>update(k,i,f,e.target.value)}/></td>)}<td><input value={r.fuente?.proveedor||''} placeholder={r.fuente?.estado===APU_DATA_STATE.BIBLIOTECA?'Biblioteca ZOEMEC':''} onChange={e=>{const n=structuredClone(apu),x=k==='tools'?n.herramientaMenor.detalle[i]:n[k][i];x.fuente={...(x.fuente||{}),proveedor:e.target.value,estado:x.fuente?.estado||APU_DATA_STATE.REQUIERE_VALIDACION};onChange(n)}}/></td><td><input value={r.fuente?.fecha||''} onChange={e=>{const n=structuredClone(apu),x=k==='tools'?n.herramientaMenor.detalle[i]:n[k][i];x.fuente={...(x.fuente||{}),fecha:e.target.value};onChange(n)}}/></td><td title={r.fuente?.matchMethod?`Método de coincidencia: ${r.fuente.matchMethod} · Confianza: ${r.fuente.confidence??0}% · Origen del precio: ${r.fuente.origenPrecio||''}${r.fuente.catalogItemId?` · Insumo de catálogo: ${r.fuente.catalogItemId}`:''}`:undefined}>{apuDataStateLabel(r.fuente?.estado)}</td><td title={rc.title} className="pro-regional-cell">{rc.text}</td><td><button onClick={()=>remove(k,i)}>×</button></td></tr>;})}</tbody></table></div><button onClick={()=>add(k)}>+ Agregar</button></Accordion>;
  const list=(f,title,object=false)=><Accordion key={f} title={title} summary={`${(apu[f]||[]).length} elemento(s)`}>{(apu[f]||[]).map((v,i)=><div className="pro-list-row" key={i}><textarea value={object?(v.especificacion||v.texto||''):v} onChange={e=>{const n=structuredClone(apu);n[f][i]=object?{...v,[f==='supuestos'?'texto':'especificacion']:e.target.value}:e.target.value;onChange(n)}}/><button onClick={()=>{const n=structuredClone(apu);n[f].splice(i,1);onChange(n)}}>×</button></div>)}<button onClick={()=>onChange({...apu,[f]:[...(apu[f]||[]),object?(f==='supuestos'?{texto:''}:{especificacion:'',criterio:'',norma:''}):'']})}>+ Agregar</button></Accordion>;
  return <div className="professional-apu-editor">
+  <RegionalContextPanel apu={apu} onConfigureLocation={onConfigureLocation}/>
   <ZoemecIntelligencePanel apu={apu} onChange={onChange} history={history} onRestoreVersion={restoreVersion} user={user}/>
   <PriceReviewPanel apu={apu} onChange={onChange}/>
   <h3 className="pro-section-title pro-section-title-first">G. Acciones</h3>
@@ -426,6 +445,6 @@ export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindP
   </Accordion>
   <div className="pro-economy"><b>Costo directo {money(final.calculated.direct)}</b><strong>PRECIO UNITARIO SIN IVA {money(final.calculated.pu)}</strong><span>Cantidad {num(apu.cantidadObra)}</span><b>Importe sin IVA {money(final.calculated.importeTotal)}</b><span>IVA {money(final.calculated.iva*apu.cantidadObra)}</span><b>Importe con IVA {money(final.calculated.importeTotal+final.calculated.iva*apu.cantidadObra)}</b></div>
   {notice&&<div className="validation-panel"><h3>{notice.status}</h3>{(notice.issues||[]).map((x,i)=><p key={i}>{x.message}</p>)}</div>}
-  {modal&&<div className="pro-modal"><div><button onClick={()=>setModal('')}>×</button><h2>{modal==='prices'?'Comparador de precios':modal==='history'?'Historial':'Fuentes'}</h2>{modal==='prices'?<><table className="data-table"><thead><tr><th>Recurso</th><th>Actual</th><th>Nuevo</th><th>Diferencia</th><th>Variación</th><th>Proveedor nuevo</th><th>Fecha</th><th>Aplicar</th></tr></thead><tbody>{quotes.map((q,i)=><tr key={i}><td>{q.resource}</td><td>{money(q.current)}</td><td>{money(q.next)}</td><td>{money(q.difference)}</td><td>{q.variationPct==null?'—':`${num(q.variationPct)}%`}</td><td>{q.priceRecord.supplier||'PENDIENTE'}</td><td>{q.priceRecord.priceDate||'Sin fecha'}</td><td><input type="checkbox" checked={q.apply} onChange={e=>setQuotes(quotes.map((x,j)=>j===i?{...x,apply:e.target.checked}:x))}/></td></tr>)}</tbody></table><button onClick={applyPrices}>Aplicar seleccionados</button><button onClick={()=>setModal('')}>Cancelar</button></>:modal==='history'?history.map(v=><p key={v.version}><b>{v.version}</b> · {v.at} · {money(v.unitPrice)} <button onClick={()=>restoreVersion(v)}>Restaurar</button></p>):['materials','labor','equipment','consumables'].flatMap(k=>(apu[k]||[]).map(r=><p key={`${k}-${r.clave}`}><b>{r.descripcion}</b> · {r.fuente?.proveedor||'Sin proveedor'} · {r.fuente?.fecha||'Sin fecha'} · {apuDataStateLabel(r.fuente?.estado)}</p>))}</div></div>}
+  {modal&&<div className="pro-modal"><div><button onClick={()=>setModal('')}>×</button><h2>{modal==='prices'?'Comparador de precios':modal==='history'?'Historial':'Fuentes'}</h2>{modal==='prices'?<><table className="data-table"><thead><tr><th>Recurso</th><th>Actual</th><th>Nuevo</th><th>Diferencia</th><th>Variación</th><th>Proveedor nuevo</th><th>Fecha</th><th>Aplicar</th></tr></thead><tbody>{quotes.map((q,i)=><tr key={i}><td>{q.resource}</td><td>{money(q.current)}</td><td>{money(q.next)}</td><td>{money(q.difference)}</td><td>{q.variationPct==null?'—':`${num(q.variationPct)}%`}</td><td>{q.priceRecord.supplier||'PENDIENTE'}</td><td>{q.priceRecord.priceDate||'Sin fecha'}</td><td><input type="checkbox" checked={q.apply} onChange={e=>setQuotes(quotes.map((x,j)=>j===i?{...x,apply:e.target.checked}:x))}/></td></tr>)}</tbody></table><button onClick={applyPrices}>Aplicar seleccionados</button><button onClick={()=>setModal('')}>Cancelar</button></>:modal==='history'?history.map(v=><p key={v.version}><b>{v.version}</b> · {v.at} · {money(v.unitPrice)} <button onClick={()=>restoreVersion(v)}>Restaurar</button></p>):['materials','labor','equipment','consumables'].flatMap(k=>(apu[k]||[]).map(r=>{const rc=regionalCell(r);return <p key={`${k}-${r.clave}`}><b>{r.descripcion}</b> · Precio utilizado: {money(r[priceKey(k)])} · {r.fuente?.proveedor||'Sin proveedor'} · {r.fuente?.fecha||'Sin fecha'} · {apuDataStateLabel(r.fuente?.estado)} · <span title={rc.title}>{rc.text}</span></p>;}))}</div></div>}
  </div>;
 }

@@ -5,6 +5,7 @@ import { LevantamientoCard } from './LevantamientoCard.jsx';
 import { NewSurveyModal } from './NewSurveyModal.jsx';
 import { SurveyDetail } from './SurveyDetail.jsx';
 import { recomputeSurvey } from '../../lib/levantamientoCalc.js';
+import { SURVEY_SOURCE_TYPE } from '../../domain/levantamientoSchema.js';
 
 /* Modulo "Levantamiento IA" (Fase 1). surveys/setSurveys ya llegan filtrados
    al proyecto activo (useProjectScoped en main.jsx, mismo patron que
@@ -25,10 +26,20 @@ export function LevantamientoModule({ surveys, setSurveys, activeProjectId, onNe
 
   const openNew = () => { if(requireProject()) setShowNew(true); };
 
+  /* P1 (regresion en produccion, "no aparece el flujo Que quieres construir"):
+     antes, guardar evidencia (foto/video/3D) dejaba al usuario en la pestana
+     'datos' de siempre -- la pestana 'propuesta' existia, pero nadie la
+     encontraba sin buscarla. Ahora, si el levantamiento recien creado SI
+     tiene evidencia real (mismo criterio que SurveyDetail#hasEvidence), se
+     abre DIRECTO en 'propuesta' -- nunca se fuerza esa pestana en un
+     levantamiento manual sin evidencia (ahi ni siquiera existe, dejaria la
+     pantalla en blanco). */
   const addSurvey = (survey) => {
     setSurveys([survey, ...list]);
     setShowNew(false);
     setOpenId(survey.id);
+    const hasEvidence = (survey.scanMedia || []).length > 0 || survey.sourceType === SURVEY_SOURCE_TYPE.IMPORT_3D;
+    setOpenTab(hasEvidence ? 'propuesta' : 'datos');
   };
   const updateSurvey = (id, next) => setSurveys(list.map(s => s.id === id ? recomputeSurvey(next) : s));
   const removeSurvey = (id) => {

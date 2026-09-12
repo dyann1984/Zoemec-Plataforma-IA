@@ -6,6 +6,7 @@ import { addDoc, collection, deleteDoc, doc, getCountFromServer, getDoc, getDocs
 import { deleteObject, getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { auth, db, emailActionCodeSettings, firebaseReady, storage } from './firebase.js';
 import { useCloudState } from './cloud.js';
+import { useDraftAutosave, clearDraftAutosave } from './hooks/useDraftAutosave.js';
 import { consumeOneDriveRedirect, isOneDriveConfigured } from './lib/onedrive.js';
 import { createDemoContext } from './lib/apuFlow.js';
 import { APU_DEFAULT_FACTORS, DEFAULT_IVA_RATE, calcAPU, rowImporte, toSafeNonNegativeNumber } from './lib/apuCalc.js';
@@ -46,6 +47,7 @@ import { ZoemecBrand } from './components/ui/ZoemecBrand.jsx';
 import { Backdrop } from './components/ui/Backdrop.jsx';
 import { Donut, Spark } from './components/ui/charts.jsx';
 import { PageHead, InfoCard, EmptyState } from './components/ui/PageElements.jsx';
+import { AutosaveIndicator } from './components/ui/AutosaveIndicator.jsx';
 import { Param, Cost, NField, ORow } from './components/ui/FormFields.jsx';
 import { HardHat } from './components/ui/HardHat.jsx';
 import {
@@ -929,7 +931,7 @@ function App(){
   else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView} apus={apus} clients={clients} projects={projects} activeProject={activeProject} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} orgSession={orgSession}>
     {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} activeProject={activeProject} user={user} demoMode={DEMO_MODE} demoContext={DEMO_MODE ? createDemoContext() : null} />}
     {module === 'levantamiento' && <LevantamientoModule surveys={surveys} setSurveys={setSurveys} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} onSendToApu={()=>setModule('apu')} currentUserEmail={user?.email || null} />}
-    {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} rawApus={rawApus} linkApuToProject={linkApuToProject} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} />}
+    {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} rawApus={rawApus} linkApuToProject={linkApuToProject} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} onConfigureLocation={()=>setModule('cartera')} />}
     {module === 'presupuestos' && <Budgets company={companyView} budgets={budgets} setBudgets={setBudgets} items={budgetItems} setItems={setBudgetItems} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} />}
     {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={(pid)=>{ setRawApus(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgets(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawCatalog(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgetItems(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawSurveys(l=>l.filter(x=>(x?.projectId??null)!==pid)); }} />}
     {module === 'biblioteca' && <Library user={user} catalog={catalog} setCatalog={setCatalog} setModule={setModule} />}
@@ -2068,7 +2070,7 @@ function ResourceCards({apu}){
   </div>;
 }
 
-function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog,projects,rawApus,linkApuToProject,activeProjectId,activeProject,onNeedProject}){
+function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog,projects,rawApus,linkApuToProject,activeProjectId,activeProject,onNeedProject,onConfigureLocation}){
   const { t: tr } = useI18n();
   const { beginJob, completeJob, failJob, getUnseen, consumeJob } = useAiJobs();
   const requireProject=()=>{
@@ -2097,6 +2099,45 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   // o "Abrir" un guardado distinto) -- se estampa sobre professionalApu mas
   // abajo, sin tocar generate()/generateAI() ni el efecto de migracion v1->v2.
   const [stableApuId,setStableApuId]=useState(()=>apuV2.id);
+  /* P0 (correccion de regresion en produccion, "el trabajo se pierde al
+     cambiar de pestana/modulo"): apuV2/stableApuId son useState puro, SIN
+     ningun mecanismo de persistencia -- cambiar `module` en Shell desmonta
+     <APU> por completo (module==='apu' && <APU/>, no es un ocultamiento por
+     CSS), y con eso se pierde cualquier edicion que no se haya guardado
+     explicitamente con "Guardar version". clave FIJA 'current' (no por
+     stableApuId): stableApuId se re-genera aleatorio en CADA montaje de
+     este componente (useState(()=>apuV2.id) con apuV2 fresco), asi que
+     jamas coincidiria con el de un montaje anterior -- lo que se quiere
+     recordar es "en que estabas trabajando la ultima vez", no un id que ni
+     siquiera sobrevive el propio remontaje. */
+  const [apuDraft,setApuDraft]=useDraftAutosave(user,'apu','current',null);
+  const skipNextApuAutosaveRef=useRef(true);
+  const apuDraftRestoredRef=useRef(false);
+  useEffect(()=>{
+    if(apuDraftRestoredRef.current) return;
+    apuDraftRestoredRef.current=true;
+    // Restaura en silencio, mismo criterio que el resto de useCloudState en
+    // esta app (clientes/presupuestos/catalogo tampoco preguntan "restaurar?"
+    // -- ya cargan la version mas reciente de forma transparente). Solo
+    // aplica si de verdad hay contenido (nunca pisa el APU vacio con "otro
+    // APU vacio" sin necesidad).
+    if(apuDraft?.apuV2 && apuDraft?.stableApuId){
+      setApuV2(apuDraft.apuV2);
+      setStableApuId(apuDraft.stableApuId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+  useEffect(()=>{
+    // El primer disparo coincide con el montaje (mismo commit que el efecto
+    // de restauracion de arriba) -- saltarlo evita que se autoguarde el APU
+    // vacio inicial ENCIMA del borrador que el efecto anterior acaba de
+    // pedir restaurar, antes de que ese restore realmente se refleje en
+    // apuV2 (los efectos del mismo commit leen el estado de ANTES de que se
+    // apliquen las actualizaciones que ellos mismos programaron).
+    if(skipNextApuAutosaveRef.current){ skipNextApuAutosaveRef.current=false; return; }
+    setApuDraft({apuV2,stableApuId});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[apuV2,stableApuId]);
   // skipMigrateIdRef: cuando generateAI ya construyo un apuV2 rico (procedimiento,
   // calidad, seguridad, fuentes, confianza real desde el esquema v2), este efecto
   // NO debe pisarlo con la migracion vacia de apuV1->v2 solo porque apu.id cambio.
@@ -2226,6 +2267,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     // Limpiar/Crear manualmente es el unico momento (junto con "Abrir" otro
     // guardado) en que de verdad es OTRA identidad -- ver stableApuId arriba.
     setStableApuId(freshApu.id);
+    clearDraftAutosave(user,'apu','current');
     setAiOpen(empty.aiOpen);
     setExcelInfo(empty.excelInfo);
     setConceptBatch(empty.conceptBatch);
@@ -3353,6 +3395,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         : <button type="button" className="link-inline exec-detail-toggle" onClick={()=>setShowExecutive(true)}>{tr('apu.showDetail')}</button>}
     </>}
 
+    <div style={{ textAlign:'right', marginBottom:4 }}><AutosaveIndicator/></div>
     <ProfessionalApuEditor apu={professionalApu} onChange={setApuV2} user={user} onSave={saved=>{
       if(!requireProject()) return;
       // FIX Fase 9 (hallazgo F-006b, P1): "Guardar version" del editor
@@ -3365,7 +3408,8 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       if(isNew && !requireApuAccess()) return;
       setApus([saved,...apus.filter(x=>x.id!==saved.id)]);
       if(isNew) markApuUsed();
-    }} onFindPrices={findV2Prices} onExcel={exportExcel} onPdf={exportPDF} exportBlocked={isFree && userUsage.apusCreated>=1} exportBlockedReason={tr('apu.exportBlockedReason')}/>
+      clearDraftAutosave(user,'apu','current');
+    }} onFindPrices={findV2Prices} onExcel={exportExcel} onPdf={exportPDF} exportBlocked={isFree && userUsage.apusCreated>=1} exportBlockedReason={tr('apu.exportBlockedReason')} onConfigureLocation={onConfigureLocation}/>
     <div className="apu-grid legacy-editor-compat">
       <div className="panel">
         <label>{tr('apu.conceptLabel')}</label>

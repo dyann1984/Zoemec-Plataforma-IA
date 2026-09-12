@@ -6,6 +6,14 @@
    descarga YA resueltas por SurveyDetail (mismo mecanismo que la pestana
    Multimedia -- nunca se resuelve dos veces).
 
+   P0 (correccion de regresion, "el trabajo se pierde al cambiar de pestana"):
+   TODO el estado de este panel (formulario Y resultado) vive en
+   useDraftAutosave, con clave = surveyId -- sobrevive cambiar de pestana/
+   modulo, refresh, y cerrar/reabrir, exactamente igual que el resto de la
+   app con useCloudState. "Si ya existe [una propuesta]: mostrar el
+   resultado guardado" (pedido explicito del brief) es HECHO por esto
+   mismo, no una logica aparte: el resultado ES parte del borrador.
+
    "Generar APU desde esta propuesta" (regla 5 del brief): este panel NO
    crea ningun APU el mismo -- pide al servidor los conceptos derivados
    (deriveApuConceptsFromProposal, ya probado en constructionProposal.test.js)
@@ -13,8 +21,10 @@
    (main.jsx, "Generar por lote" -- TEXTAREA de conceptos separados por
    linea). Puente deliberadamente simple: no duplica el pipeline de
    generacion de APU ni el gate de plan/precio que ese flujo ya aplica. */
-import { useState } from 'react';
 import { useI18n } from '../../i18n/I18nContext.jsx';
+import { auth } from '../../firebase.js';
+import { useDraftAutosave, clearDraftAutosave } from '../../hooks/useDraftAutosave.js';
+import { AutosaveIndicator } from '../../components/ui/AutosaveIndicator.jsx';
 import { generateConstructionProposal, deriveApuConceptsFromProposal } from '../../services/constructionProposalApi.js';
 import { DATA_ORIGIN } from '../../domain/constructionProposal.js';
 
@@ -23,6 +33,13 @@ const ORIGIN_BADGE = {
   [DATA_ORIGIN.INFERIDO]: '◐', [DATA_ORIGIN.ESTIMADO]: '△'
 };
 
+function makeEmptyDraft(){
+  return {
+    userPrompt: '', largo: '', ancho: '', altura: '', niveles: '', necesidadesEspeciales: '', referenceBudget: '',
+    status: 'idle', proposal: null, error: null
+  };
+}
+
 function DimensionRow({ label, field, tr }){
   if(field.valor == null) return null;
   return <div className="survey-quant-table" style={{ marginBottom: 2 }}>
@@ -30,33 +47,32 @@ function DimensionRow({ label, field, tr }){
   </div>;
 }
 
-export function ConstructionProposalPanel({ imageUrls, hasEvidence, stylePreferences }){
+export function ConstructionProposalPanel({ surveyId, imageUrls, hasEvidence, stylePreferences }){
   const { t: tr } = useI18n();
-  const [userPrompt, setUserPrompt] = useState('');
-  const [largo, setLargo] = useState('');
-  const [ancho, setAncho] = useState('');
-  const [altura, setAltura] = useState('');
-  const [referenceBudget, setReferenceBudget] = useState('');
-  const [state, setState] = useState({ status: 'idle', proposal: null, error: null });
+  const user = auth.currentUser ? { uid: auth.currentUser.uid } : null;
+  const [draft, setDraft] = useDraftAutosave(user, 'proposal', surveyId, makeEmptyDraft());
+  const d = draft || makeEmptyDraft();
+  const patch = (fields) => setDraft(prev => ({ ...(prev || makeEmptyDraft()), ...fields }));
 
   const generate = async () => {
-    if(!userPrompt.trim()) return;
-    setState({ status: 'loading', proposal: null, error: null });
+    if(!d.userPrompt.trim()) return;
+    patch({ status: 'loading', proposal: null, error: null });
     try{
       const knownDimensions = {
-        largo: Number(largo) || undefined, ancho: Number(ancho) || undefined, altura: Number(altura) || undefined
+        largo: Number(d.largo) || undefined, ancho: Number(d.ancho) || undefined, altura: Number(d.altura) || undefined
       };
       const { proposal } = await generateConstructionProposal({
-        imageUrls, userPrompt: userPrompt.trim(), knownDimensions, stylePreferences, referenceBudget: Number(referenceBudget) || 0
+        imageUrls, userPrompt: d.userPrompt.trim(), knownDimensions, stylePreferences,
+        referenceBudget: Number(d.referenceBudget) || 0, levels: Number(d.niveles) || 0, specialNeeds: d.necesidadesEspeciales
       });
-      setState({ status: 'ready', proposal, error: null });
+      patch({ status: 'ready', proposal, error: null });
     }catch(err){
-      setState({ status: 'error', proposal: null, error: err.message || tr('levantamiento.proposalErrorMsg') });
+      patch({ status: 'error', proposal: null, error: err.message || tr('levantamiento.proposalErrorMsg') });
     }
   };
 
   const copyApuConcepts = async () => {
-    const { concepts } = await deriveApuConceptsFromProposal(state.proposal).catch(err => {
+    const { concepts } = await deriveApuConceptsFromProposal(d.proposal).catch(err => {
       window.zoemecNotify?.(err.message || tr('levantamiento.proposalErrorMsg'), 'error');
       return { concepts: [] };
     });
@@ -69,58 +85,92 @@ export function ConstructionProposalPanel({ imageUrls, hasEvidence, stylePrefere
     window.zoemecNotify?.(tr('levantamiento.proposalConceptsCopiedMsg', { count: concepts.length }), 'info');
   };
 
-  const proposal = state.proposal;
+  // "Nueva propuesta" (regla explicita: si ya existe, mostrar el resultado
+  // guardado -- pero el usuario debe poder pedir otra sin perder la anterior
+  // por accidente, ver clearDraftAutosave). Vuelve al formulario vacio;
+  // el borrador anterior queda descartado a proposito (una propuesta vieja
+  // ya resuelta no debe quedar mezclada con el intento nuevo).
+  const startOver = () => { clearDraftAutosave(user, 'proposal', surveyId); setDraft(makeEmptyDraft()); };
 
+  const proposal = d.proposal;
+
+  // "Si ya existe: mostrar el resultado guardado" -- el CTA de captura solo
+  // se muestra si TODAVIA no hay ninguna propuesta generada.
+  if(proposal){
+    return <div className="construction-proposal-panel">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div className="phonescan-disclaimer" style={{ flex: 1 }}>{tr('levantamiento.proposalDisclaimer')}</div>
+        <AutosaveIndicator />
+      </div>
+      <div className="panel" style={{ marginTop: 12 }}>
+        <h4>{tr('levantamiento.proposalResultTitle')}</h4>
+        {proposal.requiresProfessionalValidation && <div className="survey-opening-warning">{tr('levantamiento.proposalRequiresValidationMsg')}</div>}
+        <p>{proposal.descripcion}</p>
+
+        <b style={{ fontSize: '.82rem' }}>{tr('levantamiento.proposalDimensionsTitle')}</b>
+        <DimensionRow label={tr('levantamiento.proposalDimLength')} field={proposal.dimensiones.largo} tr={tr} />
+        <DimensionRow label={tr('levantamiento.proposalDimWidth')} field={proposal.dimensiones.ancho} tr={tr} />
+        <DimensionRow label={tr('levantamiento.proposalDimHeight')} field={proposal.dimensiones.altura} tr={tr} />
+        <DimensionRow label={tr('levantamiento.proposalDimArea')} field={proposal.dimensiones.superficie} tr={tr} />
+        <DimensionRow label={tr('levantamiento.proposalDimVolume')} field={proposal.dimensiones.volumen} tr={tr} />
+
+        {Object.entries(proposal.sistemaConstructivo).filter(([, items]) => items.length > 0).map(([key, items]) => (
+          <div key={key} style={{ marginTop: 8 }}>
+            <b style={{ fontSize: '.82rem' }}>{tr(`levantamiento.proposalSystem_${key}`)}</b>
+            <ul style={{ margin: '4px 0', paddingLeft: 18 }}>{items.map((item, i) => <li key={i} style={{ fontSize: '.82rem' }}>{item}</li>)}</ul>
+          </div>
+        ))}
+
+        {proposal.notes.length > 0 && <>
+          <b style={{ fontSize: '.82rem' }}>{tr('levantamiento.proposalNotesTitle')}</b>
+          <ul style={{ margin: '4px 0', paddingLeft: 18 }}>{proposal.notes.map((n, i) => <li key={i} className="muted" style={{ fontSize: '.78rem' }}>{n}</li>)}</ul>
+        </>}
+
+        <div className="form-actions">
+          <button className="soft" onClick={startOver}>{tr('levantamiento.proposalStartOverButton')}</button>
+          <button className="soft" onClick={copyApuConcepts}>{tr('levantamiento.proposalCopyConceptsButton')}</button>
+        </div>
+      </div>
+    </div>;
+  }
+
+  // CTA destacado (pedido explicito del brief, punto P1): este es el
+  // PRIMER contenido que el usuario ve en la pestana cuando todavia no
+  // genero ninguna propuesta -- nunca queda enterrado ni ambiguo.
   return <div className="construction-proposal-panel">
-    <div className="phonescan-disclaimer">{tr('levantamiento.proposalDisclaimer')}</div>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div className="phonescan-disclaimer" style={{ flex: 1 }}>{tr('levantamiento.proposalDisclaimer')}</div>
+      <AutosaveIndicator />
+    </div>
+
+    <div className="panel proposal-cta" style={{ textAlign: 'center', padding: '20px 16px', marginBottom: 12 }}>
+      <h3 style={{ margin: '0 0 4px' }}>✨ {tr('levantamiento.proposalGenerateButton')}</h3>
+      <p className="muted" style={{ marginTop: 0 }}>{tr('levantamiento.proposalCtaHint')}</p>
+    </div>
 
     <div className="nf wide">
       <label>{tr('levantamiento.proposalPromptLabel')}</label>
-      <textarea rows={3} value={userPrompt} onChange={e => setUserPrompt(e.target.value)} placeholder={tr('levantamiento.proposalPromptPlaceholder')} />
+      <textarea rows={3} value={d.userPrompt} onChange={e => patch({ userPrompt: e.target.value })} placeholder={tr('levantamiento.proposalPromptPlaceholder')} />
     </div>
     <div className="field-grid">
-      <div className="nf"><label>{tr('levantamiento.proposalKnownLengthLabel')}</label><input type="number" step="any" value={largo} onChange={e => setLargo(e.target.value)} placeholder="m" /></div>
-      <div className="nf"><label>{tr('levantamiento.proposalKnownWidthLabel')}</label><input type="number" step="any" value={ancho} onChange={e => setAncho(e.target.value)} placeholder="m" /></div>
-      <div className="nf"><label>{tr('levantamiento.proposalKnownHeightLabel')}</label><input type="number" step="any" value={altura} onChange={e => setAltura(e.target.value)} placeholder="m" /></div>
-      <div className="nf"><label>{tr('levantamiento.proposalBudgetLabel')}</label><input type="number" step="any" value={referenceBudget} onChange={e => setReferenceBudget(e.target.value)} placeholder="MXN" /></div>
+      <div className="nf"><label>{tr('levantamiento.proposalKnownLengthLabel')}</label><input type="number" step="any" value={d.largo} onChange={e => patch({ largo: e.target.value })} placeholder="m" /></div>
+      <div className="nf"><label>{tr('levantamiento.proposalKnownWidthLabel')}</label><input type="number" step="any" value={d.ancho} onChange={e => patch({ ancho: e.target.value })} placeholder="m" /></div>
+      <div className="nf"><label>{tr('levantamiento.proposalKnownHeightLabel')}</label><input type="number" step="any" value={d.altura} onChange={e => patch({ altura: e.target.value })} placeholder="m" /></div>
+      <div className="nf"><label>{tr('levantamiento.proposalLevelsLabel')}</label><input type="number" step="1" min="1" value={d.niveles} onChange={e => patch({ niveles: e.target.value })} placeholder="1" /></div>
+      <div className="nf"><label>{tr('levantamiento.proposalBudgetLabel')}</label><input type="number" step="any" value={d.referenceBudget} onChange={e => patch({ referenceBudget: e.target.value })} placeholder="MXN" /></div>
+    </div>
+    <div className="nf wide">
+      <label>{tr('levantamiento.proposalSpecialNeedsLabel')}</label>
+      <textarea rows={2} value={d.necesidadesEspeciales} onChange={e => patch({ necesidadesEspeciales: e.target.value })} placeholder={tr('levantamiento.proposalSpecialNeedsPlaceholder')} />
     </div>
     {!hasEvidence && <p className="muted" style={{ fontSize: '.78rem' }}>{tr('levantamiento.proposalNoImagesHint')}</p>}
 
     <div className="form-actions">
-      <button onClick={generate} disabled={!userPrompt.trim() || state.status === 'loading'}>
-        {state.status === 'loading' ? tr('levantamiento.proposalGeneratingMsg') : `✨ ${tr('levantamiento.proposalGenerateButton')}`}
+      <button onClick={generate} disabled={!d.userPrompt.trim() || d.status === 'loading'}>
+        {d.status === 'loading' ? tr('levantamiento.proposalGeneratingMsg') : `✨ ${tr('levantamiento.proposalGenerateButton')}`}
       </button>
     </div>
 
-    {state.status === 'error' && <p className="nf-error-msg">{state.error}</p>}
-
-    {proposal && <div className="panel" style={{ marginTop: 12 }}>
-      <h4>{tr('levantamiento.proposalResultTitle')}</h4>
-      {proposal.requiresProfessionalValidation && <div className="survey-opening-warning">{tr('levantamiento.proposalRequiresValidationMsg')}</div>}
-      <p>{proposal.descripcion}</p>
-
-      <b style={{ fontSize: '.82rem' }}>{tr('levantamiento.proposalDimensionsTitle')}</b>
-      <DimensionRow label={tr('levantamiento.proposalDimLength')} field={proposal.dimensiones.largo} tr={tr} />
-      <DimensionRow label={tr('levantamiento.proposalDimWidth')} field={proposal.dimensiones.ancho} tr={tr} />
-      <DimensionRow label={tr('levantamiento.proposalDimHeight')} field={proposal.dimensiones.altura} tr={tr} />
-      <DimensionRow label={tr('levantamiento.proposalDimArea')} field={proposal.dimensiones.superficie} tr={tr} />
-      <DimensionRow label={tr('levantamiento.proposalDimVolume')} field={proposal.dimensiones.volumen} tr={tr} />
-
-      {Object.entries(proposal.sistemaConstructivo).filter(([, items]) => items.length > 0).map(([key, items]) => (
-        <div key={key} style={{ marginTop: 8 }}>
-          <b style={{ fontSize: '.82rem' }}>{tr(`levantamiento.proposalSystem_${key}`)}</b>
-          <ul style={{ margin: '4px 0', paddingLeft: 18 }}>{items.map((item, i) => <li key={i} style={{ fontSize: '.82rem' }}>{item}</li>)}</ul>
-        </div>
-      ))}
-
-      {proposal.notes.length > 0 && <>
-        <b style={{ fontSize: '.82rem' }}>{tr('levantamiento.proposalNotesTitle')}</b>
-        <ul style={{ margin: '4px 0', paddingLeft: 18 }}>{proposal.notes.map((n, i) => <li key={i} className="muted" style={{ fontSize: '.78rem' }}>{n}</li>)}</ul>
-      </>}
-
-      <div className="form-actions">
-        <button className="soft" onClick={copyApuConcepts}>{tr('levantamiento.proposalCopyConceptsButton')}</button>
-      </div>
-    </div>}
+    {d.status === 'error' && <p className="nf-error-msg">{d.error}</p>}
   </div>;
 }

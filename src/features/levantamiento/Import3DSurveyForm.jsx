@@ -26,6 +26,9 @@ import { validateImportFile, MAX_IMPORT_FILE_SIZE_BYTES } from '../../domain/lev
 import { computeUniformScaleFactor, deriveSpaceFromImportedModel, buildSurveyImportMeta } from '../../domain/levantamientoImportConversion.js';
 import { hasAnyStylePreference } from '../../domain/evidenceStylePreferences.js';
 import { EvidenceStylePanel } from './EvidenceStylePanel.jsx';
+import { auth } from '../../firebase.js';
+import { useDraftAutosave, clearDraftAutosave } from '../../hooks/useDraftAutosave.js';
+import { AutosaveIndicator } from '../../components/ui/AutosaveIndicator.jsx';
 
 const STEP = Object.freeze({ UPLOAD: 'upload', LOADING: 'loading', SCALE: 'scale', REVIEW: 'review' });
 
@@ -49,9 +52,23 @@ export function Import3DSurveyForm({ projectId, onCancel, onSave }){
   const [scaleError, setScaleError] = useState(null);
   const [confirmedScaleFactor, setConfirmedScaleFactor] = useState(1);
   const [space, setSpace] = useState(null);
-  const [name, setName] = useState('');
-  const [stylePreferences, setStylePreferences] = useState(null); // Fase 2, ver PhoneScanSurveyForm.jsx
-  const [description, setDescription] = useState('');
+  // P0 (correccion de regresion, "cargar evidencia -> cambiar pestana ->
+  // volver"): igual criterio que PhoneScanSurveyForm.jsx -- clave FIJA
+  // 'pending' (este wizard tambien se desmonta por completo si el usuario
+  // cambia de modulo). Valor limitado a proposito: el archivo 3D en si
+  // (File, ya cargado como Object3D) NO es serializable, asi que si el
+  // wizard se desmonta en STEP.SCALE/REVIEW, el usuario de todas formas
+  // tiene que volver a subir el archivo -- lo unico que vale la pena
+  // recordar es nombre/descripcion/estilo para cuando llegue de nuevo a
+  // Revisar, no el archivo ni el Space derivado.
+  const user = auth.currentUser ? { uid: auth.currentUser.uid } : null;
+  const [pendingDraft, setPendingDraft] = useDraftAutosave(user, 'import3d', 'pending', { name: '', description: '', stylePreferences: null });
+  const name = pendingDraft?.name || '';
+  const setName = (value) => setPendingDraft(prev => ({ ...(prev || {}), name: value }));
+  const stylePreferences = pendingDraft?.stylePreferences || null; // Fase 2, ver PhoneScanSurveyForm.jsx
+  const setStylePreferences = (value) => setPendingDraft(prev => ({ ...(prev || {}), stylePreferences: value }));
+  const description = pendingDraft?.description || '';
+  const setDescription = (value) => setPendingDraft(prev => ({ ...(prev || {}), description: value }));
   const [nameError, setNameError] = useState(false);
   const loadedObjectRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -163,15 +180,28 @@ export function Import3DSurveyForm({ projectId, onCancel, onSave }){
       import('../../lib/levantamientoModelLoader.js').then(m => m.disposeLoadedModel(loadedObjectRef.current));
       loadedObjectRef.current = null;
     }
+    clearDraftAutosave(user, 'import3d', 'pending');
     onSave(recomputeSurvey(survey));
   };
 
+  /* "Hay cambios sin guardar. ¿Quieres salir?" (P0) -- solo pregunta si de
+     verdad hay algo que perder (un archivo ya cargado, o texto capturado);
+     salir desde STEP.UPLOAD sin haber tocado nada no amerita confirmar. */
+  const handleCancel = () => {
+    const hasWork = step !== STEP.UPLOAD || name.trim() || description.trim() || hasAnyStylePreference(stylePreferences);
+    if(hasWork && !window.confirm(tr('levantamiento.unsavedChangesConfirmMsg'))) return;
+    onCancel();
+  };
+
   return <div className="record-modal" role="dialog" aria-modal="true">
-    <div className="record-backdrop" onClick={onCancel}></div>
+    <div className="record-backdrop" onClick={handleCancel}></div>
     <div className="panel record-form survey-form">
       <div className="record-form-head">
         <div><span>{tr('levantamiento.import3dWizardKicker')}</span><h2>{tr('levantamiento.import3dWizardTitle')}</h2></div>
-        <button className="secondary" onClick={onCancel}>{tr('levantamiento.cancel')}</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <AutosaveIndicator />
+          <button className="secondary" onClick={handleCancel}>{tr('levantamiento.cancel')}</button>
+        </div>
       </div>
 
       {step === STEP.UPLOAD && <>
@@ -246,7 +276,7 @@ export function Import3DSurveyForm({ projectId, onCancel, onSave }){
         <SpaceCard space={space} onUpdate={setSpace} onRemove={null} />
         <EvidenceStylePanel value={stylePreferences} onChange={setStylePreferences} />
         <div className="form-actions">
-          <button className="secondary" onClick={onCancel}>{tr('levantamiento.cancel')}</button>
+          <button className="secondary" onClick={handleCancel}>{tr('levantamiento.cancel')}</button>
           <button onClick={save}>{tr('levantamiento.save')}</button>
         </div>
       </>}

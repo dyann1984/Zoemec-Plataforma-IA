@@ -5,7 +5,7 @@
    completa (formulario, badges de origen, banner de validacion
    profesional, boton de copiar conceptos) sin necesitar OPENAI_API_KEY ni
    una llamada real a OpenAI (que cuesta dinero y no aplica en dev). */
-import React from 'react';
+import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import '../src/style.css';
 import { ConstructionProposalPanel } from '../src/features/levantamiento/ConstructionProposalPanel.jsx';
@@ -57,11 +57,21 @@ window.fetch = async (url, options) => {
 };
 
 function QaHarness(){
+  // P0: "mounted" simula cambiar de pestana/modulo (desmonta el panel por
+  // completo) y volver -- si el borrador de verdad sobrevive, el formulario/
+  // resultado deben reaparecer identicos al reabrir, sin volver a escribir
+  // nada ni a generar de nuevo.
+  const [mounted, setMounted] = useState(true);
   return <div style={{ maxWidth: 700, margin: '0 auto', padding: 16, fontFamily: 'sans-serif' }}>
     <div style={{ background: '#2A1740', color: '#fff', padding: '8px 14px', borderRadius: 8, marginBottom: 16, fontSize: '.82rem' }}>
       ARNES DE QA -- Fase 3 (Propuesta con IA) -- no es producto. fetch('/api/construction-proposal') interceptado con una respuesta fija, sin llamar a OpenAI real.
     </div>
-    <ConstructionProposalPanel imageUrls={[]} hasEvidence={true} stylePreferences={{ colors: ['blanco'], materials: ['concreto'], estilo: 'moderno' }} />
+    <button onClick={() => setMounted(m => !m)} style={{ marginBottom: 12 }}>
+      {mounted ? 'P0: Simular cambio de pestaña (desmontar)' : 'P0: Volver (remontar)'}
+    </button>
+    {mounted
+      ? <ConstructionProposalPanel surveyId="QA-SURVEY-1" imageUrls={[]} hasEvidence={true} stylePreferences={{ colors: ['blanco'], materials: ['concreto'], estilo: 'moderno' }} />
+      : <p className="muted">(panel desmontado -- como si hubieras cambiado de módulo)</p>}
   </div>;
 }
 

@@ -213,7 +213,7 @@ export function SurveyDetail({ survey, onBack, onChange, onSendToApu, currentUse
     </div>}
 
     {activeTab === 'propuesta' && <div className="panel">
-      <ConstructionProposalPanel imageUrls={photoImageUrls} hasEvidence={photoImageUrls.length > 0} stylePreferences={survey.stylePreferences || null} />
+      <ConstructionProposalPanel surveyId={survey.id} imageUrls={photoImageUrls} hasEvidence={photoImageUrls.length > 0} stylePreferences={survey.stylePreferences || null} />
     </div>}
   </section>;
 }

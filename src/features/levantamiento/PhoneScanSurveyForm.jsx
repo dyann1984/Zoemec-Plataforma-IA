@@ -29,6 +29,8 @@ import {
 } from '../../domain/levantamientoMedia.js';
 import { hasAnyStylePreference } from '../../domain/evidenceStylePreferences.js';
 import { EvidenceStylePanel } from './EvidenceStylePanel.jsx';
+import { useDraftAutosave, clearDraftAutosave } from '../../hooks/useDraftAutosave.js';
+import { AutosaveIndicator } from '../../components/ui/AutosaveIndicator.jsx';
 
 const STEP = Object.freeze({ CAPTURE: 'captura', REVIEW: 'revisar' });
 
@@ -54,7 +56,22 @@ function extForMimeType(mimeType, kind){
 
 export function PhoneScanSurveyForm({ projectId, onCancel, onSave }){
   const { t: tr } = useI18n();
-  const surveyIdRef = useRef('LEV-' + uid());
+  const user = auth.currentUser ? { uid: auth.currentUser.uid } : null;
+  // P0 (correccion de regresion, "cargar evidencia -> cambiar pestana ->
+  // volver"): clave FIJA 'pending' (no por surveyIdRef.current) -- este
+  // wizard es un MODAL dentro de LevantamientoModule, que se desmonta por
+  // completo si el usuario cambia de modulo (module==='levantamiento' &&
+  // <LevantamientoModule/>, mismo patron de desmontaje que <APU/>). Un
+  // surveyIdRef.current generado con uid() jamas coincidiria consigo mismo
+  // entre un montaje y el siguiente, asi que la clave del borrador NO puede
+  // depender de el -- en vez de eso, el borrador GUARDA el surveyId usado la
+  // ultima vez, y ese mismo id se reutiliza al reabrir (para que las fotos
+  // ya subidas bajo esa ruta de Storage sigan perteneciendo al MISMO
+  // levantamiento cuando por fin se guarde). Recordar solo el intento MAS
+  // RECIENTE (un solo slot) es una limitacion deliberada, igual criterio
+  // que el borrador de APU (ver main.jsx).
+  const [pendingDraft, setPendingDraft] = useDraftAutosave(user, 'phonescan', 'pending', null);
+  const surveyIdRef = useRef(pendingDraft?.surveyId || ('LEV-' + uid()));
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -75,15 +92,32 @@ export function PhoneScanSurveyForm({ projectId, onCancel, onSave }){
   const [recordingElapsed, setRecordingElapsed] = useState(0);
   const [captureError, setCaptureError] = useState(null);
   const [dragActive, setDragActive] = useState(false);
-  const [items, setItems] = useState([]); // {localId,kind,blob,previewUrl,sizeBytes,durationSeconds,mimeType,status,progress,storagePath,errorReason}
-  const [name, setName] = useState('');
+  const [items, setItems] = useState([]); // {localId,kind,blob,previewUrl,sizeBytes,durationSeconds,mimeType,status,progress,storagePath,errorReason} -- nunca serializable, no autoguardado (ver nota P0 mas arriba)
+  // nombre/descripcion/estilo son lo unico de este wizard que es JSON-
+  // serializable y barato de restaurar -- viven DENTRO del mismo borrador
+  // 'pending' que ya guarda el surveyId (ver arriba). Los `items` (fotos/
+  // video ya subidos) NO se restauran todavia si el wizard llega a
+  // desmontarse por completo (limite conocido, ver reporte) -- sus blobs no
+  // son serializables y persistirlos exigiria resolver cada uno por
+  // download URL al reabrir; ya quedan a salvo en Storage de todas formas,
+  // solo no reaparecen solos en este wizard si se cierra sin guardar.
+  const formDraft = pendingDraft;
+  const setFormDraft = (updater) => setPendingDraft(prev => {
+    const base = prev || { surveyId: surveyIdRef.current };
+    const next = typeof updater === 'function' ? updater(base) : updater;
+    return { ...base, ...next, surveyId: surveyIdRef.current };
+  });
+  const name = formDraft?.name || '';
+  const setName = (value) => setFormDraft(prev => ({ ...(prev || {}), name: value }));
+  const description = formDraft?.description || '';
+  const setDescription = (value) => setFormDraft(prev => ({ ...(prev || {}), description: value }));
   // Fase 2: null hasta que el usuario abra/toque el panel "Estilo y
   // materiales" -- ver hasAnyStylePreference (distingue "nunca lo abrio" de
   // "lo abrio y no eligio nada", aunque para el Survey guardado ambos casos
   // hoy se comportan igual: no se manda nada a la IA todavia, Fase 3 unica
   // consumidora real).
-  const [stylePreferences, setStylePreferences] = useState(null);
-  const [description, setDescription] = useState('');
+  const stylePreferences = formDraft?.stylePreferences || null;
+  const setStylePreferences = (value) => setFormDraft(prev => ({ ...(prev || {}), stylePreferences: value }));
   const [nameError, setNameError] = useState(false);
   const photoInputRef = useRef(null);
 
@@ -279,7 +313,15 @@ export function PhoneScanSurveyForm({ projectId, onCancel, onSave }){
     uploadItem(localId, item.blob, item.kind, item.mimeType, item.durationSeconds);
   };
 
+  /* "Hay cambios sin guardar. ¿Quieres salir?" (pedido explicito del brief,
+     P0): esta es la unica salida de este wizard donde el usuario declara
+     intencion explicita de abandonar -- Cancelar YA borraba de Storage
+     cualquier foto/video subido (ver abajo), asi que confirmar aqui es
+     ademas la unica proteccion real contra perder evidencia ya capturada
+     por un click accidental. */
   const handleCancel = () => {
+    const hasWork = name.trim() || description.trim() || hasAnyStylePreference(stylePreferences) || items.length > 0;
+    if(hasWork && !window.confirm(tr('levantamiento.unsavedChangesConfirmMsg'))) return;
     items.forEach(item => {
       if(item.status === 'uploaded'){
         import('../../lib/levantamientoMediaUpload.js').then(m => m.deleteScanMedia(item.storagePath));
@@ -287,6 +329,7 @@ export function PhoneScanSurveyForm({ projectId, onCancel, onSave }){
         removedIdsRef.current.add(item.localId);
       }
     });
+    clearDraftAutosave(user, 'phonescan', 'pending');
     onCancel();
   };
 
@@ -304,6 +347,7 @@ export function PhoneScanSurveyForm({ projectId, onCancel, onSave }){
       stylePreferences: hasAnyStylePreference(stylePreferences) ? stylePreferences : null
     });
     survey.status = SURVEY_STATUS.DRAFT;
+    clearDraftAutosave(user, 'phonescan', 'pending');
     onSave(recomputeSurvey(survey));
   };
 
@@ -342,7 +386,10 @@ export function PhoneScanSurveyForm({ projectId, onCancel, onSave }){
     <div className="panel record-form survey-form">
       <div className="record-form-head">
         <div><span>{tr('levantamiento.phoneScanWizardKicker')}</span><h2>{tr('levantamiento.phoneScanWizardTitle')}</h2></div>
-        <button className="secondary" onClick={handleCancel}>{tr('levantamiento.cancel')}</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <AutosaveIndicator />
+          <button className="secondary" onClick={handleCancel}>{tr('levantamiento.cancel')}</button>
+        </div>
       </div>
 
       {step === STEP.CAPTURE && <>

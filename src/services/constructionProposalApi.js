@@ -4,9 +4,9 @@
    reimplementa el manejo de errores/token. */
 import { apiPost } from './apiClient.js';
 
-export function generateConstructionProposal({ imageUrls, userPrompt, knownDimensions, stylePreferences, referenceBudget }){
+export function generateConstructionProposal({ imageUrls, userPrompt, knownDimensions, stylePreferences, referenceBudget, levels, specialNeeds }){
   return apiPost('/api/construction-proposal', {
-    action: 'generate', imageUrls, userPrompt, knownDimensions, stylePreferences, referenceBudget
+    action: 'generate', imageUrls, userPrompt, knownDimensions, stylePreferences, referenceBudget, levels, specialNeeds
   });
 }
 

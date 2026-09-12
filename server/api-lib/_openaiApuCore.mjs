@@ -315,7 +315,7 @@ Reglas obligatorias:
    transcriba bien -- mismo principio que ownerUid/organizationId en el
    resto del backend (la fuente de verdad real nunca es lo que un modelo/
    cliente afirma, es lo que el sistema ya sabe con certeza). */
-export async function generateConstructionProposal({ imageUrls = [], userPrompt = '', knownDimensions = {}, stylePreferences = null, referenceBudget = 0 } = {}){
+export async function generateConstructionProposal({ imageUrls = [], userPrompt = '', knownDimensions = {}, stylePreferences = null, referenceBudget = 0, levels = 0, specialNeeds = '' } = {}){
   if(!process.env.OPENAI_API_KEY) throw new Error('Falta OPENAI_API_KEY en Vercel.');
   const cleanPrompt = String(userPrompt || '').trim();
   if(!cleanPrompt) throw new Error('Describe que quieres construir en este espacio.');
@@ -331,6 +331,8 @@ export async function generateConstructionProposal({ imageUrls = [], userPrompt 
     : 'El usuario no dio ninguna medida real conocida -- si necesitas una escala para razonar proporciones, dilo en notes en vez de inventar un numero de "sentido comun".';
   const styleText = stylePreferences ? `Preferencias de estilo del usuario (ya elegidas explicitamente, uselas para el sistema constructivo/acabados sugeridos): ${JSON.stringify(stylePreferences)}.` : '';
   const budgetText = Number(referenceBudget) > 0 ? `Presupuesto objetivo de referencia: $${Number(referenceBudget)} MXN -- orientativo, no fuerces el sistema constructivo para encajar en el a costa de omitir algo necesario.` : '';
+  const levelsText = Number(levels) > 0 ? `Numero de niveles/plantas pedido por el usuario: ${Number(levels)} -- diseña el sistema constructivo (estructura, cimentacion) acorde a esa altura, nunca asumas 1 nivel si el usuario pidio mas.` : '';
+  const specialNeedsText = String(specialNeeds || '').trim() ? `Necesidades especiales declaradas por el usuario (accesibilidad, normativa local, uso especifico, etc.): "${String(specialNeeds).trim()}" -- reflejalas en el sistema constructivo/notes cuando aplique.` : '';
 
   const prompt = `Eres un arquitecto/ingeniero de costos mexicano. Un usuario te muestra evidencia visual de un espacio (fotos adjuntas${images.length ? '' : ' -- NO se adjunto ninguna foto esta vez, trabaja SOLO con la descripcion de texto y advierte esa limitacion en notes'}) y describe que quiere construir ahi:
 
@@ -339,6 +341,8 @@ export async function generateConstructionProposal({ imageUrls = [], userPrompt 
 ${knownDimsText}
 ${styleText}
 ${budgetText}
+${levelsText}
+${specialNeedsText}
 
 Genera una propuesta constructiva preliminar. Para CADA dimension, declara "origen" usando EXACTAMENTE una de estas 4 palabras, con este significado estricto:
 - "detectado": lo puedes observar/medir de forma razonable EN LA FOTO (proporciones relativas visibles).

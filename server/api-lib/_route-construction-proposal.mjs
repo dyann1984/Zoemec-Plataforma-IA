@@ -15,8 +15,8 @@ function httpError(status, message){ const e = new Error(message); e.status = st
 
 async function handleGenerate(req, res){
   const authz = await requireFeature(req, 'ai');
-  const { imageUrls, userPrompt, knownDimensions, stylePreferences, referenceBudget } = req.body || {};
-  const proposal = await generateConstructionProposal({ imageUrls, userPrompt, knownDimensions, stylePreferences, referenceBudget });
+  const { imageUrls, userPrompt, knownDimensions, stylePreferences, referenceBudget, levels, specialNeeds } = req.body || {};
+  const proposal = await generateConstructionProposal({ imageUrls, userPrompt, knownDimensions, stylePreferences, referenceBudget, levels, specialNeeds });
   await markFeatureUsed(authz);
   res.status(200).json({ ok: true, proposal });
 }

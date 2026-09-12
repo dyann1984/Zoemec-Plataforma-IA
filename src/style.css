@@ -2836,6 +2836,7 @@ svg.ic{display:block;flex:none}
 .zi-evidence-table{width:100%;border-collapse:collapse;font-size:.82rem}
 .zi-evidence-table th{text-align:left;font-family:var(--mono);font-size:.66rem;text-transform:uppercase;color:var(--muted);padding:6px 8px;border-bottom:1px solid var(--line)}
 .zi-evidence-table td{padding:6px 8px;border-bottom:1px solid var(--line)}
+.zi-regional-intel{display:block;font-size:.68rem;line-height:1.35;color:var(--muted);max-width:220px}
 
 @media (max-width:768px){
   .zi-panel-head{flex-wrap:wrap}
@@ -3434,6 +3435,9 @@ svg.ic{display:block;flex:none}
 }
 .phonescan-controls{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
 .phonescan-controls button{min-height:44px;min-width:44px}
+
+.phonescan-actions-row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.phonescan-actions-row button{flex:1 1 140px;min-height:44px}
 
 .phonescan-dropzone{
   border:2px dashed var(--line-2);border-radius:var(--r);padding:20px 18px;

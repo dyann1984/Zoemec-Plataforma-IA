@@ -1,0 +1,8 @@
+[
+  {
+    "origin": ["https://zoemecia.com", "https://zoemec-plataforma-ia.vercel.app", "http://localhost:5173"],
+    "method": ["GET", "PUT", "POST", "HEAD"],
+    "maxAgeSeconds": 3600,
+    "responseHeader": ["Content-Type", "Content-Length", "Content-Disposition", "x-goog-resumable", "x-goog-upload-protocol", "x-goog-upload-status"]
+  }
+]

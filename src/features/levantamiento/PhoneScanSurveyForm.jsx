@@ -63,7 +63,10 @@ export function PhoneScanSurveyForm({ projectId, onCancel, onSave }){
   const fileInputRef = useRef(null);
 
   const [step, setStep] = useState(STEP.CAPTURE);
-  const [cameraStatus, setCameraStatus] = useState('requesting'); // 'requesting' | 'ready' | 'error'
+  // 'idle' = todavia no se pidio la camara (las 3 acciones estan disponibles
+  // sin haber tocado getUserMedia); 'requesting'|'ready'|'error' solo aplican
+  // despues de que el usuario elige explicitamente "Usar cámara".
+  const [cameraStatus, setCameraStatus] = useState('idle');
   const [cameraError, setCameraError] = useState(null);
   const [recorderSupported, setRecorderSupported] = useState(true);
   const [recordingState, setRecordingState] = useState('idle'); // 'idle' | 'recording' | 'paused'
@@ -74,21 +77,37 @@ export function PhoneScanSurveyForm({ projectId, onCancel, onSave }){
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [nameError, setNameError] = useState(false);
+  const photoInputRef = useRef(null);
+
+  /* startCamera: FIX "cámara negra" -- antes, getUserMedia se disparaba
+     automaticamente al montar el componente, y el resultado (stream) se
+     asignaba a videoRef.current DENTRO del mismo callback async que recien
+     iba a poner cameraStatus en 'ready'. En ese instante el <video> todavia
+     NO existe en el DOM (solo se renderiza cuando cameraStatus==='ready',
+     ver JSX abajo) -- `if(videoRef.current)` era falso, la asignacion nunca
+     ocurria, y el <video> que React montaba justo despues nacia SIN
+     srcObject: la camara ya estaba encendida (el LED del dispositivo prende)
+     pero la vista previa se quedaba negra para siempre. La correccion real
+     es un efecto separado, con cameraStatus como dependencia (useEffect de
+     abajo): ese efecto SIEMPRE corre DESPUES de que React ya monto el nuevo
+     <video>, por eso videoRef.current ya existe cuando se lee ahi. Ahora
+     ademas es una accion explicita del usuario ("Usar cámara"), no automatica
+     al abrir el wizard -- evita pedir permiso de camara sin que el usuario
+     lo haya elegido, y dejar accesibles "Subir fotos"/"Subir video" aunque
+     la camara falle o el usuario nunca la use. */
+  const startCamera = async () => {
+    setCameraStatus('requesting');
+    setCameraError(null);
+    const { getCameraStream, isMediaRecorderSupported } = await import('../../lib/cameraCapture.js');
+    setRecorderSupported(isMediaRecorderSupported());
+    const result = await getCameraStream();
+    if(!result.ok){ setCameraError(result.reason); setCameraStatus('error'); return; }
+    streamRef.current = result.stream;
+    setCameraStatus('ready');
+  };
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const { getCameraStream, isMediaRecorderSupported } = await import('../../lib/cameraCapture.js');
-      setRecorderSupported(isMediaRecorderSupported());
-      const result = await getCameraStream();
-      if(cancelled) return;
-      if(!result.ok){ setCameraError(result.reason); setCameraStatus('error'); return; }
-      streamRef.current = result.stream;
-      if(videoRef.current) videoRef.current.srcObject = result.stream;
-      setCameraStatus('ready');
-    })();
     return () => {
-      cancelled = true;
       if(recordingTimerRef.current) clearInterval(recordingTimerRef.current);
       if(streamRef.current){
         import('../../lib/cameraCapture.js').then(m => m.stopStreamTracks(streamRef.current));
@@ -96,15 +115,20 @@ export function PhoneScanSurveyForm({ projectId, onCancel, onSave }){
     };
   }, []);
 
-  /* El <video> de vista previa se desmonta al pasar a "revisar" (esa etapa
-     no lo renderiza) y se vuelve a montar al regresar a "captura" -- un
-     <video> nuevo no trae consigo el srcObject anterior, hay que
-     reasignarlo cada vez que el paso de captura vuelve a montarse. */
+  /* Asigna srcObject (y llama play() explicitamente -- no confiar solo en el
+     atributo autoPlay del HTML: algunos navegadores no reanudan la
+     reproduccion automaticamente cuando srcObject se asigna DESPUES de que
+     el elemento ya existia, ver auditoria "video.play()" pedida) cada vez
+     que el <video> de vista previa pasa a existir en el DOM: al terminar
+     startCamera() (cameraStatus->'ready') Y al volver de "revisar" a
+     "captura" (el <video> se desmonto y hay que volver a montarlo). Ambas
+     dependencias cubren los dos momentos reales en que el elemento nace. */
   useEffect(() => {
-    if(step === STEP.CAPTURE && videoRef.current && streamRef.current){
+    if(step === STEP.CAPTURE && cameraStatus === 'ready' && videoRef.current && streamRef.current){
       videoRef.current.srcObject = streamRef.current;
+      videoRef.current.play?.().catch(() => { /* autoplay bloqueado por el navegador -- el usuario ya ve los controles, puede reintentar */ });
     }
-  }, [step]);
+  }, [step, cameraStatus]);
 
   const uploadItem = async (localId, blob, kind, mimeType, durationSeconds) => {
     const currentUid = auth.currentUser?.uid;
@@ -208,6 +232,26 @@ export function PhoneScanSurveyForm({ projectId, onCancel, onSave }){
     handleFinishedCapture({ kind: SCAN_MEDIA_KIND.VIDEO, blob: file, durationSeconds, mimeType: file.type || 'video/mp4' });
   };
 
+  /* FIX "falta opcion para subir fotos/imagenes": antes SOLO existia "tomar
+     foto" con la camara en vivo -- no habia forma de elegir imagenes ya
+     existentes del dispositivo (galeria/carrete), aunque el dominio
+     (SCAN_MEDIA_KIND.PHOTO, validateScanMediaFile, buildScanMediaItem) ya lo
+     soportaba por completo. Acepta seleccion multiple (un <input> con
+     `multiple`, ver JSX) -- cada archivo se procesa y sube de forma
+     independiente, exactamente igual que cualquier otro item del wizard. */
+  const ACCEPTED_PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+  const handleExistingPhotoFiles = (fileList) => {
+    const files = Array.from(fileList || []);
+    if(!files.length) return;
+    const rejected = files.filter(f => !ACCEPTED_PHOTO_TYPES.includes(f.type));
+    if(rejected.length){
+      setCaptureError(tr('levantamiento.phoneScanUnsupportedPhotoTypeMsg'));
+    }
+    files.filter(f => ACCEPTED_PHOTO_TYPES.includes(f.type)).forEach(file => {
+      handleFinishedCapture({ kind: SCAN_MEDIA_KIND.PHOTO, blob: file, mimeType: file.type });
+    });
+  };
+
   const removeItem = (localId) => {
     const item = items.find(it => it.localId === localId);
     if(!item) return;
@@ -293,13 +337,32 @@ export function PhoneScanSurveyForm({ projectId, onCancel, onSave }){
       </div>
 
       {step === STEP.CAPTURE && <>
-        <div className="phonescan-camera-preview">
+        {/* Tres acciones siempre visibles y explicitas, nunca condicionadas
+            entre si: "Usar cámara" solo INICIA getUserMedia cuando el
+            usuario lo elige (ya no automatico al abrir el wizard); "Subir
+            fotos"/"Subir video" funcionan sin importar si la camara esta
+            disponible, con permiso, o si el usuario ni siquiera la intento
+            -- asi un dispositivo sin camara, o con el permiso denegado,
+            sigue teniendo una forma real de aportar evidencia. */}
+        <div className="phonescan-actions-row">
+          <button type="button" className={cameraStatus !== 'idle' ? '' : 'soft'} onClick={startCamera} disabled={cameraStatus === 'requesting' || cameraStatus === 'ready'}>
+            {tr('levantamiento.phoneScanUseCameraButton')}
+          </button>
+          <button type="button" className="soft" onClick={() => photoInputRef.current?.click()}>{tr('levantamiento.phoneScanUploadPhotosButton')}</button>
+          <button type="button" className="soft" onClick={() => fileInputRef.current?.click()}>{tr('levantamiento.phoneScanUploadVideoButton')}</button>
+        </div>
+        <input ref={photoInputRef} type="file" accept="image/jpeg,image/png,image/webp" multiple style={{ display: 'none' }}
+          onChange={e => { handleExistingPhotoFiles(e.target.files); e.target.value = ''; }} />
+        <input ref={fileInputRef} type="file" accept="video/*" style={{ display: 'none' }}
+          onChange={e => { handleExistingVideoFile(e.target.files?.[0]); e.target.value = ''; }} />
+
+        {cameraStatus !== 'idle' && <div className="phonescan-camera-preview">
           {cameraLive
             ? <video ref={videoRef} muted playsInline autoPlay />
             : <div className="phonescan-camera-placeholder">
                 {cameraStatus === 'requesting' ? tr('levantamiento.phoneScanRequestingCameraMsg') : (cameraErrorMsgKey ? tr(`levantamiento.${cameraErrorMsgKey}`) : '')}
               </div>}
-        </div>
+        </div>}
 
         {cameraLive && <div className="phonescan-controls">
           {canRecord && recordingState === 'idle' && <button type="button" onClick={startRecording}>{tr('levantamiento.phoneScanRecordButton')}</button>}
@@ -323,8 +386,6 @@ export function PhoneScanSurveyForm({ projectId, onCancel, onSave }){
         >
           <b>{tr('levantamiento.phoneScanUploadVideoButton')}</b>
           <span>{tr('levantamiento.phoneScanDropzoneHint')}</span>
-          <input ref={fileInputRef} type="file" accept="video/*" style={{ display: 'none' }}
-            onChange={e => handleExistingVideoFile(e.target.files?.[0])} />
         </div>
 
         {captureError && <p className="nf-error-msg">{captureError}</p>}

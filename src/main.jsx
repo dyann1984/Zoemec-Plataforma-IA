@@ -20,6 +20,7 @@ import { validateProjectDraft } from './domain/projectDraftValidation.js';
 import { exportAPUExcelV2, exportAPUPdfV2, exportAPUPdfMaster } from './lib/apuExportV2.js';
 import { exportProjectDossierPdf } from './lib/apuProjectDossierPdf.js';
 import { exportProjectDossierExcel } from './lib/apuProjectDossierXlsx.js';
+import ExplosionsPanel from './features/explosions/ExplosionsPanel.jsx';
 import {
   money, num, excelCell, XLS, xcell, fcell, styleHeader, styleSection,
   exportRowsCSV, exportRowsExcel, exportWorkbookExcel,
@@ -4018,6 +4019,10 @@ function Projects({projects,setProjects,activeProjectId,setActiveProjectId,setMo
       setDossierState({projectId, format, status:'error', message:err.message});
     }
   };
+  // Explosion de Materiales/Mano de Obra/Maquinaria (Fase A): panel propio
+  // (ExplosionsPanel.jsx), nunca reusa el estado del Dossier -- son features
+  // independientes que comparten solo el patron de boton "soft" por tarjeta.
+  const [explosionsProjectId,setExplosionsProjectId]=useState(null);
   const remove = (i) => {
     const removed=list[i];
     if(!confirm(tr('projects.confirmDelete',{name:removed?.name||tr('projects.defaultProjectName')}))) return;
@@ -4085,9 +4090,11 @@ function Projects({projects,setProjects,activeProjectId,setActiveProjectId,setMo
           <button className="soft" disabled={dossierState?.projectId===p.id && dossierState?.status==='generating'} onClick={()=>generateProjectDossier(p.id,'PDF')}>{dossierState?.projectId===p.id && dossierState?.format==='PDF' && dossierState?.status==='generating' ? tr('projects.generatingPdf') : tr('projects.dossierPdf')}</button>
           <button className="soft" disabled={dossierState?.projectId===p.id && dossierState?.status==='generating'} onClick={()=>generateProjectDossier(p.id,'XLSX')}>{dossierState?.projectId===p.id && dossierState?.format==='XLSX' && dossierState?.status==='generating' ? tr('projects.generatingExcel') : tr('projects.dossierExcel')}</button>
           {dossierState?.projectId===p.id && dossierState?.status==='error' && <small style={{color:'var(--danger)'}}>{dossierState.message}</small>}
+          <button className="soft" onClick={()=>setExplosionsProjectId(p.id)}>{tr('projects.explosionsButton')}</button>
         </div>}
       </div>
     )}</div> : <div className="panel"><EmptyState icon="proyectos" title={tr('projects.emptyTitle')} text={tr('projects.emptyText')} actionLabel={tr('projects.newProject')} onAction={add}/></div>}
+    {explosionsProjectId && <ExplosionsPanel projectId={explosionsProjectId} onClose={()=>setExplosionsProjectId(null)} />}
   </section>
 }
 function Clients({clients,setClients,embedded=false}){

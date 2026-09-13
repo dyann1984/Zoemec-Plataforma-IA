@@ -455,6 +455,39 @@ describe('firestore.rules — projects / apus / apuVersions (Fase 7)', () => {
   });
 });
 
+describe('firestore.rules — planoTakeoffs / planoTakeoffVersions / planoTakeoffAudit (Fase B)', () => {
+  it('nadie escribe planoTakeoffs desde el cliente -- toda escritura pasa por _route-plano-takeoffs.mjs (SDK admin)', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('planoTakeoffs/pl1').set({ ownerUid: 'alice', currentVersion: 'V1' }));
+  });
+
+  it('el dueno real SI puede leer su propio plano, otro usuario no', async () => {
+    await seed((db) => db.doc('planoTakeoffs/pl1').set({ ownerUid: 'alice', currentVersion: 'V1' }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(alice.doc('planoTakeoffs/pl1').get());
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(bob.doc('planoTakeoffs/pl1').get());
+  });
+
+  it('nadie escribe planoTakeoffVersions desde el cliente; el dueno real si puede leer, otro usuario no', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('planoTakeoffVersions/pl1__V1').set({ ownerUid: 'alice', version: 'V1' }));
+    await seed((db) => db.doc('planoTakeoffVersions/pl1__V1').set({ ownerUid: 'alice', version: 'V1' }));
+    await assertSucceeds(alice.doc('planoTakeoffVersions/pl1__V1').get());
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(bob.doc('planoTakeoffVersions/pl1__V1').get());
+  });
+
+  it('nadie escribe planoTakeoffAudit desde el cliente; el dueno real si puede leer, otro usuario no', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('planoTakeoffAudit/a1').set({ action: 'PLANO_TAKEOFF_CREATED', ownerUid: 'alice' }));
+    await seed((db) => db.doc('planoTakeoffAudit/a1').set({ action: 'PLANO_TAKEOFF_CREATED', ownerUid: 'alice' }));
+    await assertSucceeds(alice.doc('planoTakeoffAudit/a1').get());
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(bob.doc('planoTakeoffAudit/a1').get());
+  });
+});
+
 describe('firestore.rules — exportEvents (Fase 8)', () => {
   it('nadie escribe exportEvents desde el cliente -- toda escritura pasa por api/export-events.mjs (SDK admin)', async () => {
     const alice = testEnv.authenticatedContext('alice').firestore();

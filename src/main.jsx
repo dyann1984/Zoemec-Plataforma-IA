@@ -21,6 +21,7 @@ import { exportAPUExcelV2, exportAPUPdfV2, exportAPUPdfMaster } from './lib/apuE
 import { exportProjectDossierPdf } from './lib/apuProjectDossierPdf.js';
 import { exportProjectDossierExcel } from './lib/apuProjectDossierXlsx.js';
 import ExplosionsPanel from './features/explosions/ExplosionsPanel.jsx';
+import PlanoTakeoffWorkspace from './features/planos/PlanoTakeoffWorkspace.jsx';
 import {
   money, num, excelCell, XLS, xcell, fcell, styleHeader, styleSection,
   exportRowsCSV, exportRowsExcel, exportWorkbookExcel,
@@ -4917,8 +4918,10 @@ function VisualAI({user, setModule}){
   const tabs=<div className="visual-modes" style={{marginBottom:14}}>
     <button className={subview==='propuesta'?'active':''} onClick={()=>setSubview('propuesta')}>{tr('visualAi.tabProposal')}</button>
     <button className={subview==='takeoff'?'active':''} onClick={()=>setSubview('takeoff')}>{tr('visualAi.tabTakeoff')}</button>
+    <button className={subview==='takeoffVector'?'active':''} onClick={()=>setSubview('takeoffVector')}>{tr('visualAi.tabTakeoffVector')}</button>
   </div>;
   if(subview==='takeoff') return <section><PageHead kicker={tr('modules.takeoff.kicker')} title={tr('modules.takeoff.title')} desc={tr('modules.takeoff.desc')} />{tabs}<PlanoTakeoff user={user} setModule={setModule}/></section>;
+  if(subview==='takeoffVector') return <section><PageHead kicker={tr('modules.takeoffVector.kicker')} title={tr('modules.takeoffVector.title')} desc={tr('modules.takeoffVector.desc')} />{tabs}<PlanoTakeoffWorkspace user={user}/></section>;
   return <section><PageHead kicker={tr('visualAi.kicker')} title={tr('visualAi.title')} desc={tr('visualAi.desc')} action={<button onClick={generate}>{tr('visualAi.generateProposal')}</button>} />
     {tabs}
     <div className="visual-grid">

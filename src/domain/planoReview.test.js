@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PLANO_ELEMENT_STATES, ESCALA_FUENTES, isValidPlanoState, isValidEscalaFuente, enforceScaleRule, applyPlanoElementReview, toApuSeed } from './planoReview.js';
+import {
+  PLANO_ELEMENT_STATES, ESCALA_FUENTES, PLANO_ELEMENT_ORIGIN, isValidPlanoState, isValidEscalaFuente,
+  isValidPlanoElementOrigin, isQuantifiable, enforceScaleRule, applyPlanoElementReview, toApuSeed
+} from './planoReview.js';
 
 function baseElement(overrides = {}){
   return {
@@ -93,4 +96,50 @@ test('toApuSeed: usa la cantidad propuesta por la IA cuando no hay correccion hu
   const el = baseElement({ estado: PLANO_ELEMENT_STATES.VALIDADO_POR_USUARIO, validatedBy: 'diana@zoemec.com' });
   const seed = toApuSeed(el);
   assert.equal(seed.qty, 126.4);
+});
+
+/* Fase B: DETECTADO_VECTORIAL / CORREGIDO_POR_USUARIO / PLANO_ELEMENT_ORIGIN /
+   isQuantifiable -- todo aditivo, no debe alterar ninguna de las pruebas de
+   arriba (RC4). */
+
+test('isValidPlanoState acepta los 2 estados nuevos de Fase B', () => {
+  assert.equal(isValidPlanoState('DETECTADO_VECTORIAL'), true);
+  assert.equal(isValidPlanoState('CORREGIDO_POR_USUARIO'), true);
+});
+
+test('isValidPlanoElementOrigin solo acepta el enum controlado', () => {
+  Object.values(PLANO_ELEMENT_ORIGIN).forEach(o => assert.equal(isValidPlanoElementOrigin(o), true));
+  assert.equal(isValidPlanoElementOrigin('BOUNDING_BOX_MAGICO'), false);
+});
+
+test('isQuantifiable: solo VALIDADO_POR_USUARIO y CORREGIDO_POR_USUARIO cuentan para cuantificacion', () => {
+  assert.equal(isQuantifiable(PLANO_ELEMENT_STATES.VALIDADO_POR_USUARIO), true);
+  assert.equal(isQuantifiable(PLANO_ELEMENT_STATES.CORREGIDO_POR_USUARIO), true);
+  assert.equal(isQuantifiable(PLANO_ELEMENT_STATES.PROPUESTO_POR_IA), false);
+  assert.equal(isQuantifiable(PLANO_ELEMENT_STATES.DETECTADO_VECTORIAL), false);
+  assert.equal(isQuantifiable(PLANO_ELEMENT_STATES.REQUIERE_REVISION), false);
+  assert.equal(isQuantifiable(PLANO_ELEMENT_STATES.RECHAZADO), false);
+});
+
+test('applyPlanoElementReview: CORREGIDO_POR_USUARIO tambien exige usuario, igual que VALIDADO_POR_USUARIO', () => {
+  assert.throws(() => applyPlanoElementReview(baseElement(), { state: 'CORREGIDO_POR_USUARIO' }));
+  const reviewed = applyPlanoElementReview(baseElement(), { state: 'CORREGIDO_POR_USUARIO', validatedBy: 'diana@zoemec.com', cantidadCorregida: 130 });
+  assert.equal(reviewed.estado, 'CORREGIDO_POR_USUARIO');
+  assert.equal(reviewed.cantidadOriginalIA, 126.4);
+  assert.equal(reviewed.cantidadCorregida, 130);
+});
+
+test('applyPlanoElementReview: solo CORREGIDO_POR_USUARIO estampa correctedBy/correctedAt (VALIDADO_POR_USUARIO nunca)', () => {
+  const corregido = applyPlanoElementReview(baseElement(), { state: 'CORREGIDO_POR_USUARIO', validatedBy: 'diana@zoemec.com', cantidadCorregida: 130 });
+  assert.equal(corregido.correctedBy, 'diana@zoemec.com');
+  assert.ok(corregido.correctedAt);
+  const validado = applyPlanoElementReview(baseElement(), { state: 'VALIDADO_POR_USUARIO', validatedBy: 'diana@zoemec.com' });
+  assert.equal(validado.correctedBy, null);
+  assert.equal(validado.correctedAt, null);
+});
+
+test('CORREGIDO_POR_USUARIO y VALIDADO_POR_USUARIO nunca se mezclan: son estados distintos aunque ambos tengan usuario/fecha', () => {
+  const validado = applyPlanoElementReview(baseElement(), { state: 'VALIDADO_POR_USUARIO', validatedBy: 'diana@zoemec.com' });
+  const corregido = applyPlanoElementReview(baseElement(), { state: 'CORREGIDO_POR_USUARIO', validatedBy: 'diana@zoemec.com', cantidadCorregida: 200 });
+  assert.notEqual(validado.estado, corregido.estado);
 });

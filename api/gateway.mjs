@@ -19,6 +19,7 @@ import exportEventsHandler from '../server/api-lib/_route-export-events.mjs';
 import healthHandler from '../server/api-lib/_route-health.mjs';
 import organizationsHandler from '../server/api-lib/_route-organizations.mjs';
 import constructionProposalHandler from '../server/api-lib/_route-construction-proposal.mjs';
+import planoTakeoffsHandler from '../server/api-lib/_route-plano-takeoffs.mjs';
 
 const ROUTES = {
   '/api/apus': apusHandler,
@@ -29,6 +30,7 @@ const ROUTES = {
   '/api/health': healthHandler,
   '/api/organizations': organizationsHandler,
   '/api/construction-proposal': constructionProposalHandler,
+  '/api/plano-takeoffs': planoTakeoffsHandler,
 };
 
 export default async function handler(req, res){

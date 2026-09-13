@@ -369,6 +369,25 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Plano Takeoff (Fase B): mismo patron exacto que apus/apuVersions/apuAudit
+    // -- documento actual + version inmutable + auditoria append-only, toda
+    // escritura via server/api-lib/_route-plano-takeoffs.mjs (Admin SDK).
+    match /planoTakeoffs/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /planoTakeoffVersions/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /planoTakeoffAudit/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+
     // Eventos de exportacion del Dossier APU Auditable (Fase 8, regla 22):
     // append-only, nunca editable ni borrable -- toda escritura pasa por
     // api/export-events.mjs (SDK admin). Mismo criterio de lectura que

@@ -397,7 +397,19 @@ export function migrateLegacyApuToV2(apuV1 = {}){
     // Variables estructuradas del concepto (RC5, ver conceptVariablesFromParsed
     // en src/lib/excelImport.js): opcional, se conserva tal cual si el v1 ya
     // la traia (makeAPUFromConcept / applyConceptMetadata la agregan).
-    variables: apuV1.variables || null
+    variables: apuV1.variables || null,
+    // Cuantificador Parametrico ZOEMEC (Fase B): un APU v1 generado por
+    // parametricApuAssembler.js trae parametricGenerated/parametricSource
+    // (incluye parameterTrace, la trazabilidad de origen de cada parametro)
+    // -- son campos aditivos que NINGUNA otra rama de este objeto reconstruye,
+    // asi que deben preservarse explicitamente aqui o se perderian en el
+    // primer paso de todo el pipeline de guardado/exportacion (main.jsx,
+    // RevisionBandeja.jsx y las rutas de servidor migran TODO APU v1 con
+    // esta funcion antes de finalizeProfessionalAPU). Un APU que no vino del
+    // Cuantificador nunca tuvo estos campos -- quedan en false/null, igual
+    // que cualquier otro campo aditivo sin dato real.
+    parametricGenerated: apuV1.parametricGenerated === true,
+    parametricSource: apuV1.parametricSource || null
   };
 }
 

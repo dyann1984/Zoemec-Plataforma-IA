@@ -4,6 +4,8 @@ import { assembleAPUFromParametricResult } from './parametricApuAssembler.js';
 import { PARAMETRIC_ELEMENTS } from './parametricElements.js';
 import { buildBaseAuxiliaries, makeAuxiliaryDefinition } from './auxiliaries.js';
 import { calcAPU, rowImporte } from '../lib/apuCalc.js';
+import { PARAM_ORIGIN } from './parametricTraceability.js';
+import { finalizeProfessionalAPU } from './apuProfessional.js';
 
 const FAKE_CATALOG = [
   { desc: 'Cemento gris CPC 30R', unidad: 'saco', precio: 245, estado: 'VERIFICADO', tipo: 'material' },
@@ -37,6 +39,15 @@ test('assembleAPUFromParametricResult (zapata_aislada): produce un APU con la MI
   assert.equal(apu.parametricGenerated, true);
   assert.equal(apu.parametricSource.elementId, 'zapata_aislada');
   assert.equal(apu.family, elementDef.family);
+
+  // parameterTrace (pedido explicito de trazabilidad de parametros): debe
+  // venir dentro del APU, no solo en la UI del wizard.
+  const trace = apu.parametricSource.parameterTrace;
+  assert.ok(Array.isArray(trace) && trace.length > 0);
+  ['largo', 'ancho', 'peralte'].forEach(key => assert.ok(trace.some(e => e.clave === key && e.origen === PARAM_ORIGIN.USER_PROVIDED)));
+  assert.ok(trace.some(e => e.clave === 'pctAceroVolumen' && e.origen === PARAM_ORIGIN.ZOEMEC_SUGGESTED));
+  assert.ok(trace.some(e => e.clave === 'volumenConcreto' && e.origen === PARAM_ORIGIN.CALCULATED));
+  assert.ok(trace.some(e => e.origen === PARAM_ORIGIN.AUXILIARY_DERIVED && e.auxiliarClave === 'CONC-200'));
 
   // El precio de catalogo real (245) se uso para el cemento, no un precio
   // inventado -- confirma que resolveAuxiliaryCost/findCatalogMatches si
@@ -270,4 +281,112 @@ PARIDAD_CASOS.forEach(([elementDef, inputs]) => {
     // para la comparacion directa contra el builder puro).
     assert.doesNotThrow(() => buildElementSketch(elementDef.id, inputs, {}), `${elementDef.id}: el croquis debe poder generarse con los mismos inputs/params que el calculo`);
   });
+});
+
+/* ============================================================
+   TRAZABILIDAD DE PARAMETROS -- pedido explicito: "parametricSource debe
+   viajar dentro del APU generado y sobrevivir a guardado, reapertura,
+   historial/versionado, PDF, Excel y auditoria". Las pruebas 5 y 6 abajo
+   verifican eso a nivel de datos (JSON/estructura, migracion v1->v2 y
+   finalizacion), que es lo que realmente atraviesa Firestore y las
+   exportaciones -- incluyendo drawApuSections/buildProfessionalAPUSheet
+   (apuExportV2.js), llamadas directamente aqui mismo. */
+
+test('5. PERSISTENCIA de parametricSource.parameterTrace: sobrevive un guardado/reapertura (round-trip JSON, igual que Firestore), a migrateLegacyApuToV2 y a finalizeProfessionalAPU', async () => {
+  const { migrateLegacyApuToV2 } = await import('./apuSchema.js');
+  const elementDef = PARAMETRIC_ELEMENTS.zapata_aislada;
+  const inputs = { largo: 1.2, ancho: 1.2, peralte: 0.4 };
+  const params = { pctAceroVolumen: 2.0 }; // override real, para probar que el estado de override tambien sobrevive
+  const calcResult = elementDef.calculate(inputs, params);
+  const apu = assembleAPUFromParametricResult({
+    elementDef, inputs, params, calcResult, catalog: FAKE_CATALOG, auxiliaries: buildBaseAuxiliaries()
+  });
+
+  // Round-trip JSON: lo mismo que le pasa a un documento al guardarse y
+  // reabrirse desde Firestore (serializacion estructural, sin funciones ni
+  // undefined) -- si algo se perdiera aqui, se perderia tambien en produccion.
+  const reopened = JSON.parse(JSON.stringify(apu));
+  assert.deepEqual(reopened.parametricSource.parameterTrace, apu.parametricSource.parameterTrace);
+  assert.equal(reopened.parametricSource.parameterTrace.find(e => e.clave === 'pctAceroVolumen').origen, PARAM_ORIGIN.USER_OVERRIDE);
+
+  // migrateLegacyApuToV2 es el paso REAL que corre TODO el pipeline de
+  // guardado/exportacion (main.jsx, RevisionBandeja.jsx, las rutas de
+  // servidor) sobre un APU v1 como el que arma este ensamblador, ANTES de
+  // finalizeProfessionalAPU -- si este paso perdiera parametricSource, se
+  // perderia para siempre en cuanto el usuario guardara el APU, sin importar
+  // que el ensamblador lo haya generado bien. (Gap real encontrado y
+  // corregido en este mismo cambio: migrateLegacyApuToV2 reconstruye el
+  // objeto v2 desde cero y no heredaba estos campos por defecto.)
+  const v2 = migrateLegacyApuToV2(apu);
+  assert.equal(v2.parametricGenerated, true);
+  assert.deepEqual(v2.parametricSource.parameterTrace, apu.parametricSource.parameterTrace);
+
+  // finalizeProfessionalAPU es el paso que corren TODAS las exportaciones y
+  // la Bandeja de revision antes de mostrar/exportar un APU -- nunca debe
+  // descartar un campo aditivo como parametricSource.
+  const finalized = finalizeProfessionalAPU(v2);
+  assert.deepEqual(finalized.parametricSource.parameterTrace, apu.parametricSource.parameterTrace);
+  assert.equal(finalized.parametricGenerated, true);
+
+  // Version/fecha del auxiliar tambien sobreviven -- necesarias para saber
+  // CUAL version del auxiliar produjo la dosificacion/desperdicio mostrados.
+  const derivado = finalized.parametricSource.parameterTrace.find(e => e.origen === PARAM_ORIGIN.AUXILIARY_DERIVED);
+  assert.ok(derivado.auxiliarVersion != null && derivado.auxiliarFecha != null);
+});
+
+test('5b. un APU v1 SIN origen parametrico migra con parametricGenerated:false/parametricSource:null (nunca se inventa trazabilidad para un APU normal)', async () => {
+  const { migrateLegacyApuToV2 } = await import('./apuSchema.js');
+  const v2 = migrateLegacyApuToV2({ id: 'APU-X', concept: 'x', materials: [], labor: [], equipment: [] });
+  assert.equal(v2.parametricGenerated, false);
+  assert.equal(v2.parametricSource, null);
+});
+
+test('6. EXPORTACION conserva la trazabilidad: buildProfessionalAPUSheet (Excel) y drawApuSections (PDF) incluyen la seccion de trazabilidad de parametros', async () => {
+  const { buildProfessionalAPUSheet, drawApuSections } = await import('../lib/apuExportV2.js');
+  const { migrateLegacyApuToV2 } = await import('./apuSchema.js');
+  const { jsPDF } = await import('jspdf');
+  const elementDef = PARAMETRIC_ELEMENTS.plantilla;
+  const inputs = { largo: 3, ancho: 2, espesor: 0.05 };
+  const calcResult = elementDef.calculate(inputs, {});
+  const apuV1 = assembleAPUFromParametricResult({
+    elementDef, inputs, params: {}, calcResult, catalog: FAKE_CATALOG, auxiliaries: buildBaseAuxiliaries()
+  });
+  // Mismo paso que corre el pipeline real antes de exportar (ver prueba 5).
+  const apu = migrateLegacyApuToV2(apuV1);
+
+  // Excel: la seccion de trazabilidad de parametros debe existir como fila
+  // real dentro de `rows` (datos, no un binario que haya que decodificar) y
+  // el nombre del primer input debe aparecer en algun renglon de esa seccion.
+  const sheet = buildProfessionalAPUSheet(apu);
+  const spanRowIndex = sheet.rows.findIndex(row => row.some(cell => typeof cell?.value === 'string' && cell.value.includes('TRAZABILIDAD DE PARAMETROS')));
+  assert.ok(spanRowIndex >= 0, 'falta la seccion de trazabilidad de parametros en la hoja Excel');
+  const traceRows = sheet.rows.slice(spanRowIndex, spanRowIndex + 20);
+  assert.ok(traceRows.some(row => row.some(cell => typeof cell?.value === 'string' && cell.value.toLowerCase().includes('largo'))),
+    'la hoja Excel debe listar el input "Largo" dentro de la seccion de trazabilidad');
+
+  // PDF: la seccion queda registrada en layout.sections (estructura real
+  // devuelta por drawApuSections, no texto extraido de bytes de PDF).
+  const doc = new jsPDF('portrait', 'mm', 'a4');
+  const { layout } = drawApuSections(doc, apu, { startY: 12, startPage: 1 });
+  assert.ok(layout.sections.some(s => s.title.includes('TRAZABILIDAD DE PARAMETROS')),
+    'falta la seccion de trazabilidad de parametros en el layout del PDF');
+});
+
+test('6b. un APU normal (no parametrico) NUNCA muestra una seccion de trazabilidad de parametros vacia', async () => {
+  const { buildProfessionalAPUSheet, drawApuSections } = await import('../lib/apuExportV2.js');
+  const { migrateLegacyApuToV2 } = await import('./apuSchema.js');
+  const { jsPDF } = await import('jspdf');
+  const elementDef = PARAMETRIC_ELEMENTS.zapata_aislada;
+  const inputs = { largo: 1, ancho: 1, peralte: 0.3 };
+  const calcResult = elementDef.calculate(inputs, {});
+  const apuV1 = assembleAPUFromParametricResult({ elementDef, inputs, params: {}, calcResult, catalog: FAKE_CATALOG, auxiliaries: buildBaseAuxiliaries() });
+  delete apuV1.parametricGenerated; delete apuV1.parametricSource; // simula un APU generado por IA, sin origen parametrico
+  const apu = migrateLegacyApuToV2(apuV1);
+
+  const sheet = buildProfessionalAPUSheet(apu);
+  assert.ok(!sheet.rows.some(row => row.some(cell => typeof cell?.value === 'string' && cell.value.includes('TRAZABILIDAD DE PARAMETROS'))));
+
+  const doc = new jsPDF('portrait', 'mm', 'a4');
+  const { layout } = drawApuSections(doc, apu, { startY: 12, startPage: 1 });
+  assert.ok(!layout.sections.some(s => s.title.includes('TRAZABILIDAD DE PARAMETROS')));
 });

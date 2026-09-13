@@ -24,6 +24,7 @@ import { SYSTEM_RESOURCES } from './constructionSystems.js';
 import { resolveAuxiliaryCost } from './auxiliaries.js';
 import { APU_DATA_STATE } from './apuSchema.js';
 import { uid } from '../utils/id.js';
+import { buildParameterTrace } from './parametricTraceability.js';
 
 /* No existe un tipo 'cimbra' en SYSTEM_RESOURCES (ningun concepto de texto
    libre lo dispara hoy en el motor de plantillas) -- este es el UNICO
@@ -171,7 +172,20 @@ export function assembleAPUFromParametricResult({
     // Cuantificador, nunca de IA ni de clasificacion de texto.
     aiGenerated: false,
     parametricGenerated: true,
-    parametricSource: { elementId: elementDef.id, inputs, params }
+    // parameterTrace viaja CON el APU guardado (trazabilidad matematica
+    // pedida explicitamente, ver parametricTraceability.js): cualquiera que
+    // inspeccione este APU despues -- guardado, reabierto, en su
+    // historial/version, o exportado a PDF/Excel -- puede ver, por cada
+    // parametro, su nombre/valor/unidad/origen/valor base original/si fue
+    // modificado por el usuario/version-fecha del auxiliar cuando aplique.
+    // Nunca se recalcula aqui: se construye UNA sola vez, con la MISMA
+    // funcion que usa la UI en vivo del wizard.
+    parametricSource: {
+      elementId: elementDef.id, inputs, params,
+      estadoPorValor: calcResult?.estadoPorValor || {},
+      cantidades: calcResult?.cantidades || {},
+      parameterTrace: buildParameterTrace({ elementDef, inputs, params, calcResult, auxiliaries })
+    }
   };
 
   const item = {

@@ -10,6 +10,28 @@ import { computeConceptStatus, conceptStatusLabel } from '../domain/apuCompletio
 import { xcell, fcell, XLS, exportWorkbookExcel, money, num } from './apuExport.js';
 import { COSTO_CAMPO_CATEGORIA_LABEL, calcCostoCampoImporte, calcPresupuestadoVsReal } from '../domain/apuCostosCampo.js';
 import { ESTADO_REVISION_LABEL, NORMATIVA_DISCLAIMER, NORMATIVA_VACIA_TEXTO } from '../domain/apuNormativa.js';
+import { PARAM_ORIGIN } from '../domain/parametricTraceability.js';
+
+/* Etiqueta de origen para las exportaciones (PDF/Excel) del Cuantificador
+   Parametrico -- texto fijo en español, independiente del i18n de la UI
+   (esta capa no tiene acceso al contexto de idioma), mismo criterio que
+   apuDataStateLabel para el resto del documento. */
+const PARAM_ORIGIN_EXPORT_LABEL={
+  [PARAM_ORIGIN.USER_PROVIDED]:'Proporcionado por usuario',
+  [PARAM_ORIGIN.USER_OVERRIDE]:'Proporcionado por usuario (modificado)',
+  [PARAM_ORIGIN.ZOEMEC_SUGGESTED]:'Sugerido por ZOEMEC',
+  [PARAM_ORIGIN.AUXILIARY_DERIVED]:'Derivado de auxiliar',
+  [PARAM_ORIGIN.CALCULATED]:'Calculado',
+  [PARAM_ORIGIN.IMPORTED]:'Importado'
+};
+const paramTraceRows=trace=>(trace||[]).map(e=>[
+  e.nombre,
+  `${e.valor ?? ''}${e.unidad?` ${e.unidad}`:''}`,
+  PARAM_ORIGIN_EXPORT_LABEL[e.origen]||e.origen||'',
+  e.valorBaseOriginal!=null?String(e.valorBaseOriginal):'—',
+  e.modificadoPorUsuario?'SI':'NO',
+  e.auxiliarClave?`${e.auxiliarClave} v${e.auxiliarVersion??1} (${String(e.auxiliarFecha||'').slice(0,10)})`:'—'
+]);
 
 const COLORS={labor:'#123F78',materials:'#D56A00',tools:'#2F7D3A',equipment:'#1578B7',consumables:'#8C6D1F',safety:'#B5263D',procedure:'#6D2D91',quality:'#D5A900',measure:'#078C88'};
 const NO_JUSTIFICATION_TEXT='Sin justificación técnica registrada -- APU generado antes de esta funcionalidad.';
@@ -213,6 +235,20 @@ export function buildProfessionalAPUSheet(rawApu){
     add([asCell(riesgos.resumen,{columnSpan:12,wrap:true}),...Array(11).fill(null)]);
     head(['No.','Severidad','Hallazgo','Evidencia','Impacto potencial','Recomendacion','','Confianza','Incluir en APU','','','']);
     riesgos.hallazgos.forEach((h,i)=>add([i+1,h.severidad,asCell(h.hallazgo,{columnSpan:2,wrap:true}),null,asCell(h.impactoPotencial,{columnSpan:2,wrap:true}),null,asCell(h.recomendacion,{wrap:true}),h.confianza,h.incluirEnAPU?'SI':'NO',null,null,null]));
+    add([]);
+  }
+
+  // 19b. Trazabilidad de parametros del Cuantificador Parametrico ZOEMEC --
+  // mismo pedido/mismos datos que la seccion equivalente del PDF individual
+  // (ver drawApuSections): nombre/valor/origen/valor base/si fue
+  // modificado/version-fecha del auxiliar, para que sobreviva tambien a la
+  // exportacion Excel. Nunca aparece para un APU que no viene del
+  // Cuantificador.
+  if(apu.parametricGenerated && apu.parametricSource?.parameterTrace?.length){
+    span('19b. TRAZABILIDAD DE PARAMETROS (CUANTIFICADOR PARAMETRICO)','#6D2D91');
+    head(['Parametro','Valor','Origen','Valor base','Modificado','Auxiliar (version/fecha)']);
+    paramTraceRows(apu.parametricSource.parameterTrace).forEach(([nombre,valor,origen,valorBase,modificado,aux])=>
+      add([asCell(nombre,{wrap:true}),valor,origen,valorBase,modificado,asCell(aux,{wrap:true})]));
     add([]);
   }
 
@@ -764,6 +800,18 @@ export function drawApuSections(doc,rawApu,opts={}){
   kv('Fecha base de precios',apu.fechaBase||'');
   kv('Validado el',apu.validatedAt?new Date(apu.validatedAt).toLocaleString('es-MX'):'');
   y+=2;
+  // 19b. Trazabilidad de parametros del Cuantificador Parametrico ZOEMEC
+  // (pedido explicito: ningun valor tecnico -- %acero/dosificacion/
+  // desperdicio/recubrimiento/cimbra/rendimientos -- debe presentarse como
+  // universal, y esa trazabilidad debe sobrevivir a la exportacion). Solo
+  // aparece para un APU generado por el Cuantificador; nunca una seccion
+  // vacia para un APU normal.
+  if(apu.parametricGenerated && apu.parametricSource?.parameterTrace?.length){
+    table('19b. TRAZABILIDAD DE PARAMETROS (CUANTIFICADOR PARAMETRICO)',[109,45,145],
+      ['Parametro','Valor','Origen','Valor base','Modificado','Auxiliar (version/fecha)'],
+      paramTraceRows(apu.parametricSource.parameterTrace),
+      [1.3,0.9,1.3,0.7,0.6,1.3]);
+  }
   bar('20. CONFIANZA DEL ANALISIS',[7,140,136]);
   kv('Confianza global',formatGlobalConfidence(globalConfidence).fullLabel);
   kv('Precios',dimensionPercentLabel(globalConfidence.dimensions.prices));

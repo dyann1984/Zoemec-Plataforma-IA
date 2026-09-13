@@ -73,6 +73,24 @@ test('migrateLegacyApuToV2 no muta el APU original', () => {
   assert.deepEqual(legacy, clone);
 });
 
+test('migrateLegacyApuToV2 preserva parametricGenerated/parametricSource (Cuantificador Parametrico ZOEMEC) -- gap real: este objeto se reconstruye desde cero y no los heredaba por defecto', () => {
+  const legacy = {
+    id: 'APU-PARAM', materials: [['Mat', 1, 'pza', 10, 0]],
+    parametricGenerated: true,
+    parametricSource: { elementId: 'zapata_aislada', inputs: { largo: 1 }, params: {}, parameterTrace: [{ clave: 'largo', valor: 1, origen: 'USER_PROVIDED' }] }
+  };
+  const v2 = migrateLegacyApuToV2(legacy);
+  assert.equal(v2.parametricGenerated, true);
+  assert.deepEqual(v2.parametricSource, legacy.parametricSource);
+});
+
+test('migrateLegacyApuToV2 de un APU sin origen parametrico: parametricGenerated queda false y parametricSource null (nunca se inventa)', () => {
+  const legacy = { id: 'APU-NORMAL', materials: [['Mat', 1, 'pza', 10, 0]] };
+  const v2 = migrateLegacyApuToV2(legacy);
+  assert.equal(v2.parametricGenerated, false);
+  assert.equal(v2.parametricSource, null);
+});
+
 test('migrateLegacyApuToV2 nunca produce estado VERIFICADO: plantilla -> IMPORTADO', () => {
   const legacy = { templateGenerated: true, sourceFile: 'Catalogo base', materials: [['Mat', 1, 'pza', 10, 0]] };
   const v2 = migrateLegacyApuToV2(legacy);

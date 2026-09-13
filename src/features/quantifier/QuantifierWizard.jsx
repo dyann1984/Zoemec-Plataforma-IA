@@ -22,6 +22,7 @@ import { ElementSketch } from './ElementSketch.jsx';
 import { PARAMETRIC_FAMILIES, listElementsByFamily, getParametricElement } from '../../domain/parametricElements.js';
 import { listAvailableAuxiliaries, resolveAuxiliaryCost } from '../../domain/auxiliaries.js';
 import { assembleAPUFromParametricResult } from '../../domain/parametricApuAssembler.js';
+import { buildParameterTrace, PARAM_ORIGIN_LABEL_KEY, PARAM_ORIGIN_CSS_CLASS } from '../../domain/parametricTraceability.js';
 import { listGlobalAuxiliaries, listOrgAuxiliaries } from '../../services/auxiliariesApi.js';
 import { calcAPU } from '../../lib/apuCalc.js';
 
@@ -64,6 +65,22 @@ export function QuantifierWizard({ user, catalog, organizationId = null, activeP
     return assembleAPUFromParametricResult({ elementDef, inputs: d.inputs, params: d.params, calcResult, catalog, auxiliaries });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [elementDef, calcResult, catalog, auxiliaries]);
+
+  // Fuente unica de verdad del origen de cada valor tecnico (ver
+  // parametricTraceability.js) -- la MISMA funcion que persiste dentro del
+  // APU generado (parametricApuAssembler.js), para que la UI en vivo y lo
+  // que queda guardado nunca puedan divergir.
+  const parameterTrace = useMemo(() => {
+    if(!elementDef || !calcResult) return [];
+    return buildParameterTrace({ elementDef, inputs: d.inputs, params: d.params, calcResult, auxiliaries });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [elementDef, calcResult, d.inputs, d.params, auxiliaries]);
+  const traceByKey = useMemo(() => {
+    const map = new Map();
+    parameterTrace.forEach(entry => { if(entry.clave != null) map.set(entry.clave, entry); });
+    return map;
+  }, [parameterTrace]);
+  const originBadge = (entry) => entry && <span className={'quant-origin-badge quant-origin-' + PARAM_ORIGIN_CSS_CLASS[entry.origen]}>{tr(`levantamiento.${PARAM_ORIGIN_LABEL_KEY[entry.origen]}`)}</span>;
 
   const steps = STEP_KEYS.map(key => ({ key, label: tr(`levantamiento.quantStep_${key}`) }));
   const goTo = (i) => setD({ step: Math.max(0, Math.min(steps.length - 1, i)) });
@@ -121,22 +138,95 @@ export function QuantifierWizard({ user, catalog, organizationId = null, activeP
           <button type="button" className={d.modo === 'sencillo' ? '' : 'soft'} onClick={() => setD({ modo: 'sencillo' })}>{tr('levantamiento.quantModeSimple')}</button>
           <button type="button" className={d.modo === 'experto' ? '' : 'soft'} onClick={() => setD({ modo: 'experto' })}>{tr('levantamiento.quantModeExpert')}</button>
         </div>
+        {/* Pedido explicito: ningun valor tecnico (porcentaje de acero,
+            dosificacion, desperdicio, recubrimiento, cimbra, rendimientos)
+            se presenta como universal -- SIEMPRE se etiqueta segun su
+            origen real, sin importar el modo activo. */}
+        <p className="muted" style={{ fontSize: '.74rem', marginBottom: 10 }}>{tr('levantamiento.quantParamsDisclaimer')}</p>
         <div className="field-grid">
           {elementDef.params.map(p => {
+            // Editabilidad: los parametros de referencia (expertOnly) solo
+            // se editan en modo experto; los de seleccion de referencia
+            // (ej. clave de auxiliar) siempre son editables -- esto NUNCA
+            // decide el origen mostrado, solo si el campo es input o texto.
             const isEditable = d.modo === 'experto' || !p.expertOnly;
-            const current = d.params?.[p.key] !== undefined ? d.params[p.key] : p.default;
+            const entry = traceByKey.get(p.key);
+            const current = entry ? entry.valor : p.default;
             return <div className="nf" key={p.key}>
               <label>{p.label}{p.unit ? ` (${p.unit})` : ''}</label>
               {isEditable
                 ? <input type={typeof p.default === 'number' ? 'number' : 'text'} step="0.01" value={current}
                     onChange={e => setD({ params: { ...d.params, [p.key]: typeof p.default === 'number' ? Number(e.target.value) : e.target.value } })} />
-                : <span className="muted">{String(current)} <span className="quant-assumed-badge">{tr('levantamiento.quantAssumedBadge')}</span></span>}
+                : <span className="muted">{String(current)}</span>}
+              {originBadge(entry)}
             </div>;
           })}
         </div>
+        {/* "Heredado de auxiliar": el desperdicio/dosificacion REAL de un
+            auxiliar (ej. CONC-200) vive en su propia composicion, nunca en
+            los params de este elemento -- se avisa aqui para que el
+            usuario sepa donde esta esa trazabilidad (desglose real en el
+            paso Resultado), en vez de asumir que "no aparece" significa
+            "no existe". */}
+        {calcResult && calcResult.consumos.filter(c => c.tipo === 'auxiliar').map(c => auxiliaries.find(a => a.clave === c.clave)).filter(Boolean).map(aux => (
+          <p key={aux.clave} className="muted quant-aux-note">{tr('levantamiento.quantAuxCompositionNote', { nombre: aux.nombre })}</p>
+        ))}
       </div>}
 
-      {d.step === 4 && calcResult && <pre className="quant-summary">{JSON.stringify(calcResult.cantidades, null, 1)}</pre>}
+      {d.step === 4 && calcResult && <div>
+        <b style={{ fontSize: '.82rem' }}>{tr('levantamiento.quantInputsTitle')}</b>
+        <div className="field-grid" style={{ marginBottom: 14 }}>
+          {elementDef.inputs.map(inp => (
+            <div className="nf" key={inp.key}>
+              <label>{inp.label}{inp.unit ? ` (${inp.unit})` : ''}</label>
+              <span>{d.inputs?.[inp.key]}</span>
+              {originBadge(traceByKey.get(inp.key))}
+            </div>
+          ))}
+        </div>
+        <b style={{ fontSize: '.82rem' }}>{tr('levantamiento.quantParametersTitle')}</b>
+        <div className="field-grid" style={{ marginBottom: 14 }}>
+          {elementDef.params.map(p => {
+            const entry = traceByKey.get(p.key);
+            return <div className="nf" key={p.key}>
+              <label>{p.label}{p.unit ? ` (${p.unit})` : ''}</label>
+              <span>{entry ? String(entry.valor) : ''}</span>
+              {originBadge(entry)}
+            </div>;
+          })}
+        </div>
+        <b style={{ fontSize: '.82rem' }}>{tr('levantamiento.quantQuantitiesTitle')}</b>
+        <div className="field-grid" style={{ marginBottom: 14 }}>
+          {Object.entries(calcResult.cantidades).map(([key, value]) => (
+            <div className="nf" key={key}>
+              <label>{key}</label>
+              <span>{typeof value === 'number' ? value.toFixed(4) : String(value)}</span>
+              {originBadge(traceByKey.get(key))}
+            </div>
+          ))}
+        </div>
+        {calcResult.consumos.some(c => c.tipo === 'auxiliar') && <>
+          <b style={{ fontSize: '.82rem' }}>{tr('levantamiento.quantAuxBreakdownTitle')}</b>
+          {calcResult.consumos.filter(c => c.tipo === 'auxiliar').map(consumo => {
+            const aux = auxiliaries.find(a => a.clave === consumo.clave);
+            if(!aux) return null;
+            const resolved = resolveAuxiliaryCost(aux, catalog);
+            return <table key={consumo.clave} className="quant-aux-table">
+              <caption>
+                {aux.nombre}
+                <span className="quant-origin-badge quant-origin-inherited">{tr('levantamiento.quantOriginInherited')}</span>
+                <span className="muted quant-aux-version"> {tr('levantamiento.quantAuxVersionLabel', { version: aux.version ?? 1, fecha: (aux.updatedAt || '').slice(0, 10) })}</span>
+              </caption>
+              <thead><tr><th>Insumo</th><th>Cantidad base</th><th>Desperdicio</th><th>P.U.</th></tr></thead>
+              <tbody>
+                {resolved.desglose.map((row, i) => <tr key={i}>
+                  <td>{row.desc}</td><td>{row.cantidadBase.toFixed(4)} {row.unidad}</td><td>{row.desperdicioPct}%</td><td>${row.precioUnitario.toFixed(2)}</td>
+                </tr>)}
+              </tbody>
+            </table>;
+          })}
+        </>}
+      </div>}
 
       {d.step === 5 && previewApu && <div>
         {(() => { const calc = calcAPU(previewApu); return <div className="field-grid">

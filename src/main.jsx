@@ -68,6 +68,7 @@ import { QuantifierWizard } from './features/quantifier/QuantifierWizard.jsx';
 import { CatalogoModule } from './features/catalogo/CatalogoModule.jsx';
 import { PresupuestoModule } from './features/presupuesto/PresupuestoModule.jsx';
 import { ControlPresupuestalModule } from './features/control-presupuestal/ControlPresupuestalModule.jsx';
+import { ProjectVaultModule } from './features/vault/ProjectVaultModule.jsx';
 import {
   emptyApuWorkspaceState, removeBatchApus, describeAmbiguousSingleExport,
   duplicateGroupKey, groupConceptsByDuplicateKey, defaultBatchSelection, isExportableConceptItem,
@@ -952,6 +953,7 @@ function App(){
       <Budgets legacyOnly company={companyView} budgets={budgets} setBudgets={setBudgets} items={budgetItems} setItems={setBudgetItems} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} />
     </>}
     {module === 'control-presupuestal' && <ControlPresupuestalModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} />}
+    {module === 'vault' && <ProjectVaultModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} setModule={setModule} />}
     {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={(pid)=>{ setRawApus(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgets(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawCatalog(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgetItems(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawSurveys(l=>l.filter(x=>(x?.projectId??null)!==pid)); }} />}
     {module === 'biblioteca' && <Library user={user} catalog={catalog} setCatalog={setCatalog} setModule={setModule} />}
     {module === 'tecnico' && <TechnicalOffice company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} needsProject={needsProject} onCreateProject={()=>setModule('cartera')} />}
@@ -1504,6 +1506,7 @@ function Shell({children,user,logout,module,setModule,company,apus,clients,proje
     ['catalogo','cuantificaciones',tr('shell.menu.catalogo')],
     ['presupuestos','presupuestos',tr('shell.menu.presupuestos')],
     ['control-presupuestal','comparativa',tr('shell.menu.controlPresupuestal'),tr('shell.menu.controlPresupuestalDesc')],
+    ['vault','folder',tr('shell.menu.vault'),tr('shell.menu.vaultDesc')],
     ['cartera','clientes',tr('shell.menu.cartera'),tr('shell.menu.carteraDesc')],
     ['biblioteca','biblioteca',tr('shell.menu.biblioteca'),tr('shell.menu.bibliotecaDesc')],
     ['visual','render',tr('shell.menu.visual'),tr('shell.menu.visualDesc')],

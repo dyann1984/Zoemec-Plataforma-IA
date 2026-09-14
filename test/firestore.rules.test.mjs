@@ -647,6 +647,39 @@ describe('firestore.rules — payments (Fase E, ledger append-only)', () => {
   });
 });
 
+describe('firestore.rules — constructionDna / constructionDnaVersions / constructionDnaAudit (Fase F)', () => {
+  it('nadie escribe constructionDna desde el cliente -- toda escritura pasa por _route-construction-dna.mjs (SDK admin)', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('constructionDna/PRO-1').set({ ownerUid: 'alice', currentVersion: 'V1' }));
+  });
+
+  it('el dueno real SI puede leer el Construction DNA de su propio proyecto, otro usuario no', async () => {
+    await seed((db) => db.doc('constructionDna/PRO-1').set({ ownerUid: 'alice', currentVersion: 'V1' }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(alice.doc('constructionDna/PRO-1').get());
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(bob.doc('constructionDna/PRO-1').get());
+  });
+
+  it('nadie escribe constructionDnaVersions desde el cliente; el dueno real si puede leer, otro usuario no', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('constructionDnaVersions/PRO-1__V1').set({ ownerUid: 'alice', version: 'V1' }));
+    await seed((db) => db.doc('constructionDnaVersions/PRO-1__V1').set({ ownerUid: 'alice', version: 'V1' }));
+    await assertSucceeds(alice.doc('constructionDnaVersions/PRO-1__V1').get());
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(bob.doc('constructionDnaVersions/PRO-1__V1').get());
+  });
+
+  it('nadie escribe constructionDnaAudit desde el cliente; el dueno real si puede leer, otro usuario no', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('constructionDnaAudit/a1').set({ action: 'CONSTRUCTION_DNA_VERSION_CREATED', ownerUid: 'alice' }));
+    await seed((db) => db.doc('constructionDnaAudit/a1').set({ action: 'CONSTRUCTION_DNA_VERSION_CREATED', ownerUid: 'alice' }));
+    await assertSucceeds(alice.doc('constructionDnaAudit/a1').get());
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(bob.doc('constructionDnaAudit/a1').get());
+  });
+});
+
 describe('firestore.rules — exportEvents (Fase 8)', () => {
   it('nadie escribe exportEvents desde el cliente -- toda escritura pasa por api/export-events.mjs (SDK admin)', async () => {
     const alice = testEnv.authenticatedContext('alice').firestore();

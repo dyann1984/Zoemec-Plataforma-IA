@@ -43,6 +43,8 @@
     { "source": "/api/progress", "destination": "/api/gateway" },
     { "source": "/api/estimates", "destination": "/api/gateway" },
     { "source": "/api/payments", "destination": "/api/gateway" },
+    { "source": "/api/construction-dna", "destination": "/api/gateway" },
+    { "source": "/api/project-vault", "destination": "/api/gateway" },
     { "source": "/api/:path*", "destination": "/api/:path*" },
     { "source": "/src/:path*", "destination": "/src/:path*" },
     { "source": "/@vite/:path*", "destination": "/@vite/:path*" },

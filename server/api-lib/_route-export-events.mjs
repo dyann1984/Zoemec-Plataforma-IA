@@ -27,7 +27,7 @@ const VALID_MODES = new Set(['CLIENTE', 'TECNICO']);
 // (ver handleRecord abajo) -- nunca cambian el comportamiento de
 // 'APU'/'PROJECT' ya existentes, solo distinguen en el log de auditoria de
 // que pestana vino el export.
-const VALID_SCOPES = new Set(['APU', 'PROJECT', 'EXPLOSION', 'PRESUPUESTO']);
+const VALID_SCOPES = new Set(['APU', 'PROJECT', 'EXPLOSION', 'PRESUPUESTO', 'VAULT']);
 
 function httpError(status, message){ const e = new Error(message); e.status = status; return e; }
 
@@ -67,7 +67,7 @@ async function handleRecord(req, res){
   const db = getAdminDb();
   const docRef = db.collection(COLLECTION).doc();
   let event;
-  if(scope === 'PROJECT' || scope === 'EXPLOSION' || scope === 'PRESUPUESTO'){
+  if(scope === 'PROJECT' || scope === 'EXPLOSION' || scope === 'PRESUPUESTO' || scope === 'VAULT'){
     if(!projectId) throw httpError(400, 'Falta projectId.');
     const projectSnap = await db.collection('projects').doc(String(projectId)).get();
     if(!projectSnap.exists) throw httpError(404, 'El proyecto no existe.');

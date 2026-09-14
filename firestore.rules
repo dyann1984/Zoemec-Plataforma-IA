@@ -476,6 +476,26 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Construction DNA (Fase F, Project Vault): documento puntero actual +
+    // version inmutable + auditoria append-only, mismo patron que
+    // presupuestos/presupuestoVersions/presupuestoAudit. Toda escritura via
+    // server/api-lib/_route-construction-dna.mjs (SDK Admin).
+    match /constructionDna/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /constructionDnaVersions/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /constructionDnaAudit/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+
     // Eventos de exportacion del Dossier APU Auditable (Fase 8, regla 22):
     // append-only, nunca editable ni borrable -- toda escritura pasa por
     // api/export-events.mjs (SDK admin). Mismo criterio de lectura que

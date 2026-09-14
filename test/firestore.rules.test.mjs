@@ -680,6 +680,81 @@ describe('firestore.rules — constructionDna / constructionDnaVersions / constr
   });
 });
 
+describe('firestore.rules — sentinelAlerts / sentinelAlertsAudit / healthHistory (Fase G)', () => {
+  it('nadie escribe sentinelAlerts desde el cliente -- toda escritura pasa por _route-sentinel.mjs (SDK admin)', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('sentinelAlerts/a1').set({ ownerUid: 'alice', status: 'NUEVA' }));
+  });
+
+  it('el dueno real SI puede leer su propia alerta, otro usuario no', async () => {
+    await seed((db) => db.doc('sentinelAlerts/a1').set({ ownerUid: 'alice', status: 'NUEVA' }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(alice.doc('sentinelAlerts/a1').get());
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(bob.doc('sentinelAlerts/a1').get());
+  });
+
+  it('nadie escribe sentinelAlertsAudit desde el cliente; el dueno real si puede leer, otro usuario no', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('sentinelAlertsAudit/a1').set({ action: 'SENTINEL_ALERT_CREATED', ownerUid: 'alice' }));
+    await seed((db) => db.doc('sentinelAlertsAudit/a1').set({ action: 'SENTINEL_ALERT_CREATED', ownerUid: 'alice' }));
+    await assertSucceeds(alice.doc('sentinelAlertsAudit/a1').get());
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(bob.doc('sentinelAlertsAudit/a1').get());
+  });
+
+  it('nadie escribe healthHistory desde el cliente; el dueno real si puede leer, otro usuario no', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('healthHistory/h1').set({ score: 80, ownerUid: 'alice' }));
+    await seed((db) => db.doc('healthHistory/h1').set({ score: 80, ownerUid: 'alice' }));
+    await assertSucceeds(alice.doc('healthHistory/h1').get());
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(bob.doc('healthHistory/h1').get());
+  });
+});
+
+describe('firestore.rules — assets / assetsAudit / assetComponents / assetComponentsAudit (Fase G)', () => {
+  it('nadie escribe assets desde el cliente -- toda escritura pasa por _route-assets.mjs (SDK admin)', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('assets/PRO-1').set({ ownerUid: 'alice', nombre: 'x' }));
+  });
+
+  it('el dueno real SI puede leer su propio activo, otro usuario no', async () => {
+    await seed((db) => db.doc('assets/PRO-1').set({ ownerUid: 'alice', nombre: 'x' }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(alice.doc('assets/PRO-1').get());
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(bob.doc('assets/PRO-1').get());
+  });
+
+  it('nadie escribe assetsAudit desde el cliente; el dueno real si puede leer, otro usuario no', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('assetsAudit/a1').set({ action: 'ASSET_CREATED_FROM_PROJECT', ownerUid: 'alice' }));
+    await seed((db) => db.doc('assetsAudit/a1').set({ action: 'ASSET_CREATED_FROM_PROJECT', ownerUid: 'alice' }));
+    await assertSucceeds(alice.doc('assetsAudit/a1').get());
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(bob.doc('assetsAudit/a1').get());
+  });
+
+  it('nadie escribe assetComponents desde el cliente; el dueno real si puede leer, otro usuario no', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('assetComponents/c1').set({ ownerUid: 'alice', tipo: 'HVAC' }));
+    await seed((db) => db.doc('assetComponents/c1').set({ ownerUid: 'alice', tipo: 'HVAC' }));
+    await assertSucceeds(alice.doc('assetComponents/c1').get());
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(bob.doc('assetComponents/c1').get());
+  });
+
+  it('nadie escribe assetComponentsAudit desde el cliente; el dueno real si puede leer, otro usuario no', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(alice.doc('assetComponentsAudit/a1').set({ action: 'ASSET_COMPONENT_CREATED', ownerUid: 'alice' }));
+    await seed((db) => db.doc('assetComponentsAudit/a1').set({ action: 'ASSET_COMPONENT_CREATED', ownerUid: 'alice' }));
+    await assertSucceeds(alice.doc('assetComponentsAudit/a1').get());
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(bob.doc('assetComponentsAudit/a1').get());
+  });
+});
+
 describe('firestore.rules — exportEvents (Fase 8)', () => {
   it('nadie escribe exportEvents desde el cliente -- toda escritura pasa por api/export-events.mjs (SDK admin)', async () => {
     const alice = testEnv.authenticatedContext('alice').firestore();

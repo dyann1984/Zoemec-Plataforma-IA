@@ -22,7 +22,7 @@ const GATEWAY_PATHS = new Set([
   '/api/export-events', '/api/health', '/api/organizations', '/api/construction-proposal',
   '/api/plano-takeoffs', '/api/catalogo-conceptos', '/api/presupuestos',
   '/api/change-orders', '/api/commitments', '/api/progress', '/api/estimates', '/api/payments',
-  '/api/construction-dna', '/api/project-vault'
+  '/api/construction-dna', '/api/project-vault', '/api/sentinel', '/api/assets'
 ]);
 // Otras funciones serverless de produccion (api/*.mjs, fuera del gateway)
 // que tambien tienen sentido probar contra el emulador localmente.

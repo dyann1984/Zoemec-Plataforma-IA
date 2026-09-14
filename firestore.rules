@@ -496,6 +496,49 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Project Sentinel (Fase G): alertas persistentes + su auditoria +
+    // historial de Project Health. Toda escritura via
+    // server/api-lib/_route-sentinel.mjs (SDK Admin).
+    match /sentinelAlerts/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /sentinelAlertsAudit/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /healthHistory/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+
+    // Ciclo de vida del activo (Fase G): un activo por proyecto entregado +
+    // sus componentes + auditoria de ambos. Toda escritura via
+    // server/api-lib/_route-assets.mjs (SDK Admin).
+    match /assets/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /assetsAudit/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /assetComponents/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /assetComponentsAudit/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+
     // Eventos de exportacion del Dossier APU Auditable (Fase 8, regla 22):
     // append-only, nunca editable ni borrable -- toda escritura pasa por
     // api/export-events.mjs (SDK admin). Mismo criterio de lectura que

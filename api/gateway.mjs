@@ -29,6 +29,8 @@ import estimatesHandler from '../server/api-lib/_route-estimates.mjs';
 import paymentsHandler from '../server/api-lib/_route-payments.mjs';
 import constructionDnaHandler from '../server/api-lib/_route-construction-dna.mjs';
 import projectVaultHandler from '../server/api-lib/_route-project-vault.mjs';
+import sentinelHandler from '../server/api-lib/_route-sentinel.mjs';
+import assetsHandler from '../server/api-lib/_route-assets.mjs';
 
 const ROUTES = {
   '/api/apus': apusHandler,
@@ -49,6 +51,8 @@ const ROUTES = {
   '/api/payments': paymentsHandler,
   '/api/construction-dna': constructionDnaHandler,
   '/api/project-vault': projectVaultHandler,
+  '/api/sentinel': sentinelHandler,
+  '/api/assets': assetsHandler,
 };
 
 export default async function handler(req, res){

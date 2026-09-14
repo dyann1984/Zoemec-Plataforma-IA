@@ -38,6 +38,12 @@ function get(token, query){ return { method: 'GET', headers: token ? { authoriza
 async function call(req){ const res = mockRes(); await handler(req, res); return res; }
 const uniq = (p) => `${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}@test.zoemec`;
 
+async function seedOrgMember(db, uid, organizationId){
+  await db.doc(`organizations/${organizationId}`).set({ id: organizationId, name: `Empresa ${organizationId}`, status: 'ACTIVE_TRIAL' });
+  await db.doc(`organizations/${organizationId}/members/${uid}`).set({ uid, role: 'company_manager', status: 'active' });
+  await db.doc(`users/${uid}`).set({ uid, organizationId, role: 'user', plan: 'Gratis', active: true }, { merge: true });
+}
+
 function conceptoFixture(overrides = {}){
   return { clave: 'ALB-001', capitulo: 'albañilería', concept: 'Muro de block hueco 15cm', unit: 'm²', qty: 24, ...overrides };
 }
@@ -84,6 +90,83 @@ describe('POST /api/catalogo-conceptos action=create', () => {
     const res = await call(post(idToken, { action: 'create', projectId: 'PRO-CON-UBIC', conceptos: [conceptoFixture()] }));
     assert.equal(res.body.conceptos[0].ubicacionEstructurada.city, 'Guadalajara');
     assert.equal(res.body.conceptos[0].ubicacionEstructurada.state, 'Jalisco');
+  });
+});
+
+describe('POST action=create -- deduplicacion por origenElementoId (Fase D.1, "Agregar al catalogo")', () => {
+  it('el mismo elemento de origen enviado dos veces ACTUALIZA el concepto existente, nunca lo duplica', async () => {
+    const { idToken } = await createUserAndGetIdToken({ email: uniq('dedup') });
+    const origenElementoId = 'PLANO-123:el-1';
+    const first = await call(post(idToken, {
+      action: 'create', projectId: 'PRO-DEDUP',
+      conceptos: [conceptoFixture({ origenElementoId, qty: 10, origenPlano: { origen: 'plano-takeoff-vector', planoTakeoffId: 'PLANO-123', page: 1 } })]
+    }));
+    assert.equal(first.statusCode, 201);
+    assert.equal(first.body.created, 1);
+    assert.equal(first.body.updated, 0);
+    const firstId = first.body.conceptos[0].id;
+
+    // Se reenvia el MISMO elemento con una cantidad corregida (ej. el usuario
+    // volvio a validar en el plano) -- debe actualizar, no duplicar.
+    const second = await call(post(idToken, {
+      action: 'create', projectId: 'PRO-DEDUP',
+      conceptos: [conceptoFixture({ origenElementoId, qty: 15, origenPlano: { origen: 'plano-takeoff-vector', planoTakeoffId: 'PLANO-123', page: 2 } })]
+    }));
+    assert.equal(second.statusCode, 201);
+    assert.equal(second.body.created, 0);
+    assert.equal(second.body.updated, 1);
+    assert.equal(second.body.conceptos[0].id, firstId, 'debe ser EXACTAMENTE el mismo documento, no uno nuevo');
+    assert.equal(second.body.conceptos[0].qty, 15);
+    assert.equal(second.body.conceptos[0].origenPlano.page, 2);
+
+    const list = await call(get(idToken, { projectId: 'PRO-DEDUP' }));
+    assert.equal(list.body.conceptos.length, 1, 'el listado del proyecto debe seguir mostrando UN solo concepto');
+  });
+
+  it('actualizar por dedup NUNCA pisa un status/apuId ya avanzado (GENERADO/ASOCIADO se preservan)', async () => {
+    const { idToken } = await createUserAndGetIdToken({ email: uniq('dedup-status') });
+    const origenElementoId = 'PLANO-456:el-1';
+    const created = await call(post(idToken, { action: 'create', projectId: 'PRO-DEDUP-2', conceptos: [conceptoFixture({ origenElementoId })] }));
+    const id = created.body.conceptos[0].id;
+    await call(post(idToken, { action: 'set-status', id, status: 'GENERANDO' }));
+    await call(post(idToken, { action: 'set-status', id, status: 'GENERADO', apuId: 'APU-DEDUP-1' }));
+
+    const resent = await call(post(idToken, { action: 'create', projectId: 'PRO-DEDUP-2', conceptos: [conceptoFixture({ origenElementoId, qty: 99 })] }));
+    assert.equal(resent.body.updated, 1);
+    assert.equal(resent.body.conceptos[0].status, 'GENERADO', 'reenviar el mismo elemento no debe revertir un concepto ya generado a PENDIENTE');
+    assert.equal(resent.body.conceptos[0].apuId, 'APU-DEDUP-1', 'el APU ya asociado nunca se pierde por un reenvio del mismo elemento');
+    assert.equal(resent.body.conceptos[0].qty, 99, 'los datos del elemento (cantidad corregida) si se actualizan');
+  });
+
+  it('dos elementos DISTINTOS (origenElementoId distinto) en el mismo proyecto nunca se fusionan', async () => {
+    const { idToken } = await createUserAndGetIdToken({ email: uniq('dedup-distinct') });
+    const res = await call(post(idToken, {
+      action: 'create', projectId: 'PRO-DEDUP-3',
+      conceptos: [conceptoFixture({ origenElementoId: 'PLANO-A:el-1' }), conceptoFixture({ origenElementoId: 'PLANO-A:el-2', clave: 'ALB-002' })]
+    }));
+    assert.equal(res.body.created, 2);
+    assert.equal(res.body.updated, 0);
+  });
+
+  it('sin origenElementoId (captura manual), reenviar datos similares SIEMPRE crea un concepto nuevo', async () => {
+    const { idToken } = await createUserAndGetIdToken({ email: uniq('dedup-manual') });
+    const res1 = await call(post(idToken, { action: 'create', projectId: 'PRO-DEDUP-4', conceptos: [conceptoFixture()] }));
+    const res2 = await call(post(idToken, { action: 'create', projectId: 'PRO-DEDUP-4', conceptos: [conceptoFixture()] }));
+    assert.notEqual(res1.body.conceptos[0].id, res2.body.conceptos[0].id);
+    const list = await call(get(idToken, { projectId: 'PRO-DEDUP-4' }));
+    assert.equal(list.body.conceptos.length, 2);
+  });
+
+  it('el mismo origenElementoId repetido DENTRO de una sola llamada tambien deduplica', async () => {
+    const { idToken } = await createUserAndGetIdToken({ email: uniq('dedup-samebatch') });
+    const res = await call(post(idToken, {
+      action: 'create', projectId: 'PRO-DEDUP-5',
+      conceptos: [conceptoFixture({ origenElementoId: 'PLANO-X:el-1', qty: 1 }), conceptoFixture({ origenElementoId: 'PLANO-X:el-1', qty: 2 })]
+    }));
+    assert.equal(res.body.created, 1);
+    assert.equal(res.body.updated, 1);
+    const list = await call(get(idToken, { projectId: 'PRO-DEDUP-5' }));
+    assert.equal(list.body.conceptos.length, 1);
   });
 });
 
@@ -196,5 +279,52 @@ describe('aislamiento multi-tenant y archive', () => {
     const res = await call(post(idToken, { action: 'create', projectId: 'PRO-10', conceptos: [conceptoFixture()], organizationId: 'org-inventada' }));
     assert.equal(res.body.conceptos[0].organizationId, null);
     assert.equal(res.body.conceptos[0].ownerUid, uid);
+  });
+});
+
+describe('PRUEBA ESPECIFICA -- aislamiento por ORGANIZACION (Fase D.1, punto 9), no solo por usuario individual', () => {
+  it('un miembro de la Empresa B NUNCA puede leer/editar/asociar/archivar un catalogConcepto de la Empresa A por ID, aunque lo conozca', async () => {
+    const db = getAdminDb();
+    const { uid: uidA, idToken: tokenA } = await createUserAndGetIdToken({ email: uniq('org-a') });
+    const orgA = `org-a-${Date.now()}`;
+    await seedOrgMember(db, uidA, orgA);
+    const { uid: uidB, idToken: tokenB } = await createUserAndGetIdToken({ email: uniq('org-b') });
+    const orgB = `org-b-${Date.now()}`;
+    await seedOrgMember(db, uidB, orgB);
+
+    const created = await call(post(tokenA, { action: 'create', projectId: 'PRO-ORG-A', conceptos: [conceptoFixture()] }));
+    assert.equal(created.body.conceptos[0].organizationId, orgA);
+    const conceptoId = created.body.conceptos[0].id;
+
+    // GET directo por projectId (Empresa B nunca ve nada de un proyecto de la Empresa A).
+    const listB = await call(get(tokenB, { projectId: 'PRO-ORG-A' }));
+    assert.equal(listB.body.conceptos.length, 0);
+
+    // Acciones por ID directo -- todas deben rechazarse con 403, nunca 404
+    // silencioso (que revelaria si el id existe) ni 200.
+    assert.equal((await call(post(tokenB, { action: 'update', id: conceptoId, patch: { qty: 999 } }))).statusCode, 403);
+    assert.equal((await call(post(tokenB, { action: 'set-status', id: conceptoId, status: 'GENERANDO' }))).statusCode, 403);
+    assert.equal((await call(post(tokenB, { action: 'associate-apu', id: conceptoId, apuId: 'cualquier-apu' }))).statusCode, 403);
+    assert.equal((await call(post(tokenB, { action: 'archive', id: conceptoId }))).statusCode, 403);
+
+    // El concepto de la Empresa A sigue intacto (ningun intento ajeno lo modifico).
+    const stillThere = await call(get(tokenA, { projectId: 'PRO-ORG-A' }));
+    assert.equal(stillThere.body.conceptos[0].qty, conceptoFixture().qty);
+    assert.equal(stillThere.body.conceptos[0].status, 'PENDIENTE');
+  });
+
+  it('OTRO miembro de la MISMA organizacion SI puede leer/operar el concepto (espacio de trabajo compartido, no por-usuario)', async () => {
+    const db = getAdminDb();
+    const { uid: uid1, idToken: token1 } = await createUserAndGetIdToken({ email: uniq('org-share-1') });
+    const org = `org-share-${Date.now()}`;
+    await seedOrgMember(db, uid1, org);
+    const { uid: uid2, idToken: token2 } = await createUserAndGetIdToken({ email: uniq('org-share-2') });
+    await seedOrgMember(db, uid2, org);
+
+    const created = await call(post(token1, { action: 'create', projectId: 'PRO-ORG-SHARE', conceptos: [conceptoFixture()] }));
+    const conceptoId = created.body.conceptos[0].id;
+    const updated = await call(post(token2, { action: 'update', id: conceptoId, patch: { qty: 42 } }));
+    assert.equal(updated.statusCode, 200, 'un companero de la misma organizacion SI puede operar sobre el concepto -- es trabajo de equipo, no aislado por usuario individual');
+    assert.equal(updated.body.concepto.qty, 42);
   });
 });

@@ -52,11 +52,37 @@ async function handleList(req, res){
   res.status(200).json({ conceptos });
 }
 
-/* CREATE en lote: usado por "Enviar a Catalogo" (individual o masivo desde
-   Levantamiento/PlanoTakeoff) y por captura manual. Cada concepto se resuelve
-   y valida de forma independiente -- si uno viene invalido, se descarta con
-   su propio motivo en `rejected` sin tumbar los demas (mismo criterio de
-   "un fallo no debe perder el resto" que ya aplica al lote de generacion). */
+/* CREATE en lote: usado por "Agregar al catalogo" (individual o masivo,
+   desde Levantamiento/PlanoTakeoff/Visual AI o captura manual). Cada
+   concepto se resuelve y valida de forma independiente -- si uno viene
+   invalido, se descarta con su propio motivo en `rejected` sin tumbar los
+   demas (mismo criterio de "un fallo no debe perder el resto" que ya
+   aplica al lote de generacion).
+
+   DEDUPLICACION (Fase D.1, punto 1: "cree/actualice el concepto
+   correspondiente sin duplicarlo"): cuando el item trae `origenElementoId`
+   (identidad estable del elemento de origen, ej. `${planoTakeoffId}:${elementId}`
+   o `${visualRequestId}:${elementId}` para el flujo de imagen -- ver
+   toApuSeed/attachAiOrigin), se busca primero si YA existe un concepto no
+   archivado de este proyecto con ese mismo origenElementoId. Si existe, se
+   ACTUALIZA (clave/capitulo/descripcion/unidad/cantidad/ubicacion/origenPlano),
+   preservando id/status/apuId/apuVersionId -- reenviar el mismo elemento
+   (ej. tras corregir la cantidad en el plano) nunca crea un segundo
+   concepto ni pisa un APU ya asociado/generado. Sin `origenElementoId`
+   (captura manual, sin origen de plano) siempre crea uno nuevo -- no hay
+   identidad estable contra la cual deduplicar. */
+async function findExistingByOrigenElementoId(db, authz, orgContext, projectId, origenElementoId){
+  if(!origenElementoId) return null;
+  let query = orgContext
+    ? db.collection(COLLECTION).where('organizationId', '==', orgContext.organizationId).where('projectId', '==', String(projectId))
+    : db.collection(COLLECTION).where('ownerUid', '==', authz.uid).where('projectId', '==', String(projectId));
+  const snap = await query.get();
+  const match = snap.docs.map(d => d.data()).find(c => !c.archivedAt && c.origenElementoId === origenElementoId);
+  return match || null;
+}
+
+const UPDATABLE_ON_DEDUP = ['clave', 'capitulo', 'concept', 'unit', 'qty', 'referencePU', 'origenPlano', 'origenElementoId'];
+
 async function handleCreate(req, res){
   const authz = await requireAuth(req);
   const orgContext = await loadOrgContext(authz.uid);
@@ -67,19 +93,38 @@ async function handleCreate(req, res){
   const organizationId = orgContext ? orgContext.organizationId : null;
   const now = new Date().toISOString();
 
-  const built = [];
+  const toCreate = [];
+  const toUpdate = [];
   const rejected = [];
   for(const raw of conceptos){
+    // Tambien protege contra duplicados DENTRO del mismo lote (ej. el mismo
+    // elemento enviado dos veces en una sola llamada) -- no solo contra lo
+    // ya persistido, que la consulta de abajo no puede ver todavia.
+    const dupInBatch = raw?.origenElementoId && (
+      toCreate.find(c => c.origenElementoId === raw.origenElementoId) ||
+      toUpdate.find(c => c.origenElementoId === raw.origenElementoId)
+    );
+    const existing = dupInBatch || await findExistingByOrigenElementoId(db, authz, orgContext, projectId, raw?.origenElementoId);
+    if(existing){
+      const seed = makeEmptyCatalogConcepto({ projectId: String(projectId), ...raw });
+      const { valid, errors } = validateCatalogConcepto(seed);
+      if(!valid){ rejected.push({ input: raw, errors }); continue; }
+      const withLocation = await resolveConceptLocation(db, seed, projectId);
+      const patch = {};
+      UPDATABLE_ON_DEDUP.forEach(f => { if(withLocation[f] !== undefined) patch[f] = withLocation[f]; });
+      toUpdate.push({ ...existing, ...patch, ubicacion: withLocation.ubicacion ?? existing.ubicacion, ubicacionEstructurada: withLocation.ubicacionEstructurada ?? existing.ubicacionEstructurada, updatedAt: now });
+      continue;
+    }
     const seed = makeEmptyCatalogConcepto({ projectId: String(projectId), ...raw });
     const { valid, errors } = validateCatalogConcepto(seed);
     if(!valid){ rejected.push({ input: raw, errors }); continue; }
     const withLocation = await resolveConceptLocation(db, seed, projectId);
-    built.push({ ...withLocation, ownerUid: authz.uid, organizationId, createdAt: now, updatedAt: now });
+    toCreate.push({ ...withLocation, ownerUid: authz.uid, organizationId, createdAt: now, updatedAt: now });
   }
-  if(!built.length) throw httpError(400, `Ningun concepto valido para crear. Motivos: ${JSON.stringify(rejected)}`);
+  if(!toCreate.length && !toUpdate.length) throw httpError(400, `Ningun concepto valido para crear/actualizar. Motivos: ${JSON.stringify(rejected)}`);
 
   const batch = db.batch();
-  built.forEach(concepto => {
+  toCreate.forEach(concepto => {
     batch.set(db.collection(COLLECTION).doc(concepto.id), concepto);
     batch.set(db.collection(AUDIT_COLLECTION).doc(), {
       entryId: concepto.id, action: 'CATALOGO_CONCEPTO_CREATED', previousStatus: null, newStatus: concepto.status,
@@ -88,8 +133,17 @@ async function handleCreate(req, res){
       timestamp: now
     });
   });
+  toUpdate.forEach(concepto => {
+    batch.set(db.collection(COLLECTION).doc(concepto.id), concepto);
+    batch.set(db.collection(AUDIT_COLLECTION).doc(), {
+      entryId: concepto.id, action: 'CATALOGO_CONCEPTO_DEDUP_UPDATED', previousStatus: concepto.status, newStatus: concepto.status,
+      actor: authz.uid, actorEmail: authz.email, reason: reason || 'Actualizado desde el mismo elemento de origen (sin duplicar)', source: 'api',
+      projectId: concepto.projectId, conceptoId: concepto.id, organizationId, ownerUid: authz.uid,
+      timestamp: now
+    });
+  });
   await batch.commit();
-  res.status(201).json({ conceptos: built, rejected });
+  res.status(201).json({ conceptos: [...toCreate, ...toUpdate], created: toCreate.length, updated: toUpdate.length, rejected });
 }
 
 async function loadOwnedConcepto(db, authz, orgContext, id){

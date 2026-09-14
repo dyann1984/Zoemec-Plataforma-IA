@@ -11,6 +11,7 @@
 import { useMemo, useState } from 'react';
 import { PageHead, EmptyState } from '../../components/ui/PageElements.jsx';
 import { useCatalogConceptos } from './catalogConceptosCloud.js';
+import { useProjectApus } from './projectApusCloud.js';
 import { generateApuForConcepto, persistGeneratedApu } from './generateApuForConcepto.js';
 import { ApuAssociationSearch } from './ApuAssociationSearch.jsx';
 import { QuantifierWizard } from '../quantifier/QuantifierWizard.jsx';
@@ -44,8 +45,15 @@ async function runWithConcurrency(items, limit, worker){
   await Promise.all(runners);
 }
 
-export function CatalogoModule({ user, organizationId, activeProjectId, activeProject, catalog = [], rawApus = [], onNeedProject, setModule }){
+export function CatalogoModule({ user, organizationId, activeProjectId, activeProject, catalog = [], onNeedProject, setModule, onNavigateToPlano }){
   const { conceptos, loading, error, create, update, setStatus, associateApu, archive } = useCatalogConceptos(user, activeProjectId);
+  // Copia PROPIA y fresca de los APUs del proyecto (nunca el `rawApus` de
+  // main.jsx, que es el cache de sesion del editor de APU y no se entera de
+  // un APU creado por generateApuForConcepto.js hasta recargar la pagina --
+  // ver projectApusCloud.js). Se refresca explicitamente tras cada accion
+  // que crea o asocia un APU, para que "Asociar APU existente" y el
+  // Presupuesto vean el resultado de inmediato, sin depender de un reload.
+  const { apus: rawApus, reload: reloadApus } = useProjectApus(user, activeProjectId);
   const { beginJob, completeJob, failJob } = useAiJobs();
   const [draft, setDraft] = useState({ clave: '', capitulo: 'OTROS', concept: '', unit: '', qty: '' });
   const [associatingId, setAssociatingId] = useState(null);
@@ -68,6 +76,7 @@ export function CatalogoModule({ user, organizationId, activeProjectId, activePr
       await setStatus(concepto.id, 'GENERANDO', { batchId: null });
       const { apuId, requiresReview } = await generateApuForConcepto({ concepto, catalog, project: activeProject });
       await setStatus(concepto.id, requiresReview ? 'REQUIERE_REVISION' : 'GENERADO', { apuId });
+      reloadApus();
     }catch(err){
       await setStatus(concepto.id, 'ERROR', { error: err.message }).catch(() => {});
     }finally{
@@ -100,6 +109,7 @@ export function CatalogoModule({ user, organizationId, activeProjectId, activePr
       });
       const summary = { total: targets.length, ok, failed };
       setBatchSummary(summary);
+      reloadApus();
       completeJob(jobId, summary, { label: `Generación de lote (${targets.length} conceptos)` });
     }catch(err){
       failJob(jobId, err, { label: 'Generación de lote' });
@@ -122,6 +132,7 @@ export function CatalogoModule({ user, organizationId, activeProjectId, activePr
         reason: `Generado con Cuantificador Paramétrico desde Catálogo (concepto ${concepto.id})`
       });
       await setStatus(concepto.id, requiresReview ? 'REQUIERE_REVISION' : 'GENERADO', { apuId });
+      reloadApus();
     }catch(err){
       await setStatus(concepto.id, 'ERROR', { error: err.message }).catch(() => {});
     }finally{
@@ -132,6 +143,7 @@ export function CatalogoModule({ user, organizationId, activeProjectId, activePr
   const handleAssociate = async (concepto, apuId, matchInfo) => {
     setAssociatingId(null);
     await associateApu(concepto.id, apuId, matchInfo);
+    reloadApus();
   };
 
   const addManualConcept = async (e) => {
@@ -217,6 +229,12 @@ export function CatalogoModule({ user, organizationId, activeProjectId, activePr
                         <button className="soft" disabled={busy} onClick={() => runGenerateAI(c)}>{busy ? 'Generando…' : 'Generar con IA'}</button>
                         {parametricSuggestions.length > 0 && (
                           <button className="soft" disabled={busy} onClick={() => setParametricId(c.id)}>Generar con cuantificador</button>
+                        )}
+                        {c.origenPlano?.planoTakeoffId && (
+                          <button className="soft" onClick={() => onNavigateToPlano?.({ kind: 'plano-takeoff-vector', planoTakeoffId: c.origenPlano.planoTakeoffId, elementId: c.origenPlano.elementoId, page: c.origenPlano.page })}>Ver en plano</button>
+                        )}
+                        {c.origenPlano && !c.origenPlano.planoTakeoffId && (
+                          <button className="soft" onClick={() => onNavigateToPlano?.({ kind: 'plano-takeoff-image' })}>Ver en plano</button>
                         )}
                         <button className="soft danger" disabled={busy} onClick={() => archive(c.id)}>Archivar</button>
                       </div>

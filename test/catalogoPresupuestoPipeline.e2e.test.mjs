@@ -176,6 +176,18 @@ describe('Fase D end-to-end: PDF -> Cuantificacion -> Catalogo -> APU -> Presupu
     assert.equal(paramApuRes.statusCode, 201);
     assert.deepEqual(paramApuRes.body.apu.snapshot.ubicacionEstructurada, { country: 'MX', state: 'Nuevo León', city: 'Monterrey' },
       'el APU parametrico tambien debe regionalizarse con la ubicacion real del proyecto');
+
+    // ---- Regionalizacion (Fase D.1, punto 4): Confidence Engine debe leer
+    // EXACTAMENTE ese mismo snapshot -- runApuConfidence(savedApu.snapshot)
+    // recorre la dimension regionalEvidence sobre el objeto YA regionalizado,
+    // nunca una copia distinta ni un valor recalculado aparte. Sin datos de
+    // Price Intelligence (esta prueba nunca llama a la IA real ni al buscador
+    // de precios, ver comentario del encabezado), la dimension debe declarar
+    // honestamente que no hay evidencia -- NUNCA fabricar un score regional. ----
+    const paramConfidence = runApuConfidence(finalizeProfessionalAPU(paramApuRes.body.apu.snapshot));
+    assert.ok('regionalEvidence' in paramConfidence.dimensions, 'la dimension regionalEvidence debe estar presente, conectada al mismo snapshot regionalizado');
+    assert.equal(paramConfidence.dimensions.regionalEvidence.score, null, 'sin evidencia real de Price Intelligence, el score regional debe ser null (INSUFFICIENT_EVIDENCE), nunca inventado');
+
     const paramSetStatus = await callCatalogo(post(idToken, { action: 'set-status', id: conceptoParametrico.id, status: 'GENERADO', apuId: paramApuId }));
     assert.equal(paramSetStatus.statusCode, 200);
     assert.equal(paramSetStatus.body.concepto.status, 'GENERADO');
@@ -268,9 +280,31 @@ describe('Fase D end-to-end: PDF -> Cuantificacion -> Catalogo -> APU -> Presupu
     assert.equal(reopenedPresu.body.presupuesto.snapshot.importeTotal, snapshot.importeTotal + 1);
 
     // ---- 6. Explosiones (Fase A, MISMO motor, ver "Ver explosiones") ----
+    // ExplosionsPanel.jsx alimenta computeExplosionData con TODOS los APUs
+    // reales del proyecto (GET /api/apus?projectId=), exactamente lo que se
+    // reproduce aqui con finalApusRes -- reusando el MISMO motor, sin copia.
     const explosionData = computeExplosionData(finalApusRes.body.apus);
     assert.ok(explosionData.materials, 'la explosion de materiales debe calcularse a partir de los APUs reales del proyecto');
     assert.ok(Array.isArray(explosionData.labor.rows) || Array.isArray(explosionData.labor), 'la explosion de mano de obra debe producirse sin lanzar');
+
+    // ---- Reconciliacion explicita: APUs del presupuesto <-> explosion consolidada ----
+    // Todo apuId que el Presupuesto referencia (conceptos ASOCIADO/GENERADO)
+    // debe estar presente entre los APUs que alimentaron la explosion -- el
+    // Presupuesto nunca puede "ver" un costo que la explosion no conoce.
+    const explosionSourceApuIds = new Set(finalApusRes.body.apus.map(a => a.id));
+    const presupuestoApuIds = aggregation.rows.filter(r => r.apuId).map(r => r.apuId);
+    assert.equal(presupuestoApuIds.length, 3, 'los 3 conceptos con APU (asociado/parametrico/reintentado) deben aportar apuId al presupuesto');
+    presupuestoApuIds.forEach(id => {
+      assert.ok(explosionSourceApuIds.has(id), `el APU ${id} referenciado por el Presupuesto debe estar entre los APUs que alimentaron la Explosion consolidada`);
+    });
+    // Y, en sentido inverso: cada renglon de material de la explosion solo
+    // puede declarar como origen APUs que de verdad se le pasaron -- nunca
+    // un apusOrigen fantasma que no exista en el conjunto de entrada.
+    explosionData.materials.forEach(row => {
+      (row.apusOrigen || []).forEach(apuId => {
+        assert.ok(explosionSourceApuIds.has(apuId), `apusOrigen de un renglon de material referencia un APU (${apuId}) que no se le paso a computeExplosionData`);
+      });
+    });
 
     // ---- 7. Exportacion PDF/Excel del Presupuesto ----
     const pdfDoc = exportPresupuestoPDF({ presupuesto: baselineRes.body.presupuesto, aggregation, projectName: 'Obra QA Fase D', save: false });

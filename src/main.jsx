@@ -467,6 +467,14 @@ function App(){
       setActiveProjectId(projects[0].id);
     }
   }, [projects, activeProjectId]);
+  // "Ver en plano" (Fase D.1, trazabilidad Presupuesto -> Plano): destino de
+  // navegacion en memoria, nunca persistido -- PresupuestoModule/CatalogoModule
+  // lo escriben al hacer click, VisualAI/PlanoTakeoffWorkspace lo consumen
+  // (abren el plano correcto, la pagina correcta, seleccionan el elemento) y
+  // lo limpian cuando ya lo aplicaron. No hay router real en esta app (ver
+  // `module`/setModule), asi que este es el unico canal para pasar "que
+  // abrir" de un modulo a otro sin acoplar los componentes entre si.
+  const [planoNavigationTarget, setPlanoNavigationTarget] = useState(null);
   const [apus, setApus] = useProjectScoped(rawApus, setRawApus, activeProjectId);
   const [budgets, setBudgets] = useProjectScoped(rawBudgets, setRawBudgets, activeProjectId);
   const [catalog, setCatalog] = useProjectScoped(rawCatalog, setRawCatalog, activeProjectId);
@@ -936,16 +944,16 @@ function App(){
   else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView} apus={apus} clients={clients} projects={projects} activeProject={activeProject} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} orgSession={orgSession}>
     {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} activeProject={activeProject} user={user} demoMode={DEMO_MODE} demoContext={DEMO_MODE ? createDemoContext() : null} />}
     {module === 'levantamiento' && <LevantamientoModule surveys={surveys} setSurveys={setSurveys} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} onSendToApu={()=>setModule('catalogo')} currentUserEmail={user?.email || null} organizationId={orgSession?.organization?.id || null} />}
-    {module === 'catalogo' && <CatalogoModule user={user} organizationId={orgSession?.organization?.id || null} activeProjectId={activeProjectId} activeProject={activeProject} catalog={catalog} rawApus={rawApus} onNeedProject={()=>setModule('cartera')} setModule={setModule} />}
+    {module === 'catalogo' && <CatalogoModule user={user} organizationId={orgSession?.organization?.id || null} activeProjectId={activeProjectId} activeProject={activeProject} catalog={catalog} onNeedProject={()=>setModule('cartera')} setModule={setModule} onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }} />}
     {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} rawApus={rawApus} linkApuToProject={linkApuToProject} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} onConfigureLocation={()=>setModule('cartera')} organizationId={orgSession?.organization?.id || null} />}
     {module === 'presupuestos' && <>
-      <PresupuestoModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} rawApus={rawApus} onNeedProject={()=>setModule('cartera')} setModule={setModule} />
+      <PresupuestoModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} setModule={setModule} onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }} />
       <Budgets legacyOnly company={companyView} budgets={budgets} setBudgets={setBudgets} items={budgetItems} setItems={setBudgetItems} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} />
     </>}
     {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={(pid)=>{ setRawApus(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgets(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawCatalog(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgetItems(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawSurveys(l=>l.filter(x=>(x?.projectId??null)!==pid)); }} />}
     {module === 'biblioteca' && <Library user={user} catalog={catalog} setCatalog={setCatalog} setModule={setModule} />}
     {module === 'tecnico' && <TechnicalOffice company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} needsProject={needsProject} onCreateProject={()=>setModule('cartera')} />}
-    {module === 'visual' && <VisualAI user={user} setModule={setModule} />}
+    {module === 'visual' && <VisualAI user={user} setModule={setModule} activeProjectId={activeProjectId} activeProject={activeProject} organizationId={orgSession?.organization?.id || null} onNeedProject={()=>setModule('cartera')} navigationTarget={planoNavigationTarget} onNavigationTargetConsumed={()=>setPlanoNavigationTarget(null)} />}
     {module === 'comunidad' && <Community />}
     {module === 'planes' && <PlansAccess user={user} />}
     {module === 'reportes' && <Reports clients={clients} apus={apus} budgets={budgets} />}
@@ -4889,9 +4897,18 @@ function parseVisualReport(text){
   return sections.length ? sections : null;
 }
 
-function VisualAI({user, setModule}){
+function VisualAI({user, setModule, activeProjectId=null, activeProject=null, organizationId=null, onNeedProject, navigationTarget=null, onNavigationTargetConsumed}){
   const { t: tr } = useI18n();
   const [subview,setSubview]=useState('propuesta');
+  // "Ver en plano" (Fase D.1): un destino de navegacion real (no solo del
+  // tab por defecto 'propuesta') cambia el subview automaticamente al que
+  // corresponde con el origen del concepto -- el usuario nunca tiene que
+  // encontrar a mano donde esta el plano que genero ese renglon.
+  useEffect(()=>{
+    if(!navigationTarget) return;
+    if(navigationTarget.kind==='plano-takeoff-vector') setSubview('takeoffVector');
+    else if(navigationTarget.kind==='plano-takeoff-image') setSubview('takeoff');
+  },[navigationTarget]);
   const [image,setImage]=useState('');
   const [fileName,setFileName]=useState('');
   const [mode,setMode]=useState('fachada');
@@ -4956,8 +4973,8 @@ function VisualAI({user, setModule}){
     <button className={subview==='takeoff'?'active':''} onClick={()=>setSubview('takeoff')}>{tr('visualAi.tabTakeoff')}</button>
     <button className={subview==='takeoffVector'?'active':''} onClick={()=>setSubview('takeoffVector')}>{tr('visualAi.tabTakeoffVector')}</button>
   </div>;
-  if(subview==='takeoff') return <section><PageHead kicker={tr('modules.takeoff.kicker')} title={tr('modules.takeoff.title')} desc={tr('modules.takeoff.desc')} />{tabs}<PlanoTakeoff user={user} setModule={setModule}/></section>;
-  if(subview==='takeoffVector') return <section><PageHead kicker={tr('modules.takeoffVector.kicker')} title={tr('modules.takeoffVector.title')} desc={tr('modules.takeoffVector.desc')} />{tabs}<PlanoTakeoffWorkspace user={user}/></section>;
+  if(subview==='takeoff') return <section><PageHead kicker={tr('modules.takeoff.kicker')} title={tr('modules.takeoff.title')} desc={tr('modules.takeoff.desc')} />{tabs}<PlanoTakeoff user={user} setModule={setModule} activeProjectId={activeProjectId} organizationId={organizationId} onNeedProject={onNeedProject}/></section>;
+  if(subview==='takeoffVector') return <section><PageHead kicker={tr('modules.takeoffVector.kicker')} title={tr('modules.takeoffVector.title')} desc={tr('modules.takeoffVector.desc')} />{tabs}<PlanoTakeoffWorkspace user={user} projectId={activeProjectId} organizationId={organizationId} onNeedProject={onNeedProject} navigationTarget={navigationTarget?.kind==='plano-takeoff-vector'?navigationTarget:null} onNavigationTargetConsumed={onNavigationTargetConsumed}/></section>;
   return <section><PageHead kicker={tr('visualAi.kicker')} title={tr('visualAi.title')} desc={tr('visualAi.desc')} action={<button onClick={generate}>{tr('visualAi.generateProposal')}</button>} />
     {tabs}
     <div className="visual-grid">
@@ -4994,10 +5011,12 @@ function VisualAI({user, setModule}){
    (action:'similarMatrices'), ambos ya existentes: sin funciones serverless
    nuevas. No dibuja overlays ni bounding boxes (el modelo no da coordenadas
    fiables): solo pagina + evidencia textual, tal como se aprobo. */
-function PlanoTakeoff({user, setModule}){
+function PlanoTakeoff({user, setModule, activeProjectId=null, organizationId=null, onNeedProject}){
   const { t: tr } = useI18n();
   const { beginJob, completeJob, failJob, getUnseen, consumeJob } = useAiJobs();
   const [recoveredTakeoff,setRecoveredTakeoff]=useState(null);
+  const [catalogAddedKeys,setCatalogAddedKeys]=useState(()=>new Set());
+  const [catalogBusyIndex,setCatalogBusyIndex]=useState(-1);
   // Mismo motivo que en APU/generateAI: getUnseen cambia de identidad cuando
   // termina la hidratacion asincrona desde Firestore, asi que se usa como
   // dependencia en vez de [] para no perder la recuperacion en una carrera.
@@ -5099,15 +5118,38 @@ function PlanoTakeoff({user, setModule}){
     }finally{ setBusyIndex(-1); }
   };
 
-  const handleUseInApu=(elemento)=>{
+  // "Agregar al catalogo" (Fase D.1, cierre del hueco Visual AI -> Catalogo):
+  // reemplaza el salto directo al editor de APU -- el flujo correcto es
+  // Plano -> Elemento validado -> Catalogo -> APU -> Presupuesto, nunca
+  // saltarse el Catalogo. Reusa toApuSeed SOLO para su validacion de forma
+  // (concepto/unidad/cantidad utilizables); el resultado real que se manda
+  // al servidor es un concepto de catalogo completo, con origenElementoId
+  // para deduplicar si este mismo elemento se vuelve a enviar.
+  const addElementToCatalog=async(elemento,index)=>{
+    if(!activeProjectId){ window.zoemecNotify?.(tr('takeoff.needsProjectMsg'),'error'); onNeedProject?.(); return; }
     const seed=toApuSeed(elemento);
     if(!seed){
       window.zoemecNotify?.(tr('takeoff.notValidatedMsg'), 'error');
       return;
     }
-    try{ localStorage.setItem('zoemec-pending-plano-seed', JSON.stringify(seed)); }catch{}
-    window.zoemecNotify?.(tr('takeoff.readyForApuMsg',{concept:seed.concept,qty:seed.qty,unit:seed.unit}), 'info');
-    setModule?.('apu');
+    setCatalogBusyIndex(index);
+    try{
+      const origenElementoId=`${result?.visualRequestId||'sin-request'}:${index}`;
+      const res=await apiPost('/api/catalogo-conceptos', {
+        action:'create', projectId:activeProjectId,
+        conceptos:[{
+          clave:`EL-${index+1}`, capitulo:'OTROS', concept:seed.concept, unit:seed.unit, qty:seed.qty, referencePU:seed.referencePU,
+          origenElementoId, origenPlano:{ origen:'plano-takeoff', ...seed.sourceMeta }
+        }]
+      });
+      setCatalogAddedKeys(prev=>new Set(prev).add(origenElementoId));
+      const wasUpdate=(res.updated||0)>0;
+      window.zoemecNotify?.(tr(wasUpdate?'takeoff.updatedInCatalogMsg':'takeoff.addedToCatalogMsg',{concept:seed.concept,qty:seed.qty,unit:seed.unit}), 'success');
+    }catch(err){
+      window.zoemecNotify?.(err?.message||tr('takeoff.addToCatalogFailMsg'), 'error');
+    }finally{
+      setCatalogBusyIndex(-1);
+    }
   };
 
   const estadoLabel={ PROPUESTO_POR_IA:tr('takeoff.stateProposedAI'), REQUIERE_REVISION:tr('takeoff.stateNeedsReview'), VALIDADO_POR_USUARIO:tr('takeoff.stateValidated'), RECHAZADO:tr('takeoff.stateRejected') };
@@ -5137,7 +5179,7 @@ function PlanoTakeoff({user, setModule}){
     </div>
 
     {mimeType.startsWith('image/') && dataBase64
-      ? <PlanoManualMeasure imageDataUrl={dataBase64} fileName={fileName} mimeType={mimeType} setModule={setModule} takeoffRecords={takeoffRecords} setTakeoffRecords={setTakeoffRecords} user={user}/>
+      ? <PlanoManualMeasure imageDataUrl={dataBase64} fileName={fileName} mimeType={mimeType} setModule={setModule} takeoffRecords={takeoffRecords} setTakeoffRecords={setTakeoffRecords} user={user} activeProjectId={activeProjectId} onNeedProject={onNeedProject}/>
       : dataBase64 ? <p className="muted" style={{fontSize:'.78rem'}}>{tr('takeoff.manualOnlyImageHint')}</p> : null}
 
     {result && <div className="panel">
@@ -5169,7 +5211,9 @@ function PlanoTakeoff({user, setModule}){
                 <button className="soft" disabled={busy} onClick={()=>reviewElement(index,'VALIDADO_POR_USUARIO')}>{tr('takeoff.validate')}</button>
                 <button className="row-del" disabled={busy} onClick={()=>reviewElement(index,'RECHAZADO')}>{tr('takeoff.reject')}</button>
                 <button className="soft" disabled={busy} onClick={()=>handleSimilar(index,el)}>{tr('takeoff.similarMatrices')}</button>
-                <button disabled={el.estado!=='VALIDADO_POR_USUARIO'} onClick={()=>handleUseInApu(el)}>{tr('takeoff.useInApu')}</button>
+                {catalogAddedKeys.has(`${result?.visualRequestId||'sin-request'}:${index}`)
+                  ? <span className="muted" style={{fontSize:'.78rem'}}>✓ {tr('planoTakeoff.alreadyInCatalog')}</span>
+                  : <button disabled={el.estado!=='VALIDADO_POR_USUARIO' || catalogBusyIndex===index} onClick={()=>addElementToCatalog(el,index)}>{catalogBusyIndex===index?tr('planoTakeoff.saving'):tr('takeoff.addToCatalog')}</button>}
               </td>
             </tr>
             {similarByIndex[index] && <tr><td colSpan={10}>
@@ -5195,7 +5239,7 @@ function PlanoTakeoff({user, setModule}){
    simulada). El elemento resultante se valida y convierte a semilla de APU
    con el MISMO motor que Planos IA (applyPlanoElementReview/toApuSeed,
    planoReview.js) -- ningun motor nuevo. */
-function PlanoManualMeasure({imageDataUrl, fileName, mimeType, setModule, takeoffRecords, setTakeoffRecords, user}){
+function PlanoManualMeasure({imageDataUrl, fileName, mimeType, setModule, takeoffRecords, setTakeoffRecords, user, activeProjectId=null, onNeedProject}){
   const { t: tr } = useI18n();
   const canvasRef=useRef(null);
   const imgRef=useRef(null);
@@ -5342,8 +5386,16 @@ function PlanoManualMeasure({imageDataUrl, fileName, mimeType, setModule, takeof
     setTakeoffRecords(prev=>upsertTakeoffRecord(prev,record));
   };
 
-  const useInApu=()=>{
+  const [catalogBusy,setCatalogBusy]=useState(false);
+  const [catalogAddedRecordId,setCatalogAddedRecordId]=useState(null);
+  // "Agregar al catalogo" (Fase D.1): mismo criterio que PlanoTakeoff/
+  // PlanoTakeoffWorkspace -- nunca saltar directo al editor de APU, el
+  // elemento validado pasa primero por el Catalogo. origenElementoId usa
+  // el id del registro de trazo local (recordId, ver planoTakeoffStore.js)
+  // para poder deduplicar si el mismo trazo se vuelve a "usar" dos veces.
+  const addToCatalog=async()=>{
     if(!pendingElement) return;
+    if(!activeProjectId){ window.zoemecNotify?.(tr('takeoff.needsProjectMsg'),'error'); onNeedProject?.(); return; }
     const cantidadEditada=cantidadFinal!==''?Number(cantidadFinal):null;
     const huboCorreccion=cantidadEditada!=null && cantidadEditada!==pendingElement.cantidadPropuesta;
     const reviewed=applyPlanoElementReview(pendingElement,{
@@ -5353,18 +5405,33 @@ function PlanoManualMeasure({imageDataUrl, fileName, mimeType, setModule, takeof
     });
     const seed=toApuSeed(reviewed);
     if(!seed){ window.zoemecNotify?.(tr('takeoffManual.noValidQtyMsg'),'error'); return; }
-    // Persiste la correccion manteniendo el historial (cantidad ORIGINAL del
-    // trazo nunca se pierde -- ver planoTakeoffStore.js#applyManualCorrection).
-    if(recordId){
-      setTakeoffRecords(prev=>prev.map(r=>r.id!==recordId?r:applyManualCorrection(r,{
-        cantidadCorregida: huboCorreccion?cantidadEditada:null,
-        descripcionCorregida: reviewed.descripcionCorregida,
-        validatedBy: user?.email||'usuario'
-      })));
+    setCatalogBusy(true);
+    try{
+      // Persiste la correccion manteniendo el historial (cantidad ORIGINAL del
+      // trazo nunca se pierde -- ver planoTakeoffStore.js#applyManualCorrection).
+      if(recordId){
+        setTakeoffRecords(prev=>prev.map(r=>r.id!==recordId?r:applyManualCorrection(r,{
+          cantidadCorregida: huboCorreccion?cantidadEditada:null,
+          descripcionCorregida: reviewed.descripcionCorregida,
+          validatedBy: user?.email||'usuario'
+        })));
+      }
+      const origenElementoId=recordId||`manual-${Date.now()}`;
+      const res=await apiPost('/api/catalogo-conceptos', {
+        action:'create', projectId:activeProjectId,
+        conceptos:[{
+          clave:tipo.toUpperCase(), capitulo:'OTROS', concept:seed.concept, unit:seed.unit, qty:seed.qty, referencePU:seed.referencePU,
+          origenElementoId, origenPlano:{ origen:'plano-takeoff-manual', ...seed.sourceMeta }
+        }]
+      });
+      setCatalogAddedRecordId(origenElementoId);
+      const wasUpdate=(res.updated||0)>0;
+      window.zoemecNotify?.(tr(wasUpdate?'takeoffManual.updatedInCatalogMsg':'takeoffManual.addedToCatalogMsg',{concept:seed.concept,qty:seed.qty,unit:seed.unit}), 'success');
+    }catch(err){
+      window.zoemecNotify?.(err?.message||tr('takeoffManual.addToCatalogFailMsg'), 'error');
+    }finally{
+      setCatalogBusy(false);
     }
-    try{ localStorage.setItem('zoemec-pending-plano-seed', JSON.stringify(seed)); }catch{}
-    window.zoemecNotify?.(tr('takeoffManual.readyForApuMsg',{concept:seed.concept,qty:seed.qty,unit:seed.unit}), 'info');
-    setModule?.('apu');
   };
 
   return <div className="panel plano-manual-measure">
@@ -5394,7 +5461,9 @@ function PlanoManualMeasure({imageDataUrl, fileName, mimeType, setModule, takeof
       {pendingElement.cantidadPropuesta!=null && <div className="grid-2">
         <div><label>{tr('takeoffManual.finalQtyLabel')}</label><input type="number" step="any" value={cantidadFinal} onChange={e=>setCantidadFinal(e.target.value)}/></div>
       </div>}
-      <button disabled={pendingElement.cantidadPropuesta==null} onClick={useInApu}>{tr('takeoffManual.validateAndUse')}</button>
+      {catalogAddedRecordId && catalogAddedRecordId===(recordId||catalogAddedRecordId)
+        ? <span className="muted" style={{fontSize:'.78rem'}}>✓ {tr('planoTakeoff.alreadyInCatalog')}</span>
+        : <button disabled={pendingElement.cantidadPropuesta==null || catalogBusy} onClick={addToCatalog}>{catalogBusy?tr('planoTakeoff.saving'):tr('takeoffManual.addToCatalog')}</button>}
     </div>}
   </div>;
 }

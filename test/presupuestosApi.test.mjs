@@ -7,7 +7,7 @@ process.env.GOOGLE_APPLICATION_CREDENTIALS = process.env.GOOGLE_APPLICATION_CRED
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import handler from '../server/api-lib/_route-presupuestos.mjs';
-import { getAdminAuth } from '../server/api-lib/_firebaseAdmin.mjs';
+import { getAdminAuth, getAdminDb } from '../server/api-lib/_firebaseAdmin.mjs';
 
 const AUTH_HOST = process.env.FIREBASE_AUTH_EMULATOR_HOST;
 if(!AUTH_HOST){
@@ -124,6 +124,52 @@ describe('Baseline (set-once)', () => {
     assert.equal(saved.body.presupuesto.currentVersion, 'V2');
     assert.equal(saved.body.presupuesto.baselineVersion, 'V1');
   });
+
+  it('PRUEBA ESPECIFICA de intento de sobrescritura del Baseline: multiples intentos por multiples caminos, ninguno lo mueve; existe audit trail; el Baseline sigue recuperable via restore-version', async () => {
+    const { idToken } = await createUserAndGetIdToken({ email: uniq('baseline-overwrite') });
+    const db = getAdminDb();
+    await call(post(idToken, { action: 'create', id: 'PRE-OVERWRITE', projectId: 'PRO-OVERWRITE', snapshot: snapshotFixture({ importeTotal: 100 }) }));
+    const approved = await call(post(idToken, { action: 'approve-baseline', id: 'PRE-OVERWRITE' }));
+    assert.equal(approved.body.presupuesto.baselineVersion, 'V1');
+
+    // Intento 1: approve-baseline otra vez (camino directo) -- rechazado.
+    const attempt1 = await call(post(idToken, { action: 'approve-baseline', id: 'PRE-OVERWRITE' }));
+    assert.equal(attempt1.statusCode, 409);
+    assert.equal(attempt1.body.code, 'BASELINE_ALREADY_SET');
+
+    // Intento 2: guardar una version nueva y INTENTAR colar un baselineVersion
+    // distinto en el body -- save-version nunca lee/escribe ese campo del
+    // cliente, solo el servidor mueve baselineVersion (y solo approve-baseline
+    // lo hace, una vez).
+    const saved = await call(post(idToken, {
+      action: 'save-version', id: 'PRE-OVERWRITE', snapshot: snapshotFixture({ importeTotal: 200 }),
+      expectedParentVersionId: 'V1', baselineVersion: 'V2' // spoof deliberado, debe ignorarse
+    }));
+    assert.equal(saved.statusCode, 200);
+    assert.equal(saved.body.presupuesto.currentVersion, 'V2');
+    assert.equal(saved.body.presupuesto.baselineVersion, 'V1', 'baselineVersion NUNCA se toma del body de save-version, ni siquiera si el cliente lo manda');
+
+    // Intento 3: approve-baseline de nuevo, ya con currentVersion en V2 --
+    // sigue rechazado, el gate es "ya existe baseline", no "coincide con currentVersion".
+    const attempt3 = await call(post(idToken, { action: 'approve-baseline', id: 'PRE-OVERWRITE' }));
+    assert.equal(attempt3.statusCode, 409);
+    assert.equal(attempt3.body.code, 'BASELINE_ALREADY_SET');
+    assert.equal(attempt3.body.presupuesto, undefined, 'un intento rechazado no debe devolver un presupuesto mutado');
+
+    // Audit trail: debe existir un registro real de la aprobacion del Baseline.
+    const auditSnap = await db.collection('presupuestoAudit').where('entryId', '==', 'PRE-OVERWRITE').where('action', '==', 'PRESUPUESTO_BASELINE_APPROVED').get();
+    assert.equal(auditSnap.size, 1, 'debe existir exactamente UN evento de auditoria de aprobacion de Baseline, nunca uno por cada intento rechazado');
+    assert.equal(auditSnap.docs[0].data().newStatus, 'V1');
+
+    // El Baseline (V1) sigue siendo una version real y recuperable -- restore-version
+    // sobre V1 crea una version NUEVA identica, nunca borra ni corrompe el Baseline.
+    const restored = await call(post(idToken, { action: 'restore-version', id: 'PRE-OVERWRITE', version: 'V1' }));
+    assert.equal(restored.statusCode, 200);
+    assert.equal(restored.body.presupuesto.snapshot.importeTotal, 100, 'el snapshot restaurado debe ser EXACTAMENTE el del Baseline original');
+    assert.equal(restored.body.presupuesto.baselineVersion, 'V1', 'restaurar el contenido del Baseline no reasigna el puntero de Baseline');
+    const finalList = await call(get(idToken, { id: 'PRE-OVERWRITE' }));
+    assert.equal(finalList.body.versions.length, 3, 'V1 (baseline), V2, V3 (restauracion) -- ninguna version se perdio ni se sobreescribio');
+  });
 });
 
 describe('aislamiento multi-tenant y archive', () => {
@@ -161,5 +207,56 @@ describe('aislamiento multi-tenant y archive', () => {
     const res = await call(post(idToken, { action: 'create', id: 'PRE-10', projectId: 'PRO-10', snapshot: snapshotFixture(), organizationId: 'org-inventada' }));
     assert.equal(res.body.presupuesto.organizationId, null);
     assert.equal(res.body.presupuesto.ownerUid, uid);
+  });
+});
+
+describe('PRUEBA ESPECIFICA -- aislamiento por ORGANIZACION (Fase D.1, punto 9), no solo por usuario individual', () => {
+  async function seedOrgMember(db, uid, organizationId){
+    await db.doc(`organizations/${organizationId}`).set({ id: organizationId, name: `Empresa ${organizationId}`, status: 'ACTIVE_TRIAL' });
+    await db.doc(`organizations/${organizationId}/members/${uid}`).set({ uid, role: 'company_manager', status: 'active' });
+    await db.doc(`users/${uid}`).set({ uid, organizationId, role: 'user', plan: 'Gratis', active: true }, { merge: true });
+  }
+
+  it('un miembro de la Empresa B NUNCA puede leer/guardar/restaurar/aprobar Baseline/archivar un presupuesto de la Empresa A por ID', async () => {
+    const db = getAdminDb();
+    const { uid: uidA, idToken: tokenA } = await createUserAndGetIdToken({ email: uniq('presu-org-a') });
+    const orgA = `org-presu-a-${Date.now()}`;
+    await seedOrgMember(db, uidA, orgA);
+    const { uid: uidB, idToken: tokenB } = await createUserAndGetIdToken({ email: uniq('presu-org-b') });
+    const orgB = `org-presu-b-${Date.now()}`;
+    await seedOrgMember(db, uidB, orgB);
+
+    const created = await call(post(tokenA, { action: 'create', id: 'PRE-ORG-A', projectId: 'PRO-ORG-A', snapshot: snapshotFixture() }));
+    assert.equal(created.body.presupuesto.organizationId, orgA);
+
+    // Listado por projectId: la Empresa B nunca ve nada de un proyecto de la Empresa A.
+    const listB = await call(get(tokenB, { projectId: 'PRO-ORG-A' }));
+    assert.equal(listB.body.presupuestos.length, 0);
+
+    // Acceso directo por ID -- todas las acciones deben rechazarse con 403.
+    assert.equal((await call(get(tokenB, { id: 'PRE-ORG-A' }))).statusCode, 403);
+    assert.equal((await call(post(tokenB, { action: 'save-version', id: 'PRE-ORG-A', snapshot: snapshotFixture({ nota: 'hackeado' }), expectedParentVersionId: 'V1' }))).statusCode, 403);
+    assert.equal((await call(post(tokenB, { action: 'restore-version', id: 'PRE-ORG-A', version: 'V1' }))).statusCode, 403);
+    assert.equal((await call(post(tokenB, { action: 'approve-baseline', id: 'PRE-ORG-A' }))).statusCode, 403);
+    assert.equal((await call(post(tokenB, { action: 'archive', id: 'PRE-ORG-A' }))).statusCode, 403);
+
+    // El presupuesto de la Empresa A sigue intacto.
+    const stillThere = await call(get(tokenA, { id: 'PRE-ORG-A' }));
+    assert.equal(stillThere.body.presupuesto.currentVersion, 'V1');
+    assert.equal(stillThere.body.presupuesto.baselineVersion, null);
+  });
+
+  it('OTRO miembro de la MISMA organizacion SI puede leer/guardar/aprobar Baseline (espacio de trabajo compartido)', async () => {
+    const db = getAdminDb();
+    const { uid: uid1, idToken: token1 } = await createUserAndGetIdToken({ email: uniq('presu-share-1') });
+    const org = `org-presu-share-${Date.now()}`;
+    await seedOrgMember(db, uid1, org);
+    const { uid: uid2, idToken: token2 } = await createUserAndGetIdToken({ email: uniq('presu-share-2') });
+    await seedOrgMember(db, uid2, org);
+
+    await call(post(token1, { action: 'create', id: 'PRE-ORG-SHARE', projectId: 'PRO-ORG-SHARE', snapshot: snapshotFixture() }));
+    const approvedByColleague = await call(post(token2, { action: 'approve-baseline', id: 'PRE-ORG-SHARE' }));
+    assert.equal(approvedByColleague.statusCode, 200, 'un companero de la misma organizacion SI puede aprobar el Baseline -- es trabajo de equipo');
+    assert.equal(approvedByColleague.body.presupuesto.baselineVersion, 'V1');
   });
 });

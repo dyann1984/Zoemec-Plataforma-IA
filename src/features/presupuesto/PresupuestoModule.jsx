@@ -9,6 +9,7 @@
 import { useMemo, useState } from 'react';
 import { PageHead, EmptyState } from '../../components/ui/PageElements.jsx';
 import { useCatalogConceptos } from '../catalogo/catalogConceptosCloud.js';
+import { useProjectApus } from '../catalogo/projectApusCloud.js';
 import { usePresupuesto } from './presupuestoCloud.js';
 import { aggregatePresupuesto } from '../../domain/presupuestoAggregation.js';
 import { capituloLabel } from '../../domain/presupuestoCapitulos.js';
@@ -41,8 +42,11 @@ function originPrecio(concepto, apu){
   return '—';
 }
 
-export function PresupuestoModule({ user, activeProjectId, activeProject, rawApus = [], onNeedProject, setModule }){
+export function PresupuestoModule({ user, activeProjectId, activeProject, onNeedProject, setModule, onNavigateToPlano }){
   const { conceptos, loading: loadingConceptos } = useCatalogConceptos(user, activeProjectId);
+  // Copia propia y fresca de los APUs del proyecto -- nunca el `rawApus`
+  // (cache de sesion del editor de APU en main.jsx), ver projectApusCloud.js.
+  const { apus: rawApus } = useProjectApus(user, activeProjectId);
   const { presupuesto, versions, saveVersion, create, approveBaseline } = usePresupuesto(user, activeProjectId);
   const [saving, setSaving] = useState(false);
   const [explosionsOpen, setExplosionsOpen] = useState(false);
@@ -61,7 +65,12 @@ export function PresupuestoModule({ user, activeProjectId, activeProject, rawApu
         apuId: c.apuId || null, apuVersionId: c.apuVersionId || null,
         pu: totals?.pu ?? 0, direct: totals?.direct ?? 0, iva: totals?.iva ?? 0,
         confidenceStatus: confidence, bidRiskSeverity: bidRisk,
-        origenCantidad: originCantidad(c), origenPrecio: originPrecio(c, apu)
+        origenCantidad: originCantidad(c), origenPrecio: originPrecio(c, apu),
+        // Trazabilidad Presupuesto -> Concepto -> APU -> Plano (Fase D.1,
+        // punto 2): se preserva tal cual el origenPlano del concepto (nunca
+        // se recalcula aqui) para que "Ver en plano" sepa que planoTakeoffId/
+        // pagina/elemento abrir.
+        origenPlano: c.origenPlano || null
       };
     });
     return aggregatePresupuesto(rows);
@@ -126,7 +135,7 @@ export function PresupuestoModule({ user, activeProjectId, activeProject, rawApu
               <div className="module-subhead"><div><h2 style={{ margin: 0 }}>{cap.label}</h2></div><b>{money(cap.importe)}</b></div>
               <div className="apu-table-scroll">
                 <table className="budget-table">
-                  <thead><tr><th>Clave</th><th>Descripción</th><th>Unidad</th><th>Cantidad</th><th>P.U.</th><th>Importe</th><th>APU</th><th>Confianza</th><th>Bid Risk</th><th>Origen cant.</th><th>Origen precio</th></tr></thead>
+                  <thead><tr><th>Clave</th><th>Descripción</th><th>Unidad</th><th>Cantidad</th><th>P.U.</th><th>Importe</th><th>APU</th><th>Confianza</th><th>Bid Risk</th><th>Origen cant.</th><th>Origen precio</th><th></th></tr></thead>
                   <tbody>
                     {aggregation.rows.filter(r => r.capitulo === cap.capitulo).map(r => (
                       <tr key={r.conceptoId}>
@@ -141,6 +150,13 @@ export function PresupuestoModule({ user, activeProjectId, activeProject, rawApu
                         <td><BidRiskBadge severity={r.bidRiskSeverity} /></td>
                         <td>{r.origenCantidad}</td>
                         <td>{r.origenPrecio}</td>
+                        <td>
+                          {r.origenPlano?.planoTakeoffId
+                            ? <button className="soft" onClick={() => onNavigateToPlano?.({ kind: 'plano-takeoff-vector', planoTakeoffId: r.origenPlano.planoTakeoffId, elementId: r.origenPlano.elementoId, page: r.origenPlano.page })}>Ver en plano</button>
+                            : r.origenPlano
+                              ? <button className="soft" onClick={() => onNavigateToPlano?.({ kind: 'plano-takeoff-image' })}>Ver en plano</button>
+                              : null}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

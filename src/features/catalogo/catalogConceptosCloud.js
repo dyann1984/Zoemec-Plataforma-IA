@@ -8,6 +8,7 @@
    endpoint explicito en server/api-lib/_route-catalogo-conceptos.mjs. */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiPost, apiGetSafe } from '../../services/apiClient.js';
+import { reclassifyStaleGenerando } from '../../domain/catalogConceptoSchema.js';
 
 const PATH = '/api/catalogo-conceptos';
 
@@ -27,7 +28,13 @@ export function useCatalogConceptos(user, projectId){
     setLoading(false);
     if(!res){ setError('No se pudo cargar el catalogo de conceptos.'); return; }
     setError(null);
-    setConceptos(res.conceptos || []);
+    const { conceptos: fresh, reclassified } = reclassifyStaleGenerando(res.conceptos || []);
+    setConceptos(fresh);
+    // Best-effort: avisa al servidor de cada reclasificacion (no bloquea el
+    // render -- si falla, la proxima recarga lo vuelve a detectar igual).
+    reclassified.forEach(c => {
+      apiPost(PATH, { action: 'set-status', id: c.id, status: 'ERROR', error: c.statusError }).catch(() => {});
+    });
   }, [uid, projectId]);
 
   useEffect(() => { reload(); }, [reload]);

@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { aggregatePresupuesto } from './presupuestoAggregation.js';
+import { calcAPUv2 } from '../lib/apuCalc.js';
 
 test('importe = cantidad x precio unitario por renglon', () => {
   const { rows } = aggregatePresupuesto([
@@ -62,4 +63,53 @@ test('valores no numericos (NaN/undefined) nunca se propagan como NaN', () => {
   assert.equal(rows[0].qty, 0);
   assert.equal(rows[0].importe, 0);
   assert.ok(Number.isFinite(rows[0].importe));
+});
+
+/* PRUEBA ESPECIFICA (Fase D.1, punto 6): con un APU real (calcAPUv2, MISMO
+   motor que produce cada APU del catalogo) que tiene merma/indirectos/
+   financiamiento/utilidad/cargos/IVA conocidos, confirma que el Presupuesto
+   usa esos totales TAL CUAL -- nunca vuelve a aplicar ninguno de esos
+   porcentajes una segunda vez. Si aggregatePresupuesto reaplicara merma o la
+   cascada, el importe NO coincidiria con qty x apu.calculado.pu. */
+test('el Presupuesto usa direct/pu del APU tal cual -- merma/indirectos/financiamiento/utilidad/cargos/IVA nunca se reaplican', () => {
+  const apu = {
+    cantidadObra: 1,
+    materials: [{ descripcion: 'Cemento gris', consumo: 10, desperdicioPct: 10, precioUnitario: 100, unidad: 'saco', integracion: 'POR_UNIDAD_OBRA' }],
+    labor: [{ descripcion: 'Albañil', cuadrilla: 1, rendimiento: 8, salarioBase: 380, fsr: 1.65 }],
+    equipment: [], consumables: [], seguridad: [],
+    factores: { indCampo: 8, indOficina: 7, finance: 2, utility: 10, cargos: 0.5, iva: 16 }
+  };
+  const totals = calcAPUv2(apu);
+  // El material solo, con 10% de merma: 10 x 1.10 x 100 = 1100 -- confirma
+  // que la merma YA esta adentro de `direct` antes de llegar al presupuesto.
+  const materialConMerma = 10 * 1.10 * 100;
+  assert.ok(totals.direct > materialConMerma, 'direct debe incluir tambien mano de obra, no solo el material');
+  assert.ok(totals.pu > totals.direct, 'pu debe ser mayor a direct: ya trae indirectos/financiamiento/utilidad/cargos aplicados UNA vez');
+
+  const qty = 25;
+  const { rows, costoDirectoTotal, importeTotal } = aggregatePresupuesto([
+    { conceptoId: 'C1', capitulo: 'ALBANILERIA', qty, pu: totals.pu, direct: totals.direct, iva: totals.iva, apuId: 'A1' }
+  ]);
+
+  // Formula unica permitida en esta capa: cantidad x P.U. = importe.
+  assert.equal(rows[0].importe, qty * totals.pu);
+  assert.equal(importeTotal, qty * totals.pu);
+  assert.equal(costoDirectoTotal, qty * totals.direct);
+
+  // Prueba negativa explicita: si esta capa reaplicara la cascada de
+  // indirectos/utilidad/cargos (un bug de "doble aplicacion"), el importe
+  // seria mayor que qty x pu -- nunca debe serlo.
+  const pctCascadaTotal = (8 + 7 + 2 + 10 + 0.5) / 100; // suma de los mismos rubros, solo para construir el valor "incorrecto"
+  const importeSiSeReaplicaraLaCascada = qty * totals.pu * (1 + pctCascadaTotal);
+  assert.notEqual(rows[0].importe, importeSiSeReaplicaraLaCascada);
+
+  // Prueba negativa explicita para merma: si el presupuesto volviera a
+  // aplicar el 10% de desperdicio sobre el costo directo, costoDirectoTotal
+  // no coincidiria con qty x direct.
+  const costoDirectoSiSeReaplicaraLaMerma = qty * totals.direct * 1.10;
+  assert.notEqual(costoDirectoTotal, costoDirectoSiSeReaplicaraLaMerma);
+
+  // El IVA tampoco se recalcula aqui -- se preserva tal cual vino del APU
+  // (solo informativo a este nivel, ver presupuestoAggregation.js).
+  assert.equal(rows[0].iva, totals.iva);
 });

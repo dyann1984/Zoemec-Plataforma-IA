@@ -24,6 +24,18 @@ import { calibrateScale } from '../../domain/planoMeasurement.js';
 import { buildPlanoQuantification, summarizePlanoQuantification } from '../../domain/planoQuantification.js';
 
 const LAYERS = ['muros', 'puertas', 'ventanas', 'columnas', 'areas', 'cotas', 'ejes'];
+// Mapa best-effort tipo de elemento -> capitulo del Presupuesto (Fase D.1):
+// un tipo sin entrada aqui cae en 'OTROS' via normalizeCapitulo del lado del
+// servidor, nunca rompe la creacion del concepto -- esto es solo una
+// sugerencia razonable, el usuario puede corregir el capitulo despues en el
+// Catalogo.
+const TIPO_A_CAPITULO = { muro: 'ALBANILERIA', puerta: 'CANCELERIA_CARPINTERIA', ventana: 'CANCELERIA_CARPINTERIA', columna: 'ESTRUCTURA', losa: 'ESTRUCTURA', piso: 'ACABADOS' };
+// Estados que representan una revision humana YA aceptada (con o sin
+// correccion) -- ambos son elegibles para "Agregar al catalogo", a
+// diferencia de toApuSeed (planoReview.js) que historicamente solo acepta
+// VALIDADO_POR_USUARIO; aqui se acepta tambien CORREGIDO_POR_USUARIO porque
+// ES una revision humana aceptada, solo que con datos corregidos.
+const CATALOG_ELIGIBLE_STATES = new Set(['VALIDADO_POR_USUARIO', 'CORREGIDO_POR_USUARIO']);
 const ESCALA_LABEL = {
   [ESCALA_FUENTES.ESCALA_GRAFICA]: 'Escala gráfica declarada',
   [ESCALA_FUENTES.COTAS_TEXTO]: 'Cota detectada en el plano',
@@ -42,9 +54,11 @@ function readFileAsDataUrl(file){
   });
 }
 
-export default function PlanoTakeoffWorkspace({ user, projectId = null }){
+export default function PlanoTakeoffWorkspace({ user, projectId = null, organizationId = null, onNeedProject, navigationTarget = null, onNavigationTargetConsumed }){
   const { t: tr } = useI18n();
   const [file, setFile] = useState(null);
+  const [catalogAddedIds, setCatalogAddedIds] = useState(() => new Set());
+  const [catalogBusyId, setCatalogBusyId] = useState(null);
   const [dataUrl, setDataUrl] = useState('');
   const [analysis, setAnalysis] = useState({ status: 'idle', data: null, error: null });
   const [elementos, setElementos] = useState([]);
@@ -144,6 +158,59 @@ export default function PlanoTakeoffWorkspace({ user, projectId = null }){
     setResolvedScale(data.planoTakeoff.snapshot?.escalaResuelta || null);
     setAnalysis({ status: 'ready', data: { numPages: data.planoTakeoff.numPages, vectorSummary: null }, error: null });
     setSaveState({ status: 'saved', at: Date.now() });
+  };
+
+  // "Ver en plano" (Fase D.1): reabre el planoTakeoff correcto, la pagina
+  // correcta, y resalta (selecciona) el elemento de origen -- consume el
+  // destino UNA sola vez (onNavigationTargetConsumed limpia el estado en
+  // main.jsx para no reabrir en bucle en cada render).
+  useEffect(() => {
+    if(!navigationTarget?.planoTakeoffId) return;
+    (async () => {
+      if(planoIdRef.current !== navigationTarget.planoTakeoffId){
+        await reopenPlanoTakeoff(navigationTarget.planoTakeoffId);
+      }
+      if(navigationTarget.page) setPageNumber(Number(navigationTarget.page) || 1);
+      if(navigationTarget.elementId) setSelectedId(navigationTarget.elementId);
+      onNavigationTargetConsumed?.();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigationTarget]);
+
+  const addElementToCatalog = async (el) => {
+    if(!projectId){ window.zoemecNotify?.(tr('planoTakeoff.needsProjectMsg'), 'error'); onNeedProject?.(); return; }
+    const concept = el.descripcionCorregida || el.descripcion;
+    const unit = el.unidadCorregida || el.unidad;
+    const qtyRaw = el.cantidadCorregida != null ? el.cantidadCorregida : el.cantidadPropuesta;
+    const qty = Number(qtyRaw);
+    if(!concept || !unit || !Number.isFinite(qty) || qty <= 0){
+      window.zoemecNotify?.(tr('takeoff.notValidatedMsg'), 'error');
+      return;
+    }
+    setCatalogBusyId(el.id);
+    try{
+      const origenElementoId = `${planoIdRef.current}:${el.id}`;
+      const res = await apiPost('/api/catalogo-conceptos', {
+        action: 'create', projectId,
+        conceptos: [{
+          clave: el.id, capitulo: TIPO_A_CAPITULO[el.tipo] || 'OTROS', concept, unit, qty,
+          origenElementoId,
+          origenPlano: {
+            origen: 'plano-takeoff-vector', planoTakeoffId: planoIdRef.current, elementoId: el.id,
+            page: pageNumber, bbox: el.geometry || null, fileName: file?.name || '',
+            evidencia: el.evidencia || el.descripcion || '', fuenteEscala: resolvedScale?.fuente || null,
+            confianza: el.confianzaIA ?? null, validatedBy: el.validatedBy || null, validatedAt: el.validatedAt || null
+          }
+        }]
+      });
+      setCatalogAddedIds(prev => new Set(prev).add(el.id));
+      const wasUpdate = (res.updated || 0) > 0;
+      window.zoemecNotify?.(tr(wasUpdate ? 'planoTakeoff.updatedInCatalogMsg' : 'planoTakeoff.addedToCatalogMsg', { concept }), 'success');
+    }catch(err){
+      window.zoemecNotify?.(err?.message || tr('planoTakeoff.addToCatalogFailMsg'), 'error');
+    }finally{
+      setCatalogBusyId(null);
+    }
   };
 
   const updateElements = (updater) => {
@@ -256,6 +323,15 @@ export default function PlanoTakeoffWorkspace({ user, projectId = null }){
             <button className="soft" onClick={() => setEditDraft({ [selectedElement.id]: { cantidad: selectedElement.cantidadPropuesta, unidad: selectedElement.unidad } })}>{tr('planoTakeoff.correct')}</button>
             <button className="row-del" onClick={() => handleReview(selectedElement.id, PLANO_ELEMENT_STATES.RECHAZADO, { motivo: 'Rechazado desde el visor.' })}>{tr('planoTakeoff.reject')}</button>
           </div>}
+          {CATALOG_ELIGIBLE_STATES.has(selectedElement.estado) && (
+            catalogAddedIds.has(selectedElement.id)
+              ? <p className="muted" style={{ marginTop: 8 }}>✓ {tr('planoTakeoff.alreadyInCatalog')}</p>
+              : <div className="sc-actions" style={{ marginTop: 8 }}>
+                <button disabled={catalogBusyId === selectedElement.id} onClick={() => addElementToCatalog(selectedElement)}>
+                  {catalogBusyId === selectedElement.id ? tr('planoTakeoff.saving') : tr('planoTakeoff.addToCatalog')}
+                </button>
+              </div>
+          )}
           {editDraft[selectedElement.id] && <div className="field-grid" style={{ marginTop: 8 }}>
             <input type="number" step="any" value={editDraft[selectedElement.id].cantidad} onChange={e => setEditDraft(prev => ({ ...prev, [selectedElement.id]: { ...prev[selectedElement.id], cantidad: e.target.value } }))} />
             <input value={editDraft[selectedElement.id].unidad} onChange={e => setEditDraft(prev => ({ ...prev, [selectedElement.id]: { ...prev[selectedElement.id], unidad: e.target.value } }))} />

@@ -20,7 +20,8 @@ import statusHandler from '../api/status.mjs';
 const GATEWAY_PATHS = new Set([
   '/api/apus', '/api/projects', '/api/challenge-decisions', '/api/technical-memory',
   '/api/export-events', '/api/health', '/api/organizations', '/api/construction-proposal',
-  '/api/plano-takeoffs', '/api/catalogo-conceptos', '/api/presupuestos'
+  '/api/plano-takeoffs', '/api/catalogo-conceptos', '/api/presupuestos',
+  '/api/change-orders', '/api/commitments', '/api/progress', '/api/estimates', '/api/payments'
 ]);
 // Otras funciones serverless de produccion (api/*.mjs, fuera del gateway)
 // que tambien tienen sentido probar contra el emulador localmente.

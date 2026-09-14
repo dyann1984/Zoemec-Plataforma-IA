@@ -22,6 +22,11 @@ import constructionProposalHandler from '../server/api-lib/_route-construction-p
 import planoTakeoffsHandler from '../server/api-lib/_route-plano-takeoffs.mjs';
 import catalogoConceptosHandler from '../server/api-lib/_route-catalogo-conceptos.mjs';
 import presupuestosHandler from '../server/api-lib/_route-presupuestos.mjs';
+import changeOrdersHandler from '../server/api-lib/_route-change-orders.mjs';
+import commitmentsHandler from '../server/api-lib/_route-commitments.mjs';
+import progressHandler from '../server/api-lib/_route-progress.mjs';
+import estimatesHandler from '../server/api-lib/_route-estimates.mjs';
+import paymentsHandler from '../server/api-lib/_route-payments.mjs';
 
 const ROUTES = {
   '/api/apus': apusHandler,
@@ -35,6 +40,11 @@ const ROUTES = {
   '/api/plano-takeoffs': planoTakeoffsHandler,
   '/api/catalogo-conceptos': catalogoConceptosHandler,
   '/api/presupuestos': presupuestosHandler,
+  '/api/change-orders': changeOrdersHandler,
+  '/api/commitments': commitmentsHandler,
+  '/api/progress': progressHandler,
+  '/api/estimates': estimatesHandler,
+  '/api/payments': paymentsHandler,
 };
 
 export default async function handler(req, res){

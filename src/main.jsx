@@ -65,6 +65,8 @@ import { calibrateScale, measureElement } from './domain/planoMeasurement.js';
 import { createTakeoffRecord, applyManualCorrection, upsertTakeoffRecord, findLatestTakeoffForFile, hashFileContent } from './domain/planoTakeoffStore.js';
 import { LevantamientoModule } from './features/levantamiento/LevantamientoModule.jsx';
 import { QuantifierWizard } from './features/quantifier/QuantifierWizard.jsx';
+import { CatalogoModule } from './features/catalogo/CatalogoModule.jsx';
+import { PresupuestoModule } from './features/presupuesto/PresupuestoModule.jsx';
 import {
   emptyApuWorkspaceState, removeBatchApus, describeAmbiguousSingleExport,
   duplicateGroupKey, groupConceptsByDuplicateKey, defaultBatchSelection, isExportableConceptItem,
@@ -933,9 +935,13 @@ function App(){
   else if(!hasValidSession(user)) content = <Landing setScreen={setScreen} login={login} company={companyView} />;
   else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView} apus={apus} clients={clients} projects={projects} activeProject={activeProject} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} orgSession={orgSession}>
     {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} activeProject={activeProject} user={user} demoMode={DEMO_MODE} demoContext={DEMO_MODE ? createDemoContext() : null} />}
-    {module === 'levantamiento' && <LevantamientoModule surveys={surveys} setSurveys={setSurveys} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} onSendToApu={()=>setModule('apu')} currentUserEmail={user?.email || null} organizationId={orgSession?.organization?.id || null} />}
+    {module === 'levantamiento' && <LevantamientoModule surveys={surveys} setSurveys={setSurveys} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} onSendToApu={()=>setModule('catalogo')} currentUserEmail={user?.email || null} organizationId={orgSession?.organization?.id || null} />}
+    {module === 'catalogo' && <CatalogoModule user={user} organizationId={orgSession?.organization?.id || null} activeProjectId={activeProjectId} activeProject={activeProject} catalog={catalog} rawApus={rawApus} onNeedProject={()=>setModule('cartera')} setModule={setModule} />}
     {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} rawApus={rawApus} linkApuToProject={linkApuToProject} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} onConfigureLocation={()=>setModule('cartera')} organizationId={orgSession?.organization?.id || null} />}
-    {module === 'presupuestos' && <Budgets company={companyView} budgets={budgets} setBudgets={setBudgets} items={budgetItems} setItems={setBudgetItems} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} />}
+    {module === 'presupuestos' && <>
+      <PresupuestoModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} rawApus={rawApus} onNeedProject={()=>setModule('cartera')} setModule={setModule} />
+      <Budgets legacyOnly company={companyView} budgets={budgets} setBudgets={setBudgets} items={budgetItems} setItems={setBudgetItems} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} />
+    </>}
     {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={(pid)=>{ setRawApus(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgets(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawCatalog(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgetItems(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawSurveys(l=>l.filter(x=>(x?.projectId??null)!==pid)); }} />}
     {module === 'biblioteca' && <Library user={user} catalog={catalog} setCatalog={setCatalog} setModule={setModule} />}
     {module === 'tecnico' && <TechnicalOffice company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} needsProject={needsProject} onCreateProject={()=>setModule('cartera')} />}
@@ -1485,6 +1491,7 @@ function Shell({children,user,logout,module,setModule,company,apus,clients,proje
     ['inicio','inicio',tr('shell.menu.inicio')],
     ['levantamiento','bim',tr('shell.menu.levantamiento'),tr('shell.menu.levantamientoDesc')],
     ['apu','apu',tr('shell.menu.apu')],
+    ['catalogo','cuantificaciones',tr('shell.menu.catalogo')],
     ['presupuestos','presupuestos',tr('shell.menu.presupuestos')],
     ['cartera','clientes',tr('shell.menu.cartera'),tr('shell.menu.carteraDesc')],
     ['biblioteca','biblioteca',tr('shell.menu.biblioteca'),tr('shell.menu.bibliotecaDesc')],
@@ -3890,7 +3897,7 @@ async function exportConceptsAPUPdfMasterFile(concepts, catalog, company, prepar
   return exportAPUPdfMaster(professional,{fileName:'APU-MAESTRO-ZOEMEC.pdf',company});
 }
 
-function Budgets({company,budgets,setBudgets,items,setItems,activeProjectId,onNeedProject}){
+function Budgets({company,budgets,setBudgets,items,setItems,activeProjectId,onNeedProject,legacyOnly=false}){
   const { t: tr } = useI18n();
   // Antes el 16% estaba repetido como literal en 3 lugares (calculo, export
   // Excel, export PDF) y no leia el campo "iva" de ningun APU. Ahora hay una
@@ -3913,6 +3920,35 @@ function Budgets({company,budgets,setBudgets,items,setItems,activeProjectId,onNe
     const bIva=bTotal*bIvaRate/100;
     kind==='pdf' ? exportBudgetPDF(bItems,bTotal,bIva,company,bIvaRate) : exportBudgetExcel(bItems,bTotal,bIva,bIvaRate);
   };
+  // legacyOnly (Fase D): el Presupuesto real ahora vive en PresupuestoModule
+  // (conceptos del Catalogo + su APU asociado, con capitulos/confianza/Bid
+  // Risk/versionado). Esta pantalla YA NO captura presupuestos nuevos a
+  // mano -- pero los que un usuario ya guardo aqui antes de Fase D nunca se
+  // borran ni se ocultan: siguen visibles y exportables en este modo de
+  // solo lectura ("Presupuestos heredados"), montado dentro de
+  // PresupuestoModule (ver main.jsx, module==='presupuestos').
+  if(legacyOnly){
+    if(!budgets.length) return null;
+    return <div className="panel" style={{marginTop:16}}>
+      <h2>Presupuestos heredados (formato anterior) <small className="hint">({budgets.length})</small></h2>
+      <div className="saved-grid">{budgets.map(b=>{
+        const bItems=b.items||[];
+        const bTotal=bItems.reduce((a,i)=>a+Number(i.qty)*Number(i.pu),0);
+        const bIvaRate=toSafeNonNegativeNumber(b.ivaRate ?? DEFAULT_IVA_RATE);
+        const bWithIva=bTotal*(1+bIvaRate/100);
+        return <div className="saved-card" key={b.id}>
+          <div className="sc-clave">{b.name||'Presupuesto'} · {b.date}</div>
+          <div className="sc-concept">{tr('budget.conceptCount',{count:bItems.length})} · {b.client||'Cliente por definir'}</div>
+          <div className="sc-pu">{money(bWithIva)} <small>{tr('budget.withIva')}</small></div>
+          <div className="sc-actions">
+            <button onClick={()=>downloadSaved(b,'pdf')}>{tr('budget.pdf')}</button>
+            <button onClick={()=>downloadSaved(b,'excel')}>{tr('budget.excel')}</button>
+            <button className="del" onClick={()=>removeSaved(b.id)}>{tr('budget.delete')}</button>
+          </div>
+        </div>;
+      })}</div>
+    </div>;
+  }
   return <section><PageHead kicker={tr('modules.presupuestos.kicker')} title={tr('modules.presupuestos.title')} desc={tr('modules.presupuestos.desc')} action={<button onClick={save}>{tr('budget.save')}</button>} />
     {!activeProjectId && <div className="panel" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap',padding:'14px 18px'}}>
       <p className="muted" style={{margin:0}}>{tr('budget.needProjectBanner')}</p>

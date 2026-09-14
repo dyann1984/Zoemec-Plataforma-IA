@@ -22,12 +22,12 @@ import { loadOrgContext, assertOrgNotExpired, canAccessOrgScopedDoc } from './_o
 const COLLECTION = 'exportEvents';
 const VALID_FORMATS = new Set(['PDF', 'XLSX']);
 const VALID_MODES = new Set(['CLIENTE', 'TECNICO']);
-// 'EXPLOSION' (Fase A -- Explosion de materiales/mano de obra/maquinaria):
-// aditivo, mismo shape/verificacion que 'PROJECT' (ver handleRecord abajo) --
-// nunca cambia el comportamiento de 'APU'/'PROJECT' ya existentes, solo
-// distingue en el log de auditoria que el export vino de la pestaña
-// Explosiones y no del Dossier de Proyecto.
-const VALID_SCOPES = new Set(['APU', 'PROJECT', 'EXPLOSION']);
+// 'EXPLOSION' (Fase A -- Explosion de materiales/mano de obra/maquinaria) y
+// 'PRESUPUESTO' (Fase D): aditivos, mismo shape/verificacion que 'PROJECT'
+// (ver handleRecord abajo) -- nunca cambian el comportamiento de
+// 'APU'/'PROJECT' ya existentes, solo distinguen en el log de auditoria de
+// que pestana vino el export.
+const VALID_SCOPES = new Set(['APU', 'PROJECT', 'EXPLOSION', 'PRESUPUESTO']);
 
 function httpError(status, message){ const e = new Error(message); e.status = status; return e; }
 
@@ -67,7 +67,7 @@ async function handleRecord(req, res){
   const db = getAdminDb();
   const docRef = db.collection(COLLECTION).doc();
   let event;
-  if(scope === 'PROJECT' || scope === 'EXPLOSION'){
+  if(scope === 'PROJECT' || scope === 'EXPLOSION' || scope === 'PRESUPUESTO'){
     if(!projectId) throw httpError(400, 'Falta projectId.');
     const projectSnap = await db.collection('projects').doc(String(projectId)).get();
     if(!projectSnap.exists) throw httpError(404, 'El proyecto no existe.');

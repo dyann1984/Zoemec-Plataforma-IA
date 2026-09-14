@@ -388,6 +388,44 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Catalogo de conceptos (Fase D): documento actual + auditoria
+    // append-only, mismo patron que apus/planoTakeoffs. Un concepto es
+    // esencialmente estatico (clave/capitulo/descripcion/unidad/cantidad/
+    // origen) asi que, a diferencia de apus/planoTakeoffs, no tiene
+    // coleccion de versiones propia -- toda escritura pasa por
+    // server/api-lib/_route-catalogo-conceptos.mjs (SDK Admin).
+    match /catalogConceptos/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /catalogConceptosAudit/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+
+    // Presupuesto (Fase D): mismo patron exacto que apus/apuVersions/apuAudit
+    // -- documento actual (con currentVersion Y baselineVersion, este ultimo
+    // fijado una sola vez por la accion approve-baseline y nunca modificado
+    // despues) + version inmutable + auditoria append-only. Toda escritura
+    // via server/api-lib/_route-presupuestos.mjs (SDK Admin).
+    match /presupuestos/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /presupuestoVersions/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /presupuestoAudit/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+
     // Eventos de exportacion del Dossier APU Auditable (Fase 8, regla 22):
     // append-only, nunca editable ni borrable -- toda escritura pasa por
     // api/export-events.mjs (SDK admin). Mismo criterio de lectura que

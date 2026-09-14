@@ -20,6 +20,8 @@ import healthHandler from '../server/api-lib/_route-health.mjs';
 import organizationsHandler from '../server/api-lib/_route-organizations.mjs';
 import constructionProposalHandler from '../server/api-lib/_route-construction-proposal.mjs';
 import planoTakeoffsHandler from '../server/api-lib/_route-plano-takeoffs.mjs';
+import catalogoConceptosHandler from '../server/api-lib/_route-catalogo-conceptos.mjs';
+import presupuestosHandler from '../server/api-lib/_route-presupuestos.mjs';
 
 const ROUTES = {
   '/api/apus': apusHandler,
@@ -31,6 +33,8 @@ const ROUTES = {
   '/api/organizations': organizationsHandler,
   '/api/construction-proposal': constructionProposalHandler,
   '/api/plano-takeoffs': planoTakeoffsHandler,
+  '/api/catalogo-conceptos': catalogoConceptosHandler,
+  '/api/presupuestos': presupuestosHandler,
 };
 
 export default async function handler(req, res){

@@ -172,4 +172,25 @@ describe('api/gateway.mjs -- ruteo hacia los 6 handlers consolidados', () => {
     assert.equal(res.statusCode, 200);
     assert.ok(Array.isArray(res.body.events));
   });
+
+  it('POST /api/catalogo-conceptos action=create llega al handler real del Catalogo de conceptos (Fase D)', async () => {
+    const { idToken } = await createUserAndGetIdToken({ email: uniq('gw-catalogo') });
+    const res = await call(post('/api/catalogo-conceptos', idToken, {
+      action: 'create', projectId: 'PRO-GW-CATALOGO',
+      conceptos: [{ clave: 'GW-1', capitulo: 'CIMENTACION', concept: 'Zapata aislada (gateway)', unit: 'pza', qty: 4 }]
+    }));
+    assert.equal(res.statusCode, 201);
+    assert.equal(res.body.conceptos[0].status, 'PENDIENTE');
+  });
+
+  it('POST /api/presupuestos action=create llega al handler real del Presupuesto (Fase D)', async () => {
+    const { idToken } = await createUserAndGetIdToken({ email: uniq('gw-presupuesto') });
+    const res = await call(post('/api/presupuestos', idToken, {
+      action: 'create', id: `PRE-GW-${Date.now()}`, projectId: 'PRO-GW-PRESUPUESTO',
+      snapshot: { conceptos: [], capituloSubtotals: [], costoDirectoTotal: 0, importeTotal: 0 }
+    }));
+    assert.equal(res.statusCode, 201);
+    assert.equal(res.body.presupuesto.currentVersion, 'V1');
+    assert.equal(res.body.presupuesto.baselineVersion, null);
+  });
 });

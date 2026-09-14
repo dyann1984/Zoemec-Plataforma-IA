@@ -36,6 +36,8 @@
     { "source": "/api/organizations", "destination": "/api/gateway" },
     { "source": "/api/construction-proposal", "destination": "/api/gateway" },
     { "source": "/api/plano-takeoffs", "destination": "/api/gateway" },
+    { "source": "/api/catalogo-conceptos", "destination": "/api/gateway" },
+    { "source": "/api/presupuestos", "destination": "/api/gateway" },
     { "source": "/api/:path*", "destination": "/api/:path*" },
     { "source": "/src/:path*", "destination": "/src/:path*" },
     { "source": "/@vite/:path*", "destination": "/@vite/:path*" },

@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { jsPDF } from 'jspdf';
 import { createUserWithEmailAndPassword, getAdditionalUserInfo, getIdTokenResult, GoogleAuthProvider, onAuthStateChanged, sendEmailVerification, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile } from 'firebase/auth';
@@ -54,6 +54,7 @@ import { Card } from './components/ui/Card.jsx';
 import { Section } from './components/ui/Section.jsx';
 import { MetricCard } from './components/ui/MetricCard.jsx';
 import { UserMenu } from './components/ui/UserMenu.jsx';
+import { ProjectsView } from './features/projects/ProjectsView.jsx';
 import { AutosaveIndicator } from './components/ui/AutosaveIndicator.jsx';
 import { Param, Cost, NField, ORow } from './components/ui/FormFields.jsx';
 import { HardHat } from './components/ui/HardHat.jsx';
@@ -518,7 +519,7 @@ function App(){
   useEffect(() => {
     setZoeContext(prev => ({ ...prev, user, route: module, activeApu: apus[0] || prev.activeApu, budget: budgets[0] || prev.budget, project: projects[0] || prev.project, library: catalog, alerts: prev.alerts || [] }));
   }, [user, module, apus, budgets, projects, catalog]);
-  const companyView = (!company?.logo || company.logo === '/logo.png' || company.logo === '/images/logo-web.png') ? {...company, logo:'/images/logo-web.png?v=zoemec-2026'} : company;
+  const companyView = (!company?.logo || company.logo === '/logo.png' || company.logo.includes('logo-web.png')) ? {...company, logo:'/images/zoemec-logo-oficial.png'} : company;
 
   // Microsoft redirige de vuelta a la app con ?code=...&state=... tras un login
   // real (ver src/lib/onedrive.js). Se captura una sola vez al montar (antes de
@@ -927,6 +928,8 @@ function App(){
     setScreen('landing');
   };
 
+  const [createProjectTrigger, setCreateProjectTrigger] = useState(false);
+
   let content;
   const activeProject = projects.find(p => p.id === activeProjectId) || null;
   const needsProject = !projects.length;
@@ -948,7 +951,7 @@ function App(){
   else if(screen === 'login') content = <Auth mode="login" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} resendVerificationEmail={resendVerificationEmail} company={companyView} />;
   else if(screen === 'register') content = <Auth mode="register" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} resendVerificationEmail={resendVerificationEmail} company={companyView} />;
   else if(!hasValidSession(user)) content = <Landing setScreen={setScreen} login={login} company={companyView} />;
-  else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView} apus={apus} clients={clients} projects={projects} activeProject={activeProject} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} orgSession={orgSession}>
+  else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView} apus={apus} clients={clients} projects={projects} activeProject={activeProject} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} orgSession={orgSession} onOpenCreateProject={()=>{ setModule('cartera'); setCreateProjectTrigger(true); }}>
     {COSTOS_GROUP.includes(module) && <SubNavTabs active={module} onSelect={setModule} items={[
       {key:'apu',icon:'apu',label:tr('shell.menu.apu')},
       {key:'presupuestos',icon:'presupuestos',label:tr('shell.menu.presupuestos')},
@@ -971,7 +974,7 @@ function App(){
     </>}
     {module === 'control-presupuestal' && <ControlPresupuestalModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} />}
     {module === 'vault' && <ProjectVaultModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} setModule={setModule} onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }} />}
-    {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={(pid)=>{ setRawApus(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgets(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawCatalog(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgetItems(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawSurveys(l=>l.filter(x=>(x?.projectId??null)!==pid)); }} />}
+    {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={(pid)=>{ setRawApus(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgets(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawCatalog(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgetItems(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawSurveys(l=>l.filter(x=>(x?.projectId??null)!==pid)); }} openCreateProject={createProjectTrigger} onHandledCreateProject={()=>setCreateProjectTrigger(false)} apus={apus} budgets={budgets} />}
     {module === 'biblioteca' && <Library user={user} catalog={catalog} setCatalog={setCatalog} setModule={setModule} />}
     {module === 'tecnico' && <TechnicalOffice company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} needsProject={needsProject} onCreateProject={()=>setModule('cartera')} />}
     {module === 'visual' && <VisualAI user={user} setModule={setModule} activeProjectId={activeProjectId} activeProject={activeProject} organizationId={orgSession?.organization?.id || null} onNeedProject={()=>setModule('cartera')} navigationTarget={planoNavigationTarget} onNavigationTargetConsumed={()=>setPlanoNavigationTarget(null)} />}
@@ -1391,7 +1394,7 @@ function ComparePublicWrapper({ setScreen }){
   </div>;
 }
 
-function Auth({mode,setScreen,login,loginWithGoogle,resendVerificationEmail,company}){
+export function Auth({mode,setScreen,login,loginWithGoogle,resendVerificationEmail,company}){
   const { t: tr } = useI18n();
   const [name,setName]=useState('');
   const [email,setEmail]=useState('');
@@ -1515,7 +1518,7 @@ function TopSearch({apus=[],clients=[],projects=[],setModule}){
 const COSTOS_GROUP = ['apu','presupuestos','control-presupuestal','catalogo','biblioteca'];
 const REPORTES_GROUP = ['reportes','comparativa','vault'];
 
-function Shell({children,user,logout,module,setModule,company,apus,clients,projects,activeProject,activeProjectId,setActiveProjectId,orgSession}){
+export function Shell({children,user,logout,module,setModule,company,apus,clients,projects,activeProject,activeProjectId,setActiveProjectId,orgSession,onOpenCreateProject}){
   const { theme, toggleTheme } = useTheme();
   const { t: tr, locale, setLocale } = useI18n();
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -1556,6 +1559,15 @@ function Shell({children,user,logout,module,setModule,company,apus,clients,proje
     ['presupuestos','presupuestos',tr('shell.crearMenu.presupuesto'),tr('shell.crearMenu.presupuestoDesc')],
   ];
   const goTo = (m) => { setModule(m); setDrawerOpen(false); setCrearOpen(false); };
+  const handleCrearItemClick = (key) => {
+    setDrawerOpen(false);
+    setCrearOpen(false);
+    if(key === 'cartera'){
+      onOpenCreateProject?.();
+      return;
+    }
+    goTo(key);
+  };
   useEffect(() => {
     if(!crearOpen) return;
     const onKey = (e) => { if(e.key === 'Escape') setCrearOpen(false); };
@@ -1600,7 +1612,7 @@ function Shell({children,user,logout,module,setModule,company,apus,clients,proje
           </button>
           {crearOpen && <div className="crear-popover" role="menu">
             <span className="crear-popover-title">{tr('shell.crearMenu.title')}</span>
-            {crearItems.map(([key,icon,label,desc])=><button key={key} type="button" role="menuitem" onClick={()=>goTo(key)}><span className="mi"><Icon name={icon} size={17}/></span><span className="menu-copy"><b>{label}</b><small>{desc}</small></span></button>)}
+            {crearItems.map(([key,icon,label,desc])=><button key={key} type="button" role="menuitem" onClick={()=>handleCrearItemClick(key)}><span className="mi"><Icon name={icon} size={17}/></span><span className="menu-copy"><b>{label}</b><small>{desc}</small></span></button>)}
           </div>}
         </div>
         <button className={costosActive?'active':''} onClick={()=>goTo(costosActive?module:'apu')}><span className="mi"><Icon name="costos"/></span><span className="menu-copy"><b>{tr('shell.menu.costos')}</b></span></button>
@@ -1634,7 +1646,7 @@ function Shell({children,user,logout,module,setModule,company,apus,clients,proje
             {projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
           <Icon name="chevronDown" size={13}/>
-          <button type="button" className="ghost-up" onClick={()=>goTo('cartera')}>{tr('shell.projectSwitcher.new')}</button>
+          <button type="button" className="ghost-up" onClick={()=>onOpenCreateProject?.()}>{tr('shell.projectSwitcher.new')}</button>
         </div>}
         <div className="topbar-spacer"/>
         <TopSearch apus={apus} clients={clients} projects={projects} setModule={setModule}/>
@@ -3894,14 +3906,21 @@ function Budgets({company,budgets,setBudgets,items,setItems,activeProjectId,onNe
   </section>
 }
 
-function ClientsProjects({clients,setClients,projects,setProjects,activeProjectId,setActiveProjectId,setModule,onDeleteProjectData}){
-  const { t: tr } = useI18n();
-  return <section><PageHead kicker={tr('projects.centerKicker')} title={tr('projects.centerTitle')} desc={tr('projects.centerDesc')} />
-    <div className="combined-stack">
-      <Projects projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={onDeleteProjectData} embedded />
-      <Clients clients={clients} setClients={setClients} embedded />
-    </div>
-  </section>;
+function ClientsProjects({clients,setClients,projects,setProjects,activeProjectId,setActiveProjectId,setModule,onDeleteProjectData,openCreateProject,onHandledCreateProject,apus,budgets}){
+  return <ProjectsView
+    projects={projects}
+    setProjects={setProjects}
+    clients={clients}
+    setClients={setClients}
+    activeProjectId={activeProjectId}
+    setActiveProjectId={setActiveProjectId}
+    setModule={setModule}
+    onDeleteProjectData={onDeleteProjectData}
+    openCreateProject={openCreateProject}
+    onHandledCreateProject={onHandledCreateProject}
+    apus={apus}
+    budgets={budgets}
+  />;
 }
 
 function Projects({projects,setProjects,activeProjectId,setActiveProjectId,setModule,onDeleteProjectData,embedded=false}){

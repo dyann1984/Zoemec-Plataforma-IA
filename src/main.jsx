@@ -55,6 +55,7 @@ import { Section } from './components/ui/Section.jsx';
 import { MetricCard } from './components/ui/MetricCard.jsx';
 import { UserMenu } from './components/ui/UserMenu.jsx';
 import { ProjectsView } from './features/projects/ProjectsView.jsx';
+import { ProjectWorkspace } from './features/projects/workspace/ProjectWorkspace.jsx';
 import { AutosaveIndicator } from './components/ui/AutosaveIndicator.jsx';
 import { Param, Cost, NField, ORow } from './components/ui/FormFields.jsx';
 import { HardHat } from './components/ui/HardHat.jsx';
@@ -974,7 +975,8 @@ function App(){
     </>}
     {module === 'control-presupuestal' && <ControlPresupuestalModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} />}
     {module === 'vault' && <ProjectVaultModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} setModule={setModule} onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }} />}
-    {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={(pid)=>{ setRawApus(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgets(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawCatalog(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgetItems(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawSurveys(l=>l.filter(x=>(x?.projectId??null)!==pid)); }} openCreateProject={createProjectTrigger} onHandledCreateProject={()=>setCreateProjectTrigger(false)} apus={apus} budgets={budgets} />}
+    {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={(pid)=>{ setRawApus(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgets(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawCatalog(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgetItems(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawSurveys(l=>l.filter(x=>(x?.projectId??null)!==pid)); }} openCreateProject={createProjectTrigger} onHandledCreateProject={()=>setCreateProjectTrigger(false)} apus={apus} budgets={budgets} onOpenWorkspace={(pid)=>{ setActiveProjectId(pid); setModule('project-workspace'); }} />}
+    {module === 'project-workspace' && <ProjectWorkspace projectId={activeProjectId} projects={projects} apus={apus} budgets={budgets} surveys={surveys} onBackToProjects={()=>setModule('cartera')} />}
     {module === 'biblioteca' && <Library user={user} catalog={catalog} setCatalog={setCatalog} setModule={setModule} />}
     {module === 'tecnico' && <TechnicalOffice company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} needsProject={needsProject} onCreateProject={()=>setModule('cartera')} />}
     {module === 'visual' && <VisualAI user={user} setModule={setModule} activeProjectId={activeProjectId} activeProject={activeProject} organizationId={orgSession?.organization?.id || null} onNeedProject={()=>setModule('cartera')} navigationTarget={planoNavigationTarget} onNavigationTargetConsumed={()=>setPlanoNavigationTarget(null)} />}
@@ -1605,7 +1607,7 @@ export function Shell({children,user,logout,module,setModule,company,apus,client
         <button className="drawer-close" ref={drawerCloseRef} onClick={()=>{ setDrawerOpen(false); hamburgerRef.current?.focus(); }} aria-label={tr('shell.closeDrawer')}>×</button>
       </div>
       <div className="menu">
-        {primaryMenu.map(m=><button key={m[0]} className={module===m[0]?'active':''} onClick={()=>goTo(m[0])}><span className="mi"><Icon name={m[1]}/></span><span className="menu-copy"><b>{m[2]}</b></span></button>)}
+        {primaryMenu.map(m=><button key={m[0]} className={(module===m[0] || (m[0]==='cartera' && module==='project-workspace'))?'active':''} onClick={()=>goTo(m[0])}><span className="mi"><Icon name={m[1]}/></span><span className="menu-copy"><b>{m[2]}</b></span></button>)}
         <div className="menu-crear-wrap" ref={crearRef}>
           <button type="button" className={'menu-crear'+(crearOpen?' active':'')} onClick={()=>setCrearOpen(v=>!v)} aria-haspopup="true" aria-expanded={crearOpen}>
             <Icon name="plus" size={16}/><span>{tr('shell.menu.crear')}</span>
@@ -1631,7 +1633,7 @@ export function Shell({children,user,logout,module,setModule,company,apus,client
     </aside>
     <nav className="mobile-bottom-nav" aria-label={tr('shell.menu.more')}>
       <button className={module==='inicio'?'active':''} onClick={()=>goTo('inicio')}><Icon name="inicio" size={20}/><small>{tr('shell.menu.inicio')}</small></button>
-      <button className={module==='cartera'?'active':''} onClick={()=>goTo('cartera')}><Icon name="proyectos" size={20}/><small>{tr('shell.menu.cartera')}</small></button>
+      <button className={(module==='cartera' || module==='project-workspace')?'active':''} onClick={()=>goTo('cartera')}><Icon name="proyectos" size={20}/><small>{tr('shell.menu.cartera')}</small></button>
       <button className="mobile-crear" onClick={()=>{ setDrawerOpen(true); setCrearOpen(true); }}><span className="mobile-crear-dot"><Icon name="plus" size={20}/></span><small>{tr('shell.menu.crear')}</small></button>
       <button className={costosActive?'active':''} onClick={()=>goTo(costosActive?module:'apu')}><Icon name="costos" size={20}/><small>{tr('shell.menu.costos')}</small></button>
       <button className={reportesActive?'active':''} onClick={()=>goTo(reportesActive?module:'reportes')}><Icon name="reportes" size={20}/><small>{tr('shell.menu.reportes')}</small></button>
@@ -1650,21 +1652,23 @@ export function Shell({children,user,logout,module,setModule,company,apus,client
         </div>}
         <div className="topbar-spacer"/>
         <TopSearch apus={apus} clients={clients} projects={projects} setModule={setModule}/>
-        <NotificationBell user={user}/>
-        <UserMenu avatarLabel={user.initials} name={user.name} subtitle={planLabel}>
-          <div className="user-menu-row user-menu-locale">
-            <span>{tr('toggle.langToggleLabel')}</span>
-            <div className="locale-switch" role="group">
-              <button className={locale==='es'?'active':''} onClick={()=>setLocale('es')} aria-pressed={locale==='es'}>ES</button>
-              <button className={locale==='en'?'active':''} onClick={()=>setLocale('en')} aria-pressed={locale==='en'}>EN</button>
+        <div className="topbar-actions">
+          <NotificationBell user={user}/>
+          <UserMenu avatarLabel={user.initials} name={user.name} subtitle={planLabel}>
+            <div className="user-menu-row user-menu-locale">
+              <span>{tr('toggle.langToggleLabel')}</span>
+              <div className="locale-switch" role="group">
+                <button className={locale==='es'?'active':''} onClick={()=>setLocale('es')} aria-pressed={locale==='es'}>ES</button>
+                <button className={locale==='en'?'active':''} onClick={()=>setLocale('en')} aria-pressed={locale==='en'}>EN</button>
+              </div>
             </div>
-          </div>
-          <button type="button" className="user-menu-row" onClick={toggleTheme}>
-            <Icon name={theme==='light'?'moon':'sun'} size={16}/><span>{theme==='light'?tr('toggle.themeDark'):tr('toggle.themeLight')}</span>
-          </button>
-          <div className="user-menu-row user-menu-status"><CloudBadge user={user}/><ProcessesIndicator/></div>
-          <button type="button" className="user-menu-row user-menu-logout" onClick={logout}>{tr('shell.logout')}</button>
-        </UserMenu>
+            <button type="button" className="user-menu-row" onClick={toggleTheme}>
+              <Icon name={theme==='light'?'moon':'sun'} size={16}/><span>{theme==='light'?tr('toggle.themeDark'):tr('toggle.themeLight')}</span>
+            </button>
+            <div className="user-menu-row user-menu-status"><CloudBadge user={user}/><ProcessesIndicator/></div>
+            <button type="button" className="user-menu-row user-menu-logout" onClick={logout}>{tr('shell.logout')}</button>
+          </UserMenu>
+        </div>
       </header>
       {orgSession?.organization && <TrialBanner organization={orgSession.organization} />}
       {children}
@@ -3906,7 +3910,7 @@ function Budgets({company,budgets,setBudgets,items,setItems,activeProjectId,onNe
   </section>
 }
 
-function ClientsProjects({clients,setClients,projects,setProjects,activeProjectId,setActiveProjectId,setModule,onDeleteProjectData,openCreateProject,onHandledCreateProject,apus,budgets}){
+function ClientsProjects({clients,setClients,projects,setProjects,activeProjectId,setActiveProjectId,setModule,onOpenWorkspace,onDeleteProjectData,openCreateProject,onHandledCreateProject,apus,budgets}){
   return <ProjectsView
     projects={projects}
     setProjects={setProjects}
@@ -3915,6 +3919,7 @@ function ClientsProjects({clients,setClients,projects,setProjects,activeProjectI
     activeProjectId={activeProjectId}
     setActiveProjectId={setActiveProjectId}
     setModule={setModule}
+    onOpenWorkspace={onOpenWorkspace}
     onDeleteProjectData={onDeleteProjectData}
     openCreateProject={openCreateProject}
     onHandledCreateProject={onHandledCreateProject}

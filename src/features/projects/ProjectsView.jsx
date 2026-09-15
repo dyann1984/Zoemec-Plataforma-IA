@@ -97,6 +97,7 @@ export function ProjectsView({
   activeProjectId,
   setActiveProjectId,
   setModule,
+  onOpenWorkspace,
   onDeleteProjectData,
   openCreateProject = false,
   onHandledCreateProject,
@@ -168,7 +169,11 @@ export function ProjectsView({
 
   const handleOpenProject = (projectId) => {
     setActiveProjectId?.(projectId);
-    setModule?.('apu');
+    if (onOpenWorkspace) {
+      onOpenWorkspace(projectId);
+    } else {
+      setModule?.('project-workspace');
+    }
   };
 
   const handleEditProject = (project) => {

@@ -49,6 +49,11 @@ import { ZoemecBrand } from './components/ui/ZoemecBrand.jsx';
 import { Backdrop } from './components/ui/Backdrop.jsx';
 import { Donut, Spark } from './components/ui/charts.jsx';
 import { PageHead, InfoCard, EmptyState } from './components/ui/PageElements.jsx';
+import { SubNavTabs } from './components/ui/SubNavTabs.jsx';
+import { Card } from './components/ui/Card.jsx';
+import { Section } from './components/ui/Section.jsx';
+import { MetricCard } from './components/ui/MetricCard.jsx';
+import { UserMenu } from './components/ui/UserMenu.jsx';
 import { AutosaveIndicator } from './components/ui/AutosaveIndicator.jsx';
 import { Param, Cost, NField, ORow } from './components/ui/FormFields.jsx';
 import { HardHat } from './components/ui/HardHat.jsx';
@@ -944,6 +949,18 @@ function App(){
   else if(screen === 'register') content = <Auth mode="register" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} resendVerificationEmail={resendVerificationEmail} company={companyView} />;
   else if(!hasValidSession(user)) content = <Landing setScreen={setScreen} login={login} company={companyView} />;
   else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView} apus={apus} clients={clients} projects={projects} activeProject={activeProject} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} orgSession={orgSession}>
+    {COSTOS_GROUP.includes(module) && <SubNavTabs active={module} onSelect={setModule} items={[
+      {key:'apu',icon:'apu',label:tr('shell.menu.apu')},
+      {key:'presupuestos',icon:'presupuestos',label:tr('shell.menu.presupuestos')},
+      {key:'control-presupuestal',icon:'comparativa',label:tr('shell.menu.controlPresupuestal')},
+      {key:'catalogo',icon:'cuantificaciones',label:tr('shell.menu.catalogo')},
+      {key:'biblioteca',icon:'biblioteca',label:tr('shell.menu.biblioteca')},
+    ]}/>}
+    {REPORTES_GROUP.includes(module) && <SubNavTabs active={module} onSelect={setModule} items={[
+      {key:'reportes',icon:'reportes',label:tr('shell.menu.reportes')},
+      {key:'comparativa',icon:'comparativa',label:tr('shell.menu.comparativa')},
+      {key:'vault',icon:'folder',label:tr('shell.menu.vault')},
+    ]}/>}
     {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} activeProject={activeProject} user={user} demoMode={DEMO_MODE} demoContext={DEMO_MODE ? createDemoContext() : null} />}
     {module === 'levantamiento' && <LevantamientoModule surveys={surveys} setSurveys={setSurveys} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} onSendToApu={()=>setModule('catalogo')} currentUserEmail={user?.email || null} organizationId={orgSession?.organization?.id || null} />}
     {module === 'catalogo' && <CatalogoModule user={user} organizationId={orgSession?.organization?.id || null} activeProjectId={activeProjectId} activeProject={activeProject} catalog={catalog} onNeedProject={()=>setModule('cartera')} setModule={setModule} onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }} />}
@@ -1490,33 +1507,63 @@ function TopSearch({apus=[],clients=[],projects=[],setModule}){
   </div>;
 }
 
+// Grupos de navegacion del rediseno UX (ver Shell/App mas abajo): Costos y
+// Reportes son entradas unicas en el sidebar que agrupan pantallas que ya
+// existian por separado. Ninguna pantalla cambia -- solo la barra de
+// pestanas (SubNavTabs) que aparece arriba de ellas cuando el modulo activo
+// pertenece al grupo.
+const COSTOS_GROUP = ['apu','presupuestos','control-presupuestal','catalogo','biblioteca'];
+const REPORTES_GROUP = ['reportes','comparativa','vault'];
+
 function Shell({children,user,logout,module,setModule,company,apus,clients,projects,activeProject,activeProjectId,setActiveProjectId,orgSession}){
   const { theme, toggleTheme } = useTheme();
   const { t: tr, locale, setLocale } = useI18n();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [crearOpen, setCrearOpen] = useState(false);
   const hamburgerRef = useRef(null);
   const drawerCloseRef = useRef(null);
+  const crearRef = useRef(null);
   useEffect(() => { if(drawerOpen) drawerCloseRef.current?.focus(); }, [drawerOpen]);
-  // Comunidad y Planes y acceso se ocultan temporalmente del menu principal
-  // (fase de concurso: se mantienen en el codigo, solo no se muestran en la navegacion).
-  const menu = [
+  // Reestructuracion de navegacion (rediseno UX): el sidebar antiguo tenia
+  // 14+ modulos al mismo nivel. Ahora la navegacion primaria queda en 5
+  // accesos (Inicio, Proyectos, Crear+, Costos, Reportes); Costos y
+  // Reportes son "grupos" que agrupan visualmente modulos que ya existian
+  // como pantallas independientes (ver COSTOS_GROUP/REPORTES_GROUP) --
+  // goTo(module) sigue siendo la misma funcion de siempre, ninguna pantalla
+  // cambio de props ni de logica. El resto de modulos (Levantamiento IA,
+  // Visual IA, Oficina tecnica, Equipo, Admin) se movio a "Mas herramientas"
+  // (secundario, colapsado) sin eliminarse. Comunidad y Planes siguen
+  // ocultos del menu como antes.
+  const costosActive = COSTOS_GROUP.includes(module);
+  const reportesActive = REPORTES_GROUP.includes(module);
+  const primaryMenu = [
     ['inicio','inicio',tr('shell.menu.inicio')],
+    ['cartera','proyectos',tr('shell.menu.cartera'),tr('shell.menu.carteraDesc')],
+  ];
+  const secondaryMenu = [
     ['levantamiento','bim',tr('shell.menu.levantamiento'),tr('shell.menu.levantamientoDesc')],
-    ['apu','apu',tr('shell.menu.apu')],
-    ['catalogo','cuantificaciones',tr('shell.menu.catalogo')],
-    ['presupuestos','presupuestos',tr('shell.menu.presupuestos')],
-    ['control-presupuestal','comparativa',tr('shell.menu.controlPresupuestal'),tr('shell.menu.controlPresupuestalDesc')],
-    ['vault','folder',tr('shell.menu.vault'),tr('shell.menu.vaultDesc')],
-    ['cartera','clientes',tr('shell.menu.cartera'),tr('shell.menu.carteraDesc')],
-    ['biblioteca','biblioteca',tr('shell.menu.biblioteca'),tr('shell.menu.bibliotecaDesc')],
     ['visual','render',tr('shell.menu.visual'),tr('shell.menu.visualDesc')],
     ['tecnico','tecnico',tr('shell.menu.tecnico'),tr('shell.menu.tecnicoDesc')],
-    ['reportes','reportes',tr('shell.menu.reportes')],
-    ['comparativa','comparativa',tr('shell.menu.comparativa'),tr('shell.menu.comparativaDesc')],
     ...(orgSession?.organization ? [['equipo','clientes','Equipo','Usuarios de tu empresa']] : []),
     ...(user.isAdmin ? [['admin','admin',tr('shell.menu.admin'),tr('shell.menu.adminDesc')]] : [])
   ];
-  const goTo = (m) => { setModule(m); setDrawerOpen(false); };
+  const crearItems = [
+    ['cartera','proyectos',tr('shell.crearMenu.obra'),tr('shell.crearMenu.obraDesc')],
+    ['levantamiento','bim',tr('shell.crearMenu.foto'),tr('shell.crearMenu.fotoDesc')],
+    ['visual','render',tr('shell.crearMenu.plano'),tr('shell.crearMenu.planoDesc')],
+    ['apu','apu',tr('shell.crearMenu.apu'),tr('shell.crearMenu.apuDesc')],
+    ['presupuestos','presupuestos',tr('shell.crearMenu.presupuesto'),tr('shell.crearMenu.presupuestoDesc')],
+  ];
+  const goTo = (m) => { setModule(m); setDrawerOpen(false); setCrearOpen(false); };
+  useEffect(() => {
+    if(!crearOpen) return;
+    const onKey = (e) => { if(e.key === 'Escape') setCrearOpen(false); };
+    const onClick = (e) => { if(crearRef.current && !crearRef.current.contains(e.target)) setCrearOpen(false); };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('mousedown', onClick);
+    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('mousedown', onClick); };
+  }, [crearOpen]);
   // Punto 9 del trial empresarial: el usuario ya ve el TrialBanner completo
   // mas abajo, pero la etiqueta corta junto al nombre en el topbar seguia
   // diciendo "Gratis" (su plan INDIVIDUAL real, nunca tocado al crear la
@@ -1542,34 +1589,70 @@ function Shell({children,user,logout,module,setModule,company,apus,clients,proje
     {drawerOpen && <div className="drawer-backdrop" onClick={()=>setDrawerOpen(false)} aria-hidden="true"/>}
     <aside className="sidebar">
       <div className="sidebar-head">
-        <div className="brand"><ZoemecBrand variant="sidebar" subtitle={tr('shell.brandSubtitle')}/></div>
+        <div className="brand"><ZoemecBrand variant="sidebar"/></div>
         <button className="drawer-close" ref={drawerCloseRef} onClick={()=>{ setDrawerOpen(false); hamburgerRef.current?.focus(); }} aria-label={tr('shell.closeDrawer')}>×</button>
       </div>
-      <div className="menu">{menu.map(m=><button key={m[0]} className={module===m[0]?'active':''} onClick={()=>goTo(m[0])}><span className="mi"><Icon name={m[1]}/></span><span className="menu-copy"><b>{m[2]}</b>{m[3] && <small>{m[3]}</small>}</span></button>)}</div>
-      <button className="plan-box" onClick={()=>goTo('planes')}><b>{tr('shell.planBox.title')}</b><p>{tr('shell.planBox.desc')}</p><div><i style={{width:'68%'}}></i></div><small>{tr('shell.planBox.cta')}</small></button>
-      <button className="logout-side" onClick={logout}>{tr('shell.logout')}</button>
+      <div className="menu">
+        {primaryMenu.map(m=><button key={m[0]} className={module===m[0]?'active':''} onClick={()=>goTo(m[0])}><span className="mi"><Icon name={m[1]}/></span><span className="menu-copy"><b>{m[2]}</b></span></button>)}
+        <div className="menu-crear-wrap" ref={crearRef}>
+          <button type="button" className={'menu-crear'+(crearOpen?' active':'')} onClick={()=>setCrearOpen(v=>!v)} aria-haspopup="true" aria-expanded={crearOpen}>
+            <Icon name="plus" size={16}/><span>{tr('shell.menu.crear')}</span>
+          </button>
+          {crearOpen && <div className="crear-popover" role="menu">
+            <span className="crear-popover-title">{tr('shell.crearMenu.title')}</span>
+            {crearItems.map(([key,icon,label,desc])=><button key={key} type="button" role="menuitem" onClick={()=>goTo(key)}><span className="mi"><Icon name={icon} size={17}/></span><span className="menu-copy"><b>{label}</b><small>{desc}</small></span></button>)}
+          </div>}
+        </div>
+        <button className={costosActive?'active':''} onClick={()=>goTo(costosActive?module:'apu')}><span className="mi"><Icon name="costos"/></span><span className="menu-copy"><b>{tr('shell.menu.costos')}</b></span></button>
+        <button className={reportesActive?'active':''} onClick={()=>goTo(reportesActive?module:'reportes')}><span className="mi"><Icon name="reportes"/></span><span className="menu-copy"><b>{tr('shell.menu.reportes')}</b></span></button>
+      </div>
+      <div className="sidebar-tools">
+        <button type="button" className="menu-more-toggle" onClick={()=>setMoreOpen(v=>!v)} aria-expanded={moreOpen}>
+          <span>{tr('shell.menu.more')}</span><span className={'chev'+(moreOpen?' open':'')}><Icon name="chevronDown" size={13}/></span>
+        </button>
+        {moreOpen && <div className="menu menu-secondary">{secondaryMenu.map(m=><button key={m[0]} className={module===m[0]?'active':''} onClick={()=>goTo(m[0])}><span className="mi"><Icon name={m[1]}/></span><span className="menu-copy"><b>{m[2]}</b></span></button>)}</div>}
+      </div>
+      <button type="button" className="sidebar-user" onClick={()=>goTo('planes')}>
+        <span className="avatar">{user.initials}</span>
+        <span className="sidebar-user-copy"><b>{user.name}</b><small>{tr('shell.footerSettings')}</small></span>
+      </button>
     </aside>
+    <nav className="mobile-bottom-nav" aria-label={tr('shell.menu.more')}>
+      <button className={module==='inicio'?'active':''} onClick={()=>goTo('inicio')}><Icon name="inicio" size={20}/><small>{tr('shell.menu.inicio')}</small></button>
+      <button className={module==='cartera'?'active':''} onClick={()=>goTo('cartera')}><Icon name="proyectos" size={20}/><small>{tr('shell.menu.cartera')}</small></button>
+      <button className="mobile-crear" onClick={()=>{ setDrawerOpen(true); setCrearOpen(true); }}><span className="mobile-crear-dot"><Icon name="plus" size={20}/></span><small>{tr('shell.menu.crear')}</small></button>
+      <button className={costosActive?'active':''} onClick={()=>goTo(costosActive?module:'apu')}><Icon name="costos" size={20}/><small>{tr('shell.menu.costos')}</small></button>
+      <button className={reportesActive?'active':''} onClick={()=>goTo(reportesActive?module:'reportes')}><Icon name="reportes" size={20}/><small>{tr('shell.menu.reportes')}</small></button>
+    </nav>
     <main className="main">
       <header className="topbar">
         <button className="hamburger" ref={hamburgerRef} onClick={()=>setDrawerOpen(v=>!v)} aria-label={tr('shell.hamburger')} aria-expanded={drawerOpen}>
           <span/><span/><span/>
         </button>
-        <TopSearch apus={apus} clients={clients} projects={projects} setModule={setModule}/>
         {projects.length>0 && <div className="project-switcher" title={tr('shell.projectSwitcher.title')}>
-          <Icon name="proyectos" size={15}/>
           <select value={activeProjectId||''} onChange={e=>setActiveProjectId(e.target.value)} aria-label={tr('shell.projectSwitcher.ariaLabel')}>
             {projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
+          <Icon name="chevronDown" size={13}/>
           <button type="button" className="ghost-up" onClick={()=>goTo('cartera')}>{tr('shell.projectSwitcher.new')}</button>
         </div>}
-        <div className="user">
-          <div className="locale-switch topbar-locale" role="group" aria-label={tr('toggle.langToggleLabel')}>
-            <button className={locale==='es'?'active':''} onClick={()=>setLocale('es')} aria-pressed={locale==='es'}>ES</button>
-            <button className={locale==='en'?'active':''} onClick={()=>setLocale('en')} aria-pressed={locale==='en'}>EN</button>
+        <div className="topbar-spacer"/>
+        <TopSearch apus={apus} clients={clients} projects={projects} setModule={setModule}/>
+        <NotificationBell user={user}/>
+        <UserMenu avatarLabel={user.initials} name={user.name} subtitle={planLabel}>
+          <div className="user-menu-row user-menu-locale">
+            <span>{tr('toggle.langToggleLabel')}</span>
+            <div className="locale-switch" role="group">
+              <button className={locale==='es'?'active':''} onClick={()=>setLocale('es')} aria-pressed={locale==='es'}>ES</button>
+              <button className={locale==='en'?'active':''} onClick={()=>setLocale('en')} aria-pressed={locale==='en'}>EN</button>
+            </div>
           </div>
-          <button className="theme-toggle" onClick={toggleTheme} aria-label={tr('toggle.themeToggleLabel')} title={theme==='light'?tr('toggle.themeDark'):tr('toggle.themeLight')}><Icon name={theme==='light'?'moon':'sun'} size={17}/></button>
-          <CloudBadge user={user}/><ProcessesIndicator/><NotificationBell user={user}/><span className="avatar">{user.initials}</span><div><b>{user.name}</b><small>{planLabel}</small></div><button className="logout-btn" onClick={logout}>{tr('shell.logout')}</button>
-        </div>
+          <button type="button" className="user-menu-row" onClick={toggleTheme}>
+            <Icon name={theme==='light'?'moon':'sun'} size={16}/><span>{theme==='light'?tr('toggle.themeDark'):tr('toggle.themeLight')}</span>
+          </button>
+          <div className="user-menu-row user-menu-status"><CloudBadge user={user}/><ProcessesIndicator/></div>
+          <button type="button" className="user-menu-row user-menu-logout" onClick={logout}>{tr('shell.logout')}</button>
+        </UserMenu>
       </header>
       {orgSession?.organization && <TrialBanner organization={orgSession.organization} />}
       {children}
@@ -1651,37 +1734,15 @@ function Dashboard({setModule,apus,clients,budgets,projects,activeProject:active
   const pr = projects || [];
   const activeProject = activeProjectProp || pr[0] || null;
   const latestApu = apus[0] || null;
-  const activeBudget = budgets[0] || null;
   const budgetCount = budgets.length;
-  const projectCount = pr.length;
   const firebaseOk = remoteStatus?.firebase === 'ok';
   const openaiOk = remoteStatus?.openai === 'ok';
-  const oneDriveOk = Boolean(oneDriveStatus?.connected);
-  const missingPieces = [];
-  if(!firebaseOk) missingPieces.push('Firebase');
-  if(!openaiOk) missingPieces.push('OpenAI');
-  if(libraryCount === 0) missingPieces.push('Biblioteca');
-  if(!latestApu) missingPieces.push('APU activo');
-  if(!budgetCount) missingPieces.push('Presupuesto');
-  const healthSummary = missingPieces.length ? `Faltan: ${missingPieces.join(', ')}` : 'Todos los servicios esenciales están operativos.';
   const riskNotes = [];
   if(!activeProject) riskNotes.push(tr('dash.riskNoProject'));
   if(!latestApu) riskNotes.push(tr('dash.riskNoApu'));
   if(libraryCount === 0) riskNotes.push(tr('dash.riskNoLibrary'));
   if(!openaiOk) riskNotes.push(tr('dash.riskNoAi'));
   if(!firebaseOk) riskNotes.push(tr('dash.riskNoFirebase'));
-  const estados = pr.reduce((m,p)=>{m[p.status]=(m[p.status]||0)+1;return m;},{});
-  const palette = ['#9D6FD0','#2A1740','#C7A35C','#B8A4CC','#B54A62'];
-  const segs = Object.keys(estados).map((k,i)=>({label:k,value:estados[k],color:palette[i%palette.length]}));
-  const spark = budgets.length ? budgets.slice(-8).map((b,i)=>Math.max(1,(Number(b.total)||0)/1000+i)) : [0,0,0,0,0,0,0,0];
-  const pipeline=[
-    ['Doc','Excel / PDF',firebaseOk ? 'ready' : 'watch'],
-    ['Extraer','Conceptos',libraryCount ? 'ready' : 'watch'],
-    ['Clasificar','Especialidad',libraryCount ? 'ready' : 'watch'],
-    ['Evidencia','Fuente técnica',libraryCount ? 'ready' : 'watch'],
-    ['APU','Matriz editable',apus.length ? 'ready' : 'active'],
-    ['Entregar','PDF / XLSX',budgetCount ? 'ready' : 'watch']
-  ];
   useEffect(()=>{
     let alive=true;
     apiGetSafe('/api/status').then(data=>{ if(alive) setRemoteStatus(data); });
@@ -1744,220 +1805,61 @@ function Dashboard({setModule,apus,clients,budgets,projects,activeProject:active
     const ts = [...apus, ...budgets].map(x=>x?.updatedAt?.toMillis?.() || (typeof x?.updatedAt==='number' ? x.updatedAt : 0)).filter(Boolean);
     return ts.length ? Math.max(...ts) : null;
   }, [apus, budgets]);
-  return <section className="ai-os"><PageHead kicker={tr('modules.dashboard.kicker')} title={tr('modules.dashboard.title')} desc={tr('modules.dashboard.desc')} action={<button onClick={()=>setModule('apu')}>{tr('dash.ctaAskZoe')}</button>} />
-    <div className="precon-center">
-      {/* BLOQUE 1 -- Estado del proyecto */}
-      <div className="precon-block precon-status">
-        <h3>{tr('dash.block1Title')}</h3>
-        {activeProject ? <>
-          <div className="precon-status-head">
-            <b>{activeProject.name}</b>
-            <span>{activeProject.client || tr('dash.defaultClient')}</span>
-          </div>
-          <div className="precon-status-stats">
-            <div><small>{tr('dash.kpiPresupuestos')}</small><b>{monto ? money(monto) : '—'}</b></div>
-            <div><small>{tr('dash.kpiApus')}</small><b>{apus.length}</b></div>
-            <div><small>{tr('dash.kpiDocumentos')}</small><b>{libraryCount ?? '—'}</b></div>
-            <div><small>{tr('dash.block1LastUpdate')}</small><b>{lastUpdated ? new Date(lastUpdated).toLocaleDateString(locale==='en'?'en-US':'es-MX') : tr('dash.block1NoUpdates')}</b></div>
-          </div>
-        </> : <EmptyState text={tr('dash.block1Empty')} actionLabel={tr('dash.block1EmptyAction')} onAction={()=>setModule('cartera')}/>}
-      </div>
+  const firstName = (user?.name || '').split(' ')[0] || '';
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? tr('dash.greetingMorning') : hour < 19 ? tr('dash.greetingAfternoon') : tr('dash.greetingEvening');
+  const confidenceValue = confidenceProject?.averageScore ?? null;
+  const confidenceTone = confidenceValue==null ? 'neutral' : confidenceValue>=70 ? 'good' : confidenceValue>=40 ? 'warn' : 'bad';
+  const riskCount = riskProject ? (riskProject.critical||0)+(riskProject.high||0)+(riskProject.medium||0) : null;
+  const riskTone = !riskProject ? 'neutral' : riskLevel==='LOW' ? 'good' : riskLevel==='MEDIUM' ? 'warn' : 'bad';
+  const recentActivityItems = [
+    ...(libraryRecent||[]).slice(0,2).map(f=>tr('dash.activityDocSynced',{name:f.name})),
+    ...apus.slice(0,2).map(a=>tr('dash.activityApuCreated',{ref:a.clave || a.id || ''})),
+    ...budgets.slice(0,2).map(b=>tr('dash.activityBudgetSaved',{name:b.name})),
+  ];
+  const alertItems = [
+    ...riskNotes,
+    ...(findingsPreview.length ? [tr('dash.block5Summary',{count:findingsPreview.length})] : []),
+  ];
+  return <div className="dash2">
+    <div className="dash2-greeting">
+      <h1>{greeting}{firstName ? `, ${firstName}` : ''}</h1>
+      <p>{activeProject?.name || tr('dash.defaultWorkspace')}</p>
+    </div>
 
-      {/* BLOQUE 2 -- Bid Readiness Score */}
-      <div className={`precon-block precon-readiness status-${(bidReadiness.status||'NO_DATA').toLowerCase()}`}>
-        <h3>{tr('dash.block2Title')}</h3>
-        {bidReadiness.score == null ? <p className="precon-empty-msg">{tr('dash.block2Empty')}</p> : <>
-          <div className="precon-readiness-score"><b>{bidReadiness.score}</b><span>/100</span></div>
-          <p className="precon-readiness-status">{locale==='en' ? BID_READINESS_STATUS_LABEL_EN[bidReadiness.status] : bidReadiness.statusLabelEs}</p>
-          {bidReadiness.deductions.length ? <ul className="precon-deductions">
-            {bidReadiness.deductions.map(d=><li key={d.code}>−{d.points} {tr('dash.block2Points')}: {locale==='en' ? d.labelEn : d.labelEs}</li>)}
-          </ul> : <p className="precon-readiness-clean">{tr('dash.block2Clean')}</p>}
-        </>}
+    <Section title={tr('dash.summaryTitle')}>
+      <div className="metric-row">
+        <MetricCard label={tr('dash.metricConfidence')} value={confidenceValue!=null ? `${confidenceValue}%` : '—'} tone={confidenceTone}
+          hint={confidenceProject ? tr('dash.metricConfidenceHint',{high:confidenceProject.high}) : tr('dash.block4Empty')} onClick={()=>setModule('apu')}/>
+        <MetricCard label={tr('dash.metricBudget')} value={monto ? money(monto) : '—'}
+          hint={budgetCount ? tr('dash.metricBudgetHint',{count:budgetCount}) : tr('dash.kpiPresupuestosEmpty')} onClick={()=>setModule('presupuestos')}/>
+        <MetricCard label={tr('dash.metricRisk')} value={riskProject ? String(riskCount) : '—'} tone={riskTone}
+          hint={riskProject ? tr(`dash.riskLevel${riskLevel}`) : tr('dash.block3Empty')} onClick={()=>setModule('apu')}/>
+        <MetricCard label={tr('dash.metricProgress')} value={activeProject ? `${activeProject.progress||0}%` : '—'}
+          hint={activeProject ? tr('dash.metricProgressHint') : tr('dash.block1Empty')} onClick={()=>setModule('cartera')}/>
       </div>
+    </Section>
 
-      {/* BLOQUE 3 -- Riesgo economico */}
-      <div className={`precon-block precon-risk risk-${(riskLevel||'none').toLowerCase()}`}>
-        <h3>{tr('dash.block3Title')}</h3>
-        {!riskProject ? <p className="precon-empty-msg">{tr('dash.block3Empty')}</p> : <>
-          <div className="precon-risk-amount"><b>{money(riskProject.estimatedExposure||0)}</b></div>
-          <p className="precon-risk-level">{tr(`dash.riskLevel${riskLevel}`)}</p>
-          {riskProject.topRisks?.length ? <ul className="precon-risk-list">
-            {riskProject.topRisks.slice(0,3).map(r=><li key={r.apuId}><b>{r.concept||r.apuId}</b> — {tr(`dash.riskLevel${r.severity}`)}</li>)}
-          </ul> : <p className="precon-readiness-clean">{tr('dash.block3Clean')}</p>}
-          <button onClick={()=>setModule('apu')}>{tr('dash.block3Cta')}</button>
-        </>}
-      </div>
+    <Section title={tr('dash.continueTitle')}>
+      <Card className="continue-card" onClick={()=>setModule('apu')}>
+        <span className="continue-card-kicker">{tr('shell.menu.costos')}</span>
+        <p className="continue-card-detail">{tr('dash.continueDetail',{count:apus.length, pct: confidenceValue ?? 0})}</p>
+        <span className="continue-card-cta">{tr('dash.continueCta')} →</span>
+      </Card>
+    </Section>
 
-      {/* BLOQUE 4 -- Confianza */}
-      <div className="precon-block precon-confidence">
-        <h3>{tr('dash.block4Title')}</h3>
-        {!confidenceProject ? <p className="precon-empty-msg">{tr('dash.block4Empty')}</p> : <>
-          <div className="precon-confidence-score"><b>{confidenceProject.averageScore ?? '—'}{confidenceProject.averageScore!=null?'%':''}</b></div>
-          <div className="precon-confidence-breakdown">
-            <span>{tr('dash.block4High',{count:confidenceProject.high})}</span>
-            <span>{tr('dash.block4Medium',{count:confidenceProject.medium})}</span>
-            <span>{tr('dash.block4Low',{count:confidenceProject.low})}</span>
-            <span>{tr('dash.block4Insufficient',{count:confidenceProject.insufficientEvidence})}</span>
-          </div>
-          <button onClick={()=>setModule('apu')}>{tr('dash.block4Cta')}</button>
-        </>}
-      </div>
+    <Section title={tr('dash.recentActivity')}>
+      <Card>
+        {recentActivityItems.length ? <ul className="dash2-list">{recentActivityItems.map((x,i)=><li key={i}><Icon name="doc" size={15}/> {x}</li>)}</ul> : <EmptyState text={tr('dash.recentActivityEmpty')}/>}
+      </Card>
+    </Section>
 
-      {/* BLOQUE 5 -- Hallazgos */}
-      <div className="precon-block precon-findings">
-        <h3>{tr('dash.block5Title')}</h3>
-        {!apus.length ? <p className="precon-empty-msg">{tr('dash.block5Empty')}</p> : findingsPreview.length ? <>
-          <p>{tr('dash.block5Summary',{count:findingsPreview.length})}</p>
-          <ul className="precon-findings-list">
-            {findingsPreview.slice(0,4).map(f=><li key={f.id}><b>{f.concept}</b>: {f.message}</li>)}
-          </ul>
-          <button onClick={()=>setModule('apu')}>{tr('dash.block5Cta')}</button>
-        </> : <p className="precon-readiness-clean">{tr('dash.block5Clean')}</p>}
-      </div>
-
-      {/* BLOQUE 6 -- Flujo de preconstruccion */}
-      <div className="precon-block precon-flow">
-        <h3>{tr('dash.block6Title')}</h3>
-        <div className="precon-flow-steps">
-          {tr('dash.flowSteps').map((s,i)=><React.Fragment key={s}><span className="precon-flow-step">{s}</span>{i<tr('dash.flowSteps').length-1 && <i className="precon-flow-arrow">→</i>}</React.Fragment>)}
-        </div>
-      </div>
-    </div>
-    <div className="demo-hero">
-      <h2>{tr('dash.heroTitle')}</h2>
-      <p>{tr('dash.heroDesc')}</p>
-      <div className="demo-hero-actions">
-        <button onClick={()=>setModule('apu')}><Icon name="apu" size={17}/> {tr('dash.ctaGenerate')}</button>
-        <button className="ghost-up" onClick={()=>setModule('apu')}><Icon name="presupuestos" size={17}/> {tr('dash.ctaImport')}</button>
-      </div>
-      <div className="demo-hero-steps">
-        <div className="demo-hero-step"><b>1</b><span>{tr('dash.step1')}</span></div>
-        <div className="demo-hero-step"><b>2</b><span>{tr('dash.step2')}</span></div>
-        <div className="demo-hero-step"><b>3</b><span>{tr('dash.step3')}</span></div>
-        <div className="demo-hero-step"><b>4</b><span>{tr('dash.step4')}</span></div>
-        <div className="demo-hero-step"><b>5</b><span>{tr('dash.step5')}</span></div>
-      </div>
-    </div>
-    <div className="kpi-row">
-      <div className="kpi-tile"><small>{tr('dash.kpiProyectos')}</small><b>{projectCount}</b><span>{projectCount ? tr('dash.kpiProyectosSub',{count:projectCount}) : tr('dash.kpiProyectosEmpty')}</span></div>
-      <div className="kpi-tile"><small>{tr('dash.kpiApus')}</small><b>{apus.length}</b><span>{apus.length ? tr('dash.kpiApusSub') : tr('dash.kpiApusEmpty')}</span></div>
-      <div className="kpi-tile"><small>{tr('dash.kpiPresupuestos')}</small><b>{budgetCount}</b><span>{monto ? money(monto) : tr('dash.kpiPresupuestosEmpty')}</span></div>
-      <div className="kpi-tile"><small>{tr('dash.kpiDocumentos')}</small><b>{libraryCount ?? '—'}</b><span>{tr('dash.kpiDocumentosSub')}</span></div>
-    </div>
-    <div className="os-grid">
-      <div className="os-command">
-        <div className="os-command-head"><span>{tr('dash.liveIntel')}</span><b>{monto ? money(monto) : tr('dash.noBudgetYet')}</b></div>
-        <h2>{activeProject?.name || tr('dash.defaultWorkspace')}</h2>
-        <p>{activeProject?.client || tr('dash.defaultClient')}</p>
-        <p className="os-summary">{projectCount ? tr('dash.summaryActive',{projects:projectCount,budgets:budgetCount}) : tr('dash.summaryEmpty')}</p>
-        <div className="os-prompt"><i>ZOE</i><span>{tr('dash.zoePrompt')}</span><button onClick={()=>setModule('apu')}>{tr('dash.zoeStart')}</button></div>
-        <div className="os-pipeline">{pipeline.map((p,i)=><button key={p[0]} className={p[2]} onClick={()=>setModule(i<2?'biblioteca':i<5?'apu':'presupuestos')}><b>{p[0]}</b><span>{p[1]}</span></button>)}</div>
-      </div>
-      <div className="os-bim">
-        <div className="twin-central">
-          <h2>{tr('dash.twinTitle')}</h2>
-          <div className="twin-flow" aria-hidden>
-            {tr('dash.twinFlow').map((s,i)=>(
-              <div key={s} className={`twin-step ${i===0? 'start':''}`}><span>{s}</span>{i<7 && <i className="arrow">→</i>}</div>
-            ))}
-          </div>
-          <div className="twin-wrapper">
-            <DigitalTwin apu={apus[0]} compact onOpen={()=>setModule('apu')}/>
-          </div>
-          <div className="twin-insights">
-            <InfoCard title={tr('dash.twinProjectTitle')} value={activeProject?.name || '—'} subtitle={activeProject ? `${activeProject.progress || 0}% avance` : tr('dash.twinProjectEmpty')} actionLabel={activeProject ? tr('dash.twinProjectAction') : tr('dash.twinProjectActionCreate')} onAction={()=>setModule('cartera')}/>
-            <InfoCard title={tr('dash.twinAiTitle')} value={apus.length? tr('dash.twinAiActive'): tr('dash.twinAiInactive')} subtitle={apus.length? tr('dash.twinAiSubActive',{count:apus.length}) : tr('dash.twinAiSubEmpty')} actionLabel={tr('dash.twinAiAction')} onAction={()=>setModule('apu')}/>
-          </div>
-        </div>
-      </div>
-      <div className="os-side">
-        <div className="status-grid">
-          <div className="status-card"><small>{tr('dash.statusProyecto')}</small><b>{activeProject?.name || '—'}</b><span>{activeProject ? `${activeProject.client || ''}` : tr('dash.statusProyectoEmpty')}</span></div>
-          <div className="status-card"><small>{tr('dash.statusIa')}</small><b>{apus.length ? tr('dash.twinAiActive') : tr('dash.twinAiInactive')}</b><span>{apus.length ? tr('dash.statusIaSubActive',{pct:Math.round(apuConfidenceScore(apus[0])*100)/100}) : tr('dash.statusIaSubEmpty')}</span></div>
-                  <div className="status-card"><small>{tr('dash.statusBiblioteca')}</small><b>{libraryCount !== null ? tr('dash.statusBibliotecaDocs',{count:libraryCount}) : '—'}</b><span>{libraryCount !== null ? (libraryCount > 0 ? tr('dash.statusBibliotecaSubOk') : tr('dash.statusBibliotecaSubEmpty')) : (libraryError || tr('dash.statusBibliotecaSubNoData'))}</span></div>
-          <div className="status-card"><small>{tr('dash.statusOneDrive')}</small><b>{oneDriveOk ? tr('dash.statusOneDriveOn') : tr('dash.statusOneDriveOff')}</b><span>{oneDriveOk ? tr('dash.statusOneDriveSubOn') : tr('dash.statusOneDriveSubOff')}</span></div>
-          <div className="status-card"><small>{tr('dash.statusFirebase')}</small><b>{firebaseOk ? tr('dash.statusFirebaseOn') : tr('dash.statusFirebaseOff')}</b><span>{firebaseOk ? tr('dash.statusFirebaseSubOn') : tr('dash.statusFirebaseSubOff')}</span></div>
-          <div className="status-card"><small>{tr('dash.statusOpenAI')}</small><b>{openaiOk ? tr('dash.statusOpenAIOn') : tr('dash.statusOpenAIOff')}</b><span>{openaiOk ? tr('dash.statusOpenAISubOn') : tr('dash.statusOpenAISubOff')}</span></div>
-          <div className="status-card"><small>{tr('dash.statusHealth')}</small><b>{missingPieces.length ? tr('dash.statusHealthMissing',{items:missingPieces.join(', ')}) : tr('dash.statusHealthAllOk')}</b><span>{tr('dash.statusHealthSub',{projects:projectCount,budgets:budgetCount})}</span></div>
-        </div>
-        {riskNotes.length ? <div className="risk-notes"><small>{tr('dash.riskTitle')}</small><ul>{riskNotes.map(note=><li key={note}>{note}</li>)}</ul></div> : null}
-      </div>
-    </div>
-    <div className="quick os-actions"><button onClick={()=>setModule('apu')}><Icon name="apu"/> {tr('dash.quickGenerate')}</button><button onClick={()=>setModule('biblioteca')}><Icon name="biblioteca"/> {tr('dash.quickEvidence')}</button><button onClick={()=>setModule('cartera')}><Icon name="clientes"/> {tr('dash.quickProjects')}</button><button onClick={()=>setModule('presupuestos')}><Icon name="presupuestos"/> {tr('dash.quickDeliverables')}</button></div>
-    <div className="dash-charts">
-      <div className="panel future-panel">
-        <h2>{tr('dash.chartCostTrend')}</h2>
-        <Spark points={spark}/>
-        <div className="chart-foot">
-          <span>{budgets.length ? tr('dash.chartCostTrendSubData') : tr('dash.chartCostTrendSubEmpty')}</span>
-          <b>{budgets.length ? tr('dash.chartCostTrendSynced') : tr('dash.chartCostTrendStandby')}</b>
-        </div>
-      </div>
-      <div className="panel chart-donut future-panel">
-        <h2>{tr('dash.chartProjectMap')}</h2>
-        <Donut segments={segs} center={pr.length || 'IA'} sub="nodos"/>
-        <div className="donut-legend">
-          {segs.length ? segs.map(s=>
-            <span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>
-          ) : (
-            <span><i style={{background:'#C7A35C'}}/>{tr('dash.chartProjectMapEmpty')}</span>
-          )}
-        </div>
-      </div>
-    </div>
-    <div className="grid-3">
-      <div className="panel">
-        <h2>{tr('dash.recentProjects')}</h2>
-        {pr.length ? pr.slice(0,4).map(p=>
-          <div className="project-row" key={p.name}>
-            <div><b>{p.name}</b><small>{p.client}</small></div>
-            <span>{p.progress}%</span>
-            <progress value={p.progress} max="100" />
-          </div>
-        ) : <EmptyState text={tr('dash.recentProjectsEmpty')}/>}
-      </div>
-      <div className="panel">
-        <h2>{tr('dash.recentApus')}</h2>
-        {apus.length ? apus.slice(0,4).map((a,i)=>
-          <div className="mini-list-row" key={a.id||i}>
-            <Icon name="apu" size={15}/>
-            <b>{a.concept || a.clave || `APU ${i+1}`}</b>
-            <span>{apuConfidenceScore(a) ? `${Math.round(apuConfidenceScore(a))}%` : '—'}</span>
-          </div>
-        ) : <EmptyState text={tr('dash.recentApusEmpty')} actionLabel={tr('dash.recentApusAction')} onAction={()=>setModule('apu')}/>}
-      </div>
-      <div className="panel">
-        <h2>{tr('dash.recentBudgets')}</h2>
-        {budgets.length ? budgets.slice(0,4).map((b,i)=>
-          <div className="mini-list-row" key={b.id||i}>
-            <Icon name="presupuestos" size={15}/>
-            <b>{b.name || `Presupuesto ${i+1}`}</b>
-            <span>{b.total ? money(b.total) : '—'}</span>
-          </div>
-        ) : <EmptyState text={tr('dash.recentBudgetsEmpty')} actionLabel={tr('dash.recentBudgetsAction')} onAction={()=>setModule('presupuestos')}/>}
-      </div>
-    </div>
-    <div className="grid-2">
-      <div className="panel">
-        <h2>{tr('dash.recentDocs')}</h2>
-        {libraryRecent === null ? <EmptyState text={libraryError || tr('dash.recentDocsNoData')}/> : libraryRecent.length ? libraryRecent.map(f=>
-          <div className="mini-list-row" key={f.id}>
-            <Icon name="doc" size={15}/>
-            <b>{f.name || 'Documento'}</b>
-            <span>{f.cat || f.ext || '—'}</span>
-          </div>
-        ) : <EmptyState text={tr('dash.recentDocsEmpty')} actionLabel={tr('dash.recentDocsAction')} onAction={()=>setModule('biblioteca')}/>}
-      </div>
-      <div className="panel">
-        <h2>{tr('dash.recentActivity')}</h2>
-        {apus.length || budgets.length || (libraryRecent||[]).length ? [
-          ...(libraryRecent||[]).slice(0,2).map(f=>tr('dash.activityDocSynced',{name:f.name})),
-          ...apus.slice(0,2).map(a=>tr('dash.activityApuCreated',{ref:a.clave || a.id || ''})),
-          ...budgets.slice(0,2).map(b=>tr('dash.activityBudgetSaved',{name:b.name})),
-        ].map((x,i)=><div className="activity" key={i}><Icon name="doc" size={15}/> {x}</div>) : <EmptyState text={tr('dash.recentActivityEmpty')}/>}
-      </div>
-    </div>
-  </section>
+    <Section title={tr('dash.alertsTitle')}>
+      <Card>
+        {alertItems.length ? <ul className="dash2-list dash2-list-alerts">{alertItems.map((n,i)=><li key={i}><Icon name="alerta" size={15}/> {n}</li>)}</ul> : <p className="dash2-alerts-clean">{tr('dash.alertsClean')}</p>}
+      </Card>
+    </Section>
+  </div>
 }
 
 /* Convierte los renglones-objeto del esquema v2 (ver src/domain/apuSchema.js)

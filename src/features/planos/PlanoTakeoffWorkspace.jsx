@@ -54,7 +54,7 @@ function readFileAsDataUrl(file){
   });
 }
 
-export default function PlanoTakeoffWorkspace({ user, projectId = null, organizationId = null, onNeedProject, navigationTarget = null, onNavigationTargetConsumed }){
+export default function PlanoTakeoffWorkspace({ user, projectId = null, organizationId = null, onNeedProject, onReturnToWorkspace, navigationTarget = null, onNavigationTargetConsumed }){
   const { t: tr } = useI18n();
   const [file, setFile] = useState(null);
   const [catalogAddedIds, setCatalogAddedIds] = useState(() => new Set());
@@ -251,6 +251,9 @@ export default function PlanoTakeoffWorkspace({ user, projectId = null, organiza
   const needsScale = !resolvedScale || resolvedScale.fuente === ESCALA_FUENTES.NO_DETERMINADA;
 
   return <div className="plano-takeoff-workspace">
+    {onReturnToWorkspace && <div className="sc-actions" style={{ marginBottom: 12 }}>
+      <button type="button" className="soft" onClick={onReturnToWorkspace}>Volver a Cuantificación</button>
+    </div>}
     {analysis.status === 'idle' && existingPlanos.length > 0 && <div className="panel">
       <h3>{tr('planoTakeoff.existingTitle')}</h3>
       <ul>

@@ -1,3 +1,4 @@
+import { isQuantifiable } from '../../../domain/planoReview.js';
 /* Definición de etapas del ciclo de vida de obra en ZOEMEC y lógica determinista
    de estados de progreso reales (Completado, Pendiente, Atención).
    Regla fundamental: NUNCA inventar progreso. Si no hay datos suficientes, Pendiente.
@@ -56,7 +57,7 @@ export const WORKSPACE_STAGES = [
  * Estados posibles: 'completado' | 'atencion' | 'pendiente'
  * IMPORTANTE: No depende de la navegación (selectedStage).
  */
-export function computeStageProgress(stageKey, { project, apus = [], budgets = [], surveys, evidenceItems, planos }) {
+export function computeStageProgress(stageKey, { project, apus = [], budgets = [], surveys, evidenceItems, planos, planoTakeoffs = [] }) {
   const projectId = project?.id;
   if (!projectId) return 'pendiente';
 
@@ -65,6 +66,7 @@ export function computeStageProgress(stageKey, { project, apus = [], budgets = [
   const projectSurveys = (surveys || []).filter(s => (s?.projectId ?? null) === projectId);
   const projectEvidenceItems = (evidenceItems || []).filter(e => (e?.projectId ?? null) === projectId);
   const projectPlanos = (planos || []).filter(p => (p?.projectId ?? null) === projectId);
+  const projectTakeoffs = (planoTakeoffs || []).filter(t => (t?.projectId ?? null) === projectId);
 
   switch (stageKey) {
     case 'evidencia': {
@@ -81,8 +83,36 @@ export function computeStageProgress(stageKey, { project, apus = [], budgets = [
     }
 
     case 'cuantificacion': {
-      const hasQuantities = projectApus.some(a => Number(a?.sourceQty ?? a?.calculated?.qty ?? 0) > 0) || (project?.takeoffCount ?? 0) > 0;
-      if (hasQuantities) {
+      // Regla determinista estricta:
+      // 1. Existe al menos un planoTakeoff persistido del projectId con elementos confirmados/validados (> 0)
+      const hasConfirmedTakeoff = projectTakeoffs.some(takeoff => {
+        const elementos = Array.isArray(takeoff?.snapshot?.elementos)
+          ? takeoff.snapshot.elementos
+          : (Array.isArray(takeoff?.elementos) ? takeoff.elementos : []);
+        return elementos.some(el => {
+          const isConfirmed = isQuantifiable(el?.estado);
+          const qty = Number(el?.cantidadCorregida ?? el?.cantidadPropuesta ?? el?.dimension?.area ?? el?.dimension?.longitud ?? 0);
+          return isConfirmed && qty > 0;
+        });
+      });
+
+      // 2. OR existe al menos un survey persistido del projectId con cantidades geométricas reales mayores a cero
+      const hasQuantifiedSurvey = projectSurveys.some(survey => {
+        const spaces = Array.isArray(survey?.spaces) ? survey.spaces : [];
+        const hasSpaceQuantities = spaces.some(s => {
+          const floorArea = Number(s?.floorArea || 0);
+          const wallNetArea = Number(s?.wallNetArea || 0);
+          const perimeter = Number(s?.perimeter || 0);
+          const volume = Number(s?.volume || 0);
+          const length = Number(s?.length || 0);
+          return floorArea > 0 || wallNetArea > 0 || perimeter > 0 || volume > 0 || length > 0;
+        });
+        const totals = survey?.totals;
+        const hasTotals = Number(totals?.floorArea || 0) > 0 || Number(totals?.wallNetArea || 0) > 0;
+        return hasSpaceQuantities || hasTotals;
+      });
+
+      if (hasConfirmedTakeoff || hasQuantifiedSurvey) {
         return 'completado';
       }
       return 'pendiente';
@@ -134,7 +164,7 @@ export function computeStageProgress(stageKey, { project, apus = [], budgets = [
  * Deriva la etapa actual del ciclo del proyecto exclusivamente de datos reales.
  * Si no puede determinarse con certeza, devuelve null (nunca inventar).
  */
-export function deriveProjectLifecycleStage({ project, apus = [], budgets = [], surveys = [], evidenceItems = [], planos = [] }) {
+export function deriveProjectLifecycleStage({ project, apus = [], budgets = [], surveys = [], evidenceItems = [], planos = [], planoTakeoffs = [] }) {
   if (!project?.id) return null;
 
   const status = String(project?.status || '').toLowerCase();
@@ -144,7 +174,7 @@ export function deriveProjectLifecycleStage({ project, apus = [], budgets = [], 
 
   // Secuencia determinista: la primera etapa que no esté completada es la etapa actual de obra
   for (const stage of WORKSPACE_STAGES) {
-    const progress = computeStageProgress(stage.key, { project, apus, budgets, surveys, evidenceItems, planos });
+    const progress = computeStageProgress(stage.key, { project, apus, budgets, surveys, evidenceItems, planos, planoTakeoffs });
     if (progress !== 'completado') {
       return stage;
     }

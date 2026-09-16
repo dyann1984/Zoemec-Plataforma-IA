@@ -979,16 +979,19 @@ function App(){
     {module === 'project-workspace' && <ProjectWorkspace
       projectId={activeProjectId}
       projects={projects}
+      user={user}
+      organizationId={orgSession?.organization?.id || null}
       apus={apus}
       budgets={budgets}
       surveys={surveys}
       onBackToProjects={()=>setModule('cartera')}
       onNavigateToLevantamiento={()=>setModule('levantamiento')}
       onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }}
+      onNavigateToVault={()=>setModule('vault')}
     />}
     {module === 'biblioteca' && <Library user={user} catalog={catalog} setCatalog={setCatalog} setModule={setModule} />}
     {module === 'tecnico' && <TechnicalOffice company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} needsProject={needsProject} onCreateProject={()=>setModule('cartera')} />}
-    {module === 'visual' && <VisualAI user={user} setModule={setModule} activeProjectId={activeProjectId} activeProject={activeProject} organizationId={orgSession?.organization?.id || null} onNeedProject={()=>setModule('cartera')} navigationTarget={planoNavigationTarget} onNavigationTargetConsumed={()=>setPlanoNavigationTarget(null)} />}
+    {module === 'visual' && <VisualAI user={user} setModule={setModule} activeProjectId={activeProjectId} activeProject={activeProject} organizationId={orgSession?.organization?.id || null} onNeedProject={()=>setModule('cartera')} navigationTarget={planoNavigationTarget} onNavigationTargetConsumed={()=>setPlanoNavigationTarget(null)} onReturnToWorkspace={() => setModule('project-workspace')} />}
     {module === 'comunidad' && <Community />}
     {module === 'planes' && <PlansAccess user={user} />}
     {module === 'reportes' && <Reports clients={clients} apus={apus} budgets={budgets} />}
@@ -4838,7 +4841,7 @@ function parseVisualReport(text){
   return sections.length ? sections : null;
 }
 
-function VisualAI({user, setModule, activeProjectId=null, activeProject=null, organizationId=null, onNeedProject, navigationTarget=null, onNavigationTargetConsumed}){
+function VisualAI({user, setModule, activeProjectId=null, activeProject=null, organizationId=null, onNeedProject, navigationTarget=null, onNavigationTargetConsumed, onReturnToWorkspace}){
   const { t: tr } = useI18n();
   const [subview,setSubview]=useState('propuesta');
   // "Ver en plano" (Fase D.1): un destino de navegacion real (no solo del
@@ -4915,7 +4918,7 @@ function VisualAI({user, setModule, activeProjectId=null, activeProject=null, or
     <button className={subview==='takeoffVector'?'active':''} onClick={()=>setSubview('takeoffVector')}>{tr('visualAi.tabTakeoffVector')}</button>
   </div>;
   if(subview==='takeoff') return <section><PageHead kicker={tr('modules.takeoff.kicker')} title={tr('modules.takeoff.title')} desc={tr('modules.takeoff.desc')} />{tabs}<PlanoTakeoff user={user} setModule={setModule} activeProjectId={activeProjectId} organizationId={organizationId} onNeedProject={onNeedProject}/></section>;
-  if(subview==='takeoffVector') return <section><PageHead kicker={tr('modules.takeoffVector.kicker')} title={tr('modules.takeoffVector.title')} desc={tr('modules.takeoffVector.desc')} />{tabs}<PlanoTakeoffWorkspace user={user} projectId={activeProjectId} organizationId={organizationId} onNeedProject={onNeedProject} navigationTarget={navigationTarget?.kind==='plano-takeoff-vector'?navigationTarget:null} onNavigationTargetConsumed={onNavigationTargetConsumed}/></section>;
+  if(subview==='takeoffVector') return <section><PageHead kicker={tr('modules.takeoffVector.kicker')} title={tr('modules.takeoffVector.title')} desc={tr('modules.takeoffVector.desc')} />{tabs}<PlanoTakeoffWorkspace user={user} projectId={activeProjectId} organizationId={organizationId} onNeedProject={onNeedProject} onReturnToWorkspace={onReturnToWorkspace} navigationTarget={navigationTarget?.kind==='plano-takeoff-vector'?navigationTarget:null} onNavigationTargetConsumed={onNavigationTargetConsumed}/></section>;
   return <section><PageHead kicker={tr('visualAi.kicker')} title={tr('visualAi.title')} desc={tr('visualAi.desc')} action={<button onClick={generate}>{tr('visualAi.generateProposal')}</button>} />
     {tabs}
     <div className="visual-grid">

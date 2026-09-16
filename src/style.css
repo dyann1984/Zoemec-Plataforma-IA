@@ -4440,6 +4440,56 @@ svg.ic{display:block;flex:none}
   gap: 4px;
 }
 
+.quantification-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.quantification-summary-grid .stage-context-box strong {
+  color: var(--ink);
+  font-size: 1.2rem;
+}
+
+.quantification-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.quantification-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.quantification-table {
+  width: 100%;
+  min-width: 680px;
+  border-collapse: collapse;
+  background: var(--card);
+}
+
+.quantification-table th,
+.quantification-table td {
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  font-size: .84rem;
+}
+
+.quantification-table th {
+  color: var(--muted);
+  background: var(--surface-secondary);
+  font-size: .74rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.quantification-table tr:last-child td {
+  border-bottom: 0;
+}
+
 .context-box-label {
   font-size: .7rem;
   font-weight: 700;
@@ -5625,5 +5675,4 @@ svg.ic{display:block;flex:none}
     height: 280px !important;
   }
 }
-
 

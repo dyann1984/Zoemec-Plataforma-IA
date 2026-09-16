@@ -1,13 +1,17 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useI18n } from '../../../i18n/I18nContext.jsx';
 import { ProjectHeader } from './ProjectHeader.jsx';
 import { ProjectStepper } from './ProjectStepper.jsx';
 import { ProjectStagePlaceholder } from './ProjectStagePlaceholder.jsx';
 import { EvidenceStage } from './EvidenceStage.jsx';
+import { QuantificationStage } from './QuantificationStage.jsx';
+import { fetchProjectPlanoTakeoffs } from './planoTakeoffQuery.js';
 
 export function ProjectWorkspace({
   projectId,
   projects = [],
+  user,
+  organizationId = null,
   apus = [],
   budgets = [],
   surveys = [],
@@ -16,6 +20,7 @@ export function ProjectWorkspace({
   onBackToProjects,
   onNavigateToLevantamiento,
   onNavigateToPlano,
+  onNavigateToVault,
   initialStage = 'evidencia'
 }) {
   const { t: tr } = useI18n();
@@ -24,8 +29,24 @@ export function ProjectWorkspace({
     evidenceItems: propEvidenceItems,
     planos: propPlanos
   });
+  const [planoTakeoffs, setPlanoTakeoffs] = useState([]);
+  const [takeoffsError, setTakeoffsError] = useState(null);
 
   const project = projects.find(p => p.id === projectId);
+  const refreshPlanoTakeoffs = useCallback(async () => {
+    try {
+      setTakeoffsError(null);
+      setPlanoTakeoffs(await fetchProjectPlanoTakeoffs(projectId));
+    } catch (error) {
+      setTakeoffsError(error);
+      setPlanoTakeoffs([]);
+      window.zoemecNotify?.(error.message || 'No se pudieron cargar los takeoffs del proyecto.', 'error');
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    refreshPlanoTakeoffs();
+  }, [refreshPlanoTakeoffs]);
 
   if (!project) {
     return (
@@ -52,6 +73,7 @@ export function ProjectWorkspace({
         apus={apus}
         budgets={budgets}
         surveys={surveys}
+        planoTakeoffs={planoTakeoffs}
         evidenceItems={evidenceData.evidenceItems}
         planos={evidenceData.planos}
         onBackToProjects={onBackToProjects}
@@ -64,6 +86,7 @@ export function ProjectWorkspace({
         apus={apus}
         budgets={budgets}
         surveys={surveys}
+        planoTakeoffs={planoTakeoffs}
         evidenceItems={evidenceData.evidenceItems}
         planos={evidenceData.planos}
       />
@@ -77,6 +100,17 @@ export function ProjectWorkspace({
           onNavigateToPlano={onNavigateToPlano}
           onEvidenceUpdated={setEvidenceData}
         />
+      ) : selectedStage === 'cuantificacion' ? (
+        <QuantificationStage
+          project={project}
+          surveys={surveys}
+          evidenceItems={evidenceData.evidenceItems}
+          planoTakeoffs={planoTakeoffs}
+          onQuantifyPlano={() => onNavigateToPlano?.({ kind: 'plano-takeoff-vector', returnToWorkspace: true })}
+          onOpenTakeoff={() => onNavigateToPlano?.({ kind: 'plano-takeoff-vector', returnToWorkspace: true })}
+          onUseEvidence={onNavigateToLevantamiento}
+          onUseModel3d={onNavigateToVault}
+        />
       ) : (
         <ProjectStagePlaceholder
           selectedStage={selectedStage}
@@ -84,10 +118,12 @@ export function ProjectWorkspace({
           apus={apus}
           budgets={budgets}
           surveys={surveys}
+          planoTakeoffs={planoTakeoffs}
           evidenceItems={evidenceData.evidenceItems}
           planos={evidenceData.planos}
         />
       )}
+      {takeoffsError && <small className="muted">No se pudo actualizar la consulta de planos.</small>}
     </div>
   );
 }

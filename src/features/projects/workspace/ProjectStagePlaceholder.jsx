@@ -9,13 +9,14 @@ export function ProjectStagePlaceholder({
   project,
   apus = [],
   budgets = [],
-  surveys = []
+  surveys = [],
+  planoTakeoffs = []
 }) {
   const { t: tr } = useI18n();
 
   const activeStageKey = selectedStage || currentStage || 'evidencia';
   const stage = WORKSPACE_STAGES.find(s => s.key === activeStageKey) || WORKSPACE_STAGES[0];
-  const stageProgress = computeStageProgress(stage.key, { project, apus, budgets, surveys });
+  const stageProgress = computeStageProgress(stage.key, { project, apus, budgets, surveys, planoTakeoffs });
 
   const stageTitle = tr(stage.titleKey) || stage.defaultTitle;
   const stageDesc = tr(stage.descKey) || stage.defaultDesc;
@@ -81,10 +82,10 @@ export function ProjectStagePlaceholder({
               <div className="stage-context-box">
                 <span className="context-box-label">{tr('workspace.context.takeoffItems')}</span>
                 <span className="context-box-value">
-                  {projectApus.filter(a => Number(a?.sourceQty ?? a?.calculated?.qty ?? 0) > 0).length}
+                  {planoTakeoffs.length}
                 </span>
                 <span className="context-box-hint">
-                  {projectApus.length > 0
+                  {planoTakeoffs.length > 0
                     ? tr('workspace.context.takeoffActive')
                     : tr('workspace.context.noTakeoffYet')}
                 </span>

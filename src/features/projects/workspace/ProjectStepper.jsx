@@ -12,7 +12,8 @@ export function ProjectStepper({
   budgets = [],
   surveys = [],
   evidenceItems = [],
-  planos = []
+  planos = [],
+  planoTakeoffs = []
 }) {
   const { t: tr } = useI18n();
 
@@ -21,7 +22,7 @@ export function ProjectStepper({
   const activeIndex = currentIndex >= 0 ? currentIndex : 0;
   const currentStageObj = WORKSPACE_STAGES[activeIndex] || WORKSPACE_STAGES[0];
 
-  const stageProgressContext = { project, apus, budgets, surveys, evidenceItems, planos };
+  const stageProgressContext = { project, apus, budgets, surveys, evidenceItems, planos, planoTakeoffs };
 
   const handlePrev = () => {
     if (activeIndex > 0) {

@@ -85,3 +85,64 @@ test('deriveProjectLifecycleStage: identifica con precision la etapa real de obr
   // Si tiene survey pero no APUs:
   assert.equal(deriveProjectLifecycleStage({ project: p1, surveys, apus: [] })?.key, 'cuantificacion');
 });
+
+test('computeStageProgress: cuantificacion regla determinista estricta', () => {
+  const project = { id: 'PRJ-1' };
+
+  // 1. solo APU con cantidad > 0 -> PENDIENTE (APU no pertenece a Cuantificacion)
+  const apusWithQty = [{ projectId: 'PRJ-1', sourceQty: 50, calculated: { qty: 50 } }];
+  assert.equal(computeStageProgress('cuantificacion', { project, apus: apusWithQty }), 'pendiente', 'APU NO es fuente de verdad para Cuantificacion');
+
+  // 2. Takeoff confirmado con cantidad > 0 -> COMPLETADO
+  const confirmedTakeoff = [{
+    id: 'TK-1',
+    projectId: 'PRJ-1',
+    snapshot: {
+      elementos: [{ id: 'el-1', estado: 'VALIDADO_POR_USUARIO', cantidadPropuesta: 15.5 }]
+    }
+  }];
+  assert.equal(computeStageProgress('cuantificacion', { project, planoTakeoffs: confirmedTakeoff }), 'completado');
+
+  // 3. Survey cuantificado con cantidades reales > 0 -> COMPLETADO
+  const quantifiedSurvey = [{
+    id: 'SURV-1',
+    projectId: 'PRJ-1',
+    spaces: [{ name: 'Sala', floorArea: 48, wallNetArea: 91.71 }]
+  }];
+  assert.equal(computeStageProgress('cuantificacion', { project, surveys: quantifiedSurvey }), 'completado');
+
+  // 4. Takeoff vacio -> PENDIENTE
+  const emptyTakeoff = [{
+    id: 'TK-EMPTY',
+    projectId: 'PRJ-1',
+    snapshot: { elementos: [] }
+  }];
+  assert.equal(computeStageProgress('cuantificacion', { project, planoTakeoffs: emptyTakeoff }), 'pendiente');
+
+  const unconfirmedTakeoff = [{
+    id: 'TK-UNCONF',
+    projectId: 'PRJ-1',
+    snapshot: {
+      elementos: [{ id: 'el-2', estado: 'PROPUESTO_POR_IA', cantidadPropuesta: 20 }]
+    }
+  }];
+  assert.equal(computeStageProgress('cuantificacion', { project, planoTakeoffs: unconfirmedTakeoff }), 'pendiente');
+
+  // 5. Takeoff/survey de otro projectId -> PENDIENTE
+  assert.equal(computeStageProgress('cuantificacion', {
+    project,
+    planoTakeoffs: [{ projectId: 'OTRO_PROYECTO', snapshot: { elementos: [{ estado: 'VALIDADO_POR_USUARIO', cantidadPropuesta: 100 }] } }],
+    surveys: [{ projectId: 'OTRO_PROYECTO', spaces: [{ floorArea: 100 }] }]
+  }), 'pendiente');
+});
+
+test('computeStageProgress: un modelo 3D por si solo no completa cuantificacion', () => {
+  assert.equal(computeStageProgress('cuantificacion', {
+    project: { id: 'PRJ-1' },
+    evidenceItems: [{
+      projectId: 'PRJ-1',
+      kind: '3d',
+      metadata: { boundingBox: { size: { x: 10, y: 3, z: 8 } }, meshCount: 12 }
+    }]
+  }), 'pendiente');
+});

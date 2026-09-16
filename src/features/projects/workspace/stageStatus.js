@@ -56,17 +56,25 @@ export const WORKSPACE_STAGES = [
  * Estados posibles: 'completado' | 'atencion' | 'pendiente'
  * IMPORTANTE: No depende de la navegación (selectedStage).
  */
-export function computeStageProgress(stageKey, { project, apus = [], budgets = [], surveys = [] }) {
+export function computeStageProgress(stageKey, { project, apus = [], budgets = [], surveys, evidenceItems, planos }) {
   const projectId = project?.id;
   if (!projectId) return 'pendiente';
 
-  const projectApus = apus.filter(a => (a?.projectId ?? null) === projectId);
-  const projectBudgets = budgets.filter(b => (b?.projectId ?? null) === projectId);
-  const projectSurveys = surveys.filter(s => (s?.projectId ?? null) === projectId);
+  const projectApus = (apus || []).filter(a => (a?.projectId ?? null) === projectId);
+  const projectBudgets = (budgets || []).filter(b => (b?.projectId ?? null) === projectId);
+  const projectSurveys = (surveys || []).filter(s => (s?.projectId ?? null) === projectId);
+  const projectEvidenceItems = (evidenceItems || []).filter(e => (e?.projectId ?? null) === projectId);
+  const projectPlanos = (planos || []).filter(p => (p?.projectId ?? null) === projectId);
 
   switch (stageKey) {
     case 'evidencia': {
-      if (projectSurveys.length > 0 || (project?.evidenceCount ?? 0) > 0) {
+      // Prioridad 1: Información real persistida y consultada para el projectId actual
+      if (projectSurveys.length > 0 || projectEvidenceItems.length > 0 || projectPlanos.length > 0) {
+        return 'completado';
+      }
+      // Fallback secundario: solo si las colecciones no fueron provistas/consultadas
+      const collectionsProvided = surveys !== undefined || evidenceItems !== undefined || planos !== undefined;
+      if (!collectionsProvided && Number(project?.evidenceCount) > 0) {
         return 'completado';
       }
       return 'pendiente';
@@ -126,7 +134,7 @@ export function computeStageProgress(stageKey, { project, apus = [], budgets = [
  * Deriva la etapa actual del ciclo del proyecto exclusivamente de datos reales.
  * Si no puede determinarse con certeza, devuelve null (nunca inventar).
  */
-export function deriveProjectLifecycleStage({ project, apus = [], budgets = [], surveys = [] }) {
+export function deriveProjectLifecycleStage({ project, apus = [], budgets = [], surveys = [], evidenceItems = [], planos = [] }) {
   if (!project?.id) return null;
 
   const status = String(project?.status || '').toLowerCase();
@@ -136,11 +144,11 @@ export function deriveProjectLifecycleStage({ project, apus = [], budgets = [], 
 
   // Secuencia determinista: la primera etapa que no esté completada es la etapa actual de obra
   for (const stage of WORKSPACE_STAGES) {
-    const progress = computeStageProgress(stage.key, { project, apus, budgets, surveys });
+    const progress = computeStageProgress(stage.key, { project, apus, budgets, surveys, evidenceItems, planos });
     if (progress !== 'completado') {
       return stage;
     }
   }
 
-  return WORKSPACE_STAGES[4]; // Todas completadas -> Entrega
+  return WORKSPACE_STAGES[WORKSPACE_STAGES.length - 1]; // Todas completadas -> Entrega
 }

@@ -976,7 +976,16 @@ function App(){
     {module === 'control-presupuestal' && <ControlPresupuestalModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} />}
     {module === 'vault' && <ProjectVaultModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} setModule={setModule} onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }} />}
     {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={(pid)=>{ setRawApus(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgets(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawCatalog(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgetItems(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawSurveys(l=>l.filter(x=>(x?.projectId??null)!==pid)); }} openCreateProject={createProjectTrigger} onHandledCreateProject={()=>setCreateProjectTrigger(false)} apus={apus} budgets={budgets} onOpenWorkspace={(pid)=>{ setActiveProjectId(pid); setModule('project-workspace'); }} />}
-    {module === 'project-workspace' && <ProjectWorkspace projectId={activeProjectId} projects={projects} apus={apus} budgets={budgets} surveys={surveys} onBackToProjects={()=>setModule('cartera')} />}
+    {module === 'project-workspace' && <ProjectWorkspace
+      projectId={activeProjectId}
+      projects={projects}
+      apus={apus}
+      budgets={budgets}
+      surveys={surveys}
+      onBackToProjects={()=>setModule('cartera')}
+      onNavigateToLevantamiento={()=>setModule('levantamiento')}
+      onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }}
+    />}
     {module === 'biblioteca' && <Library user={user} catalog={catalog} setCatalog={setCatalog} setModule={setModule} />}
     {module === 'tecnico' && <TechnicalOffice company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} needsProject={needsProject} onCreateProject={()=>setModule('cartera')} />}
     {module === 'visual' && <VisualAI user={user} setModule={setModule} activeProjectId={activeProjectId} activeProject={activeProject} organizationId={orgSession?.organization?.id || null} onNeedProject={()=>setModule('cartera')} navigationTarget={planoNavigationTarget} onNavigationTargetConsumed={()=>setPlanoNavigationTarget(null)} />}

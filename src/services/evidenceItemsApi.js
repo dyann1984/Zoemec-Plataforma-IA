@@ -17,11 +17,16 @@ import { makeEvidenceItem, buildGalleryFromEvidenceItems } from '../domain/evide
    intento. Best-effort: un fallo aqui nunca debe bloquear el flujo real de
    captura (la subida a Storage ya tuvo exito o fallo por su cuenta antes
    de llegar aqui) -- se traga el error, nunca lo propaga. */
-export async function recordEvidenceItem(fields){
+export async function recordEvidenceItem(fields, options = {}){
   try{
     const item = makeEvidenceItem(fields);
     await setDoc(doc(db, 'evidenceItems', item.id), item, { merge: true });
-  }catch{ /* metadata es un respaldo de recuperacion, nunca la barrera real de que el archivo exista en Storage */ }
+    return item;
+  }catch(err){
+    if (options?.throwOnError) throw err;
+    /* metadata es un respaldo de recuperacion, nunca la barrera real de que el archivo exista en Storage */
+    return null;
+  }
 }
 
 /* ownerUid es obligatorio (no opcional): las reglas de Firestore para
@@ -39,6 +44,20 @@ export async function fetchEvidenceItemsForSurvey(surveyId, ownerUid){
     const snap = await getDocs(query(collection(db, 'evidenceItems'), where('surveyId', '==', surveyId), where('ownerUid', '==', ownerUid)));
     return buildGalleryFromEvidenceItems(snap.docs.map(d => d.data()));
   }catch{
+    return [];
+  }
+}
+
+export async function fetchEvidenceItemsForProject(projectId, ownerUid){
+  if(!projectId || !ownerUid) return [];
+  try{
+    const snap = await getDocs(query(
+      collection(db, 'evidenceItems'),
+      where('projectId', '==', projectId),
+      where('ownerUid', '==', ownerUid)
+    ));
+    return buildGalleryFromEvidenceItems(snap.docs.map(d => d.data()));
+  }catch(err){
     return [];
   }
 }

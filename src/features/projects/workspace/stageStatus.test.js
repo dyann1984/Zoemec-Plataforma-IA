@@ -11,10 +11,37 @@ test('WORKSPACE_STAGES: define exactamente las 5 etapas en el orden requerido', 
 
 test('computeStageProgress: sin datos suficientes devuelve pendiente (nunca inventa progreso)', () => {
   assert.equal(computeStageProgress('evidencia', { project: null }), 'pendiente');
+  assert.equal(computeStageProgress('evidencia', { project: { id: 'P1' }, surveys: [], evidenceItems: [], planos: [] }), 'pendiente');
   assert.equal(computeStageProgress('cuantificacion', { project: { id: 'P1' } }), 'pendiente');
   assert.equal(computeStageProgress('costos', { project: { id: 'P1' } }), 'pendiente');
   assert.equal(computeStageProgress('revision', { project: { id: 'P1' } }), 'pendiente');
   assert.equal(computeStageProgress('entrega', { project: { id: 'P1' } }), 'pendiente');
+});
+
+test('computeStageProgress: evidencia prioriza colecciones reales (surveys, evidenceItems, planos)', () => {
+  const project = { id: 'P1' };
+
+  // 1. Con un survey real del proyecto -> completado
+  assert.equal(computeStageProgress('evidencia', { project, surveys: [{ projectId: 'P1' }] }), 'completado');
+
+  // 2. Con un evidenceItem real (foto/video en Storage) -> completado
+  assert.equal(computeStageProgress('evidencia', { project, surveys: [], evidenceItems: [{ projectId: 'P1', id: 'ev1' }] }), 'completado');
+
+  // 3. Con un plano real vinculado al proyecto -> completado
+  assert.equal(computeStageProgress('evidencia', { project, surveys: [], evidenceItems: [], planos: [{ projectId: 'P1', id: 'pl1' }] }), 'completado');
+
+  // 4. Ítems de otro proyecto NO completan la etapa
+  assert.equal(computeStageProgress('evidencia', {
+    project,
+    surveys: [{ projectId: 'OTRO_PROYECTO' }],
+    evidenceItems: [{ projectId: 'OTRO_PROYECTO' }],
+    planos: [{ projectId: 'OTRO_PROYECTO' }]
+  }), 'pendiente');
+
+  // 5. Fallback secundario de evidenceCount solo cuando colecciones no se proveen
+  assert.equal(computeStageProgress('evidencia', { project: { id: 'P1', evidenceCount: 3 } }), 'completado');
+  // Pero si las colecciones se proveen vacías, los datos reales mandan -> pendiente
+  assert.equal(computeStageProgress('evidencia', { project: { id: 'P1', evidenceCount: 3 }, surveys: [], evidenceItems: [], planos: [] }), 'pendiente');
 });
 
 test('computeStageProgress: costos pasa a completado si existen APUs o presupuestos del proyecto', () => {

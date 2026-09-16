@@ -38,12 +38,20 @@ async function resolveConceptLocation(db, concepto, projectId){
   return { ...concepto, ubicacionEstructurada, ubicacion: concepto?.ubicacion || ubicacion };
 }
 
+async function assertProjectAccess(db, authz, orgContext, projectId){
+  const projectSnap = await db.collection('projects').doc(String(projectId)).get();
+  if(!projectSnap.exists || !canAccessOrgScopedDoc(projectSnap.data(), authz, orgContext)){
+    throw httpError(403, 'No tienes acceso a este proyecto.');
+  }
+}
+
 async function handleList(req, res){
   const authz = await requireAuth(req);
   const orgContext = await loadOrgContext(authz.uid);
   const { projectId } = req.query || {};
   if(!projectId) throw httpError(400, 'Falta projectId.');
   const db = getAdminDb();
+  await assertProjectAccess(db, authz, orgContext, projectId);
   let query = orgContext
     ? db.collection(COLLECTION).where('organizationId', '==', orgContext.organizationId).where('projectId', '==', String(projectId))
     : db.collection(COLLECTION).where('ownerUid', '==', authz.uid).where('projectId', '==', String(projectId));
@@ -81,7 +89,11 @@ async function findExistingByOrigenElementoId(db, authz, orgContext, projectId, 
   return match || null;
 }
 
-const UPDATABLE_ON_DEDUP = ['clave', 'capitulo', 'concept', 'unit', 'qty', 'referencePU', 'origenPlano', 'origenElementoId'];
+const UPDATABLE_ON_DEDUP = [
+  'clave', 'capitulo', 'concept', 'unit', 'qty', 'referencePU', 'origenPlano',
+  'origenElementoId', 'origenCantidad', 'sourceType', 'sourceRecordId',
+  'sourceElementId', 'planId', 'surveyId', 'confirmedAt', 'confirmedBy'
+];
 
 async function handleCreate(req, res){
   const authz = await requireAuth(req);
@@ -90,6 +102,7 @@ async function handleCreate(req, res){
   const { projectId, conceptos, reason } = req.body || {};
   if(!projectId || !Array.isArray(conceptos) || !conceptos.length) throw httpError(400, 'Faltan projectId/conceptos.');
   const db = getAdminDb();
+  await assertProjectAccess(db, authz, orgContext, projectId);
   const organizationId = orgContext ? orgContext.organizationId : null;
   const now = new Date().toISOString();
 

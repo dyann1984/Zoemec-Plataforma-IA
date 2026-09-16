@@ -35,13 +35,39 @@ function mockRes(){
 }
 function post(token, body){ return { method: 'POST', headers: token ? { authorization: `Bearer ${token}` } : {}, body }; }
 function get(token, query){ return { method: 'GET', headers: token ? { authorization: `Bearer ${token}` } : {}, query: query || {} }; }
-async function call(req){ const res = mockRes(); await handler(req, res); return res; }
+async function call(req){
+  const projectId = req.body?.projectId || req.query?.projectId;
+  const authorization = req.headers?.authorization || '';
+  if(projectId && authorization){
+    const token = authorization.replace(/^Bearer\s+/i, '');
+    const authz = await getAdminAuth().verifyIdToken(token);
+    const db = getAdminDb();
+    const projectRef = db.collection('projects').doc(String(projectId));
+    const projectSnap = await projectRef.get();
+    if(!projectSnap.exists){
+      const userSnap = await db.collection('users').doc(authz.uid).get();
+      await projectRef.set({
+        id: String(projectId),
+        projectId: String(projectId),
+        ownerUid: authz.uid,
+        organizationId: userSnap.exists ? (userSnap.data().organizationId || null) : null
+      });
+    }
+  }
+  const res = mockRes(); await handler(req, res); return res;
+}
 const uniq = (p) => `${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}@test.zoemec`;
 
 async function seedOrgMember(db, uid, organizationId){
   await db.doc(`organizations/${organizationId}`).set({ id: organizationId, name: `Empresa ${organizationId}`, status: 'ACTIVE_TRIAL' });
   await db.doc(`organizations/${organizationId}/members/${uid}`).set({ uid, role: 'company_manager', status: 'active' });
   await db.doc(`users/${uid}`).set({ uid, organizationId, role: 'user', plan: 'Gratis', active: true }, { merge: true });
+}
+
+async function seedProject(db, projectId, uid, organizationId = null){
+  await db.collection('projects').doc(projectId).set({
+    id: projectId, projectId, ownerUid: uid, organizationId
+  });
 }
 
 function conceptoFixture(overrides = {}){
@@ -51,6 +77,7 @@ function conceptoFixture(overrides = {}){
 describe('POST /api/catalogo-conceptos action=create', () => {
   it('crea en lote, normaliza capitulo, arranca en PENDIENTE sin APU', async () => {
     const { uid, idToken } = await createUserAndGetIdToken({ email: uniq('create') });
+    await seedProject(getAdminDb(), 'PRO-1', uid);
     const res = await call(post(idToken, { action: 'create', projectId: 'PRO-1', conceptos: [conceptoFixture(), conceptoFixture({ clave: 'ALB-002', concept: 'Aplanado fino' })] }));
     assert.equal(res.statusCode, 201);
     assert.equal(res.body.conceptos.length, 2);
@@ -62,7 +89,8 @@ describe('POST /api/catalogo-conceptos action=create', () => {
   });
 
   it('un concepto invalido en el lote se rechaza SIN tumbar a los demas', async () => {
-    const { idToken } = await createUserAndGetIdToken({ email: uniq('partial') });
+    const { uid, idToken } = await createUserAndGetIdToken({ email: uniq('partial') });
+    await seedProject(getAdminDb(), 'PRO-2', uid);
     const res = await call(post(idToken, { action: 'create', projectId: 'PRO-2', conceptos: [conceptoFixture(), { concept: 'sin unidad ni cantidad' }] }));
     assert.equal(res.statusCode, 201);
     assert.equal(res.body.conceptos.length, 1);
@@ -75,7 +103,8 @@ describe('POST /api/catalogo-conceptos action=create', () => {
   });
 
   it('regionalizacion: sin ubicacion del proyecto, el concepto queda SIN ubicacion (nunca default silencioso de ciudad)', async () => {
-    const { idToken } = await createUserAndGetIdToken({ email: uniq('sinubic') });
+    const { uid, idToken } = await createUserAndGetIdToken({ email: uniq('sinubic') });
+    await seedProject(getAdminDb(), 'PRO-SIN-UBIC', uid);
     const res = await call(post(idToken, { action: 'create', projectId: 'PRO-SIN-UBIC', conceptos: [conceptoFixture()] }));
     assert.equal(res.body.conceptos[0].ubicacionEstructurada, null);
   });
@@ -95,7 +124,8 @@ describe('POST /api/catalogo-conceptos action=create', () => {
 
 describe('POST action=create -- deduplicacion por origenElementoId (Fase D.1, "Agregar al catalogo")', () => {
   it('el mismo elemento de origen enviado dos veces ACTUALIZA el concepto existente, nunca lo duplica', async () => {
-    const { idToken } = await createUserAndGetIdToken({ email: uniq('dedup') });
+    const { uid, idToken } = await createUserAndGetIdToken({ email: uniq('dedup') });
+    await seedProject(getAdminDb(), 'PRO-DEDUP', uid);
     const origenElementoId = 'PLANO-123:el-1';
     const first = await call(post(idToken, {
       action: 'create', projectId: 'PRO-DEDUP',
@@ -124,7 +154,8 @@ describe('POST action=create -- deduplicacion por origenElementoId (Fase D.1, "A
   });
 
   it('actualizar por dedup NUNCA pisa un status/apuId ya avanzado (GENERADO/ASOCIADO se preservan)', async () => {
-    const { idToken } = await createUserAndGetIdToken({ email: uniq('dedup-status') });
+    const { uid, idToken } = await createUserAndGetIdToken({ email: uniq('dedup-status') });
+    await seedProject(getAdminDb(), 'PRO-DEDUP-2', uid);
     const origenElementoId = 'PLANO-456:el-1';
     const created = await call(post(idToken, { action: 'create', projectId: 'PRO-DEDUP-2', conceptos: [conceptoFixture({ origenElementoId })] }));
     const id = created.body.conceptos[0].id;
@@ -175,7 +206,7 @@ describe('GET /api/catalogo-conceptos', () => {
     const a = await createUserAndGetIdToken({ email: uniq('lista-a') });
     const b = await createUserAndGetIdToken({ email: uniq('lista-b') });
     await call(post(a.idToken, { action: 'create', projectId: 'PRO-LISTA', conceptos: [conceptoFixture({ clave: 'A1' })] }));
-    await call(post(b.idToken, { action: 'create', projectId: 'PRO-LISTA', conceptos: [conceptoFixture({ clave: 'B1' })] }));
+    await call(post(b.idToken, { action: 'create', projectId: 'PRO-LISTA-B', conceptos: [conceptoFixture({ clave: 'B1' })] }));
     const listA = await call(get(a.idToken, { projectId: 'PRO-LISTA' }));
     assert.equal(listA.statusCode, 200);
     assert.ok(listA.body.conceptos.every(c => c.ownerUid === a.uid));
@@ -291,6 +322,7 @@ describe('PRUEBA ESPECIFICA -- aislamiento por ORGANIZACION (Fase D.1, punto 9),
     const { uid: uidB, idToken: tokenB } = await createUserAndGetIdToken({ email: uniq('org-b') });
     const orgB = `org-b-${Date.now()}`;
     await seedOrgMember(db, uidB, orgB);
+    await seedProject(db, 'PRO-ORG-A', uidA, orgA);
 
     const created = await call(post(tokenA, { action: 'create', projectId: 'PRO-ORG-A', conceptos: [conceptoFixture()] }));
     assert.equal(created.body.conceptos[0].organizationId, orgA);
@@ -298,7 +330,7 @@ describe('PRUEBA ESPECIFICA -- aislamiento por ORGANIZACION (Fase D.1, punto 9),
 
     // GET directo por projectId (Empresa B nunca ve nada de un proyecto de la Empresa A).
     const listB = await call(get(tokenB, { projectId: 'PRO-ORG-A' }));
-    assert.equal(listB.body.conceptos.length, 0);
+    assert.equal(listB.statusCode, 403);
 
     // Acciones por ID directo -- todas deben rechazarse con 403, nunca 404
     // silencioso (que revelaria si el id existe) ni 200.
@@ -320,11 +352,25 @@ describe('PRUEBA ESPECIFICA -- aislamiento por ORGANIZACION (Fase D.1, punto 9),
     await seedOrgMember(db, uid1, org);
     const { uid: uid2, idToken: token2 } = await createUserAndGetIdToken({ email: uniq('org-share-2') });
     await seedOrgMember(db, uid2, org);
+    await seedProject(db, 'PRO-ORG-SHARE', uid1, org);
 
     const created = await call(post(token1, { action: 'create', projectId: 'PRO-ORG-SHARE', conceptos: [conceptoFixture()] }));
     const conceptoId = created.body.conceptos[0].id;
     const updated = await call(post(token2, { action: 'update', id: conceptoId, patch: { qty: 42 } }));
     assert.equal(updated.statusCode, 200, 'un companero de la misma organizacion SI puede operar sobre el concepto -- es trabajo de equipo, no aislado por usuario individual');
     assert.equal(updated.body.concepto.qty, 42);
+  });
+});
+
+describe('aislamiento por proyecto', () => {
+  it('un usuario autenticado no puede usar projectId de otro propietario', async () => {
+    const db = getAdminDb();
+    const owner = await createUserAndGetIdToken({ email: uniq('project-owner') });
+    const stranger = await createUserAndGetIdToken({ email: uniq('project-stranger') });
+    await seedProject(db, 'PRO-PRIVATE-B', owner.uid);
+    const res = await call(post(stranger.idToken, {
+      action: 'create', projectId: 'PRO-PRIVATE-B', conceptos: [conceptoFixture({ origenElementoId: 'PLANO-B:el-1' })]
+    }));
+    assert.equal(res.statusCode, 403);
   });
 });

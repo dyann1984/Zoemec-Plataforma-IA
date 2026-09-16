@@ -41,7 +41,9 @@ export function isLegalStatusTransition(from, to){
 
 export function makeEmptyCatalogConcepto({
   id = null, projectId = null, clave = '', capitulo = 'OTROS', concept = '',
-  unit = '', qty = 0, referencePU = 0, origenPlano = null, origenElementoId = null
+  unit = '', qty = 0, referencePU = 0, origenPlano = null, origenElementoId = null,
+  origenCantidad = null, sourceType = null, sourceRecordId = null, sourceElementId = null,
+  planId = null, surveyId = null, confirmedAt = null, confirmedBy = null
 } = {}){
   const now = new Date().toISOString();
   return {
@@ -60,6 +62,14 @@ export function makeEmptyCatalogConcepto({
     // para conceptos sin origen de plano (captura manual): esos siempre
     // crean uno nuevo, no hay identidad contra la cual deduplicar.
     origenElementoId,
+    origenCantidad,
+    sourceType,
+    sourceRecordId,
+    sourceElementId,
+    planId,
+    surveyId,
+    confirmedAt,
+    confirmedBy,
     apuId: null, apuVersionId: null,
     matchConfidence: null, matchMethod: null,
     parametric: null,

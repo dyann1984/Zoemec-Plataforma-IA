@@ -22,6 +22,7 @@ import { PLANO_ELEMENT_STATES, ESCALA_FUENTES, applyPlanoElementReview } from '.
 import { recalibrateVectorElement, resolveEffectiveDimension } from '../../domain/planoElementBuilder.js';
 import { calibrateScale } from '../../domain/planoMeasurement.js';
 import { buildPlanoQuantification, summarizePlanoQuantification } from '../../domain/planoQuantification.js';
+import { syncQuantificationToCatalog } from '../../domain/quantificationCostBridge.js';
 
 const LAYERS = ['muros', 'puertas', 'ventanas', 'columnas', 'areas', 'cotas', 'ejes'];
 // Mapa best-effort tipo de elemento -> capitulo del Presupuesto (Fase D.1):
@@ -189,20 +190,13 @@ export default function PlanoTakeoffWorkspace({ user, projectId = null, organiza
     }
     setCatalogBusyId(el.id);
     try{
-      const origenElementoId = `${planoIdRef.current}:${el.id}`;
-      const res = await apiPost('/api/catalogo-conceptos', {
-        action: 'create', projectId,
-        conceptos: [{
-          clave: el.id, capitulo: TIPO_A_CAPITULO[el.tipo] || 'OTROS', concept, unit, qty,
-          origenElementoId,
-          origenPlano: {
-            origen: 'plano-takeoff-vector', planoTakeoffId: planoIdRef.current, elementoId: el.id,
-            page: pageNumber, bbox: el.geometry || null, fileName: file?.name || '',
-            evidencia: el.evidencia || el.descripcion || '', fuenteEscala: resolvedScale?.fuente || null,
-            confianza: el.confianzaIA ?? null, validatedBy: el.validatedBy || null, validatedAt: el.validatedAt || null
-          }
-        }]
-      });
+      const res = await syncQuantificationToCatalog([{
+        projectId, concept, unit, qty, sourceType: 'takeoff',
+        sourceRecordId: planoIdRef.current, sourceElementId: el.id,
+        planId: planoIdRef.current, page: pageNumber, fileName: file?.name || '',
+        clave: el.id, capitulo: TIPO_A_CAPITULO[el.tipo] || 'OTROS',
+        confirmedAt: el.validatedAt, confirmedBy: el.validatedBy
+      }]);
       setCatalogAddedIds(prev => new Set(prev).add(el.id));
       const wasUpdate = (res.updated || 0) > 0;
       window.zoemecNotify?.(tr(wasUpdate ? 'planoTakeoff.updatedInCatalogMsg' : 'planoTakeoff.addedToCatalogMsg', { concept }), 'success');

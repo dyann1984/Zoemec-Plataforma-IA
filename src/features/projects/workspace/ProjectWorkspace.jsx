@@ -5,7 +5,10 @@ import { ProjectStepper } from './ProjectStepper.jsx';
 import { ProjectStagePlaceholder } from './ProjectStagePlaceholder.jsx';
 import { EvidenceStage } from './EvidenceStage.jsx';
 import { QuantificationStage } from './QuantificationStage.jsx';
+import { CostStage } from './CostStage.jsx';
 import { fetchProjectPlanoTakeoffs } from './planoTakeoffQuery.js';
+import { useCatalogConceptos } from '../../catalogo/catalogConceptosCloud.js';
+import { useProjectApus } from '../../catalogo/projectApusCloud.js';
 
 export function ProjectWorkspace({
   projectId,
@@ -21,6 +24,9 @@ export function ProjectWorkspace({
   onNavigateToLevantamiento,
   onNavigateToPlano,
   onNavigateToVault,
+  onNavigateToApu,
+  onNavigateToBudget,
+  onStageChange,
   initialStage = 'evidencia'
 }) {
   const { t: tr } = useI18n();
@@ -31,6 +37,12 @@ export function ProjectWorkspace({
   });
   const [planoTakeoffs, setPlanoTakeoffs] = useState([]);
   const [takeoffsError, setTakeoffsError] = useState(null);
+  const { conceptos: catalogConceptos } = useCatalogConceptos(user, projectId);
+  const { apus: projectApus } = useProjectApus(user, projectId);
+  const selectStage = useCallback((stage) => {
+    setSelectedStage(stage);
+    onStageChange?.(stage);
+  }, [onStageChange]);
 
   const project = projects.find(p => p.id === projectId);
   const refreshPlanoTakeoffs = useCallback(async () => {
@@ -70,10 +82,11 @@ export function ProjectWorkspace({
     <div className="project-workspace-container">
       <ProjectHeader
         project={project}
-        apus={apus}
+        apus={projectApus}
         budgets={budgets}
         surveys={surveys}
         planoTakeoffs={planoTakeoffs}
+        catalogConceptos={catalogConceptos}
         evidenceItems={evidenceData.evidenceItems}
         planos={evidenceData.planos}
         onBackToProjects={onBackToProjects}
@@ -81,14 +94,15 @@ export function ProjectWorkspace({
 
       <ProjectStepper
         selectedStage={selectedStage}
-        onSelectStage={setSelectedStage}
+        onSelectStage={selectStage}
         project={project}
-        apus={apus}
+        apus={projectApus}
         budgets={budgets}
         surveys={surveys}
         planoTakeoffs={planoTakeoffs}
         evidenceItems={evidenceData.evidenceItems}
         planos={evidenceData.planos}
+        catalogConceptos={catalogConceptos}
       />
 
       {selectedStage === 'evidencia' ? (
@@ -110,6 +124,16 @@ export function ProjectWorkspace({
           onOpenTakeoff={() => onNavigateToPlano?.({ kind: 'plano-takeoff-vector', returnToWorkspace: true })}
           onUseEvidence={onNavigateToLevantamiento}
           onUseModel3d={onNavigateToVault}
+        />
+      ) : selectedStage === 'costos' ? (
+        <CostStage
+          project={project}
+          user={user}
+          conceptos={catalogConceptos}
+          apus={projectApus}
+          onCreateApu={() => onNavigateToApu?.()}
+          onOpenApu={() => onNavigateToApu?.()}
+          onOpenBudget={onNavigateToBudget}
         />
       ) : (
         <ProjectStagePlaceholder

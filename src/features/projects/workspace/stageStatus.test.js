@@ -44,13 +44,13 @@ test('computeStageProgress: evidencia prioriza colecciones reales (surveys, evid
   assert.equal(computeStageProgress('evidencia', { project: { id: 'P1', evidenceCount: 3 }, surveys: [], evidenceItems: [], planos: [] }), 'pendiente');
 });
 
-test('computeStageProgress: costos pasa a completado si existen APUs o presupuestos del proyecto', () => {
+test('computeStageProgress: costos depende de conceptos cuantificados y P.U. canónico', () => {
   const project = { id: 'P1' };
-  const apus = [{ projectId: 'P1', concept: 'Concreto f\'c=250' }];
-  assert.equal(computeStageProgress('costos', { project, apus }), 'completado');
-
-  const budgets = [{ projectId: 'P1', total: 50000 }];
-  assert.equal(computeStageProgress('costos', { project, apus: [], budgets }), 'completado');
+  const apus = [{ projectId: 'P1', id: 'A1', calculated: { pu: 10 } }];
+  const conceptos = [{ projectId: 'P1', id: 'C1', qty: 26, apuId: 'A1' }];
+  assert.equal(computeStageProgress('costos', { project, apus, catalogConceptos: conceptos }), 'completado');
+  assert.equal(computeStageProgress('costos', { project, apus, catalogConceptos: [{ ...conceptos[0], apuId: null }] }), 'atencion');
+  assert.equal(computeStageProgress('costos', { project, apus, budgets: [{ projectId: 'P1' }], catalogConceptos: [] }), 'pendiente');
 });
 
 test('computeStageProgress: revision pasa a atencion si existen APUs con riesgo Critico o Alto', () => {

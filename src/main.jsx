@@ -32,6 +32,13 @@ import { uid } from './utils/id.js';
 import { getDeviceId, readLocal, writeLocal } from './utils/localStorage.js';
 import { setActiveUid } from './utils/scopedStorage.js';
 import { useLocalState } from './hooks/useLocalState.js';
+import {
+  clearWorkspaceNavigation,
+  normalizeWorkspaceStage,
+  readWorkspaceNavigation,
+  resolveWorkspaceNavigation,
+  writeWorkspaceNavigation
+} from './features/projects/workspace/workspaceNavigationState.js';
 import { useAuthoritativeProjects } from './hooks/useAuthoritativeProjects.js';
 import { useAuthoritativeApus } from './hooks/useAuthoritativeApus.js';
 import { authHeaders, apiPost, readJsonSafe, httpErrorMessage, apiGetSafe, aiServerUrl } from './services/apiClient.js';
@@ -345,6 +352,8 @@ function App(){
   const { t: tr } = useI18n();
   const [screen, setScreen] = useState('landing');
   const [module, setModule] = useState('inicio');
+  const [selectedProjectStage, setSelectedProjectStage] = useState('evidencia');
+  const workspaceNavigationRestoreKey = useRef(null);
   // Enlace de verificacion de correo (?mode=verifyEmail&oobCode=...), ver
   // src/features/auth/VerifyEmailScreen.jsx y emailActionCodeSettings en
   // src/firebase.js. Se lee UNA sola vez al montar (useState lazy init) para
@@ -477,6 +486,32 @@ function App(){
       setActiveProjectId(projects[0].id);
     }
   }, [projects, activeProjectId]);
+  const organizationId = orgSession?.organization?.id || null;
+  useEffect(() => {
+    if (!hasValidSession(user) || !user?.uid || !projects.length) return;
+    const restoreKey = `${user.uid}:${organizationId || 'personal'}`;
+    if (workspaceNavigationRestoreKey.current === restoreKey) return;
+    workspaceNavigationRestoreKey.current = restoreKey;
+
+    const saved = readWorkspaceNavigation(window.sessionStorage, user.uid, organizationId);
+    const resolved = resolveWorkspaceNavigation(saved, projects);
+    if (resolved.restore) {
+      setActiveProjectId(resolved.activeProjectId);
+      setSelectedProjectStage(resolved.selectedProjectStage);
+      setModule(resolved.module);
+      return;
+    }
+    setSelectedProjectStage('evidencia');
+    if (resolved.module === 'cartera') setModule('cartera');
+  }, [user, organizationId, projects, setActiveProjectId]);
+  useEffect(() => {
+    if (!hasValidSession(user) || !user?.uid || module !== 'project-workspace' || !activeProjectId) return;
+    writeWorkspaceNavigation(window.sessionStorage, user.uid, organizationId, {
+      module,
+      activeProjectId,
+      selectedProjectStage
+    });
+  }, [user, organizationId, module, activeProjectId, selectedProjectStage]);
   // "Ver en plano" (Fase D.1, trazabilidad Presupuesto -> Plano): destino de
   // navegacion en memoria, nunca persistido -- PresupuestoModule/CatalogoModule
   // lo escriben al hacer click, VisualAI/PlanoTakeoffWorkspace lo consumen
@@ -923,6 +958,8 @@ function App(){
   };
   const logout = async () => {
     try { if(firebaseReady) await signOut(auth); } catch {}
+    clearWorkspaceNavigation(window.sessionStorage, user?.uid, organizationId);
+    workspaceNavigationRestoreKey.current = null;
     localStorage.removeItem('zoemec-user');
     setActiveUid(null);
     setUser(null);
@@ -976,7 +1013,7 @@ function App(){
     {module === 'presupuestos' && <PresupuestoModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} setModule={setModule} onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }} />}
     {module === 'control-presupuestal' && <ControlPresupuestalModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} />}
     {module === 'vault' && <ProjectVaultModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} setModule={setModule} onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }} />}
-    {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={(pid)=>{ setRawApus(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgets(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawCatalog(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgetItems(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawSurveys(l=>l.filter(x=>(x?.projectId??null)!==pid)); }} openCreateProject={createProjectTrigger} onHandledCreateProject={()=>setCreateProjectTrigger(false)} apus={apus} budgets={budgets} onOpenWorkspace={(pid)=>{ setActiveProjectId(pid); setModule('project-workspace'); }} />}
+    {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={(pid)=>{ setRawApus(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgets(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawCatalog(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgetItems(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawSurveys(l=>l.filter(x=>(x?.projectId??null)!==pid)); }} openCreateProject={createProjectTrigger} onHandledCreateProject={()=>setCreateProjectTrigger(false)} apus={apus} budgets={budgets} onOpenWorkspace={(pid)=>{ setActiveProjectId(pid); setSelectedProjectStage('evidencia'); setModule('project-workspace'); }} />}
     {module === 'project-workspace' && <ProjectWorkspace
       projectId={activeProjectId}
       projects={projects}
@@ -989,6 +1026,10 @@ function App(){
       onNavigateToLevantamiento={()=>setModule('levantamiento')}
       onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }}
       onNavigateToVault={()=>setModule('vault')}
+      onNavigateToApu={()=>setModule('apu')}
+      onNavigateToBudget={()=>setModule('presupuestos')}
+      initialStage={normalizeWorkspaceStage(selectedProjectStage)}
+      onStageChange={setSelectedProjectStage}
     />}
     {module === 'biblioteca' && <Library user={user} catalog={catalog} setCatalog={setCatalog} setModule={setModule} />}
     {module === 'tecnico' && <TechnicalOffice company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} needsProject={needsProject} onCreateProject={()=>setModule('cartera')} />}

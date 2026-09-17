@@ -904,6 +904,8 @@ progress::-moz-progress-bar{background:var(--teal)}
 .data-table input:hover{border-color:var(--line)}
 .data-table input:focus{background:var(--card);border-color:var(--teal)}
 .data-table td.imp{text-align:right;font-weight:600;color:var(--ink);white-space:nowrap;padding-right:8px}
+.cost-stage-table-wrap{overflow-x:auto}
+.cost-stage-table{min-width:980px}
 .apu-table th:nth-child(2),.apu-table th:nth-child(3),.apu-table th:nth-child(4),.apu-table th:nth-child(5){width:78px}
 .apu-table td.del{width:30px;text-align:center}
 .row-del{background:transparent;color:var(--muted);box-shadow:none;padding:3px 7px;font-size:.85rem;border-radius:7px}

@@ -78,7 +78,7 @@ export function assertCacheKeySafe(fingerprintInput = {}){
    projects.ubicacion) para no romper nada que ya lo use; country/state/city
    es la nueva dimension estructurada que realmente diferencia el cache por
    geografia. */
-export async function buildQueryFingerprint({ normalizedDescription = '', technicalSpecification = '', unit = '', region = '', country = '', state = '', city = '', currency = 'MXN', tenantScope = null } = {}){
+export async function buildQueryFingerprint({ normalizedDescription = '', technicalSpecification = '', unit = '', region = '', country = '', state = '', city = '', zone = '', currency = 'MXN', tenantScope = null } = {}){
   const canonical = {
     d: normalizeForFingerprint(normalizedDescription),
     s: normalizeForFingerprint(technicalSpecification),
@@ -87,6 +87,10 @@ export async function buildQueryFingerprint({ normalizedDescription = '', techni
     country: normalizeForFingerprint(country),
     state: normalizeForFingerprint(state),
     city: normalizeForFingerprint(city),
+    // zone (Región/Zona, ej. "Zona Metropolitana"): NUEVO nivel administrativo,
+    // mismo criterio aditivo que country/state/city arriba -- distinto
+    // insumo en distinta zona no debe compartir precio de cache.
+    zone: normalizeForFingerprint(zone),
     c: normalizeForFingerprint(currency),
     // organizationId SOLO participa si el llamador declaro tenantScope --
     // ausente (undefined) para el 99% de los casos (evidencia de mercado

@@ -79,19 +79,19 @@ const item = { code: 'CON-001', concept: 'Muro de block', unit: 'm2', qty: 10 };
 
 test('1. Generacion individual guarda ubicacionEstructurada y ubicacion (texto legible)', () => {
   const v2 = runIndividualFlow(PROJECT_MTY);
-  assert.deepEqual(v2.ubicacionEstructurada, { country: 'MX', state: 'Nuevo León', city: 'Monterrey' });
+  assert.deepEqual(v2.ubicacionEstructurada, { country: 'MX', state: 'Nuevo León', city: 'Monterrey', region: null });
   assert.equal(v2.ubicacion, 'Monterrey, Nuevo León, México');
 });
 
 test('2. Batch #1 (buildBatchAPUs) guarda ubicacionEstructurada y ubicacion', () => {
   const v2 = runBatchFlow1_buildBatchAPUs(PROJECT_MTY, item, 0);
-  assert.deepEqual(v2.ubicacionEstructurada, { country: 'MX', state: 'Nuevo León', city: 'Monterrey' });
+  assert.deepEqual(v2.ubicacionEstructurada, { country: 'MX', state: 'Nuevo León', city: 'Monterrey', region: null });
   assert.equal(v2.ubicacion, 'Monterrey, Nuevo León, México');
 });
 
 test('3. Batch #2 (runQueueJob) guarda ubicacionEstructurada y ubicacion', () => {
   const v2 = runBatchFlow2_runQueueJob(PROJECT_MTY, item, 0);
-  assert.deepEqual(v2.ubicacionEstructurada, { country: 'MX', state: 'Nuevo León', city: 'Monterrey' });
+  assert.deepEqual(v2.ubicacionEstructurada, { country: 'MX', state: 'Nuevo León', city: 'Monterrey', region: null });
   assert.equal(v2.ubicacion, 'Monterrey, Nuevo León, México');
 });
 
@@ -142,7 +142,7 @@ test('10. Proyecto legacy con location=null (solo texto libre `ubicacion`) sigue
   const batch1 = runBatchFlow1_buildBatchAPUs(PROJECT_LEGACY, item, 0);
   const batch2 = runBatchFlow2_runQueueJob(PROJECT_LEGACY, item, 0);
   [individual, batch1, batch2].forEach(v2 => {
-    assert.deepEqual(v2.ubicacionEstructurada, { country: null, state: null, city: null });
+    assert.deepEqual(v2.ubicacionEstructurada, { country: null, state: null, city: null, region: null });
     assert.equal(v2.ubicacion, 'Torreón, Coahuila (texto libre antiguo, sin estructurar)');
   });
 });
@@ -153,7 +153,18 @@ test('10b. Sin proyecto activo en absoluto (null): ningun flujo lanza, todo qued
     assert.doesNotThrow(() => runBatchFlow1_buildBatchAPUs(project, item, 0));
     assert.doesNotThrow(() => runBatchFlow2_runQueueJob(project, item, 0));
     const individual = runIndividualFlow(project);
-    assert.deepEqual(individual.ubicacionEstructurada, { country: null, state: null, city: null });
+    assert.deepEqual(individual.ubicacionEstructurada, { country: null, state: null, city: null, region: null });
     assert.equal(individual.ubicacion, '');
+  });
+});
+
+test('11. Proyecto con region/zona (ej. Zona Metropolitana) la propaga en los tres flujos', () => {
+  const projectWithRegion = { locationCountry: 'MX', locationState: 'Estado de México', locationRegion: 'Zona Metropolitana', locationCity: 'Tecámac' };
+  const individual = runIndividualFlow(projectWithRegion);
+  const batch1 = runBatchFlow1_buildBatchAPUs(projectWithRegion, item, 0);
+  const batch2 = runBatchFlow2_runQueueJob(projectWithRegion, item, 0);
+  [individual, batch1, batch2].forEach(v2 => {
+    assert.deepEqual(v2.ubicacionEstructurada, { country: 'MX', state: 'Estado de México', city: 'Tecámac', region: 'Zona Metropolitana' });
+    assert.equal(v2.ubicacion, 'Tecámac, Zona Metropolitana, Estado de México, México');
   });
 });

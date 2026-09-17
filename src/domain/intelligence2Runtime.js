@@ -76,13 +76,13 @@ export function resetSharedPriceCache(){ sharedCache = null; }
 // tienen prioridad si algun dia un recurso trae su propia ubicacion, pero
 // hoy siempre coinciden con los del proyecto (un solo nivel de ubicacion
 // por corrida, no por recurso).
-export function createProductionSearchFn({ location = '', country = '', state = '', city = '', dateBase = '' } = {}){
-  return async ({ description, unit, kind, region, country: rowCountry, state: rowState, city: rowCity, dateBase: rowDateBase, technicalSpecification, tenantScope }) => {
+export function createProductionSearchFn({ location = '', country = '', state = '', city = '', zone = '', dateBase = '' } = {}){
+  return async ({ description, unit, kind, region, country: rowCountry, state: rowState, city: rowCity, zone: rowZone, dateBase: rowDateBase, technicalSpecification, tenantScope }) => {
     return apiPost('/api/price-intelligence', {
       description, unit, kind, location: region || location, dateBase: rowDateBase || dateBase,
       categoriaLaboral: kind === 'labor' ? description : '',
       technicalSpecification: technicalSpecification || '', region: region || location,
-      country: rowCountry || country, state: rowState || state, city: rowCity || city,
+      country: rowCountry || country, state: rowState || state, city: rowCity || city, zone: rowZone || zone,
       tenantScope: tenantScope || null
     });
   };
@@ -92,7 +92,7 @@ export function createProductionSearchFn({ location = '', country = '', state = 
    enrichApuWithIntelligence2 (individual o batch) -- cache compartido de
    sesion + budget/telemetry/inFlightRegistry frescos para esa corrida. */
 export function createIntelligence2RunContext({
-  maxPriceSearches = INTELLIGENCE2_CONFIG.maxPriceSearchesPerBatch, location = '', country = '', state = '', city = '', dateBase = '',
+  maxPriceSearches = INTELLIGENCE2_CONFIG.maxPriceSearchesPerBatch, location = '', country = '', state = '', city = '', zone = '', dateBase = '',
   resourceTypes = INTELLIGENCE2_CONFIG.priceSearchResourceTypes
 } = {}){
   return {
@@ -100,13 +100,17 @@ export function createIntelligence2RunContext({
     budget: createPriceSearchBudget({ maxSearches: maxPriceSearches }),
     telemetry: createPriceTelemetry(),
     inFlightRegistry: createInFlightRegistry(),
-    searchFn: createProductionSearchFn({ location, country, state, city, dateBase }),
+    searchFn: createProductionSearchFn({ location, country, state, city, zone, dateBase }),
     resourceTypes,
     // Fase 2: se reenvia tal cual a enrichApuWithIntelligence2 (main.jsx hace
     // `enrichApuWithIntelligence2({..., ...runContext})`) -- ahi decide el
     // fingerprint de cache por recurso Y el snapshot que se congela en el
     // APU (apuSchema.js#ubicacionEstructurada), nunca un enlace vivo al
-    // proyecto.
-    location: { country, state, city }
+    // proyecto. `region` (Región/Zona, Contexto geografico del APU) viaja
+    // aqui mismo -- enrichApuWithIntelligence2 lo reenvia a cada recurso
+    // como `zone` (ver materialPriceIntelligence2.js), nunca como un nivel
+    // nuevo de COBERTURA de precios (eso seguiria siendo ciudad/estado/
+    // nacional, lo unico que una fuente real puede distinguir).
+    location: { country, state, city, region: zone }
   };
 }

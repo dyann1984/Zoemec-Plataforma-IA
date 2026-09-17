@@ -36,6 +36,43 @@ export function listCountries() {
   return COUNTRIES;
 }
 
+// Nombre del nivel administrativo bajo el pais, adaptado por pais cuando se
+// conoce (regla explicita del brief de Contexto geografico del APU: "no
+// hardcodees exclusivamente Estado de Mexico"). Deliberadamente una tabla
+// chica y explicita, nunca una heuristica adivinada -- un pais ausente de
+// esta tabla cae al generico "Estado / Provincia / Departamento", que sigue
+// siendo honesto (no afirma un nombre administrativo que no se verifico).
+const ADMIN_DIVISION_LABEL_BY_COUNTRY = Object.freeze({
+  es: { [MEXICO_CODE]: 'Estado' },
+  en: { [MEXICO_CODE]: 'State' },
+});
+const DEFAULT_ADMIN_DIVISION_LABEL = Object.freeze({
+  es: 'Estado / Provincia / Departamento',
+  en: 'State / Province / Department',
+});
+
+// `locale` es opcional (default 'es', compatibilidad hacia atras) -- esta
+// tabla es deliberadamente chica y explicita en las dos rondas de texto que
+// ya soporta el resto de la plataforma (ES/EN, ver src/i18n/translations.js),
+// nunca una traduccion automatica.
+export function adminDivisionLabel(countryCode, locale = 'es') {
+  const lang = locale === 'en' ? 'en' : 'es';
+  return ADMIN_DIVISION_LABEL_BY_COUNTRY[lang][countryCode] || DEFAULT_ADMIN_DIVISION_LABEL[lang];
+}
+
+// Monedas soportadas hoy por el resto de la plataforma (formato de dinero,
+// prompt de busqueda de precios) -- lista chica y explicita a proposito:
+// agregar una moneda aqui sin que el resto de la plataforma la soporte de
+// verdad (Intl.NumberFormat, prompt de Price Intelligence) seria decorativo.
+export const CURRENCIES = Object.freeze([
+  { code: 'MXN', name: 'Peso mexicano' },
+  { code: 'USD', name: 'Dólar estadounidense' },
+]);
+
+export function listCurrencies() {
+  return CURRENCIES;
+}
+
 export function findCountry(code) {
   return COUNTRIES.find(c => c.code === code) || null;
 }
@@ -54,11 +91,15 @@ function clean(value) {
   return v || null;
 }
 
-// Texto legible para UI/exports/prompt: "Ciudad, Estado, Pais" (omite lo
-// que falte, nunca deja comas huerfanas).
-export function formatLocationDisplay({ country, state, city } = {}) {
+// Texto legible para UI/exports/prompt: "Ciudad, Region/Zona, Estado, Pais"
+// (omite lo que falte, nunca deja comas huerfanas). `region` es el nivel
+// OPCIONAL entre Ciudad y Estado (ej. "Zona Metropolitana") -- ver
+// ADR en el bloque de abajo (buildProjectLocationSnapshot) sobre por que
+// nunca se usa como un nivel nuevo de COBERTURA DE PRECIOS, solo como
+// contexto de busqueda/display.
+export function formatLocationDisplay({ country, state, city, region } = {}) {
   const countryName = country ? (findCountry(country)?.name || clean(country)) : null;
-  const parts = [clean(city), clean(state), countryName].filter(Boolean);
+  const parts = [clean(city), clean(region), clean(state), countryName].filter(Boolean);
   return parts.join(', ');
 }
 
@@ -74,16 +115,17 @@ function normalizeKeyPart(value) {
 // sin acentos, sin espacios de sobra. Nunca lanza con datos ausentes -- un
 // campo faltante simplemente queda '' (mismo criterio que el resto del
 // fingerprint en priceSearchCache.js, que nunca exige todos los campos).
-export function buildLocationFingerprintKey({ country, state, city } = {}) {
+export function buildLocationFingerprintKey({ country, state, city, region } = {}) {
   return {
     country: normalizeKeyPart(country),
     state: normalizeKeyPart(state),
     city: normalizeKeyPart(city),
+    region: normalizeKeyPart(region),
   };
 }
 
-export function hasAnyLocation({ country, state, city } = {}) {
-  return Boolean(clean(country) || clean(state) || clean(city));
+export function hasAnyLocation({ country, state, city, region } = {}) {
+  return Boolean(clean(country) || clean(state) || clean(city) || clean(region));
 }
 
 // Snapshot de ubicacion para un APU en el momento en que se genera -- NUNCA
@@ -102,6 +144,7 @@ export function buildProjectLocationSnapshot(project) {
     country: project?.locationCountry || null,
     state: project?.locationState || null,
     city: project?.locationCity || null,
+    region: project?.locationRegion || null,
   };
   const ubicacion = formatLocationDisplay(ubicacionEstructurada) || project?.ubicacion || '';
   return { ubicacion, ubicacionEstructurada };

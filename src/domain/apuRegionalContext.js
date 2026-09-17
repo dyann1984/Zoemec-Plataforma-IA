@@ -10,6 +10,46 @@ export const REGIONAL_COVERAGE_LEVEL = Object.freeze({
   CIUDAD: 'ciudad', ESTADO: 'estado', NACIONAL: 'nacional', SIN_DATO: 'sin_dato'
 });
 
+// Texto honesto para el nivel de referencia REAL usado (nunca "Región" como
+// nivel de cobertura de precios propio: ninguna fuente real de precios de la
+// plataforma distingue "región" de "estado" -- inventar esa distinción
+// violaría la regla explícita de nunca fabricar datos. `region` (Zona
+// Metropolitana, etc.) SÍ es un dato real que se usa para buscar/mostrar la
+// ubicación del APU, solo no como un nivel de cobertura de precios nuevo.
+export const REFERENCE_LEVEL_LABEL = Object.freeze({
+  [REGIONAL_COVERAGE_LEVEL.CIUDAD]: 'Ciudad',
+  [REGIONAL_COVERAGE_LEVEL.ESTADO]: 'Estado',
+  [REGIONAL_COVERAGE_LEVEL.NACIONAL]: 'Nacional',
+  [REGIONAL_COVERAGE_LEVEL.SIN_DATO]: 'Sin referencia disponible'
+});
+
+// Frase completa lista para UI (ver bloque "Ubicación y referencia de
+// costos" del APU): distingue explícitamente cuando la referencia real cayó
+// a un nivel menos específico que el que el usuario eligió, en vez de dejar
+// que el usuario asuma que "Tecámac" trajo precios de Tecámac.
+export function describeReferenceLevel(level) {
+  return REFERENCE_LEVEL_LABEL[level] || REFERENCE_LEVEL_LABEL[REGIONAL_COVERAGE_LEVEL.SIN_DATO];
+}
+
+// Oración completa para el bloque "Ubicación y referencia de costos" --
+// SIEMPRE a partir de summarizeRegionalCoverage (nunca decide un nivel por
+// su cuenta). Cuando el nivel real es menos específico que la ciudad
+// elegida, lo dice explícitamente (ej. "No existe referencia municipal
+// suficiente. Se está utilizando referencia estatal.") en vez de solo
+// mostrar la palabra "Estado" sin contexto -- regla explícita del brief.
+export function describeReferenceSentence(summary){
+  if(!summary?.hasLocation) return 'Este APU todavía no tiene una ubicación definida.';
+  if(!summary.primaryLevel) return 'Ningún insumo de este APU ha buscado precio regional todavía.';
+  const { city, state } = summary.location || {};
+  if(summary.primaryLevel === REGIONAL_COVERAGE_LEVEL.CIUDAD){
+    return `Referencia de precios utilizada: ${city || 'ciudad'}.`;
+  }
+  if(summary.primaryLevel === REGIONAL_COVERAGE_LEVEL.ESTADO){
+    return `No existe referencia municipal suficiente. Se está utilizando referencia estatal${state ? ` (${state})` : ''}.`;
+  }
+  return 'No existe referencia estatal ni municipal suficiente. Se está utilizando referencia nacional.';
+}
+
 const REGIONAL_RESOURCE_KINDS = ['materials', 'labor', 'equipment', 'consumables', 'seguridad'];
 const CONFIDENCE_RANK = { ALTA: 3, MEDIA: 2, BAJA: 1 };
 
@@ -20,12 +60,12 @@ const CONFIDENCE_RANK = { ALTA: 3, MEDIA: 2, BAJA: 1 };
    real desde Fase 2). */
 export function getApuLocation(apu){
   const loc = apu?.ubicacionEstructurada || {};
-  return { country: loc.country || null, state: loc.state || null, city: loc.city || null };
+  return { country: loc.country || null, state: loc.state || null, city: loc.city || null, region: loc.region || null };
 }
 
 export function hasApuLocation(apu){
   const loc = getApuLocation(apu);
-  return Boolean(loc.country || loc.state || loc.city);
+  return Boolean(loc.country || loc.state || loc.city || loc.region);
 }
 
 /* Recolecta, por cada renglon con evidencia de precio (Intelligence2 ya

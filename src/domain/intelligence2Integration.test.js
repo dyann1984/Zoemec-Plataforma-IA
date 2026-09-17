@@ -369,6 +369,26 @@ test('Fase 2 -- location se reenvia a cada llamada de searchFn (country/state/ci
   });
 });
 
+test('Contexto geografico del APU -- location.region se reenvia a searchFn como `zone`', async () => {
+  const ctx = freshContext();
+  const received = [];
+  const searchFn = async (args) => { received.push(args); return altoResultConUbicacion(); };
+  const apu = aiApuFixture();
+
+  await enrichApuWithIntelligence2({
+    aiApu: apu, userInput: {}, concept: apu.concept, ...ctx, searchFn,
+    location: { country: 'MX', state: 'Estado de México', region: 'Zona Metropolitana', city: 'Tecámac' }
+  });
+
+  assert.ok(received.length > 0);
+  received.forEach(args => {
+    assert.equal(args.country, 'MX');
+    assert.equal(args.state, 'Estado de México');
+    assert.equal(args.city, 'Tecámac');
+    assert.equal(args.zone, 'Zona Metropolitana');
+  });
+});
+
 test('Fase 2 -- sin location (comportamiento previo a esta fase): searchFn recibe country/state/city vacios, nunca undefined que rompa un llamador estricto', async () => {
   const ctx = freshContext();
   const received = [];

@@ -188,6 +188,30 @@ test('Fase 2 -- assertCacheKeySafe sigue aceptando country/state/city (no estan 
   assert.doesNotThrow(() => assertCacheKeySafe({ ...FINGERPRINT_CEMENTO, country: 'MX', state: 'Nuevo León', city: 'Monterrey' }));
 });
 
+/* ======================================================================
+   Contexto geografico del APU -- `zone` (Región/Zona, ej. "Zona
+   Metropolitana") como dimension NUEVA y adicional del fingerprint, mismo
+   criterio que country/state/city arriba.
+   ====================================================================== */
+
+test('zone distinta produce un fingerprint distinto, aunque country/state/city sean iguales', async () => {
+  const base = { normalizedDescription: 'Cemento CPC 30R 50 kg', unit: 'saco', country: 'MX', state: 'Estado de México', city: 'Tecámac' };
+  const conZona = await buildQueryFingerprint({ ...base, zone: 'Zona Metropolitana' });
+  const sinZona = await buildQueryFingerprint(base);
+  assert.notEqual(conZona, sinZona);
+});
+
+test('zone se normaliza igual que country/state/city (mayusculas/acentos no distinguen)', async () => {
+  const base = { normalizedDescription: 'Cemento CPC 30R 50 kg', unit: 'saco' };
+  const a = await buildQueryFingerprint({ ...base, zone: 'Zona Metropolitana' });
+  const b = await buildQueryFingerprint({ ...base, zone: 'zona metropolitana' });
+  assert.equal(a, b);
+});
+
+test('assertCacheKeySafe acepta zone (no esta en la lista prohibida)', () => {
+  assert.doesNotThrow(() => assertCacheKeySafe({ ...FINGERPRINT_CEMENTO, zone: 'Zona Metropolitana' }));
+});
+
 test('invalidate() borra una entrada especifica sin afectar otras', async () => {
   const cache = createPriceSearchCache({ now: () => 1000 });
   await cache.save(FINGERPRINT_CEMENTO, { priceStatus: 'VERIFIED_MARKET' });

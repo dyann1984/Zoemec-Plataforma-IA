@@ -1,4 +1,5 @@
 import { isQuantifiable } from '../../../domain/planoReview.js';
+import { computeReviewStageModel } from './reviewStageModel.js';
 /* Definición de etapas del ciclo de vida de obra en ZOEMEC y lógica determinista
    de estados de progreso reales (Completado, Pendiente, Atención).
    Regla fundamental: NUNCA inventar progreso. Si no hay datos suficientes, Pendiente.
@@ -57,7 +58,7 @@ export const WORKSPACE_STAGES = [
  * Estados posibles: 'completado' | 'atencion' | 'pendiente'
  * IMPORTANTE: No depende de la navegación (selectedStage).
  */
-export function computeStageProgress(stageKey, { project, apus = [], budgets = [], surveys, evidenceItems, planos, planoTakeoffs = [], catalogConceptos = [] }) {
+export function computeStageProgress(stageKey, { project, apus = [], budgets = [], surveys, evidenceItems, planos, planoTakeoffs = [], catalogConceptos = [], reviewModel = null }) {
   const projectId = project?.id;
   if (!projectId) return 'pendiente';
 
@@ -131,25 +132,12 @@ export function computeStageProgress(stageKey, { project, apus = [], budgets = [
     }
 
     case 'revision': {
-      if (projectApus.length === 0) {
-        return 'pendiente';
-      }
-      const hasRisk = projectApus.some(a => {
-        const r = a?.riskLevel || a?.risk?.level;
-        return r === 'Critico' || r === 'Crítico' || r === 'Alto';
-      });
-      if (hasRisk) {
-        return 'atencion';
-      }
-      const allVerified = projectApus.every(a => {
-        const c = a?.confidence;
-        const score = typeof c === 'number' ? c : Number(c?.score) || 0;
-        return score >= 70;
-      });
-      if (allVerified && projectApus.length > 0) {
-        return 'completado';
-      }
-      return 'pendiente';
+      if (reviewModel?.projectId === projectId) return reviewModel.status;
+      return computeReviewStageModel({
+        projectId,
+        apus: projectApus,
+        catalogConceptos
+      }).status;
     }
 
     case 'entrega': {

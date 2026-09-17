@@ -6,6 +6,7 @@ import { ProjectStagePlaceholder } from './ProjectStagePlaceholder.jsx';
 import { EvidenceStage } from './EvidenceStage.jsx';
 import { QuantificationStage } from './QuantificationStage.jsx';
 import { CostStage } from './CostStage.jsx';
+import { ReviewStage } from './ReviewStage.jsx';
 import { fetchProjectPlanoTakeoffs } from './planoTakeoffQuery.js';
 import { useCatalogConceptos } from '../../catalogo/catalogConceptosCloud.js';
 import { useProjectApus } from '../../catalogo/projectApusCloud.js';
@@ -36,6 +37,7 @@ export function ProjectWorkspace({
     planos: propPlanos
   });
   const [planoTakeoffs, setPlanoTakeoffs] = useState([]);
+  const [reviewModel, setReviewModel] = useState(null);
   const [takeoffsError, setTakeoffsError] = useState(null);
   const { conceptos: catalogConceptos } = useCatalogConceptos(user, projectId);
   const { apus: projectApus } = useProjectApus(user, projectId);
@@ -59,6 +61,10 @@ export function ProjectWorkspace({
   useEffect(() => {
     refreshPlanoTakeoffs();
   }, [refreshPlanoTakeoffs]);
+
+  useEffect(() => {
+    setReviewModel(null);
+  }, [projectId]);
 
   if (!project) {
     return (
@@ -103,6 +109,7 @@ export function ProjectWorkspace({
         evidenceItems={evidenceData.evidenceItems}
         planos={evidenceData.planos}
         catalogConceptos={catalogConceptos}
+        reviewModel={reviewModel}
       />
 
       {selectedStage === 'evidencia' ? (
@@ -134,6 +141,15 @@ export function ProjectWorkspace({
           onCreateApu={() => onNavigateToApu?.()}
           onOpenApu={() => onNavigateToApu?.()}
           onOpenBudget={onNavigateToBudget}
+        />
+      ) : selectedStage === 'revision' ? (
+        <ReviewStage
+          project={project}
+          user={user}
+          apus={projectApus}
+          catalogConceptos={catalogConceptos}
+          onModelChange={setReviewModel}
+          onOpenApu={() => onNavigateToApu?.()}
         />
       ) : (
         <ProjectStagePlaceholder

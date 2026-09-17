@@ -520,6 +520,7 @@ function App(){
   // `module`/setModule), asi que este es el unico canal para pasar "que
   // abrir" de un modulo a otro sin acoplar los componentes entre si.
   const [planoNavigationTarget, setPlanoNavigationTarget] = useState(null);
+  const [pendingOpenApuId, setPendingOpenApuId] = useState(null);
   const [apus, setApus] = useProjectScoped(rawApus, setRawApus, activeProjectId);
   const [budgets, setBudgets] = useProjectScoped(rawBudgets, setRawBudgets, activeProjectId);
   const [catalog, setCatalog] = useProjectScoped(rawCatalog, setRawCatalog, activeProjectId);
@@ -1009,7 +1010,7 @@ function App(){
     {module === 'levantamiento' && <LevantamientoModule surveys={surveys} setSurveys={setSurveys} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} onSendToApu={()=>setModule('catalogo')} currentUserEmail={user?.email || null} organizationId={orgSession?.organization?.id || null} />}
     {module === 'catalogo' && <CatalogoModule user={user} organizationId={orgSession?.organization?.id || null} activeProjectId={activeProjectId} activeProject={activeProject} catalog={catalog} onNeedProject={()=>setModule('cartera')} setModule={setModule} onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }} />}
     {module === 'precios-regionales' && <RegionalPrices apus={apus} activeProject={activeProject} onConfigureLocation={()=>setModule('apu')} />}
-    {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} rawApus={rawApus} linkApuToProject={linkApuToProject} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} onConfigureLocation={()=>setModule('cartera')} setModule={setModule} organizationId={orgSession?.organization?.id || null} />}
+    {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} rawApus={rawApus} linkApuToProject={linkApuToProject} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} onConfigureLocation={()=>setModule('cartera')} setModule={setModule} organizationId={orgSession?.organization?.id || null} pendingOpenApuId={pendingOpenApuId} onPendingOpenApuIdConsumed={()=>setPendingOpenApuId(null)} />}
     {module === 'presupuestos' && <PresupuestoModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} setModule={setModule} onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }} />}
     {module === 'control-presupuestal' && <ControlPresupuestalModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} />}
     {module === 'vault' && <ProjectVaultModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} setModule={setModule} onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }} />}
@@ -1026,7 +1027,7 @@ function App(){
       onNavigateToLevantamiento={()=>setModule('levantamiento')}
       onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }}
       onNavigateToVault={()=>setModule('vault')}
-      onNavigateToApu={()=>setModule('apu')}
+      onNavigateToApu={(apu)=>{ setPendingOpenApuId(apu?.id || null); setModule('apu'); }}
       onNavigateToBudget={()=>setModule('presupuestos')}
       initialStage={normalizeWorkspaceStage(selectedProjectStage)}
       onStageChange={setSelectedProjectStage}
@@ -2098,7 +2099,7 @@ function ResourceCards({apu}){
   </div>;
 }
 
-function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog,projects,rawApus,linkApuToProject,activeProjectId,activeProject,onNeedProject,onConfigureLocation,setModule,organizationId=null}){
+function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog,projects,rawApus,linkApuToProject,activeProjectId,activeProject,onNeedProject,onConfigureLocation,setModule,organizationId=null,pendingOpenApuId=null,onPendingOpenApuIdConsumed}){
   const { t: tr } = useI18n();
   const { beginJob, completeJob, failJob, getUnseen, consumeJob } = useAiJobs();
   const requireProject=()=>{
@@ -3404,7 +3405,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       </div>}
     </div>}
 
-    <RevisionBandeja apus={apus} user={user} onUpdateApu={saved => { if(!requireProject()) return; setApus([saved, ...apus.filter(x => x.id !== saved.id)]); if(saved.id===professionalApu.id) setApuV2(saved); }} />
+    <RevisionBandeja apus={apus} user={user} onUpdateApu={saved => { if(!requireProject()) return; setApus([saved, ...apus.filter(x => x.id !== saved.id)]); if(saved.id===professionalApu.id) setApuV2(saved); }} initialOpenId={pendingOpenApuId} onInitialOpenIdConsumed={onPendingOpenApuIdConsumed} />
 
     {hasApuContent && <>
       {/* A. Encabezado ejecutivo */}

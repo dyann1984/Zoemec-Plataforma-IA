@@ -198,7 +198,7 @@ export function ProjectWorkspace({
           conceptos={catalogConceptos}
           apus={projectApus}
           onCreateApu={() => onNavigateToApu?.()}
-          onOpenApu={() => onNavigateToApu?.()}
+          onOpenApu={(apu) => onNavigateToApu?.(apu)}
           onOpenBudget={onNavigateToBudget}
         />
       ) : selectedStage === 'revision' ? (
@@ -208,7 +208,7 @@ export function ProjectWorkspace({
           apus={projectApus}
           catalogConceptos={catalogConceptos}
           onModelChange={setReviewModel}
-          onOpenApu={() => onNavigateToApu?.()}
+          onOpenApu={(apu) => onNavigateToApu?.(apu)}
         />
       ) : selectedStage === 'entrega' ? (
         <DeliveryStage

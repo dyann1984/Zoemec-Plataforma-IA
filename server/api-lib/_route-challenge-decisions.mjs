@@ -48,6 +48,7 @@
 import { requireAuth } from './_authGuard.mjs';
 import { getAdminDb } from './_firebaseAdmin.mjs';
 import { appendAudit } from './_decisionAudit.mjs';
+import { loadOrgContext, assertProjectAccess } from './_orgGuard.mjs';
 import { runApuChallenge, challengeSeverity } from '../../src/domain/apuChallenge.js';
 import { createMemoryProposal, MEMORY_SCOPE, MEMORY_TYPE } from '../../src/domain/technicalMemory.js';
 
@@ -171,10 +172,24 @@ async function handleList(req, res){
   const { apuId, projectId } = req.query || {};
   if(!apuId && !projectId) throw httpError(400, 'Falta apuId o projectId para listar decisiones.');
   const db = getAdminDb();
-  let query = db.collection(COLLECTION);
-  query = apuId ? query.where('apuId', '==', String(apuId)) : query.where('projectId', '==', String(projectId));
+  const orgContext = await loadOrgContext(authz.uid);
+  if(apuId){
+    const apuSnap = await db.collection('apus').doc(String(apuId)).get();
+    if(!apuSnap.exists) throw httpError(403, 'No tienes acceso a este APU.');
+    const apu = apuSnap.data();
+    await assertProjectAccess(db, authz, orgContext, apu.projectId, { allowAdmin: true });
+    let query = db.collection(COLLECTION).where('apuId', '==', String(apuId));
+    const snap = await query.get();
+    res.status(200).json({ decisions: snap.docs.map(d => d.data()), requestedBy: authz.uid });
+    return;
+  }
+  await assertProjectAccess(db, authz, orgContext, projectId, { allowAdmin: true });
+  const apusSnap = await db.collection('apus').where('projectId', '==', String(projectId)).get();
+  const accessibleApuIds = new Set(apusSnap.docs.map(d => String(d.id)));
+  let query = db.collection(COLLECTION).where('projectId', '==', String(projectId));
   const snap = await query.get();
-  res.status(200).json({ decisions: snap.docs.map(d => d.data()), requestedBy: authz.uid });
+  const decisions = snap.docs.map(d => d.data()).filter(decision => accessibleApuIds.has(String(decision.apuId)));
+  res.status(200).json({ decisions, requestedBy: authz.uid });
 }
 
 /* RECORD (crear o actualizar la decision de un challenge especifico, regla
@@ -206,6 +221,16 @@ async function handleRecord(req, res){
   const sanitizedClientSnapshot = clientSnapshotInput ? sanitizeSnapshot(clientSnapshotInput) : null;
 
   const db = getAdminDb();
+  const orgContext = await loadOrgContext(authz.uid);
+  const existingApuSnap = await db.collection('apus').doc(String(apuId)).get();
+  if(!existingApuSnap.exists) throw httpError(403, 'No tienes acceso a este APU.');
+  const apu = existingApuSnap.data();
+  if(!apu.projectId) throw httpError(403, 'El APU no pertenece a un proyecto accesible.');
+  await assertProjectAccess(db, authz, orgContext, apu.projectId, { allowAdmin: true });
+  if(projectId !== undefined && String(projectId) !== String(apu.projectId)){
+    throw httpError(403, 'El APU no pertenece al proyecto indicado.');
+  }
+  const resolvedProjectId = String(apu.projectId);
   const docId = decisionDocId(apuId, challengeId);
   const docRef = db.collection(COLLECTION).doc(docId);
   const auditRef = db.collection(AUDIT_COLLECTION).doc();
@@ -227,7 +252,7 @@ async function handleRecord(req, res){
 
     const now = new Date().toISOString();
     const next = {
-      id: docId, apuId: String(apuId), projectId: (projectId !== undefined ? projectId : existing?.projectId) || null, challengeId: String(challengeId),
+      id: docId, apuId: String(apuId), projectId: resolvedProjectId, challengeId: String(challengeId),
       decision, reason: (reason !== undefined ? reason : existing?.reason) || null,
       // Dos snapshots separados (correccion #1/#4 -- nunca mezclados):
       clientSnapshot: finalClientSnapshot,

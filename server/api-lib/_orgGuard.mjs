@@ -98,4 +98,13 @@ export function canAccessOrgScopedDoc(doc, authz, orgContext){
   return Boolean(orgContext && doc.organizationId && doc.organizationId === orgContext.organizationId);
 }
 
+export async function assertProjectAccess(db, authz, orgContext, projectId, { allowAdmin = false } = {}){
+  if(!projectId) throw httpError(400, 'Falta projectId.');
+  const projectSnap = await db.collection('projects').doc(String(projectId)).get();
+  if(!projectSnap.exists || (!allowAdmin || authz.role !== 'admin') && !canAccessOrgScopedDoc(projectSnap.data(), authz, orgContext)){
+    throw httpError(403, 'No tienes acceso a este proyecto.');
+  }
+  return projectSnap.data();
+}
+
 export { httpError };

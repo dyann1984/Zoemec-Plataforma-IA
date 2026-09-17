@@ -13,7 +13,7 @@
 import { requireAuth } from './_authGuard.mjs';
 import { getAdminDb } from './_firebaseAdmin.mjs';
 import { appendAudit } from './_decisionAudit.mjs';
-import { loadOrgContext, assertOrgNotExpired, canAccessOrgScopedDoc } from './_orgGuard.mjs';
+import { loadOrgContext, assertOrgNotExpired, canAccessOrgScopedDoc, assertProjectAccess } from './_orgGuard.mjs';
 import { buildProjectLocationSnapshot, hasAnyLocation } from '../../src/domain/geography.js';
 import { makeEmptyCatalogConcepto, validateCatalogConcepto, isLegalStatusTransition, CATALOG_CONCEPTO_STATUS } from '../../src/domain/catalogConceptoSchema.js';
 import { normalizeCapitulo } from '../../src/domain/presupuestoCapitulos.js';
@@ -36,13 +36,6 @@ async function resolveConceptLocation(db, concepto, projectId){
   const { ubicacion, ubicacionEstructurada } = buildProjectLocationSnapshot(projectSnap.data());
   if(!hasAnyLocation(ubicacionEstructurada)) return concepto;
   return { ...concepto, ubicacionEstructurada, ubicacion: concepto?.ubicacion || ubicacion };
-}
-
-async function assertProjectAccess(db, authz, orgContext, projectId){
-  const projectSnap = await db.collection('projects').doc(String(projectId)).get();
-  if(!projectSnap.exists || !canAccessOrgScopedDoc(projectSnap.data(), authz, orgContext)){
-    throw httpError(403, 'No tienes acceso a este proyecto.');
-  }
 }
 
 async function handleList(req, res){

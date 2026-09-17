@@ -19,6 +19,7 @@ const AUTH_HOST = process.env.FIREBASE_AUTH_EMULATOR_HOST;
 if(!AUTH_HOST){
   throw new Error('test/challengeDecisionsApi.test.mjs requiere el emulador de Firebase Auth. Ejecuta con `npm run test:decisions`.');
 }
+const TEST_CONTEXTS = new Map();
 
 async function createUserAndGetIdToken({ email, password = 'Test1234!', role = 'user' }){
   const auth = getAdminAuth();
@@ -34,7 +35,10 @@ async function createUserAndGetIdToken({ email, password = 'Test1234!', role = '
   });
   const data = await res.json();
   if(!res.ok) throw new Error('No se pudo autenticar: ' + JSON.stringify(data));
-  return { uid: user.uid, email, idToken: data.idToken };
+  const projectId = `PROJECT-${user.uid}`;
+  await getAdminDb().collection('projects').doc(projectId).set({ id: projectId, ownerUid: user.uid, name: 'Proyecto de prueba' });
+  TEST_CONTEXTS.set(data.idToken, { uid: user.uid, projectId });
+  return { uid: user.uid, email, idToken: data.idToken, projectId };
 }
 
 function mockRes(){
@@ -45,7 +49,20 @@ function mockRes(){
 }
 function post(token, body){ return { method: 'POST', headers: token ? { authorization: `Bearer ${token}` } : {}, body }; }
 function get(token, query){ return { method: 'GET', headers: token ? { authorization: `Bearer ${token}` } : {}, query: query || {} }; }
-async function call(req){ const res = mockRes(); await handler(req, res); return res; }
+async function ensureDecisionFixture(req){
+  const token = req.headers?.authorization?.replace(/^Bearer\s+/i, '');
+  const context = TEST_CONTEXTS.get(token);
+  if(!context || req.method !== 'POST' || req.body?.action !== 'record' || !req.body?.apuId) return;
+  const db = getAdminDb();
+  const projectId = String(req.body.projectId || context.projectId);
+  const projectRef = db.collection('projects').doc(projectId);
+  const projectSnap = await projectRef.get();
+  if(!projectSnap.exists) await projectRef.set({ id: projectId, ownerUid: context.uid, name: 'Proyecto de prueba' });
+  const apuRef = db.collection('apus').doc(String(req.body.apuId));
+  const apuSnap = await apuRef.get();
+  if(!apuSnap.exists) await apuRef.set({ id: String(req.body.apuId), ownerUid: context.uid, projectId });
+}
+async function call(req){ await ensureDecisionFixture(req); const res = mockRes(); await handler(req, res); return res; }
 const uniq = (p) => `${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}@test.zoemec`;
 
 const sampleSnapshot = { category: 'rendimiento', currentValue: 6.36, baselineValue: 4.55, unitImpact: 59.02, projectImpact: 4721.65, baselineSource: 'Historico calibrado (Biblioteca ZOEMEC, matriz real)' };
@@ -73,7 +90,8 @@ describe('POST /api/challenge-decisions action=record', () => {
   it('CASO J: MAINTAIN persiste y se puede leer de vuelta', async () => {
     const { uid, idToken } = await createUserAndGetIdToken({ email: uniq('maintain') });
     const apuId = `APU-${Date.now()}`;
-    const res = await call(post(idToken, { action: 'record', apuId, projectId: 'P1', challengeId: 'yield:0', decision: 'MAINTAIN', clientSnapshot: sampleSnapshot }));
+    const projectId = `P1-${Date.now()}`;
+    const res = await call(post(idToken, { action: 'record', apuId, projectId, challengeId: 'yield:0', decision: 'MAINTAIN', clientSnapshot: sampleSnapshot }));
     assert.equal(res.statusCode, 200);
     assert.equal(res.body.decision.decision, 'MAINTAIN');
     assert.equal(res.body.decision.actorUid, uid);
@@ -143,6 +161,69 @@ describe('POST /api/challenge-decisions action=record', () => {
   it('decision generada sin token se rechaza con 401, nunca se guarda nada', async () => {
     const res = await call(post(null, { action: 'record', apuId: 'APU-X', challengeId: 'yield:0', decision: 'MAINTAIN' }));
     assert.equal(res.statusCode, 401);
+  });
+});
+
+describe('Autorizacion por proyecto y APU', () => {
+  it('sin autenticacion devuelve 401 tanto en lectura como en registro', async () => {
+    const read = await call(get(null, { projectId: 'PROJECT-NO-AUTH' }));
+    assert.equal(read.statusCode, 401);
+    const write = await call(post(null, { action: 'record', apuId: 'APU-NO-AUTH', projectId: 'PROJECT-NO-AUTH', challengeId: 'yield:0', decision: 'MAINTAIN' }));
+    assert.equal(write.statusCode, 401);
+  });
+
+  it('usuario A no puede leer ni registrar decisiones del proyecto/APU de usuario B', async () => {
+    const userA = await createUserAndGetIdToken({ email: uniq('access-a') });
+    const userB = await createUserAndGetIdToken({ email: uniq('access-b') });
+    const projectB = `PROJECT-B-${Date.now()}`;
+    const apuB = `APU-B-${Date.now()}`;
+    const db = getAdminDb();
+    await db.collection('projects').doc(projectB).set({ id: projectB, ownerUid: userB.uid, name: 'Proyecto B' });
+    await db.collection('apus').doc(apuB).set({ id: apuB, ownerUid: userB.uid, projectId: projectB });
+
+    const byProject = await call(get(userA.idToken, { projectId: projectB }));
+    assert.equal(byProject.statusCode, 403);
+    const byApu = await call(get(userA.idToken, { apuId: apuB }));
+    assert.equal(byApu.statusCode, 403);
+    const record = await call(post(userA.idToken, {
+      action: 'record', apuId: apuB, projectId: projectB,
+      challengeId: 'yield:0', decision: 'MAINTAIN'
+    }));
+    assert.equal(record.statusCode, 403);
+  });
+
+  it('un projectId arbitrario no puede reasignar un APU accesible a otro proyecto', async () => {
+    const user = await createUserAndGetIdToken({ email: uniq('project-mismatch') });
+    const otherProject = `PROJECT-OTHER-${Date.now()}`;
+    const apuId = `APU-${user.uid}`;
+    await getAdminDb().collection('projects').doc(otherProject).set({ id: otherProject, ownerUid: user.uid, name: 'Otro proyecto' });
+    await getAdminDb().collection('apus').doc(apuId).set({ id: apuId, ownerUid: user.uid, projectId: user.projectId });
+    const res = await call(post(user.idToken, {
+      action: 'record', apuId, projectId: otherProject,
+      challengeId: 'yield:0', decision: 'MAINTAIN'
+    }));
+    assert.equal(res.statusCode, 403);
+  });
+
+  it('un miembro activo de la misma organizacion puede acceder al proyecto compartido', async () => {
+    const owner = await createUserAndGetIdToken({ email: uniq('org-owner') });
+    const member = await createUserAndGetIdToken({ email: uniq('org-member') });
+    const db = getAdminDb();
+    const organizationId = `ORG-${Date.now()}`;
+    await db.collection('organizations').doc(organizationId).set({ id: organizationId, status: 'ACTIVE' });
+    await db.collection('organizations').doc(organizationId).collection('members').doc(owner.uid).set({ uid: owner.uid, status: 'ACTIVE', role: 'member' });
+    await db.collection('organizations').doc(organizationId).collection('members').doc(member.uid).set({ uid: member.uid, status: 'ACTIVE', role: 'member' });
+    await db.collection('users').doc(owner.uid).set({ organizationId }, { merge: true });
+    await db.collection('users').doc(member.uid).set({ organizationId }, { merge: true });
+    const projectId = `PROJECT-ORG-${Date.now()}`;
+    const apuId = `APU-ORG-${Date.now()}`;
+    await db.collection('projects').doc(projectId).set({ id: projectId, ownerUid: owner.uid, organizationId, name: 'Proyecto compartido' });
+    await db.collection('apus').doc(apuId).set({ id: apuId, ownerUid: owner.uid, organizationId, projectId });
+
+    const res = await call(post(member.idToken, {
+      action: 'record', apuId, projectId, challengeId: 'yield:0', decision: 'MAINTAIN'
+    }));
+    assert.equal(res.statusCode, 200);
   });
 });
 
@@ -441,14 +522,14 @@ describe('FASE 3 -- propuesta automatica de Memoria Tecnica desde una decision C
     assert.equal(memorySnap.exists, false);
   });
 
-  it('CORRECT verificado sin projectId nunca crea una propuesta de memoria (no hay a que proyecto atarla)', async () => {
+  it('CORRECT verificado sin projectId del cliente usa el proyecto autorizado del APU para la propuesta', async () => {
     const { idToken } = await createUserAndGetIdToken({ email: uniq('auto-memory-no-project') });
     const apuId = `APU-${Date.now()}`;
     const { apu, expectedFinding } = deviatedApuFixture();
     const res = await call(post(idToken, { action: 'record', apuId, challengeId: expectedFinding.id, decision: 'CORRECT', apuSnapshot: apu }));
     assert.equal(res.body.decision.verificationStatus, 'SERVER_VERIFIED');
     const memorySnap = await getAdminDb().collection('technicalMemory').doc(`AUTO-${res.body.decision.id}`).get();
-    assert.equal(memorySnap.exists, false);
+    assert.equal(memorySnap.exists, true);
   });
 
   it('un reintento de la MISMA llamada (2a fase del flujo CORRECT, sin apuSnapshot) nunca duplica la propuesta de memoria', async () => {

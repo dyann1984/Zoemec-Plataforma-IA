@@ -323,8 +323,13 @@ describe('Fase D end-to-end: PDF -> Cuantificacion -> Catalogo -> APU -> Presupu
     }
 
     // ---- 8. Multi-tenancy: un usuario ajeno no ve nada de este proyecto ----
+    // Las 3 rutas usan el MISMO guard (assertProjectAccess, _orgGuard.mjs):
+    // un usuario sin acceso al proyecto recibe 403 -- nunca una lista vacia
+    // silenciosa, que ocultaria la diferencia entre "proyecto sin conceptos"
+    // y "no tienes permiso para verlo" (mismo criterio que ya aplican las
+    // otras dos aserciones de este bloque).
     const stranger = await createUserAndGetIdToken({ email: uniq('fase-d-stranger') });
-    assert.equal((await callCatalogo(get(stranger.idToken, { projectId }))).body.conceptos.length, 0);
+    assert.equal((await callCatalogo(get(stranger.idToken, { projectId }))).statusCode, 403);
     assert.equal((await callPresupuestos(get(stranger.idToken, { id: presupuestoId }))).statusCode, 403);
     assert.equal((await callCatalogo(post(stranger.idToken, { action: 'associate-apu', id: conceptoPendiente.id, apuId: existingApuId }))).statusCode, 403);
   });

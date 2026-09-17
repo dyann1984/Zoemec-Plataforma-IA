@@ -36,11 +36,20 @@ function post(token, body){ return { method: 'POST', headers: token ? { authoriz
 function get(token, query){ return { method: 'GET', headers: token ? { authorization: `Bearer ${token}` } : {}, query: query || {} }; }
 async function call(req){ const res = mockRes(); await handler(req, res); return res; }
 const uniq = (p) => `${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}@test.zoemec`;
+/* IDs de proyecto UNICOS por llamada (no solo por archivo): `npm run
+   test:security` corre ~30 archivos de test contra UN SOLO emulador
+   compartido, y un id fijo tipo 'PRO-1' colisiona con el MISMO id fijo
+   usado por otro archivo (catalogConceptosApi.test.mjs,
+   presupuestosApi.test.mjs) -- dos tests distintos terminan leyendo/
+   pisando el documento del otro. Nunca relaja autorizacion ni cambia
+   comportamiento de produccion, solo aisla la fixture. */
+const uniqId = (p) => `${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
 describe('POST /api/projects action=create', () => {
   it('crea un proyecto con identidad real del token, nunca del body', async () => {
     const { uid, idToken } = await createUserAndGetIdToken({ email: uniq('create') });
-    const res = await call(post(idToken, { action: 'create', id: 'PRO-1', name: 'Obra QA', ownerUid: 'uid-falso-inyectado' }));
+    const id = uniqId('PRO-CREATE');
+    const res = await call(post(idToken, { action: 'create', id, name: 'Obra QA', ownerUid: 'uid-falso-inyectado' }));
     assert.equal(res.statusCode, 201);
     assert.equal(res.body.project.ownerUid, uid);
     assert.equal(res.body.project.name, 'Obra QA');
@@ -48,12 +57,13 @@ describe('POST /api/projects action=create', () => {
 
   it('es idempotente: repetir create con el mismo id no duplica ni falla', async () => {
     const { idToken } = await createUserAndGetIdToken({ email: uniq('idempotent') });
-    const first = await call(post(idToken, { action: 'create', id: 'PRO-2', name: 'Obra QA 2' }));
-    const second = await call(post(idToken, { action: 'create', id: 'PRO-2', name: 'Obra QA 2 (otro nombre)' }));
+    const id = uniqId('PRO-IDEMPOTENT');
+    const first = await call(post(idToken, { action: 'create', id, name: 'Obra QA 2' }));
+    const second = await call(post(idToken, { action: 'create', id, name: 'Obra QA 2 (otro nombre)' }));
     assert.equal(second.statusCode, 201);
     assert.equal(second.body.project.name, 'Obra QA 2'); // conserva la version original, no la reescribe
     const list = await call(get(idToken, {}));
-    assert.equal(list.body.projects.filter(p => p.id === 'PRO-2').length, 1);
+    assert.equal(list.body.projects.filter(p => p.id === id).length, 1);
   });
 
   it('create con id ya usado por OTRO usuario devuelve 409', async () => {

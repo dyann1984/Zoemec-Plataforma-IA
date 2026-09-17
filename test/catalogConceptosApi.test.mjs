@@ -57,6 +57,11 @@ async function call(req){
   const res = mockRes(); await handler(req, res); return res;
 }
 const uniq = (p) => `${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}@test.zoemec`;
+/* Id de proyecto UNICO por llamada: 'PRO-1'/'PRO-2' fijos colisionaban con
+   los MISMOS ids fijos usados en test/projectsApi.test.mjs cuando
+   `npm run test:security` corre ambos archivos contra un solo emulador
+   compartido. */
+const uniqId = (p) => `${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
 async function seedOrgMember(db, uid, organizationId){
   await db.doc(`organizations/${organizationId}`).set({ id: organizationId, name: `Empresa ${organizationId}`, status: 'ACTIVE_TRIAL' });
@@ -77,8 +82,9 @@ function conceptoFixture(overrides = {}){
 describe('POST /api/catalogo-conceptos action=create', () => {
   it('crea en lote, normaliza capitulo, arranca en PENDIENTE sin APU', async () => {
     const { uid, idToken } = await createUserAndGetIdToken({ email: uniq('create') });
-    await seedProject(getAdminDb(), 'PRO-1', uid);
-    const res = await call(post(idToken, { action: 'create', projectId: 'PRO-1', conceptos: [conceptoFixture(), conceptoFixture({ clave: 'ALB-002', concept: 'Aplanado fino' })] }));
+    const projectId = uniqId('PRO-CATALOG-CREATE');
+    await seedProject(getAdminDb(), projectId, uid);
+    const res = await call(post(idToken, { action: 'create', projectId, conceptos: [conceptoFixture(), conceptoFixture({ clave: 'ALB-002', concept: 'Aplanado fino' })] }));
     assert.equal(res.statusCode, 201);
     assert.equal(res.body.conceptos.length, 2);
     assert.equal(res.body.conceptos[0].capitulo, 'ALBANILERIA');
@@ -90,8 +96,9 @@ describe('POST /api/catalogo-conceptos action=create', () => {
 
   it('un concepto invalido en el lote se rechaza SIN tumbar a los demas', async () => {
     const { uid, idToken } = await createUserAndGetIdToken({ email: uniq('partial') });
-    await seedProject(getAdminDb(), 'PRO-2', uid);
-    const res = await call(post(idToken, { action: 'create', projectId: 'PRO-2', conceptos: [conceptoFixture(), { concept: 'sin unidad ni cantidad' }] }));
+    const projectId = uniqId('PRO-CATALOG-PARTIAL');
+    await seedProject(getAdminDb(), projectId, uid);
+    const res = await call(post(idToken, { action: 'create', projectId, conceptos: [conceptoFixture(), { concept: 'sin unidad ni cantidad' }] }));
     assert.equal(res.statusCode, 201);
     assert.equal(res.body.conceptos.length, 1);
     assert.equal(res.body.rejected.length, 1);

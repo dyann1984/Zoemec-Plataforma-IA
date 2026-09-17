@@ -36,6 +36,11 @@ function post(token, body){ return { method: 'POST', headers: token ? { authoriz
 function get(token, query){ return { method: 'GET', headers: token ? { authorization: `Bearer ${token}` } : {}, query: query || {} }; }
 async function call(req){ const res = mockRes(); await handler(req, res); return res; }
 const uniq = (p) => `${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}@test.zoemec`;
+/* projectId UNICO por llamada: 'PRO-1'/'PRO-2' fijos colisionaban con los
+   MISMOS ids fijos usados en test/projectsApi.test.mjs cuando
+   `npm run test:security` corre ambos archivos contra un solo emulador
+   compartido. */
+const uniqId = (p) => `${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
 function snapshotFixture(overrides = {}){
   return {
@@ -49,7 +54,7 @@ function snapshotFixture(overrides = {}){
 describe('POST /api/presupuestos action=create', () => {
   it('crea el presupuesto con version inicial V1 y baselineVersion null, identidad real del token', async () => {
     const { uid, idToken } = await createUserAndGetIdToken({ email: uniq('create') });
-    const res = await call(post(idToken, { action: 'create', id: 'PRE-1', projectId: 'PRO-1', snapshot: snapshotFixture(), ownerUid: 'uid-falso' }));
+    const res = await call(post(idToken, { action: 'create', id: uniqId('PRE-CREATE'), projectId: uniqId('PRO-BUDGET-CREATE'), snapshot: snapshotFixture(), ownerUid: 'uid-falso' }));
     assert.equal(res.statusCode, 201);
     assert.equal(res.body.presupuesto.ownerUid, uid);
     assert.equal(res.body.presupuesto.currentVersion, 'V1');
@@ -65,12 +70,13 @@ describe('POST /api/presupuestos action=create', () => {
 describe('versionado y conflicto de concurrencia', () => {
   it('save-version crea version nueva; releer trae EXACTAMENTE lo guardado', async () => {
     const { idToken } = await createUserAndGetIdToken({ email: uniq('save') });
-    await call(post(idToken, { action: 'create', id: 'PRE-2', projectId: 'PRO-2', snapshot: snapshotFixture() }));
+    const id = uniqId('PRE-SAVE');
+    await call(post(idToken, { action: 'create', id, projectId: uniqId('PRO-BUDGET-SAVE'), snapshot: snapshotFixture() }));
     const edited = snapshotFixture({ importeTotal: 9999 });
-    const saved = await call(post(idToken, { action: 'save-version', id: 'PRE-2', snapshot: edited, expectedParentVersionId: 'V1' }));
+    const saved = await call(post(idToken, { action: 'save-version', id, snapshot: edited, expectedParentVersionId: 'V1' }));
     assert.equal(saved.statusCode, 200);
     assert.equal(saved.body.presupuesto.currentVersion, 'V2');
-    const reopened = await call(get(idToken, { id: 'PRE-2' }));
+    const reopened = await call(get(idToken, { id }));
     assert.deepEqual(reopened.body.presupuesto.snapshot, edited);
     assert.equal(reopened.body.versions.length, 2);
   });

@@ -11,6 +11,7 @@ import { xcell, fcell, XLS, exportWorkbookExcel, money, num } from './apuExport.
 import { COSTO_CAMPO_CATEGORIA_LABEL, calcCostoCampoImporte, calcPresupuestadoVsReal } from '../domain/apuCostosCampo.js';
 import { ESTADO_REVISION_LABEL, NORMATIVA_DISCLAIMER, NORMATIVA_VACIA_TEXTO } from '../domain/apuNormativa.js';
 import { PARAM_ORIGIN } from '../domain/parametricTraceability.js';
+import { summarizeRegionalCoverage, describeReferenceLevel } from '../domain/apuRegionalContext.js';
 
 /* Etiqueta de origen para las exportaciones (PDF/Excel) del Cuantificador
    Parametrico -- texto fijo en español, independiente del i18n de la UI
@@ -110,6 +111,13 @@ export function buildProfessionalAPUSheet(rawApu){
   span('ANALISIS DE PRECIO UNITARIO (APU)');
   add([asCell('Proyecto',XLS.label),apu.proyecto,null,asCell('Cliente',XLS.label),apu.cliente,null,asCell('Fecha base',XLS.label),apu.fechaBase,null,asCell('Moneda',XLS.label),apu.moneda,null]);
   add([asCell('Ubicacion',XLS.label),apu.ubicacion,null,asCell('Partida',XLS.label),apu.partida,null,asCell('Clave',XLS.label),apu.clave,null,asCell('Version',XLS.label),apu.version||'V1',null]);
+  // QA de Contexto geografico (ronda 2): nivel de referencia REAL de precios
+  // (Ciudad/Estado/Nacional/Sin referencia) -- mismo calculo que ya usa la
+  // UI (apuRegionalContext.js), nunca un nivel inventado en el exportador.
+  {
+    const regionalSummaryXlsx=summarizeRegionalCoverage(apu);
+    add([asCell('Referencia de precios',XLS.label),regionalSummaryXlsx.primaryLevel?describeReferenceLevel(regionalSummaryXlsx.primaryLevel):'Sin referencia disponible',null,null,null,null,null,null,null,null,null]);
+  }
   add([asCell('Concepto',XLS.label),asCell(apu.concept,{columnSpan:8,wrap:true}),...Array(7).fill(null),asCell('Unidad',XLS.label),apu.unit,asCell('Cantidad',XLS.label),Number(apu.cantidadObra||0)]);
   // Variables detectadas (RC5): descripcion completa ya se ve arriba sin
   // recortar (apu.concept); aqui se muestran ademas los parametros tipados
@@ -262,7 +270,7 @@ export function buildProfessionalAPUSheet(rawApu){
   span('21-22. SUPUESTOS, CONFIANZA Y FIRMAS');(apu.supuestos||[]).forEach((v,i)=>add([i+1,asCell(v.texto||v,{columnSpan:11,wrap:true}),...Array(10).fill(null)]));
   add([asCell('Confianza',XLS.label),gc.fullLabel,asCell('Precios',XLS.label),dimensionPercentLabel(globalConfidence.dimensions.prices),asCell('Rendimientos',XLS.label),dimensionPercentLabel(globalConfidence.dimensions.productivity),asCell('Riesgos',XLS.label),gc.risk,asCell('Estado',XLS.label),apu.validationStatus,null,null]);
   add([asCell('Elaboro',XLS.label),apu.elaboro||'',null,asCell('Reviso',XLS.label),apu.reviso||'',null,asCell('Aprobo',XLS.label),apu.aprobo||'',null,asCell('Version',XLS.label),apu.version||'V1',null]);
-  return {sheet:safeSheet(`${apu.clave}_${String(apu.concept).split(/\s+/).slice(0,2).join('_')}`),rows,widths,stickyRowsCount:4,apu};
+  return {sheet:safeSheet(`${apu.clave}_${String(apu.concept).split(/\s+/).slice(0,2).join('_')}`),rows,widths,stickyRowsCount:5,apu};
 }
 
 /* Hoja de PORTADA (spec 20): logo, identificacion del proyecto/cliente/
@@ -562,14 +570,19 @@ export function drawApuSections(doc,rawApu,opts={}){
   const header=()=>{layout.generalHeaders.push({page,y});doc.setFillColor(18,63,120);doc.rect(M,y,W-2*M,11,'F');doc.setTextColor(255);doc.setFont('helvetica','bold');doc.setFontSize(10.5);doc.text('ANALISIS DE PRECIO UNITARIO (APU)',W/2,y+7.3,{align:'center'});y+=14;
     doc.setTextColor(25);doc.setFontSize(7);doc.setFont('helvetica','normal');
     doc.text(pdfText(`Clave: ${apu.clave}   Unidad: ${apu.unit}   Cantidad: ${num(apu.cantidadObra)}   Estado: ${apu.validationStatus||''}`),M,y);y+=4.2;
-    doc.text(pdfText(`Proyecto: ${apu.proyecto||'Por definir'}   Cliente: ${apu.cliente||'Por definir'}   Fecha base: ${apu.fechaBase||''}`),M,y);y+=4.2;
+    doc.text(pdfText(`Proyecto: ${apu.proyecto||'Por definir'}   Cliente: ${apu.cliente||'Por definir'}   Fecha base: ${apu.fechaBase||''}   Moneda: ${apu.moneda||'MXN'}`),M,y);y+=4.2;
     // Fase 2 (APU regionalizados): mismo dato que ya mostraba la hoja Excel
     // (buildProfessionalAPUSheet, fila "Ubicacion") -- el PDF individual no lo
     // mostraba, causando que un usuario que solo exporta PDF nunca viera con
     // que ubicacion se calculo el APU. apu.ubicacion ya es el snapshot fijado
     // en generacion (ver buildProjectLocationSnapshot en main.jsx), nunca un
     // enlace vivo al proyecto.
-    doc.text(pdfText(`Ubicacion: ${apu.ubicacion||'Sin ubicacion capturada'}`),M,y);y+=4.2;
+    // QA de Contexto geografico (ronda 2): agrega el NIVEL DE REFERENCIA real
+    // (Ciudad/Estado/Nacional/Sin referencia) -- reutiliza EXACTAMENTE
+    // summarizeRegionalCoverage/describeReferenceLevel (apuRegionalContext.js,
+    // ya usado en la UI), nunca un calculo nuevo ni un nivel inventado aqui.
+    const regionalSummaryPdf=summarizeRegionalCoverage(apu);
+    doc.text(pdfText(`Ubicacion: ${apu.ubicacion||'Sin ubicacion capturada'}   Referencia de precios: ${regionalSummaryPdf.primaryLevel?describeReferenceLevel(regionalSummaryPdf.primaryLevel):'Sin referencia disponible'}`),M,y);y+=4.2;
     doc.setFont('helvetica','bold');const conceptLines=doc.splitTextToSize(pdfText(apu.concept),W-2*M);doc.text(conceptLines,M,y);doc.setFont('helvetica','normal');y+=conceptLines.length*3.6+3;
   };
   /* Tabla de ancho proporcional (widthsRatio), en vez de columnas iguales: en

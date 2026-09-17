@@ -14,6 +14,7 @@ import { buildProfessionalAPUSheet, disambiguateSheetNames, safeSheet } from './
 import { buildProjectDossierData } from './apuProjectDossierData.js';
 import { shortHash } from '../domain/snapshotHash.js';
 import { apiPost } from '../services/apiClient.js';
+import { buildProjectLocationSnapshot } from '../domain/geography.js';
 
 const asCell = (value, style = {}) => xcell(value, style);
 const pad = (row, width) => { const full = [...row]; while(full.length < width) full.push(null); return full; };
@@ -28,10 +29,14 @@ function buildPortadaSheet(data, meta){
   add([]);
   kv('Proyecto', meta.proyecto);
   kv('Cliente', meta.cliente);
+  kv('Ubicacion del proyecto', meta.ubicacionProyecto || 'Sin ubicacion capturada');
+  kv('Moneda', meta.monedaProyecto || 'MXN');
   kv('Fecha', meta.fecha);
   kv('Numero de APUs', data.apuEntries.length);
   kv('Importe total', money(data.importeProyectoTotal));
   kv('Manifest hash (corto)', `${shortHash(data.dossierManifest.manifestHash)}...`);
+  add([]);
+  kv('Nota', 'Ubicacion/moneda de arriba son las del PROYECTO (default). Cada hoja de APU (001_, 002_, ...) muestra su propia ubicacion, moneda y nivel de referencia de precios reales, que pueden diferir si se modificaron para ese APU.');
   return { sheet: 'PORTADA', rows, widths: [28, 40, 20, 20], stickyRowsCount: 0, orientation: 'portrait' };
 }
 
@@ -160,7 +165,13 @@ function buildConceptSheets(apuEntries){
    (scope=PROJECT, api/export-events.mjs), nunca el de un solo APU. */
 export async function exportProjectDossierExcel({ projectId, mode = 'TECNICO', selectedScenarios = [], projectScenario = null, company = {}, fileName, writeXlsxFileImpl } = {}){
   const data = await buildProjectDossierData({ projectId, mode, selectedScenarios, projectScenario });
-  const meta = { proyecto: company?.name || data.project?.name || '', cliente: company?.client || data.project?.client || '', fecha: new Date().toLocaleDateString('es-MX') };
+  // QA de Contexto geografico (ronda 2): misma funcion que ya arma este
+  // snapshot en toda la plataforma (geography.js), nunca un calculo nuevo.
+  const projectLocationSnapshot = buildProjectLocationSnapshot(data.project);
+  const meta = {
+    proyecto: company?.name || data.project?.name || '', cliente: company?.client || data.project?.client || '', fecha: new Date().toLocaleDateString('es-MX'),
+    ubicacionProyecto: projectLocationSnapshot.ubicacion || '', monedaProyecto: data.project?.moneda || 'MXN'
+  };
 
   const sheets = [
     buildPortadaSheet(data, meta),

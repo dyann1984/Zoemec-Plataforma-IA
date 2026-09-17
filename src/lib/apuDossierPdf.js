@@ -89,6 +89,9 @@ function drawPortada(doc, data, meta){
   field('Concepto:', data.snapshot.concept);
   field('Unidad:', data.snapshot.unit);
   field('Version:', data.revision || 'Sin version guardada');
+  field('Ubicacion:', data.snapshot.ubicacion || 'Sin ubicacion capturada');
+  field('Moneda / Fecha base:', `${data.snapshot.moneda || 'MXN'} · ${data.snapshot.fechaBase || 'Sin fecha base'}`);
+  field('Referencia de precios:', data.regionalReferenceLabel || 'Sin referencia disponible');
   field('Fecha:', meta.fecha);
   field('Autor:', data.createdBy || meta.autor);
   field('Estado:', data.snapshot.validationStatus);

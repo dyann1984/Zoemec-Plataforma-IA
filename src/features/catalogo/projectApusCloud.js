@@ -16,7 +16,15 @@ import { apiGetSafe } from '../../services/apiClient.js';
 // APU envuelto ({id, projectId, currentVersion, snapshot, ...}) -- el resto
 // de la app espera el APU PLANO (materials/labor/... al nivel raiz).
 function unwrap(doc){
-  return { ...doc.snapshot, id: doc.id, projectId: doc.projectId ?? doc.snapshot?.projectId ?? null };
+  return {
+    ...doc.snapshot,
+    id: doc.id,
+    projectId: doc.projectId ?? doc.snapshot?.projectId ?? null,
+    currentVersion: doc.currentVersion ?? null,
+    createdAt: doc.createdAt ?? null,
+    updatedAt: doc.updatedAt ?? null,
+    archivedAt: doc.archivedAt ?? null
+  };
 }
 
 export function useProjectApus(user, projectId){

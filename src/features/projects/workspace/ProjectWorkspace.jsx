@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useI18n } from '../../../i18n/I18nContext.jsx';
 import { ProjectHeader } from './ProjectHeader.jsx';
 import { ProjectStepper } from './ProjectStepper.jsx';
@@ -7,9 +7,12 @@ import { EvidenceStage } from './EvidenceStage.jsx';
 import { QuantificationStage } from './QuantificationStage.jsx';
 import { CostStage } from './CostStage.jsx';
 import { ReviewStage } from './ReviewStage.jsx';
+import { DeliveryStage } from './DeliveryStage.jsx';
 import { fetchProjectPlanoTakeoffs } from './planoTakeoffQuery.js';
 import { useCatalogConceptos } from '../../catalogo/catalogConceptosCloud.js';
 import { useProjectApus } from '../../catalogo/projectApusCloud.js';
+import { apiGetSafe } from '../../../services/apiClient.js';
+import { computeDeliveryStageModel } from './deliveryStageModel.js';
 
 export function ProjectWorkspace({
   projectId,
@@ -38,6 +41,9 @@ export function ProjectWorkspace({
   });
   const [planoTakeoffs, setPlanoTakeoffs] = useState([]);
   const [reviewModel, setReviewModel] = useState(null);
+  const [exportEvents, setExportEvents] = useState([]);
+  const [exportEventsError, setExportEventsError] = useState(null);
+  const [exportEventsLoading, setExportEventsLoading] = useState(false);
   const [takeoffsError, setTakeoffsError] = useState(null);
   const { conceptos: catalogConceptos } = useCatalogConceptos(user, projectId);
   const { apus: projectApus } = useProjectApus(user, projectId);
@@ -47,6 +53,32 @@ export function ProjectWorkspace({
   }, [onStageChange]);
 
   const project = projects.find(p => p.id === projectId);
+
+  const refreshExportEvents = useCallback(async () => {
+    if (!projectId || !user?.uid) {
+      setExportEvents([]);
+      setExportEventsError(null);
+      return;
+    }
+
+    setExportEventsLoading(true);
+    setExportEventsError(null);
+
+    try {
+      const response = await apiGetSafe('/api/export-events');
+
+      if (!response) {
+        setExportEvents([]);
+        setExportEventsError('No fue posible consultar el historial de entregas.');
+        return;
+      }
+
+      setExportEvents(Array.isArray(response.events) ? response.events : []);
+    } finally {
+      setExportEventsLoading(false);
+    }
+  }, [projectId, user?.uid]);
+
   const refreshPlanoTakeoffs = useCallback(async () => {
     try {
       setTakeoffsError(null);
@@ -63,8 +95,32 @@ export function ProjectWorkspace({
   }, [refreshPlanoTakeoffs]);
 
   useEffect(() => {
+    refreshExportEvents();
+  }, [refreshExportEvents]);
+
+  useEffect(() => {
     setReviewModel(null);
+    setExportEvents([]);
+    setExportEventsError(null);
   }, [projectId]);
+
+  const deliveryModel = useMemo(() => {
+    const model = computeDeliveryStageModel({
+      projectId,
+      apuDocs: projectApus,
+      exportEvents
+    });
+
+    if (exportEventsError && model.apuCount > 0) {
+      return {
+        ...model,
+        status: 'atencion',
+        reason: 'EXPORT_HISTORY_UNAVAILABLE'
+      };
+    }
+
+    return model;
+  }, [projectId, projectApus, exportEvents, exportEventsError]);
 
   if (!project) {
     return (
@@ -93,6 +149,8 @@ export function ProjectWorkspace({
         surveys={surveys}
         planoTakeoffs={planoTakeoffs}
         catalogConceptos={catalogConceptos}
+        reviewModel={reviewModel}
+        deliveryModel={deliveryModel}
         evidenceItems={evidenceData.evidenceItems}
         planos={evidenceData.planos}
         onBackToProjects={onBackToProjects}
@@ -110,6 +168,7 @@ export function ProjectWorkspace({
         planos={evidenceData.planos}
         catalogConceptos={catalogConceptos}
         reviewModel={reviewModel}
+        deliveryModel={deliveryModel}
       />
 
       {selectedStage === 'evidencia' ? (
@@ -150,6 +209,16 @@ export function ProjectWorkspace({
           catalogConceptos={catalogConceptos}
           onModelChange={setReviewModel}
           onOpenApu={() => onNavigateToApu?.()}
+        />
+      ) : selectedStage === 'entrega' ? (
+        <DeliveryStage
+          project={project}
+          user={user}
+          apus={projectApus}
+          deliveryModel={deliveryModel}
+          loadingEvents={exportEventsLoading}
+          eventsError={exportEventsError}
+          onReloadExportEvents={refreshExportEvents}
         />
       ) : (
         <ProjectStagePlaceholder

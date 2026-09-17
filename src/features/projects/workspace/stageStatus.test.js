@@ -53,19 +53,45 @@ test('computeStageProgress: costos depende de conceptos cuantificados y P.U. can
   assert.equal(computeStageProgress('costos', { project, apus, budgets: [{ projectId: 'P1' }], catalogConceptos: [] }), 'pendiente');
 });
 
-test('computeStageProgress: revision pasa a atencion si existen APUs con riesgo Critico o Alto', () => {
+test('computeStageProgress: revision usa el modelo canónico de ReviewStage', () => {
   const project = { id: 'P1' };
-  const apusNormal = [{ projectId: 'P1', confidence: 85, riskLevel: 'Bajo' }];
-  assert.equal(computeStageProgress('revision', { project, apus: apusNormal }), 'completado');
 
-  const apusRisk = [{ projectId: 'P1', confidence: 60, riskLevel: 'Critico' }];
-  assert.equal(computeStageProgress('revision', { project, apus: apusRisk }), 'atencion');
+  assert.equal(computeStageProgress('revision', {
+    project,
+    reviewModel: { projectId: 'P1', status: 'completado' }
+  }), 'completado');
+
+  assert.equal(computeStageProgress('revision', {
+    project,
+    reviewModel: { projectId: 'P1', status: 'atencion' }
+  }), 'atencion');
 });
 
-test('computeStageProgress: entrega pasa a completado si la obra esta terminada o tiene dossierExported', () => {
-  assert.equal(computeStageProgress('entrega', { project: { id: 'P1', status: 'Terminado' } }), 'completado');
-  assert.equal(computeStageProgress('entrega', { project: { id: 'P1', status: 'Cerrado' } }), 'completado');
-  assert.equal(computeStageProgress('entrega', { project: { id: 'P1', status: 'En ejecucion', dossierExported: true } }), 'completado');
+test('computeStageProgress: entrega usa exclusivamente el modelo canónico de DeliveryStage', () => {
+  const project = { id: 'P1' };
+
+  assert.equal(computeStageProgress('entrega', {
+    project,
+    apus: []
+  }), 'pendiente');
+
+  assert.equal(computeStageProgress('entrega', {
+    project,
+    apus: [{ id: 'A1', projectId: 'P1' }],
+    deliveryModel: { projectId: 'P1', status: 'atencion' }
+  }), 'atencion');
+
+  assert.equal(computeStageProgress('entrega', {
+    project,
+    apus: [{ id: 'A1', projectId: 'P1' }],
+    deliveryModel: { projectId: 'P1', status: 'completado' }
+  }), 'completado');
+
+  assert.equal(computeStageProgress('entrega', {
+    project,
+    apus: [{ id: 'A1', projectId: 'P1' }],
+    deliveryModel: { projectId: 'OTRO', status: 'completado' }
+  }), 'atencion');
 });
 
 test('deriveProjectLifecycleStage: identifica con precision la etapa real de obra', () => {

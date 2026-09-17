@@ -26,7 +26,7 @@ function formatRelativeTime(ts, tr) {
   }
 }
 
-export function ProjectHeader({ project, apus = [], budgets = [], surveys = [], evidenceItems = [], planos = [], planoTakeoffs = [], onBackToProjects }) {
+export function ProjectHeader({ project, apus = [], budgets = [], surveys = [], evidenceItems = [], planos = [], planoTakeoffs = [], catalogConceptos = [], reviewModel = null, deliveryModel = null, onBackToProjects }) {
   const { t: tr } = useI18n();
 
   const name = project?.name || tr('workspace.unnamedProject');
@@ -36,7 +36,18 @@ export function ProjectHeader({ project, apus = [], budgets = [], surveys = [], 
   const isFinished = String(status).toLowerCase().includes('termin') || String(status).toLowerCase().includes('cerrad');
   const lastActivity = formatRelativeTime(project?.updatedAt || project?.createdAt, tr);
 
-  const lifecycleStage = deriveProjectLifecycleStage({ project, apus, budgets, surveys, evidenceItems, planos, planoTakeoffs });
+  const lifecycleStage = deriveProjectLifecycleStage({
+    project,
+    apus,
+    budgets,
+    surveys,
+    evidenceItems,
+    planos,
+    planoTakeoffs,
+    catalogConceptos,
+    reviewModel,
+    deliveryModel
+  });
   const lifecycleStageTitle = lifecycleStage ? (tr(lifecycleStage.titleKey) || lifecycleStage.defaultTitle) : null;
 
   return (

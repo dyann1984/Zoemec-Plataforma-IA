@@ -58,7 +58,7 @@ export const WORKSPACE_STAGES = [
  * Estados posibles: 'completado' | 'atencion' | 'pendiente'
  * IMPORTANTE: No depende de la navegación (selectedStage).
  */
-export function computeStageProgress(stageKey, { project, apus = [], budgets = [], surveys, evidenceItems, planos, planoTakeoffs = [], catalogConceptos = [], reviewModel = null }) {
+export function computeStageProgress(stageKey, { project, apus = [], budgets = [], surveys, evidenceItems, planos, planoTakeoffs = [], catalogConceptos = [], reviewModel = null, deliveryModel = null }) {
   const projectId = project?.id;
   if (!projectId) return 'pendiente';
 
@@ -141,11 +141,15 @@ export function computeStageProgress(stageKey, { project, apus = [], budgets = [
     }
 
     case 'entrega': {
-      const status = String(project?.status || '').toLowerCase();
-      if (status.includes('termin') || status.includes('cerrad') || (project?.dossierExported)) {
-        return 'completado';
+      if (deliveryModel?.projectId === projectId) {
+        return deliveryModel.status;
       }
-      return 'pendiente';
+
+      if (projectApus.length === 0) {
+        return 'pendiente';
+      }
+
+      return 'atencion';
     }
 
     default:
@@ -157,7 +161,7 @@ export function computeStageProgress(stageKey, { project, apus = [], budgets = [
  * Deriva la etapa actual del ciclo del proyecto exclusivamente de datos reales.
  * Si no puede determinarse con certeza, devuelve null (nunca inventar).
  */
-export function deriveProjectLifecycleStage({ project, apus = [], budgets = [], surveys = [], evidenceItems = [], planos = [], planoTakeoffs = [], catalogConceptos = [] }) {
+export function deriveProjectLifecycleStage({ project, apus = [], budgets = [], surveys = [], evidenceItems = [], planos = [], planoTakeoffs = [], catalogConceptos = [], reviewModel = null, deliveryModel = null }) {
   if (!project?.id) return null;
 
   const status = String(project?.status || '').toLowerCase();
@@ -167,7 +171,7 @@ export function deriveProjectLifecycleStage({ project, apus = [], budgets = [], 
 
   // Secuencia determinista: la primera etapa que no esté completada es la etapa actual de obra
   for (const stage of WORKSPACE_STAGES) {
-    const progress = computeStageProgress(stage.key, { project, apus, budgets, surveys, evidenceItems, planos, planoTakeoffs, catalogConceptos });
+    const progress = computeStageProgress(stage.key, { project, apus, budgets, surveys, evidenceItems, planos, planoTakeoffs, catalogConceptos, reviewModel, deliveryModel });
     if (progress !== 'completado') {
       return stage;
     }

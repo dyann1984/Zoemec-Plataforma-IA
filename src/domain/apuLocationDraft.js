@@ -6,7 +6,7 @@
    Reutiliza geography.js (buildProjectLocationSnapshot/formatLocationDisplay)
    en vez de duplicar la jerarquía País -> Estado/Provincia -> Región -> Ciudad
    ya existente. */
-import { buildProjectLocationSnapshot, formatLocationDisplay, hasAnyLocation } from './geography.js';
+import { buildProjectLocationSnapshot, formatLocationDisplay, hasAnyLocation, findState } from './geography.js';
 
 const DEFAULT_CURRENCY = 'MXN';
 
@@ -57,9 +57,20 @@ export function resolveInitialLocationDraft({ project, existingApu } = {}){
 // informativa para la búsqueda, no identifica una geografía distinta.
 export const PRICE_SENSITIVE_FIELDS = Object.freeze(['country', 'state', 'region', 'city', 'moneda']);
 
+// `state` se compara por su CODE canonico resuelto (findState), nunca por
+// el string crudo: un valor legado ("México") y su code nuevo equivalente
+// ("MEX") son la MISMA geografia real -- comparar texto crudo dispararia el
+// aviso de "cambiaste la ubicacion" (y el recalculo de precios que implica)
+// por una diferencia puramente de representacion, nunca una region distinta
+// de verdad (hallazgo real de la ronda de QA regional).
+function normalizedFieldValue(field, values){
+  if(field !== 'state') return values[field] || '';
+  return findState(values.country, values.state)?.code || values.state || '';
+}
+
 export function locationDraftChanged(previous, next){
   if(!previous || !next) return false;
-  return PRICE_SENSITIVE_FIELDS.some(field => (previous[field] || '') !== (next[field] || ''));
+  return PRICE_SENSITIVE_FIELDS.some(field => normalizedFieldValue(field, previous) !== normalizedFieldValue(field, next));
 }
 
 // Convierte el borrador editable a la forma que se persiste en el APU

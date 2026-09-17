@@ -5,6 +5,7 @@
    este modulo NUNCA vuelve a calcular una busqueda de precio ni inventa un
    nivel de cobertura que ningun renglon reporto. Puro, testeable con
    node --test (sin React/Firebase/OpenAI). */
+import { stateLabel as resolveStateLabel } from './geography.js';
 
 export const REGIONAL_COVERAGE_LEVEL = Object.freeze({
   CIUDAD: 'ciudad', ESTADO: 'estado', NACIONAL: 'nacional', SIN_DATO: 'sin_dato'
@@ -40,12 +41,16 @@ export function describeReferenceLevel(level) {
 export function describeReferenceSentence(summary){
   if(!summary?.hasLocation) return 'Este APU todavía no tiene una ubicación definida.';
   if(!summary.primaryLevel) return 'Ningún insumo de este APU ha buscado precio regional todavía.';
-  const { city, state } = summary.location || {};
+  const { city, state, country } = summary.location || {};
+  // El estado puede venir como code canonico ('MEX') o nombre legado -- se
+  // resuelve SIEMPRE a su etiqueta completa aqui, nunca un code crudo en
+  // texto para el usuario.
+  const stateName = state ? (resolveStateLabel(country, state) || state) : null;
   if(summary.primaryLevel === REGIONAL_COVERAGE_LEVEL.CIUDAD){
     return `Referencia de precios utilizada: ${city || 'ciudad'}.`;
   }
   if(summary.primaryLevel === REGIONAL_COVERAGE_LEVEL.ESTADO){
-    return `No existe referencia municipal suficiente. Se está utilizando referencia estatal${state ? ` (${state})` : ''}.`;
+    return `No existe referencia municipal suficiente. Se está utilizando referencia estatal${stateName ? ` (${stateName})` : ''}.`;
   }
   return 'No existe referencia estatal ni municipal suficiente. Se está utilizando referencia nacional.';
 }

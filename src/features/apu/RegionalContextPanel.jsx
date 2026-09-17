@@ -13,7 +13,7 @@
    (regla explícita del brief). */
 import { useState } from 'react';
 import { LocationPicker } from '../../components/ui/LocationPicker.jsx';
-import { listCurrencies, findCountry } from '../../domain/geography.js';
+import { listCurrencies, findCountry, stateLabel } from '../../domain/geography.js';
 import { summarizeRegionalCoverage, describeReferenceSentence } from '../../domain/apuRegionalContext.js';
 import {
   resolveInitialLocationDraft, locationDraftChanged, buildLocationPatchFromDraft, locationDraftHasAnyValue
@@ -95,7 +95,7 @@ export function RegionalContextPanel({ apu, project = null, onChange, onFindPric
           : <>
               <div className="pro-header-grid">
                 <div><small>{tr('apuLocationBlock.country')}</small><b>{location.country ? (findCountry(location.country)?.name || location.country) : tr('apuLocationBlock.noValue')}</b></div>
-                <div><small>{tr('apuLocationBlock.state')}</small><b>{location.state || tr('apuLocationBlock.noValue')}</b></div>
+                <div><small>{tr('apuLocationBlock.state')}</small><b>{location.state ? (stateLabel(location.country, location.state) || location.state) : tr('apuLocationBlock.noValue')}</b></div>
                 <div><small>{tr('apuLocationBlock.city')}</small><b>{location.city || tr('apuLocationBlock.noValue')}</b></div>
                 <div><small>{tr('apuLocationBlock.region')}</small><b>{location.region || tr('apuLocationBlock.noValue')}</b></div>
                 <div><small>{tr('apuLocationBlock.currency')}</small><b>{apu?.moneda || 'MXN'}</b></div>

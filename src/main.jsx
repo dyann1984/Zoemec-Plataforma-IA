@@ -2664,12 +2664,27 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       // /api/price-intelligence de siempre, ver src/domain/intelligence2Runtime.js).
       // Si falla por completo, el borrador conserva los precios ESTIMADO_IA
       // de la IA (igual que antes).
+      // Contexto geografico y economico del APU: si el usuario ya confirmo/
+      // edito la ubicacion de ESTE APU (bloque "Ubicacion y referencia de
+      // costos", ver RegionalContextPanel.jsx) antes de generar, eso tiene
+      // prioridad -- el proyecto activo sigue siendo el fallback cuando el
+      // usuario no toco nada (comportamiento identico al de antes de esta
+      // fase). Nunca se pierde el override del usuario por sobreescribirlo
+      // despues con el snapshot del proyecto.
+      const hasApuLocationOverride = hasAnyLocation(apuV2.ubicacionEstructurada);
+      const effectiveLocationSnapshot = hasApuLocationOverride
+        ? { ubicacionEstructurada: apuV2.ubicacionEstructurada, ubicacion: apuV2.ubicacion || formatLocationDisplay(apuV2.ubicacionEstructurada) }
+        : buildProjectLocationSnapshot(activeProject);
+      const effectiveDateBase = apuV2.fechaBase || draft.fechaBase;
       let enrichedDraft = draft;
       try{
         setAiStatus('Buscando precios de mercado reales y validando equivalencia tecnica...');
         const runContext = createIntelligence2RunContext({
-          location: activeProject?.ubicacion || '', dateBase: draft.fechaBase,
-          country: activeProject?.locationCountry || '', state: activeProject?.locationState || '', city: activeProject?.locationCity || ''
+          location: activeProject?.ubicacion || '', dateBase: effectiveDateBase,
+          country: effectiveLocationSnapshot.ubicacionEstructurada.country || '',
+          state: effectiveLocationSnapshot.ubicacionEstructurada.state || '',
+          city: effectiveLocationSnapshot.ubicacionEstructurada.city || '',
+          zone: effectiveLocationSnapshot.ubicacionEstructurada.region || ''
         });
         const result = await enrichApuWithIntelligence2({
           aiApu: draft, userInput: { concept: parsed.concept, unit: parsed.unit, qty: parsed.qty },
@@ -2686,10 +2701,12 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       // flujos de lote (buildProjectLocationSnapshot) para que los tres
       // queden con el mismo esquema regional; tambien fija `ubicacion`
       // (texto libre, usado por PDF/Excel) al mismo snapshot en vez del
-      // valor heredado del borrador previo.
-      const locationSnapshot = buildProjectLocationSnapshot(activeProject);
-      v2.ubicacionEstructurada = locationSnapshot.ubicacionEstructurada;
-      v2.ubicacion = locationSnapshot.ubicacion;
+      // valor heredado del borrador previo. Contexto geografico del APU:
+      // effectiveLocationSnapshot ya prioriza el override del usuario sobre
+      // el proyecto (ver arriba).
+      v2.ubicacionEstructurada = effectiveLocationSnapshot.ubicacionEstructurada;
+      v2.ubicacion = effectiveLocationSnapshot.ubicacion;
+      v2.fechaBase = effectiveDateBase;
       const shim = legacyShimFromV2(v2, parsed.concept, 'OpenAI API');
       setAiStatus('Validando resultado...');
       skipMigrateIdRef.current = shim.id;
@@ -3469,7 +3486,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       setApus([saved,...apus.filter(x=>x.id!==saved.id)]);
       if(isNew) markApuUsed();
       clearDraftAutosave(user,'apu','current');
-    }} onFindPrices={findV2Prices} onExcel={exportExcel} onPdf={exportPDF} exportBlocked={isFree && userUsage.apusCreated>=1} exportBlockedReason={tr('apu.exportBlockedReason')} onConfigureLocation={onConfigureLocation}/>
+    }} onFindPrices={findV2Prices} onExcel={exportExcel} onPdf={exportPDF} exportBlocked={isFree && userUsage.apusCreated>=1} exportBlockedReason={tr('apu.exportBlockedReason')} onConfigureLocation={onConfigureLocation} project={activeProject}/>
     <div className="apu-grid legacy-editor-compat">
       <div className="panel">
         <label>{tr('apu.conceptLabel')}</label>

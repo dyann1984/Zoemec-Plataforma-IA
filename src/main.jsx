@@ -106,6 +106,7 @@ import { formatLocationDisplay, hasAnyLocation, buildProjectLocationSnapshot } f
 import { resolveOrgStatus, ORG_STATUS, isActiveTrialStatus } from './domain/organization.js';
 import { ProfessionalApuEditor } from './features/apu/ProfessionalApuEditor.jsx';
 import { RevisionBandeja } from './features/apu/RevisionBandeja.jsx';
+import { RegionalContextPanel } from './features/apu/RegionalContextPanel.jsx';
 import { parseExcelToCatalog, cleanText, normalizeUnitLabel, parseExcelToAPU, parseRobustConceptCatalog, parseConceptText, parseConceptListText, conceptVariablesFromParsed } from './lib/excelImport.js';
 import {
   defaultCompany, DEMO_MODE, demoCatalog,
@@ -954,11 +955,12 @@ function App(){
   else if(!hasValidSession(user)) content = <Landing setScreen={setScreen} login={login} company={companyView} />;
   else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView} apus={apus} clients={clients} projects={projects} activeProject={activeProject} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} orgSession={orgSession} onOpenCreateProject={()=>{ setModule('cartera'); setCreateProjectTrigger(true); }}>
     {COSTOS_GROUP.includes(module) && <SubNavTabs active={module} onSelect={setModule} items={[
+      {key:'costos-resumen',icon:'inicio',label:'Resumen'},
       {key:'apu',icon:'apu',label:tr('shell.menu.apu')},
       {key:'presupuestos',icon:'presupuestos',label:tr('shell.menu.presupuestos')},
       {key:'control-presupuestal',icon:'comparativa',label:tr('shell.menu.controlPresupuestal')},
       {key:'catalogo',icon:'cuantificaciones',label:tr('shell.menu.catalogo')},
-      {key:'biblioteca',icon:'biblioteca',label:tr('shell.menu.biblioteca')},
+      {key:'precios-regionales',icon:'presupuestos',label:'Precios regionales'},
     ]}/>}
     {REPORTES_GROUP.includes(module) && <SubNavTabs active={module} onSelect={setModule} items={[
       {key:'reportes',icon:'reportes',label:tr('shell.menu.reportes')},
@@ -966,13 +968,12 @@ function App(){
       {key:'vault',icon:'folder',label:tr('shell.menu.vault')},
     ]}/>}
     {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} activeProject={activeProject} user={user} demoMode={DEMO_MODE} demoContext={DEMO_MODE ? createDemoContext() : null} />}
+    {module === 'costos-resumen' && <CostosResumen apus={apus} budgets={budgets} catalog={catalog} activeProject={activeProject} setModule={setModule} />}
     {module === 'levantamiento' && <LevantamientoModule surveys={surveys} setSurveys={setSurveys} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} onSendToApu={()=>setModule('catalogo')} currentUserEmail={user?.email || null} organizationId={orgSession?.organization?.id || null} />}
     {module === 'catalogo' && <CatalogoModule user={user} organizationId={orgSession?.organization?.id || null} activeProjectId={activeProjectId} activeProject={activeProject} catalog={catalog} onNeedProject={()=>setModule('cartera')} setModule={setModule} onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }} />}
-    {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} rawApus={rawApus} linkApuToProject={linkApuToProject} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} onConfigureLocation={()=>setModule('cartera')} organizationId={orgSession?.organization?.id || null} />}
-    {module === 'presupuestos' && <>
-      <PresupuestoModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} setModule={setModule} onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }} />
-      <Budgets legacyOnly company={companyView} budgets={budgets} setBudgets={setBudgets} items={budgetItems} setItems={setBudgetItems} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} />
-    </>}
+    {module === 'precios-regionales' && <RegionalPrices apus={apus} activeProject={activeProject} onConfigureLocation={()=>setModule('apu')} />}
+    {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} rawApus={rawApus} linkApuToProject={linkApuToProject} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} onConfigureLocation={()=>setModule('cartera')} setModule={setModule} organizationId={orgSession?.organization?.id || null} />}
+    {module === 'presupuestos' && <PresupuestoModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} setModule={setModule} onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }} />}
     {module === 'control-presupuestal' && <ControlPresupuestalModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} />}
     {module === 'vault' && <ProjectVaultModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} setModule={setModule} onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }} />}
     {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={(pid)=>{ setRawApus(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgets(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawCatalog(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgetItems(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawSurveys(l=>l.filter(x=>(x?.projectId??null)!==pid)); }} openCreateProject={createProjectTrigger} onHandledCreateProject={()=>setCreateProjectTrigger(false)} apus={apus} budgets={budgets} onOpenWorkspace={(pid)=>{ setActiveProjectId(pid); setModule('project-workspace'); }} />}
@@ -1529,7 +1530,7 @@ function TopSearch({apus=[],clients=[],projects=[],setModule}){
 // existian por separado. Ninguna pantalla cambia -- solo la barra de
 // pestanas (SubNavTabs) que aparece arriba de ellas cuando el modulo activo
 // pertenece al grupo.
-const COSTOS_GROUP = ['apu','presupuestos','control-presupuestal','catalogo','biblioteca'];
+const COSTOS_GROUP = ['costos-resumen','apu','presupuestos','control-presupuestal','catalogo','precios-regionales'];
 const REPORTES_GROUP = ['reportes','comparativa','vault'];
 
 export function Shell({children,user,logout,module,setModule,company,apus,clients,projects,activeProject,activeProjectId,setActiveProjectId,orgSession,onOpenCreateProject}){
@@ -1562,15 +1563,14 @@ export function Shell({children,user,logout,module,setModule,company,apus,client
     ['levantamiento','bim',tr('shell.menu.levantamiento'),tr('shell.menu.levantamientoDesc')],
     ['visual','render',tr('shell.menu.visual'),tr('shell.menu.visualDesc')],
     ['tecnico','tecnico',tr('shell.menu.tecnico'),tr('shell.menu.tecnicoDesc')],
+    ['biblioteca','biblioteca',tr('shell.menu.biblioteca'),tr('shell.menu.bibliotecaDesc')],
     ...(orgSession?.organization ? [['equipo','clientes','Equipo','Usuarios de tu empresa']] : []),
     ...(user.isAdmin ? [['admin','admin',tr('shell.menu.admin'),tr('shell.menu.adminDesc')]] : [])
   ];
   const crearItems = [
     ['cartera','proyectos',tr('shell.crearMenu.obra'),tr('shell.crearMenu.obraDesc')],
-    ['levantamiento','bim',tr('shell.crearMenu.foto'),tr('shell.crearMenu.fotoDesc')],
-    ['visual','render',tr('shell.crearMenu.plano'),tr('shell.crearMenu.planoDesc')],
-    ['apu','apu',tr('shell.crearMenu.apu'),tr('shell.crearMenu.apuDesc')],
-    ['presupuestos','presupuestos',tr('shell.crearMenu.presupuesto'),tr('shell.crearMenu.presupuestoDesc')],
+    ['levantamiento','bim','Subir evidencia','Levantamiento IA'],
+    ['visual','render','Importar archivo','Planos, imágenes o modelos'],
   ];
   const goTo = (m) => { setModule(m); setDrawerOpen(false); setCrearOpen(false); };
   const handleCrearItemClick = (key) => {
@@ -1751,6 +1751,39 @@ const BID_READINESS_STATUS_LABEL_EN = Object.freeze({
   READY: 'Ready to submit', READY_WITH_OBSERVATIONS: 'Ready with observations',
   NEEDS_REVIEW: 'Needs review before submitting', NOT_READY: 'Not ready to submit', NO_DATA: ''
 });
+function CostosResumen({apus=[],budgets=[],catalog=[],activeProject,setModule}){
+  return <section>
+    <PageHead kicker="Costos" title="Resumen de costos" desc="Vista consolidada de APUs, conceptos, presupuestos y cobertura regional del proyecto activo." />
+    <div className="cards-3">
+      <div className="panel"><small className="muted">APUs</small><h2>{apus.length}</h2><button className="soft" onClick={()=>setModule('apu')}>Abrir APU</button></div>
+      <div className="panel"><small className="muted">Conceptos de catálogo</small><h2>{catalog.length}</h2><button className="soft" onClick={()=>setModule('catalogo')}>Abrir Catálogo</button></div>
+      <div className="panel"><small className="muted">Presupuestos</small><h2>{budgets.length}</h2><button className="soft" onClick={()=>setModule('presupuestos')}>Abrir Presupuestos</button></div>
+    </div>
+    <div className="panel" style={{marginTop:16}}>
+      <h2>{activeProject?.name || 'Proyecto activo'}</h2>
+      <p className="muted">La cantidad económica proviene de conceptos confirmados; el P.U. proviene del APU y el presupuesto aplica cantidad × P.U.</p>
+      <div className="visual-actions">
+        <button onClick={()=>setModule('precios-regionales')}>Precios regionales</button>
+        <button className="soft" onClick={()=>setModule('control-presupuestal')}>Control presupuestal</button>
+      </div>
+    </div>
+  </section>;
+}
+
+function RegionalPrices({apus=[],activeProject,onConfigureLocation}){
+  const apu = apus[0] || null;
+  return <section>
+    <PageHead kicker="Costos" title="Precios regionales" desc="Contexto de país, estado y ciudad reutilizando la inteligencia regional existente." />
+    <div className="panel">
+      <h2>{activeProject?.name || 'Proyecto activo'}</h2>
+      <p className="muted">Esta vista reutiliza el contexto regional del APU y los servicios existentes de Price Intelligence. No calcula precios por separado.</p>
+    </div>
+    {apu
+      ? <RegionalContextPanel apu={apu} onConfigureLocation={onConfigureLocation} />
+      : <div className="panel"><EmptyState icon="presupuestos" title="Sin APU disponible" text="Crea o importa un APU para consultar su cobertura regional." /></div>}
+  </section>;
+}
+
 function Dashboard({setModule,apus,clients,budgets,projects,activeProject:activeProjectProp,user}){
   const { t: tr, locale } = useI18n();
   const [remoteStatus,setRemoteStatus] = useState(null);
@@ -1965,7 +1998,7 @@ function ExecutiveSummaryCards({apu,globalConfidence}){
   if(!hasContent) return null;
   const t = apu.calculated || {};
   const direct = t.direct || 0;
-  const segs = [['Materiales',t.mat,'#9D6FD0'],['Mano de obra',t.mo,'#2A1740'],['Equipo',t.equipo,'#B8A4CC'],['Herramienta',t.herramienta,'#C7A35C']];
+  const segs = [['Materiales',t.mat,'#3BA0D9'],['Mano de obra',t.mo,'#0B2F4A'],['Equipo',t.equipo,'#7B9DB5'],['Herramienta',t.herramienta,'#C7A35C']];
   const validado = apu.validationStatus === 'VALIDADO';
   // Fuente unica de verdad del Confidence global (ver apuConfidence.js): el
   // llamador ya calculo runApuConfidence(apu) una sola vez (se comparte con
@@ -2024,7 +2057,7 @@ function ResourceCards({apu}){
   </div>;
 }
 
-function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog,projects,rawApus,linkApuToProject,activeProjectId,activeProject,onNeedProject,onConfigureLocation,organizationId=null}){
+function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog,projects,rawApus,linkApuToProject,activeProjectId,activeProject,onNeedProject,onConfigureLocation,setModule,organizationId=null}){
   const { t: tr } = useI18n();
   const { beginJob, completeJob, failJob, getUnseen, consumeJob } = useAiJobs();
   const requireProject=()=>{
@@ -2040,6 +2073,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   // por defecto -- el flujo existente queda exactamente igual que antes,
   // esta variable solo decide cual panel se muestra.
   const [entryMode,setEntryMode]=useState('ia');
+  const [createApuOpen,setCreateApuOpen]=useState(false);
   // Unidad/Cantidad explicitas (opcionales): parseConceptText adivina unidad y
   // cantidad del texto pegado, pero un concepto en lenguaje natural puede traer
   // numeros que no son la cantidad (ej. "tuberia de 3 a 6 pulgadas" hace que el
@@ -3196,7 +3230,16 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         reemplaza a la otra -- entryMode solo decide cual panel se
         muestra, el panel de IA de abajo (ai-panel) queda exactamente
         igual que antes cuando entryMode==='ia' (default). */}
-    <div className="visual-actions" style={{marginBottom:10}}>
+    <div className="visual-actions" style={{marginBottom:10,justifyContent:'space-between',alignItems:'flex-start'}}>
+      <div className="menu-crear-wrap">
+        <button type="button" className="menu-crear active" onClick={()=>setCreateApuOpen(v=>!v)} aria-haspopup="menu" aria-expanded={createApuOpen}>+ Crear APU</button>
+        {createApuOpen && <div className="crear-popover" role="menu">
+          <button type="button" role="menuitem" onClick={()=>{setEntryMode('ia');setCreateApuOpen(false);}}><span className="menu-copy"><b>Generar con IA</b><small>Crear desde un concepto</small></span></button>
+          <button type="button" role="menuitem" onClick={()=>{resetAPUForm();setEntryMode('ia');setCreateApuOpen(false);}}><span className="menu-copy"><b>Crear manual</b><small>Editar el APU desde cero</small></span></button>
+          <button type="button" role="menuitem" onClick={()=>{setModule?.('catalogo');setCreateApuOpen(false);}}><span className="menu-copy"><b>Desde concepto cuantificado</b><small>Usar un concepto del Catálogo</small></span></button>
+          <button type="button" role="menuitem" onClick={()=>{fullExcelInputRef.current?.click();setCreateApuOpen(false);}}><span className="menu-copy"><b>Importar</b><small>Importar APU o catálogo Excel</small></span></button>
+        </div>}
+      </div>
       <button type="button" className={entryMode==='ia'?'':'soft'} onClick={()=>setEntryMode('ia')}>{tr('apu.quantModeChooserAI')}</button>
       <button type="button" className={entryMode==='parametrico'?'':'soft'} onClick={()=>setEntryMode('parametrico')}>{tr('apu.quantModeChooserParametric')}</button>
     </div>
@@ -3499,7 +3542,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
 function Incidence({t}){
   const { t: tr } = useI18n();
   const d = t.direct || 1;
-  const segs = [['m',tr('matrixTable.segMaterials'),t.mat,'#9D6FD0'],['o',tr('matrixTable.segLabor'),t.mo,'#2A1740'],['e',tr('matrixTable.segEquipment'),t.equipo,'#B8A4CC'],['h',tr('matrixTable.segTools'),t.herramienta,'#C7A35C']];
+  const segs = [['m',tr('matrixTable.segMaterials'),t.mat,'#3BA0D9'],['o',tr('matrixTable.segLabor'),t.mo,'#0B2F4A'],['e',tr('matrixTable.segEquipment'),t.equipo,'#7B9DB5'],['h',tr('matrixTable.segTools'),t.herramienta,'#C7A35C']];
   const pct = v => Math.max(0, v/d*100);
   return <div className="incid">
     <small className="hint">{tr('matrixTable.incidenceHint')}</small>
@@ -3541,8 +3584,8 @@ function exportConceptsAPUPDF(concepts, catalog, company, preparedAPUs=[]){
   const W = doc.internal.pageSize.getWidth();
   const H = doc.internal.pageSize.getHeight();
   const M = 12;
-  const purple = [42, 23, 64];
-  const violet = [111, 63, 167];
+  const petrol = [11, 47, 74];
+  const blue = [21, 120, 183];
   const soft = [246, 242, 250];
   const line = [221, 211, 232];
   const safe = (v) => cleanText(v).replace(/\s+/g, ' ').trim();
@@ -3566,7 +3609,7 @@ function exportConceptsAPUPDF(concepts, catalog, company, preparedAPUs=[]){
       }
     };
     check(16);
-    doc.setFillColor(...purple);
+    doc.setFillColor(...petrol);
     doc.rect(M, y, tableW, 7, 'F');
     doc.setTextColor(255);
     doc.setFont('helvetica','bold');
@@ -3622,7 +3665,7 @@ function exportConceptsAPUPDF(concepts, catalog, company, preparedAPUs=[]){
     const totals = calcAPU(apu);
     let y = 14;
 
-    doc.setFillColor(...purple);
+    doc.setFillColor(...petrol);
     doc.roundedRect(M, y, W - M*2, 18, 1.5, 1.5, 'F');
     doc.setTextColor(255);
     doc.setFont('helvetica','bold');
@@ -3656,7 +3699,7 @@ function exportConceptsAPUPDF(concepts, catalog, company, preparedAPUs=[]){
 
     doc.setFont('helvetica','bold');
     doc.setFontSize(8);
-    doc.setTextColor(...violet);
+    doc.setTextColor(...blue);
     doc.text('CONCEPTO ANALIZADO', M, y);
     y += 5;
     doc.setFont('helvetica','normal');
@@ -3718,7 +3761,7 @@ function exportConceptsAPUPDF(concepts, catalog, company, preparedAPUs=[]){
     if(y > H - 32){ doc.addPage(); y = 14; }
     doc.setFont('helvetica','bold');
     doc.setFontSize(7.8);
-    doc.setTextColor(...violet);
+    doc.setTextColor(...blue);
     doc.text('TRAZABILIDAD Y SUPUESTOS IA', M, y);
     y += 5;
     doc.setFont('helvetica','normal');
@@ -5488,8 +5531,8 @@ function PlansAccess({user}){
 function Reports({clients,apus,budgets}){
   const total=budgets.reduce((a,b)=>a+(b.total||0),0);
   const hasData = Boolean(clients.length || apus.length || budgets.length);
-  const segs=hasData ? [{label:'Presupuestos',value:budgets.length,color:'#9D6FD0'},{label:'APUs',value:apus.length,color:'#2A1740'},{label:'Clientes',value:clients.length,color:'#C7A35C'}].filter(s=>s.value>0) : [];
-  const bars=[['Presupuestos enviados',Math.min(100,budgets.length*10),'#9D6FD0'],['APU creados',Math.min(100,apus.length*10),'#2A1740'],['Clientes nuevos',Math.min(100,clients.length*10),'#C7A35C']];
+  const segs=hasData ? [{label:'Presupuestos',value:budgets.length,color:'#3BA0D9'},{label:'APUs',value:apus.length,color:'#0B2F4A'},{label:'Clientes',value:clients.length,color:'#C7A35C'}].filter(s=>s.value>0) : [];
+  const bars=[['Presupuestos enviados',Math.min(100,budgets.length*10),'#3BA0D9'],['APU creados',Math.min(100,apus.length*10),'#0B2F4A'],['Clientes nuevos',Math.min(100,clients.length*10),'#C7A35C']];
   const alerts=hasData ? [...apus.slice(0,2).map(a=>`APU ${a.clave || a.id} disponible para revisar`), ...budgets.slice(0,2).map(b=>`Presupuesto ${b.name} en cartera`)] : [];
   return <section><PageHead kicker="Reportes" title="Tablero ejecutivo" desc="Ventas, presupuestos, clientes, APUs, avances, utilidad y rendimiento de la oficina." action={<button onClick={()=>window.print()}>Imprimir reporte</button>} /><div className="report-hero"><div><small>Venta potencial</small><b>{money(total)}</b><span>acumulado</span></div><div><small>Pipeline</small><b>{budgets.length ? 'Activo' : '0%'}</b><span>tasa de cierre</span></div><div><small>Productividad</small><b>{apus.length}</b><span>APU generados</span></div><div><small>Clientes</small><b>{clients.length}</b><span>activos</span></div></div><div className="dash-charts report-grid"><div className="panel"><h2>Cotizacion mensual</h2><Spark points={budgets.length ? budgets.slice(-8).map(b=>Math.max(1,(Number(b.total)||0)/1000)) : [0,0,0,0,0,0,0,0]} h={110}/><div className="chart-foot"><span>{budgets.length ? 'Presupuestos reales' : 'Sin datos reales'}</span><b>{budgets.length ? 'Actualizado' : '0% acumulado'}</b></div></div><div className="panel chart-donut"><h2>Cartera por tipo de obra</h2><Donut segments={segs} center={hasData ? '100%' : '0%'} sub="cartera"/><div className="donut-legend">{segs.length ? segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>) : <EmptyState text="Sin datos para graficar."/>}</div></div></div><div className="report-bottom"><div className="panel"><h2>Resumen mensual</h2>{bars.map(([label,val,color])=><div className="bar-row" key={label}><span>{label}</span><i><b style={{width:val+'%',background:color}}></b></i><em className="bar-val">{val}%</em></div>)}</div><div className="panel"><h2>Alertas ejecutivas</h2>{alerts.length ? alerts.map(a=><div className="activity" key={a}><Icon name="bell" size={15}/> {a}</div>) : <EmptyState text="Sin alertas hasta que existan movimientos reales."/>}</div></div></section>
 }

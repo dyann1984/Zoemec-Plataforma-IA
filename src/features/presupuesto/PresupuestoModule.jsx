@@ -51,6 +51,7 @@ export function PresupuestoModule({ user, activeProjectId, activeProject, onNeed
   const [saving, setSaving] = useState(false);
   const [explosionsOpen, setExplosionsOpen] = useState(false);
   const [approving, setApproving] = useState(false);
+  const [newBudgetOpen, setNewBudgetOpen] = useState(false);
 
   const apuById = useMemo(() => new Map((rawApus || []).map(a => [a.id, a])), [rawApus]);
 
@@ -109,8 +110,13 @@ export function PresupuestoModule({ user, activeProjectId, activeProject, onNeed
         kicker="Presupuesto"
         title={activeProject?.name || 'Presupuesto'}
         desc="Cantidad × Precio Unitario = Importe. El precio unitario de cada APU ya incluye indirectos, financiamiento, utilidad y cargos adicionales."
-        action={<button onClick={() => setModule?.('catalogo')}>Ir al Catálogo</button>}
+        action={<div className="visual-actions"><button onClick={() => setNewBudgetOpen(true)}>+ Nuevo presupuesto</button><button className="soft" onClick={() => setModule?.('catalogo')}>Ir al Catálogo</button></div>}
       />
+
+      {newBudgetOpen && <div className="panel" style={{marginBottom:16,display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap'}}>
+        <div><b>Nuevo presupuesto</b><p className="muted" style={{margin:'4px 0 0'}}>Se creará con los conceptos y cantidades confirmados del Catálogo.</p></div>
+        <div className="visual-actions"><button className="soft" onClick={()=>setNewBudgetOpen(false)}>Cancelar</button><button onClick={async()=>{await handleSave();setNewBudgetOpen(false);}}>Crear presupuesto</button></div>
+      </div>}
 
       {loadingConceptos && !conceptos.length && <p className="muted">Cargando…</p>}
       {!loadingConceptos && !conceptos.length

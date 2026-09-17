@@ -1,19 +1,5 @@
 import React, { useMemo, useState } from 'react';
-
-const STATUS_LABEL = {
-  pendiente: 'Pendiente',
-  atencion: 'Atención',
-  completado: 'Completado'
-};
-
-const REASON_TEXT = {
-  PROJECT_REQUIRED: 'Selecciona un proyecto para preparar la entrega.',
-  NO_DELIVERABLE_APUS: 'Todavía no existen APUs guardados para generar una entrega.',
-  NOT_EXPORTED: 'El proyecto tiene APUs listos, pero todavía no existe una entrega emitida.',
-  DELIVERY_OUTDATED: 'La entrega existente está desactualizada porque cambiaron uno o más APUs.',
-  CURRENT_DELIVERY_EXISTS: 'La entrega corresponde a las versiones actuales de los APUs.',
-  EXPORT_HISTORY_UNAVAILABLE: 'No fue posible verificar el historial de entregas. El estado permanece en Atención.'
-};
+import { useI18n } from '../../../i18n/I18nContext.jsx';
 
 function formatDate(value) {
   if (!value) return '—';
@@ -25,10 +11,6 @@ function formatDate(value) {
     dateStyle: 'medium',
     timeStyle: 'short'
   }).format(date);
-}
-
-function modeLabel(mode) {
-  return mode === 'CLIENTE' ? 'Cliente' : 'Técnico';
 }
 
 const EMPTY_MODEL = {
@@ -54,6 +36,8 @@ export function DeliveryStage({
   eventsError = null,
   onReloadExportEvents
 }) {
+  const { t: tr } = useI18n();
+  const modeLabel = mode => mode === 'CLIENTE' ? tr('deliveryStage.modeClient') : tr('deliveryStage.modeTechnical');
   const [mode, setMode] = useState('TECNICO');
   const [exporting, setExporting] = useState(null);
   const [exportError, setExportError] = useState(null);
@@ -106,7 +90,7 @@ export function DeliveryStage({
     } catch (error) {
       setExportError(
         error?.message ||
-        `No fue posible generar la entrega ${format}.`
+        tr('deliveryStage.exportFailedFormat', { format })
       );
     } finally {
       setExporting(null);
@@ -118,19 +102,19 @@ export function DeliveryStage({
       <div className="stage-placeholder-card">
         <div className="stage-placeholder-header">
           <div className="stage-placeholder-badge-wrap">
-            <span className="stage-num-tag">Etapa 5</span>
+            <span className="stage-num-tag">{tr('deliveryStage.stageTag')}</span>
 
             <span className={`stepper-status-badge badge-status-${model.status}`}>
-              {STATUS_LABEL[model.status] || 'Pendiente'}
+              {tr(`workspace.status.${model.status}`)}
             </span>
           </div>
 
           <div className="stage-placeholder-title-group">
             <div>
-              <h2 className="stage-placeholder-h2">Entrega</h2>
+              <h2 className="stage-placeholder-h2">{tr('deliveryStage.title')}</h2>
 
               <p className="stage-placeholder-desc">
-                Genera el dossier auditable del proyecto con las versiones vigentes de sus APUs.
+                {tr('deliveryStage.description')}
               </p>
             </div>
           </div>
@@ -138,28 +122,28 @@ export function DeliveryStage({
 
         <div className="stage-placeholder-context-grid delivery-stage-summary">
           <div className="stage-context-box">
-            <span className="context-box-label">APUs incluidos</span>
+            <span className="context-box-label">{tr('deliveryStage.includedApus')}</span>
             <span className="context-box-value">{model.apuCount}</span>
           </div>
 
           <div className="stage-context-box">
-            <span className="context-box-label">Estado</span>
+            <span className="context-box-label">{tr('deliveryStage.status')}</span>
             <span className="context-box-value">
-              {STATUS_LABEL[model.status]}
+              {tr(`workspace.status.${model.status}`)}
             </span>
           </div>
 
           <div className="stage-context-box">
-            <span className="context-box-label">Formatos actuales</span>
+            <span className="context-box-label">{tr('deliveryStage.currentFormats')}</span>
             <span className="context-box-value">
               {model.currentFormats?.length
                 ? model.currentFormats.join(' + ')
-                : 'Sin entrega actual'}
+                : tr('deliveryStage.noCurrentDelivery')}
             </span>
           </div>
 
           <div className="stage-context-box">
-            <span className="context-box-label">Última entrega actual</span>
+            <span className="context-box-label">{tr('deliveryStage.lastCurrentDelivery')}</span>
             <span className="context-box-value">
               {formatDate(model.lastCurrentExport?.timestamp)}
             </span>
@@ -169,45 +153,44 @@ export function DeliveryStage({
         <div className={`stage-placeholder-notice delivery-notice status-${model.status}`}>
           {eventsError
             ? eventsError
-            : REASON_TEXT[model.reason] || 'Estado de entrega disponible.'}
+            : tr(`deliveryStage.reasons.${model.reason}`)}
         </div>
 
         {model.isStale && model.lastExport && (
           <div className="stage-placeholder-notice">
-            La última emisión fue el {formatDate(model.lastExport.timestamp)}, pero ya no coincide con las versiones actuales de los APUs.
+            {tr('deliveryStage.staleNotice', { date: formatDate(model.lastExport.timestamp) })}
           </div>
         )}
 
         <div className="review-stage-detail">
-          <h3>Preparar entrega</h3>
+          <h3>{tr('deliveryStage.prepareDelivery')}</h3>
 
           <div className="review-stage-detail-grid">
             <div>
-              <strong>Modo del dossier</strong>
+              <strong>{tr('deliveryStage.dossierMode')}</strong>
 
               <p>
-                Técnico incluye información de auditoría y revisión interna.
-                Cliente presenta una salida orientada a entrega externa.
+                {tr('deliveryStage.dossierModeDesc')}
               </p>
 
               <select
                 value={mode}
                 onChange={event => setMode(event.target.value)}
                 disabled={Boolean(exporting)}
-                aria-label="Modo del dossier"
+                aria-label={tr('deliveryStage.dossierMode')}
               >
-                <option value="TECNICO">Técnico</option>
-                <option value="CLIENTE">Cliente</option>
+                <option value="TECNICO">{tr('deliveryStage.modeTechnical')}</option>
+                <option value="CLIENTE">{tr('deliveryStage.modeClient')}</option>
               </select>
             </div>
 
             <div>
-              <strong>Versiones incluidas</strong>
+              <strong>{tr('deliveryStage.includedVersions')}</strong>
 
               <p>
                 {model.currentVersionIds?.length
                   ? model.currentVersionIds.join(' · ')
-                  : 'Sin APUs versionados disponibles'}
+                  : tr('deliveryStage.noVersionedApus')}
               </p>
             </div>
           </div>
@@ -220,8 +203,8 @@ export function DeliveryStage({
               onClick={() => handleExport('PDF')}
             >
               {exporting === 'PDF'
-                ? 'Generando PDF…'
-                : 'Generar dossier PDF'}
+                ? tr('deliveryStage.generatingPdf')
+                : tr('deliveryStage.generatePdf')}
             </button>
 
             <button
@@ -231,8 +214,8 @@ export function DeliveryStage({
               onClick={() => handleExport('XLSX')}
             >
               {exporting === 'XLSX'
-                ? 'Generando Excel…'
-                : 'Generar dossier Excel'}
+                ? tr('deliveryStage.generatingExcel')
+                : tr('deliveryStage.generateExcel')}
             </button>
 
             <button
@@ -241,7 +224,7 @@ export function DeliveryStage({
               disabled={loadingEvents || Boolean(exporting)}
               onClick={() => onReloadExportEvents?.()}
             >
-              {loadingEvents ? 'Actualizando…' : 'Actualizar historial'}
+              {loadingEvents ? tr('deliveryStage.refreshingHistory') : tr('deliveryStage.refreshHistory')}
             </button>
           </div>
 
@@ -253,17 +236,17 @@ export function DeliveryStage({
         </div>
 
         <div className="review-stage-detail">
-          <h3>Historial de entregas</h3>
+          <h3>{tr('deliveryStage.deliveryHistory')}</h3>
 
           <div className="table-wrap cost-stage-table-wrap">
             <table className="data-table delivery-stage-table">
               <thead>
                 <tr>
-                  <th>Fecha</th>
-                  <th>Formato</th>
-                  <th>Modo</th>
-                  <th>Versiones</th>
-                  <th>Estado</th>
+                  <th>{tr('deliveryStage.colDate')}</th>
+                  <th>{tr('deliveryStage.colFormat')}</th>
+                  <th>{tr('deliveryStage.colMode')}</th>
+                  <th>{tr('deliveryStage.colVersions')}</th>
+                  <th>{tr('deliveryStage.colStatus')}</th>
                 </tr>
               </thead>
 
@@ -279,7 +262,7 @@ export function DeliveryStage({
                       <td>{Array.isArray(event.apuVersionIds) ? event.apuVersionIds.join(' · ') : '—'}</td>
                       <td>
                         <span className={`badge-status-${isCurrent ? 'completado' : 'atencion'}`}>
-                          {isCurrent ? 'Actual' : 'Desactualizada'}
+                          {isCurrent ? tr('deliveryStage.current') : tr('deliveryStage.outdated')}
                         </span>
                       </td>
                     </tr>
@@ -289,7 +272,7 @@ export function DeliveryStage({
                 {!recentExports.length && (
                   <tr>
                     <td colSpan="5" className="muted">
-                      No existen entregas registradas para este proyecto.
+                      {tr('deliveryStage.noDeliveriesRegistered')}
                     </td>
                   </tr>
                 )}

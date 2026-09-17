@@ -5347,12 +5347,14 @@ svg.ic{display:block;flex:none}
     align-items: center;
     justify-content: space-between;
     gap: 10px;
+    flex-wrap: wrap;
   }
   .stepper-mobile-stage-info {
     display: flex;
     align-items: center;
     gap: 8px;
     min-width: 0;
+    flex: 1 1 200px;
   }
   .stepper-mobile-stage-title {
     font-size: 1.1rem;

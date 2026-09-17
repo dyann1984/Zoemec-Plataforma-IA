@@ -20,9 +20,9 @@ const LAYER_BY_TIPO = {
 };
 
 const COLOR_BY_TIPO = {
-  muro: '#2A1740', puerta: '#B45309', ventana: '#0369A1', columna: '#7C2D12',
-  piso: '#166534', losa: '#166534', plafon: '#166534', habitacion: '#7C3AED',
-  cota: '#6B7280', eje: '#DC2626', trabe: '#2A1740', otro: '#6D6078'
+  muro: '#0B2F4A', puerta: '#B45309', ventana: '#0369A1', columna: '#0F766E',
+  piso: '#166534', losa: '#166534', plafon: '#166534', habitacion: '#1578B7',
+  cota: '#6B7280', eje: '#DC2626', trabe: '#0F6BA8', otro: '#64748B'
 };
 
 function isDashedOrigin(origin){
@@ -155,7 +155,7 @@ export default function PlanoOverlayViewer({
         if(visibleLayers && visibleLayers[layer] === false) return null;
         const shape = elementCanvasShape(el, viewport);
         if(!shape) return null;
-        const color = COLOR_BY_TIPO[el.tipo] || '#6D6078';
+        const color = COLOR_BY_TIPO[el.tipo] || '#64748B';
         const isSelected = el.id === selectedElementId;
         const dashed = isDashedOrigin(el.origin);
         const common = {

@@ -9,7 +9,7 @@
 // Root cause real del hallazgo "parecia congelado" (auditoria pre-jueces):
 // el estado de carga SI existia (aiBusy, AIProgress) pero su texto usaba
 // colores de tarjeta clara (--muted/--ink/--ink-text) dentro de .ai-panel,
-// que tiene fondo morado oscuro -- texto oscuro sobre fondo oscuro,
+// que tiene fondo azul oscuro -- texto oscuro sobre fondo oscuro,
 // practicamente invisible. El fix de contraste vive en style.css; este
 // modulo solo cubre la parte de logica pura (que se puede probar sin
 // renderizar el DOM).

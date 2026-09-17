@@ -252,7 +252,7 @@ export function Model3DPreview({ object3D, boundingBox, diagnostics = null, onBo
           onClick={() => setColorHex(preset.hex)}
           style={{
             width: 22, height: 22, borderRadius: '50%', padding: 0, cursor: 'pointer',
-            background: hexToCss(preset.hex), border: colorHex === preset.hex ? '2px solid var(--accent, #7c3aed)' : '1px solid #0002'
+            background: hexToCss(preset.hex), border: colorHex === preset.hex ? '2px solid var(--primary)' : '1px solid #0002'
           }}
         />
       ))}

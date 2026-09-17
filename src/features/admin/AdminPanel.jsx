@@ -146,7 +146,7 @@ export function AdminPanel({user}){
       const totalUsers=users?.length||0;
       const activeUsers=(users||[]).filter(u=>u.active!==false).length;
       const plans=['Gratis','Inicial','Profesional','Empresa'];
-      const palette=['#B8A4CC','#9D6FD0','#6F3FA7','#2A1740'];
+      const palette=['#7B9DB5','#3BA0D9','#0F6BA8','#0B2F4A'];
       const segs=plans.map((p,i)=>({label:p,value:(users||[]).filter(u=>(u.role==='admin'?'Empresa':(u.plan||'Gratis'))===p).length,color:palette[i]})).filter(s=>s.value>0);
       const totalCalls=(usageTotals.apu||0)+(usageTotals.visual||0)+(usageTotals.assistant||0);
       const planCounts=plans.map(p=>({plan:p,count:(users||[]).filter(u=>(u.plan||'Gratis')===p).length,active:(users||[]).filter(u=>(u.plan||'Gratis')===p && u.active!==false).length}));

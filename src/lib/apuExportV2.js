@@ -33,7 +33,7 @@ const paramTraceRows=trace=>(trace||[]).map(e=>[
   e.auxiliarClave?`${e.auxiliarClave} v${e.auxiliarVersion??1} (${String(e.auxiliarFecha||'').slice(0,10)})`:'—'
 ]);
 
-const COLORS={labor:'#123F78',materials:'#D56A00',tools:'#2F7D3A',equipment:'#1578B7',consumables:'#8C6D1F',safety:'#B5263D',procedure:'#6D2D91',quality:'#D5A900',measure:'#078C88'};
+const COLORS={labor:'#123F78',materials:'#D56A00',tools:'#2F7D3A',equipment:'#1578B7',consumables:'#8C6D1F',safety:'#B5263D',procedure:'#0F6BA8',quality:'#D5A900',measure:'#078C88'};
 const NO_JUSTIFICATION_TEXT='Sin justificación técnica registrada -- APU generado antes de esta funcionalidad.';
 
 /* Bug real de produccion (reportado: "Descargar PDF de este APU"/"Dossier
@@ -245,7 +245,7 @@ export function buildProfessionalAPUSheet(rawApu){
   // exportacion Excel. Nunca aparece para un APU que no viene del
   // Cuantificador.
   if(apu.parametricGenerated && apu.parametricSource?.parameterTrace?.length){
-    span('19b. TRAZABILIDAD DE PARAMETROS (CUANTIFICADOR PARAMETRICO)','#6D2D91');
+    span('19b. TRAZABILIDAD DE PARAMETROS (CUANTIFICADOR PARAMETRICO)','#0F6BA8');
     head(['Parametro','Valor','Origen','Valor base','Modificado','Auxiliar (version/fecha)']);
     paramTraceRows(apu.parametricSource.parameterTrace).forEach(([nombre,valor,origen,valorBase,modificado,aux])=>
       add([asCell(nombre,{wrap:true}),valor,origen,valorBase,modificado,asCell(aux,{wrap:true})]));
@@ -298,8 +298,8 @@ export function buildPortadaSheet(apus, company={}, options={}){
   const add = (row=[]) => { const full=[...row]; while(full.length<widths.length) full.push(null); rows.push(full); return rows.length; };
   const kv = (label,value) => [asCell(label,XLS.label), asCell(value ?? '', {wrap:true})];
 
-  add([asCell(options.logo ? '' : 'ZOEMEC', {columnSpan:8, fontWeight:'bold', fontSize:20, color:'#FFFFFF', backgroundColor:'#2A1740', align:'center', alignVertical:'center'}), ...Array(7).fill(null)]);
-  add([asCell('ANALISIS DE PRECIOS UNITARIOS', {columnSpan:8, fontWeight:'bold', fontSize:14, color:'#2A1740', backgroundColor:'#EDE3F6', align:'center'}), ...Array(7).fill(null)]);
+  add([asCell(options.logo ? '' : 'ZOEMEC', {columnSpan:8, fontWeight:'bold', fontSize:20, color:'#FFFFFF', backgroundColor:'#0B2F4A', align:'center', alignVertical:'center'}), ...Array(7).fill(null)]);
+  add([asCell('ANALISIS DE PRECIOS UNITARIOS', {columnSpan:8, fontWeight:'bold', fontSize:14, color:'#0B2F4A', backgroundColor:'#EAF3F8', align:'center'}), ...Array(7).fill(null)]);
   add([]);
   add([...kv('Proyecto', proyecto), ...kv('Cliente', cliente), ...kv('Ubicacion', ubicacion), ...kv('Responsable', responsable)]);
   add([...kv('Fecha', new Date().toLocaleDateString('es-MX')), ...kv('Version', version), ...kv('Moneda', moneda), ...kv('Region / base de precios', region || `Base de precios: ${fechaBase}`)]);
@@ -328,7 +328,7 @@ export function buildParametrosSheet(apus, options = {}){
   const add = (row = []) => rows.push([...row, null]);
   const kv = (label, value) => add([asCell(label, XLS.label), asCell(value ?? '', { wrap: true })]);
 
-  add([asCell('PARAMETROS DEL LOTE', { columnSpan: 2, fontWeight: 'bold', fontSize: 14, color: '#2A1740', backgroundColor: '#EDE3F6', align: 'center' }), null]);
+  add([asCell('PARAMETROS DEL LOTE', { columnSpan: 2, fontWeight: 'bold', fontSize: 14, color: '#0B2F4A', backgroundColor: '#EAF3F8', align: 'center' }), null]);
   add([]);
   kv('Moneda', first.moneda || 'MXN');
   kv('Fecha base de precios / vigencia', first.fechaBase || new Date().toLocaleDateString('es-MX'));

@@ -2,26 +2,79 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { computeReviewStageModel } from './reviewStageModel.js';
 import { SYSTEM_RESOURCES } from '../../../domain/constructionSystems.js';
+import { calcAPUv2 } from '../../../lib/apuCalc.js';
 
 const baseApu = (overrides = {}) => {
-  const source = { proveedor: 'Proveedor de prueba', fecha: new Date().toISOString(), estado: 'VERIFICADO' };
-  const type = 'acero';
-  return {
-  id: 'apu-1',
-  projectId: 'project-a',
-  concept: 'Suministro y habilitado de acero',
-  unit: SYSTEM_RESOURCES[type].unit,
-  cantidadObra: 10,
-  primaryActivity: type,
-  materials: SYSTEM_RESOURCES[type].materials.map(([descripcion, consumo, unidad, precioUnitario, desperdicioPct]) => ({ descripcion, consumo, unidad, precioUnitario, desperdicioPct, fuente: source })),
-  labor: SYSTEM_RESOURCES[type].labor.map(([descripcion, coef, unidad, salarioBase, fsr]) => ({ descripcion, unidad, cuadrilla: 1, rendimiento: 1 / coef, salarioBase, fsr, fuente: source, rendimientoFuente: 'HISTORICO' })),
-  equipment: [],
-  consumables: [],
-  seguridad: [],
-  factores: {},
-  calculated: { pu: 100, direct: 100, importeTotal: 1000 },
-  ...overrides
+  const source = {
+    proveedor: 'Proveedor de prueba',
+    fecha: new Date().toISOString(),
+    estado: 'VERIFICADO'
   };
+
+  const type = 'acero';
+
+  const apu = {
+    id: 'apu-1',
+    projectId: 'project-a',
+    concept: 'Suministro y habilitado de acero',
+    unit: SYSTEM_RESOURCES[type].unit,
+    cantidadObra: 10,
+    primaryActivity: type,
+    classificationMatch: 'exact',
+
+    procedimientoConstructivo: [
+      'Preparación del material',
+      'Habilitado y colocación'
+    ],
+
+    controlCalidad: [
+      'Verificación de especificación y colocación'
+    ],
+
+    criterioMedicion: {
+      unidadMedicion: SYSTEM_RESOURCES[type].unit
+    },
+
+    variables: {
+      weight: 10
+    },
+
+    materials: SYSTEM_RESOURCES[type].materials.map(
+      ([descripcion, consumo, unidad, precioUnitario, desperdicioPct]) => ({
+        descripcion,
+        consumo,
+        unidad,
+        precioUnitario,
+        desperdicioPct,
+        fuente: source
+      })
+    ),
+
+    labor: SYSTEM_RESOURCES[type].labor.map(
+      ([descripcion, coef, unidad, salarioBase, fsr]) => ({
+        descripcion,
+        unidad,
+        cuadrilla: 1,
+        rendimiento: 1 / coef,
+        salarioBase,
+        fsr,
+        fuente: source,
+        rendimientoFuente: 'HISTORICO'
+      })
+    ),
+
+    equipment: [],
+    consumables: [],
+    seguridad: [],
+    factores: {},
+    ...overrides
+  };
+
+  if (!Object.prototype.hasOwnProperty.call(overrides, 'calculated')) {
+    apu.calculated = calcAPUv2(apu);
+  }
+
+  return apu;
 };
 
 const concept = (apuId = 'apu-1', projectId = 'project-a') => ({ id: `concept-${apuId}`, projectId, apuId, qty: 10 });

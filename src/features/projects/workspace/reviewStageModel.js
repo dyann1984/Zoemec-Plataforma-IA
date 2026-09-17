@@ -107,10 +107,13 @@ export function computeReviewStageModel({
     if (result.riskSeverity) counts[result.riskSeverity] = (counts[result.riskSeverity] || 0) + 1;
     return counts;
   }, {});
-  const estimatedExposure = results.reduce((sum, result) => {
-    const exposure = result.bidRisk?.estimatedExposure;
-    return Number.isFinite(exposure) ? sum + exposure : sum;
-  }, 0);
+  const exposureValues = results
+    .map(result => result.bidRisk?.estimatedExposure)
+    .filter(value => Number.isFinite(value));
+
+  const estimatedExposure = exposureValues.length
+    ? exposureValues.reduce((sum, value) => sum + value, 0)
+    : null;
   const hasUnreviewedRisk = results.some(result => result.hasHighOrCriticalRisk && !REVIEWED_STATUSES.has(result.humanStatus));
   const hasUnreviewedHumanReview = results.some(result => !REVIEWED_STATUSES.has(result.humanStatus));
   const allChallengesDecided = results.every(result => result.pendingChallenges.length === 0);

@@ -3,7 +3,7 @@ import { useI18n } from '../../../i18n/I18nContext.jsx';
 import { apiGetSafe } from '../../../services/apiClient.js';
 import { analyzeOmittedCosts, computeReviewStageModel } from './reviewStageModel.js';
 
-const money = value => Number.isFinite(Number(value))
+const money = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value))
   ? new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 2 }).format(Number(value))
   : 'No estimable';
 
@@ -108,7 +108,19 @@ export function ReviewStage({ project, user, apus = [], catalogConceptos = [], o
             <tbody>
               {model.results.map(result => {
                 const confidence = result.confidence;
-                const rowStatus = result.errors.length || result.criticalAuditFindings.length || result.pendingChallenges.length || result.hasHighOrCriticalRisk || !['REVISADO', 'VALIDADO_POR_USUARIO'].includes(result.humanStatus) ? 'atencion' : 'completado';
+                const isHumanReviewed = ['REVISADO', 'VALIDADO_POR_USUARIO'].includes(result.humanStatus);
+                const hasUnreviewedRisk = result.hasHighOrCriticalRisk && !isHumanReviewed;
+                const confidenceNeedsAttention = ['LOW', 'INSUFFICIENT_EVIDENCE'].includes(result.confidence?.status);
+
+                const rowStatus =
+                  result.errors.length ||
+                  result.criticalAuditFindings.length ||
+                  result.pendingChallenges.length ||
+                  hasUnreviewedRisk ||
+                  !isHumanReviewed ||
+                  confidenceNeedsAttention
+                    ? 'atencion'
+                    : 'completado';
                 return (
                   <tr key={result.apuId} className={selected?.apuId === result.apuId ? 'is-selected' : ''}>
                     <td>{result.concept}</td>

@@ -109,7 +109,7 @@ function logCacheWriteFailure({ queryHash, operation, errorCode, error }){
 
 export async function searchMarketReferencesWithCache({
   description, unit, kind = 'materials', location = '', dateBase = '', categoriaLaboral = '',
-  technicalSpecification = '', region = '', country = '', state = '', city = '', currency = 'MXN', tenantScope = null,
+  technicalSpecification = '', region = '', country = '', state = '', city = '', zone = '', currency = 'MXN', tenantScope = null,
   maxDailySearches = DEFAULT_MAX_DAILY_SEARCHES, searchImpl = searchMarketReferences, db = null, store = null
 } = {}){
   const database = db || getAdminDb();
@@ -119,7 +119,7 @@ export async function searchMarketReferencesWithCache({
   // `database` real incluso cuando `store` esta forzado, para poder probar
   // el fallo del CACHE de forma aislada del presupuesto.
   const cache = createPriceSearchCache({ store: store || createFirestorePriceCacheStore(database), defaultTtlMs: PRICE_CACHE_TTL_MS.NORMAL });
-  const fingerprintInput = { normalizedDescription: description, technicalSpecification, unit, region: region || location, country, state, city, currency, tenantScope };
+  const fingerprintInput = { normalizedDescription: description, technicalSpecification, unit, region: region || location, country, state, city, zone, currency, tenantScope };
 
   // FASE 3 (aprendizaje progresivo seguro): evidencia interna de ZOEMEC
   // (observaciones reales de otras organizaciones, agregadas y anonimizadas
@@ -163,7 +163,7 @@ export async function searchMarketReferencesWithCache({
     };
   }
 
-  const searchResult = await searchImpl({ description, unit, kind, location: region || location, country, state, city, dateBase, categoriaLaboral, regionalIntelligence });
+  const searchResult = await searchImpl({ description, unit, kind, location: region || location, country, state, city, zone, dateBase, categoriaLaboral, regionalIntelligence });
   const priceStatus = derivePriceStatus({ price: searchResult.precioRecomendado ?? 0, references: searchResult.referencias || [] });
   const confidence = computePriceConfidence({ references: searchResult.referencias || [] });
   const selectedReference = (searchResult.referencias || []).find(r => r?.match?.verdict === 'ALTO') || null;

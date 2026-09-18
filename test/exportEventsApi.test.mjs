@@ -163,6 +163,20 @@ describe('POST /api/export-events action=record, scope=PROJECT (Fase 8 Parte 2)'
   });
 });
 
+describe('POST /api/export-events action=record, scope=VAULT (Fase F, Reporte Ejecutivo del Project Vault)', () => {
+  it('registra el evento con projectId, igual que PROJECT/EXPLOSION/PRESUPUESTO -- nunca exige apuId', async () => {
+    const { uid, idToken } = await createUserAndGetIdToken({ email: uniq('vault-record') });
+    const projectId = uniqId('PRO-EE-VAULT');
+    await callProjects(post(idToken, { action: 'create', id: projectId, name: 'Proyecto Vault export event' }));
+    const res = await call(post(idToken, { action: 'record', scope: 'VAULT', projectId, format: 'PDF', mode: 'TECNICO' }));
+    assert.equal(res.statusCode, 201);
+    assert.equal(res.body.event.scope, 'VAULT');
+    assert.equal(res.body.event.actor, uid);
+    assert.equal(res.body.event.projectId, projectId);
+    assert.equal(res.body.event.apuId, undefined);
+  });
+});
+
 describe('GET /api/export-events', () => {
   it('lista solo los eventos del usuario autenticado, opcionalmente filtrados por apuId', async () => {
     const a = await createUserAndGetIdToken({ email: uniq('list-a') });

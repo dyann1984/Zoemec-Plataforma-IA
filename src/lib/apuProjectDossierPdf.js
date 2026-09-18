@@ -17,6 +17,7 @@ import {
 import { buildProjectDossierData } from './apuProjectDossierData.js';
 import { shortHash } from '../domain/snapshotHash.js';
 import { apiPost } from '../services/apiClient.js';
+import { buildProjectLocationSnapshot } from '../domain/geography.js';
 
 function drawPortada(doc, data, meta){
   const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), M = 16;
@@ -35,13 +36,15 @@ function drawPortada(doc, data, meta){
   };
   field('Proyecto:', meta.proyecto);
   field('Cliente:', meta.cliente);
+  field('Ubicacion del proyecto:', meta.ubicacionProyecto || 'Sin ubicacion capturada');
+  field('Moneda:', meta.monedaProyecto || 'MXN');
   field('Fecha:', meta.fecha);
   field('Numero de APUs:', data.apuEntries.length);
   field('Importe total:', money(data.importeProyectoTotal));
   field('Manifest hash:', `${shortHash(data.dossierManifest.manifestHash)}...`);
   y += 8;
   doc.setTextColor(90); doc.setFont('helvetica', 'normal'); doc.setFontSize(7.4);
-  doc.text(doc.splitTextToSize(pdfText('Este dossier refleja las versiones server-side ACTUALES de cada APU al momento de su generacion (ver Manifest Hash para verificar exactamente cuales).'), W - 2 * M), M, y);
+  doc.text(doc.splitTextToSize(pdfText('Este dossier refleja las versiones server-side ACTUALES de cada APU al momento de su generacion (ver Manifest Hash para verificar exactamente cuales). Ubicacion y moneda mostradas arriba son las del proyecto -- cada "DETALLE APU" mas adelante muestra su propia ubicacion, moneda y nivel de referencia de precios reales, que pueden diferir si se modificaron para ese APU en particular.'), W - 2 * M), M, y);
 }
 
 function drawResumenProyecto(doc, data, meta){
@@ -149,10 +152,17 @@ function drawAnexoTecnico(doc, data, meta){
    (scope=PROJECT, api/export-events.mjs) -- nunca el de un solo APU. */
 export async function exportProjectDossierPdf({ projectId, mode = 'TECNICO', selectedScenarios = [], projectScenario = null, company = {}, save = true, fileName } = {}){
   const data = await buildProjectDossierData({ projectId, mode, selectedScenarios, projectScenario });
+  // QA de Contexto geografico (ronda 2): "el entregable debe permitir saber
+  // donde se cotizo" -- Ubicacion/Moneda del PROYECTO (default que heredan
+  // los APUs nuevos, ver apuLocationDraft.js), reusando la MISMA funcion que
+  // ya arma este snapshot en toda la plataforma (geography.js), nunca un
+  // calculo nuevo aqui.
+  const projectLocationSnapshot = buildProjectLocationSnapshot(data.project);
   const meta = {
     proyecto: company?.name || data.project?.name || '', cliente: company?.client || data.project?.client || '',
     clave: data.projectId, versionLabel: 'PROYECTO', fecha: new Date().toLocaleDateString('es-MX'),
-    autor: company?.responsible || company?.email || ''
+    autor: company?.responsible || company?.email || '',
+    ubicacionProyecto: projectLocationSnapshot.ubicacion || '', monedaProyecto: data.project?.moneda || 'MXN'
   };
 
   const doc = new jsPDF('portrait', 'mm', 'a4');

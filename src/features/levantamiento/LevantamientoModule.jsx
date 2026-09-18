@@ -53,7 +53,7 @@ export function LevantamientoModule({ surveys, setSurveys, activeProjectId, onNe
 
   const openSurvey = list.find(s => s.id === openId) || null;
   if(openSurvey){
-    return <SurveyDetail survey={openSurvey} initialTab={openTab} onBack={() => setOpenId(null)} onChange={next => updateSurvey(openSurvey.id, next)} onSendToApu={onSendToApu} currentUserEmail={currentUserEmail} />;
+    return <SurveyDetail survey={openSurvey} projectId={activeProjectId} initialTab={openTab} onBack={() => setOpenId(null)} onChange={next => updateSurvey(openSurvey.id, next)} onSendToApu={onSendToApu} currentUserEmail={currentUserEmail} />;
   }
 
   return <section>

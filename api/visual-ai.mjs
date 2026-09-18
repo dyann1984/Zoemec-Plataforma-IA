@@ -2,9 +2,15 @@ import crypto from 'node:crypto';
 import { FieldValue, getAdminDb, getAdminStorage } from '../server/api-lib/_firebaseAdmin.mjs';
 import { markFeatureUsed, requireFeature } from '../server/api-lib/_authGuard.mjs';
 import { countPdfPages } from '../server/api-lib/_libraryExtract.mjs';
-import { validateTakeoffResponse, assertPageLimit } from '../server/api-lib/_planoValidate.mjs';
+import { extractVectorGeometry } from '../server/api-lib/_planoVectorExtract.mjs';
+import { validateTakeoffResponse, validateElement, assertPageLimit, MAX_PAGES_PER_ANALYSIS } from '../server/api-lib/_planoValidate.mjs';
 import { sanitizeFileName, MAX_UPLOAD_BYTES } from '../server/api-lib/_libraryClassify.mjs';
 import { TIPOS_ELEMENTO, ESCALA_FUENTES, applyPlanoElementReview } from '../src/domain/planoReview.js';
+import {
+  hasUsableVectorGeometry, groupSegmentsIntoWalls, detectGraphicScale, detectCotaScaleCandidates, resolveScale
+} from '../src/domain/planoVectorGeometry.js';
+import { calibrateScale } from '../src/domain/planoMeasurement.js';
+import { buildVectorWallElement, attachAiOrigin } from '../src/domain/planoElementBuilder.js';
 
 const SYSTEM = `Eres ZOEMEC Visual IA, asistente tecnico para arquitectura, construccion y obra.
 Responde siempre en espanol, con criterio profesional, supuestos explicitos y alcance presupuestable.
@@ -192,6 +198,187 @@ export async function runTakeoffAnalysis({ fileName, mimeType = '', dataBase64, 
   };
 }
 
+/* ---------------------------------------------------------------------- *
+ * Fase B: "PDF vectorial primero". action:'takeoffVector', aditiva y
+ * separada de action:'takeoff' de arriba (que sigue intacta, RC4 congelado
+ * para quien ya la use). Orden real de prioridad (punto 1 del pedido):
+ *   1. geometria vectorial del PDF (extractVectorGeometry, real, sin IA)
+ *   2. texto/cotas del propio PDF (detectGraphicScale/detectCotaScaleCandidates)
+ *   3. vision IA -- SOLO para lo que la geometria no puede clasificar
+ *      (puertas/ventanas/columnas/losas/habitaciones/ejes/cotas), nunca para
+ *      re-proponer muros que ya se detectaron por vector.
+ * `aiCompletionFn` es inyectable (por defecto llama a OpenAI de verdad) para
+ * poder probar el pipeline COMPLETO (extraccion real + fusion + reglas de
+ * escala) con un PDF real y una respuesta de IA controlada, sin red.
+ * ---------------------------------------------------------------------- */
+
+const VECTOR_TAKEOFF_NON_WALL_TIPOS = TIPOS_ELEMENTO.filter(t => t !== 'muro');
+
+function vectorTakeoffSystemPrompt(){
+  return `Eres ZOEMEC Takeoff IA (vectorial). El plano YA fue analizado por geometria vectorial real: algunos muros pueden haber sido detectados con su longitud EXACTA a partir de las lineas del propio PDF -- NUNCA vuelvas a proponer esos muros, ya estan resueltos sin ti.
+
+Tu trabajo es COMPLEMENTAR esa geometria, identificando SOLO elementos de este conjunto que la geometria vectorial no puede clasificar por si sola: ${VECTOR_TAKEOFF_NON_WALL_TIPOS.join(', ')}.
+
+Reglas estrictas, sin excepcion (identicas a Takeoff clasico):
+- NUNCA inventes una dimension. Una cantidad solo se propone si hay evidencia real (cota escrita, escala grafica, o referencia del usuario). Si no puedes determinarla, cantidadPropuesta=null, unidad="" y fuenteEscala="no_determinada".
+- "evidencia" debe citar o describir con precision la cota/rotulo/nota que sustenta tu propuesta. Nunca vacia ni generica.
+- "confianzaIA" es tu estimacion 0-100, nunca 100 como sinonimo de "confirmado".
+- "pagina" es el numero de pagina (desde 1) donde detectaste el elemento.
+- "bbox" es tu mejor aproximacion de {x0,y0,x1,y1} en fraccion 0-1 del tamano de la pagina/imagen completa (0,0 = esquina superior izquierda), para poder ubicar el elemento en un visor -- ES SOLO UNA APROXIMACION VISUAL, nunca una medicion geometrica exacta ni una coordenada real del documento.
+- No propongas mas de 60 elementos.
+- No calcules presupuesto ni precios.
+Responde siempre en espanol.`;
+}
+
+function vectorTakeoffJsonSchema(){
+  return {
+    type: 'object',
+    properties: {
+      elementos: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            tipo: { type: 'string', enum: VECTOR_TAKEOFF_NON_WALL_TIPOS },
+            descripcion: { type: 'string' },
+            cantidadPropuesta: { type: ['number', 'null'] },
+            unidad: { type: 'string' },
+            confianzaIA: { type: 'number' },
+            pagina: { type: 'integer' },
+            evidencia: { type: 'string' },
+            fuenteEscala: { type: 'string', enum: Object.values(ESCALA_FUENTES) },
+            observaciones: { type: 'string' },
+            bbox: {
+              type: 'object',
+              properties: { x0: { type: 'number' }, y0: { type: 'number' }, x1: { type: 'number' }, y1: { type: 'number' } },
+              required: ['x0', 'y0', 'x1', 'y1'], additionalProperties: false
+            }
+          },
+          required: ['tipo', 'descripcion', 'cantidadPropuesta', 'unidad', 'confianzaIA', 'pagina', 'evidencia', 'fuenteEscala', 'observaciones', 'bbox'],
+          additionalProperties: false
+        }
+      },
+      resumenAnalisis: { type: 'string' }
+    },
+    required: ['elementos', 'resumenAnalisis'],
+    additionalProperties: false
+  };
+}
+
+function vectorTakeoffUserText({ fileName, numPages, resolvedScale, vectorWallCount }){
+  let text = `Archivo: ${fileName || 'sin nombre'}\nPaginas a analizar: ${numPages}.`;
+  text += `\n\nLa geometria vectorial ya detecto ${vectorWallCount} muro(s) real(es) -- no los repitas.`;
+  if(resolvedScale?.fuente && resolvedScale.fuente !== ESCALA_FUENTES.NO_DETERMINADA){
+    text += `\nEscala ya resuelta por el sistema (fuente: ${resolvedScale.fuente}): usa fuenteEscala="${resolvedScale.fuente}" en los elementos donde puedas aplicar esta misma escala con evidencia real.`;
+  }else{
+    text += `\nAun NO hay escala determinada para este plano: si no encuentras tu propia evidencia de escala/cota, deja cantidadPropuesta=null y fuenteEscala="no_determinada".`;
+  }
+  return text;
+}
+
+/* Llamada real a OpenAI para el complemento de Fase B -- mismo endpoint/
+   formato que runTakeoffAnalysis, extraida a funcion propia SOLO para poder
+   inyectarla en pruebas (ver test/visualAiVectorTakeoff.test.mjs). */
+async function defaultAiCompletion({ systemPrompt, userText, isPdf, dataBase64, fileName, jsonSchema }){
+  const content = [
+    { type: 'input_text', text: userText },
+    isPdf ? { type: 'input_file', filename: fileName || 'plano.pdf', file_data: dataBase64 } : { type: 'input_image', image_url: dataBase64 }
+  ];
+  const model = process.env.OPENAI_VISUAL_MODEL || 'gpt-4.1-mini';
+  const aiRes = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      input: [{ role: 'system', content: systemPrompt }, { role: 'user', content }],
+      text: { format: { type: 'json_schema', name: 'plano_takeoff_vector', schema: jsonSchema, strict: true } },
+      max_output_tokens: 4000
+    })
+  });
+  const data = await readOpenAIJsonSafe(aiRes);
+  if(!aiRes.ok) throw new Error(data.error?.message || 'OpenAI no pudo analizar el plano.');
+  const rawText = data.output_text || data.output?.flatMap(o => o.content || []).map(c => c.text).filter(Boolean).join('') || '';
+  let parsed = null;
+  try{ parsed = JSON.parse(rawText); }catch{ parsed = null; }
+  return { parsed, usage: { inputTokens: data.usage?.input_tokens || null, outputTokens: data.usage?.output_tokens || null } };
+}
+
+/* Orquestador principal de Fase B. Pura de red/Firestore (solo llama al PDF
+   parser real y, opcionalmente, a `aiCompletionFn`) para poder probarse con
+   un PDF real generado en la prueba + una respuesta de IA falsa inyectada,
+   sin depender de credenciales de OpenAI. NUNCA escribe en Firestore --
+   la persistencia real (Fase B, punto 11) la hace el llamador via
+   POST /api/plano-takeoffs, que es quien deriva organizationId server-side. */
+export async function runVectorTakeoffAnalysis({
+  fileName, mimeType = '', dataBase64, manualCalibration, aiCompletionFn = defaultAiCompletion
+}){
+  if(!dataBase64){
+    const error = new Error('Falta el archivo del plano (PDF, JPG o PNG).');
+    error.status = 400;
+    throw error;
+  }
+  const isPdf = /^data:application\/pdf/i.test(dataBase64) || /pdf/i.test(mimeType);
+  const isImage = /^data:image\//i.test(dataBase64);
+  if(!isPdf && !isImage){
+    const error = new Error('Formato no soportado para Takeoff: sube un PDF, JPG o PNG.');
+    error.status = 415;
+    throw error;
+  }
+  const buffer = Buffer.from(String(dataBase64).split(',').pop(), 'base64');
+
+  let numPages = 1;
+  let vectorWalls = [];
+  let resolvedScale = { fuente: ESCALA_FUENTES.NO_DETERMINADA, realUnitsPerPdfPoint: null, evidencia: 'No aplica: entrada no es PDF (imagen rasterizada, sin geometria vectorial posible).' };
+  let vectorSummary = { hasUsableVectorGeometry: false, segmentCount: 0 };
+
+  if(isPdf){
+    try{ numPages = await countPdfPages(buffer); }
+    catch(err){ const error = new Error('No se pudo leer el PDF: ' + (err.message || 'archivo invalido.')); error.status = 415; throw error; }
+    assertPageLimit(numPages);
+
+    const extracted = await extractVectorGeometry(buffer, { maxPages: MAX_PAGES_PER_ANALYSIS });
+    const usable = hasUsableVectorGeometry(extracted.allSegments);
+    vectorSummary = { hasUsableVectorGeometry: usable, segmentCount: extracted.allSegments.length };
+
+    const graphicScale = detectGraphicScale(extracted.allTextItems);
+    const cotaCandidates = detectCotaScaleCandidates(extracted.allTextItems, extracted.allSegments);
+    const manualScale = manualCalibration && Number(manualCalibration.pixelDistance) > 0 && Number(manualCalibration.realDistance) > 0
+      ? { realUnitsPerPdfPoint: calibrateScale(manualCalibration.pixelDistance, manualCalibration.realDistance), evidencia: manualCalibration.evidencia || `Calibracion manual: ${manualCalibration.realDistance} en ${manualCalibration.pixelDistance}pt.` }
+      : null;
+    resolvedScale = resolveScale({ graphicScale, cotaCandidates, referenciaUsuario: manualScale });
+
+    if(usable){
+      const wallGroups = groupSegmentsIntoWalls(extracted.allSegments);
+      vectorWalls = wallGroups.map(w => buildVectorWallElement(w, { resolvedScale, fileName: fileName || '' }));
+    }
+  }
+
+  let aiElements = [];
+  let resumenAnalisis = '';
+  let aiValidation = { elementosInvalidos: [], resultadoParcial: false, elementosDescartados: 0 };
+  if(process.env.OPENAI_API_KEY || aiCompletionFn !== defaultAiCompletion){
+    const systemPrompt = vectorTakeoffSystemPrompt();
+    const userText = vectorTakeoffUserText({ fileName, numPages, resolvedScale, vectorWallCount: vectorWalls.length });
+    const { parsed } = await aiCompletionFn({ systemPrompt, userText, isPdf, dataBase64, fileName, jsonSchema: vectorTakeoffJsonSchema() });
+    const validation = validateTakeoffResponse(parsed, { numPages });
+    if(validation.ok){
+      aiElements = validation.elementos.map((el, i) => attachAiOrigin(el, { bbox: parsed?.elementos?.[i]?.bbox || null, fileName: fileName || '' }));
+      aiValidation = { elementosInvalidos: validation.elementosInvalidos, resultadoParcial: validation.resultadoParcial, elementosDescartados: validation.elementosDescartados };
+      resumenAnalisis = typeof parsed?.resumenAnalisis === 'string' ? parsed.resumenAnalisis.slice(0, 4000) : '';
+    }
+  }
+
+  return {
+    numPages, mimeType, fileName: fileName || '', buffer,
+    vectorSummary, resolvedScale,
+    elementos: [...vectorWalls, ...aiElements],
+    elementosInvalidos: aiValidation.elementosInvalidos,
+    resultadoParcial: aiValidation.resultadoParcial,
+    elementosDescartados: aiValidation.elementosDescartados,
+    resumenAnalisis
+  };
+}
+
 /* Mensajes reales observados cuando Firebase Storage no esta disponible en
    este proyecto (plan Spark sin bucket habilitado -- decision explicita del
    usuario de RC4: no activar Storage ni introducir facturacion para el
@@ -291,6 +478,40 @@ async function takeoffAnalyze(req, res, authz){
     resumenAnalisis: typeof parsed?.resumenAnalisis === 'string' ? parsed.resumenAnalisis.slice(0, 4000) : '',
     fileStored: storage.fileStored,
     downloadURL: storage.downloadURL,
+    storageError: storage.storageError
+  });
+}
+
+/* action:'takeoffVector' (Fase B): a diferencia de takeoffAnalyze arriba,
+   NUNCA escribe en Firestore -- solo analiza (vector-first + IA
+   complementaria) y devuelve el resultado. La persistencia real (con
+   organizationId derivado server-side, punto 12) la hace el cliente
+   despues via POST /api/plano-takeoffs action=create/save-version. Separar
+   "analizar" de "persistir" evita duplicar la logica de organizationId en
+   dos archivos distintos. */
+async function takeoffVectorAnalyze(req, res, authz){
+  const { fileName, mimeType = '', dataBase64, manualCalibration } = req.body || {};
+  const { numPages, mimeType: mt, buffer, vectorSummary, resolvedScale, elementos, elementosInvalidos, resultadoParcial, elementosDescartados, resumenAnalisis }
+    = await runVectorTakeoffAnalysis({ fileName, mimeType, dataBase64, manualCalibration });
+
+  const analysisId = crypto.randomUUID();
+  const storage = await storeOriginalPlano({ uid: authz.uid, visualRequestId: analysisId, fileName, mimeType: mt, buffer });
+  await markFeatureUsed(authz);
+
+  res.status(200).json({
+    ok: true,
+    fileName: fileName || '',
+    numPages,
+    vectorSummary,
+    resolvedScale,
+    elementos,
+    elementosInvalidos,
+    resultadoParcial,
+    elementosDescartados,
+    resumenAnalisis,
+    fileStored: storage.fileStored,
+    downloadURL: storage.downloadURL,
+    fileHash: storage.fileHash,
     storageError: storage.storageError
   });
 }
@@ -450,6 +671,7 @@ export default async function handler(req, res){
     const authz = await requireFeature(req, 'visual');
     const action = req.body?.action || 'propuesta';
     if(action === 'takeoff') return await takeoffAnalyze(req, res, authz);
+    if(action === 'takeoffVector') return await takeoffVectorAnalyze(req, res, authz);
     if(action === 'reviewElement') return await reviewTakeoffElement(req, res, authz);
     return await generateVisualProposal(req, res, authz);
   }catch(err){

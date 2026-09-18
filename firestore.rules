@@ -369,6 +369,176 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Plano Takeoff (Fase B): mismo patron exacto que apus/apuVersions/apuAudit
+    // -- documento actual + version inmutable + auditoria append-only, toda
+    // escritura via server/api-lib/_route-plano-takeoffs.mjs (Admin SDK).
+    match /planoTakeoffs/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /planoTakeoffVersions/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /planoTakeoffAudit/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+
+    // Catalogo de conceptos (Fase D): documento actual + auditoria
+    // append-only, mismo patron que apus/planoTakeoffs. Un concepto es
+    // esencialmente estatico (clave/capitulo/descripcion/unidad/cantidad/
+    // origen) asi que, a diferencia de apus/planoTakeoffs, no tiene
+    // coleccion de versiones propia -- toda escritura pasa por
+    // server/api-lib/_route-catalogo-conceptos.mjs (SDK Admin).
+    match /catalogConceptos/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /catalogConceptosAudit/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+
+    // Presupuesto (Fase D): mismo patron exacto que apus/apuVersions/apuAudit
+    // -- documento actual (con currentVersion Y baselineVersion, este ultimo
+    // fijado una sola vez por la accion approve-baseline y nunca modificado
+    // despues) + version inmutable + auditoria append-only. Toda escritura
+    // via server/api-lib/_route-presupuestos.mjs (SDK Admin).
+    match /presupuestos/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /presupuestoVersions/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /presupuestoAudit/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+
+    // Control Presupuestal (Fase E): 5 entidades nuevas, mismo patron de
+    // lectura que catalogConceptos/presupuestos -- toda escritura pasa por
+    // server/api-lib/_route-change-orders.mjs, _route-commitments.mjs,
+    // _route-progress.mjs, _route-estimates.mjs, _route-payments.mjs (SDK
+    // Admin). changeOrders/commitments/estimates son documento actual +
+    // auditoria append-only (mismo patron que catalogConceptos); progress/
+    // payments son ledgers append-only puros (cada renglon es su propia
+    // auditoria, ver src/domain/progressEntrySchema.js) y por eso no tienen
+    // coleccion *Audit propia.
+    match /changeOrders/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /changeOrdersAudit/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /commitments/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /commitmentsAudit/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /progressEntries/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /estimates/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /estimatesAudit/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /payments/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+
+    // Construction DNA (Fase F, Project Vault): documento puntero actual +
+    // version inmutable + auditoria append-only, mismo patron que
+    // presupuestos/presupuestoVersions/presupuestoAudit. Toda escritura via
+    // server/api-lib/_route-construction-dna.mjs (SDK Admin).
+    match /constructionDna/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /constructionDnaVersions/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /constructionDnaAudit/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+
+    // Project Sentinel (Fase G): alertas persistentes + su auditoria +
+    // historial de Project Health. Toda escritura via
+    // server/api-lib/_route-sentinel.mjs (SDK Admin).
+    match /sentinelAlerts/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /sentinelAlertsAudit/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /healthHistory/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+
+    // Ciclo de vida del activo (Fase G): un activo por proyecto entregado +
+    // sus componentes + auditoria de ambos. Toda escritura via
+    // server/api-lib/_route-assets.mjs (SDK Admin).
+    match /assets/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /assetsAudit/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /assetComponents/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /assetComponentsAudit/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+
     // Eventos de exportacion del Dossier APU Auditable (Fase 8, regla 22):
     // append-only, nunca editable ni borrable -- toda escritura pasa por
     // api/export-events.mjs (SDK admin). Mismo criterio de lectura que

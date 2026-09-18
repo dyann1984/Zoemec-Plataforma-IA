@@ -3,6 +3,17 @@ import admin from 'firebase-admin';
 const DEFAULT_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'zoemec-plataforma-ia';
 
 function parseServiceAccount(){
+  // FIX (Fase D.1, dev server local contra el emulador): con
+  // FIRESTORE_EMULATOR_HOST definido, el SDK admin JAMAS valida
+  // credenciales contra el emulador (ver comentario en hasAdminCredentials
+  // mas abajo) -- intentar de todos modos parsear FIREBASE_SERVICE_ACCOUNT_JSON
+  // (que en un .env local de desarrollo puede venir vacio, placeholder o mal
+  // formado, nunca pensado para usarse de verdad en este modo) lanzaba un
+  // JSON.parse/base64 invalido y tumbaba CUALQUIER llamada a Firestore en
+  // modo emulador, incluso con la variable de emulador correcta. En
+  // produccion (sin FIRESTORE_EMULATOR_HOST) el comportamiento no cambia en
+  // nada: ahi SI se requiere un service account real y valido.
+  if(process.env.FIRESTORE_EMULATOR_HOST) return null;
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
   if(raw){
     const clean = raw.trim();

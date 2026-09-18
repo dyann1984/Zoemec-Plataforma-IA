@@ -16,6 +16,7 @@ import { runApuConfidence } from '../domain/apuConfidence.js';
 import { runBidRisk } from '../domain/bidRisk.js';
 import { computeSnapshotHash } from '../domain/snapshotHash.js';
 import { apiGetSafe } from '../services/apiClient.js';
+import { summarizeRegionalCoverage, describeReferenceLevel } from '../domain/apuRegionalContext.js';
 
 const fold = value => String(value ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
 
@@ -175,6 +176,13 @@ export async function buildDossierData({ apu, apuId, apuVersionId, projectId: pr
   const versionDiff = mode === 'TECNICO' ? diffVersions(snapshot, bidRisk, challenge, parentEntry) : null;
   if(versionDiff) versionDiff.toVersion = resolved.versionId;
 
+  // QA de Contexto geografico (ronda 2): nivel de referencia REAL de
+  // precios para el dossier (Ciudad/Estado/Nacional/Sin referencia) --
+  // reusa summarizeRegionalCoverage/describeReferenceLevel (mismo calculo
+  // que la UI), nunca un nivel inventado en la capa de datos del dossier.
+  const regionalSummary = summarizeRegionalCoverage(snapshot);
+  const regionalReferenceLabel = regionalSummary.primaryLevel ? describeReferenceLevel(regionalSummary.primaryLevel) : 'Sin referencia disponible';
+
   return {
     mode, snapshot, snapshotHash,
     source: resolved.source, verificationLabel: resolved.verificationLabel,
@@ -182,6 +190,7 @@ export async function buildDossierData({ apu, apuId, apuVersionId, projectId: pr
     createdAt: resolved.createdAt, createdBy: resolved.createdBy,
     audit, challenge, confidence, bidRisk,
     memoryApproved, memoryAnnex,
-    versions, versionDiff
+    versions, versionDiff,
+    regionalSummary, regionalReferenceLabel
   };
 }

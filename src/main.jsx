@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { jsPDF } from 'jspdf';
 import { createUserWithEmailAndPassword, getAdditionalUserInfo, getIdTokenResult, GoogleAuthProvider, onAuthStateChanged, sendEmailVerification, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile } from 'firebase/auth';
@@ -20,6 +20,8 @@ import { validateProjectDraft } from './domain/projectDraftValidation.js';
 import { exportAPUExcelV2, exportAPUPdfV2, exportAPUPdfMaster } from './lib/apuExportV2.js';
 import { exportProjectDossierPdf } from './lib/apuProjectDossierPdf.js';
 import { exportProjectDossierExcel } from './lib/apuProjectDossierXlsx.js';
+import ExplosionsPanel from './features/explosions/ExplosionsPanel.jsx';
+import PlanoTakeoffWorkspace from './features/planos/PlanoTakeoffWorkspace.jsx';
 import {
   money, num, excelCell, XLS, xcell, fcell, styleHeader, styleSection,
   exportRowsCSV, exportRowsExcel, exportWorkbookExcel,
@@ -30,6 +32,13 @@ import { uid } from './utils/id.js';
 import { getDeviceId, readLocal, writeLocal } from './utils/localStorage.js';
 import { setActiveUid } from './utils/scopedStorage.js';
 import { useLocalState } from './hooks/useLocalState.js';
+import {
+  clearWorkspaceNavigation,
+  normalizeWorkspaceStage,
+  readWorkspaceNavigation,
+  resolveWorkspaceNavigation,
+  writeWorkspaceNavigation
+} from './features/projects/workspace/workspaceNavigationState.js';
 import { useAuthoritativeProjects } from './hooks/useAuthoritativeProjects.js';
 import { useAuthoritativeApus } from './hooks/useAuthoritativeApus.js';
 import { authHeaders, apiPost, readJsonSafe, httpErrorMessage, apiGetSafe, aiServerUrl } from './services/apiClient.js';
@@ -47,6 +56,13 @@ import { ZoemecBrand } from './components/ui/ZoemecBrand.jsx';
 import { Backdrop } from './components/ui/Backdrop.jsx';
 import { Donut, Spark } from './components/ui/charts.jsx';
 import { PageHead, InfoCard, EmptyState } from './components/ui/PageElements.jsx';
+import { SubNavTabs } from './components/ui/SubNavTabs.jsx';
+import { Card } from './components/ui/Card.jsx';
+import { Section } from './components/ui/Section.jsx';
+import { MetricCard } from './components/ui/MetricCard.jsx';
+import { UserMenu } from './components/ui/UserMenu.jsx';
+import { ProjectsView } from './features/projects/ProjectsView.jsx';
+import { ProjectWorkspace } from './features/projects/workspace/ProjectWorkspace.jsx';
 import { AutosaveIndicator } from './components/ui/AutosaveIndicator.jsx';
 import { Param, Cost, NField, ORow } from './components/ui/FormFields.jsx';
 import { HardHat } from './components/ui/HardHat.jsx';
@@ -63,6 +79,10 @@ import { calibrateScale, measureElement } from './domain/planoMeasurement.js';
 import { createTakeoffRecord, applyManualCorrection, upsertTakeoffRecord, findLatestTakeoffForFile, hashFileContent } from './domain/planoTakeoffStore.js';
 import { LevantamientoModule } from './features/levantamiento/LevantamientoModule.jsx';
 import { QuantifierWizard } from './features/quantifier/QuantifierWizard.jsx';
+import { CatalogoModule } from './features/catalogo/CatalogoModule.jsx';
+import { PresupuestoModule } from './features/presupuesto/PresupuestoModule.jsx';
+import { ControlPresupuestalModule } from './features/control-presupuestal/ControlPresupuestalModule.jsx';
+import { ProjectVaultModule } from './features/vault/ProjectVaultModule.jsx';
 import {
   emptyApuWorkspaceState, removeBatchApus, describeAmbiguousSingleExport,
   duplicateGroupKey, groupConceptsByDuplicateKey, defaultBatchSelection, isExportableConceptItem,
@@ -93,6 +113,7 @@ import { formatLocationDisplay, hasAnyLocation, buildProjectLocationSnapshot } f
 import { resolveOrgStatus, ORG_STATUS, isActiveTrialStatus } from './domain/organization.js';
 import { ProfessionalApuEditor } from './features/apu/ProfessionalApuEditor.jsx';
 import { RevisionBandeja } from './features/apu/RevisionBandeja.jsx';
+import { RegionalContextPanel } from './features/apu/RegionalContextPanel.jsx';
 import { parseExcelToCatalog, cleanText, normalizeUnitLabel, parseExcelToAPU, parseRobustConceptCatalog, parseConceptText, parseConceptListText, conceptVariablesFromParsed } from './lib/excelImport.js';
 import {
   defaultCompany, DEMO_MODE, demoCatalog,
@@ -331,6 +352,8 @@ function App(){
   const { t: tr } = useI18n();
   const [screen, setScreen] = useState('landing');
   const [module, setModule] = useState('inicio');
+  const [selectedProjectStage, setSelectedProjectStage] = useState('evidencia');
+  const workspaceNavigationRestoreKey = useRef(null);
   // Enlace de verificacion de correo (?mode=verifyEmail&oobCode=...), ver
   // src/features/auth/VerifyEmailScreen.jsx y emailActionCodeSettings en
   // src/firebase.js. Se lee UNA sola vez al montar (useState lazy init) para
@@ -463,6 +486,41 @@ function App(){
       setActiveProjectId(projects[0].id);
     }
   }, [projects, activeProjectId]);
+  const organizationId = orgSession?.organization?.id || null;
+  useEffect(() => {
+    if (!hasValidSession(user) || !user?.uid || !projects.length) return;
+    const restoreKey = `${user.uid}:${organizationId || 'personal'}`;
+    if (workspaceNavigationRestoreKey.current === restoreKey) return;
+    workspaceNavigationRestoreKey.current = restoreKey;
+
+    const saved = readWorkspaceNavigation(window.sessionStorage, user.uid, organizationId);
+    const resolved = resolveWorkspaceNavigation(saved, projects);
+    if (resolved.restore) {
+      setActiveProjectId(resolved.activeProjectId);
+      setSelectedProjectStage(resolved.selectedProjectStage);
+      setModule(resolved.module);
+      return;
+    }
+    setSelectedProjectStage('evidencia');
+    if (resolved.module === 'cartera') setModule('cartera');
+  }, [user, organizationId, projects, setActiveProjectId]);
+  useEffect(() => {
+    if (!hasValidSession(user) || !user?.uid || module !== 'project-workspace' || !activeProjectId) return;
+    writeWorkspaceNavigation(window.sessionStorage, user.uid, organizationId, {
+      module,
+      activeProjectId,
+      selectedProjectStage
+    });
+  }, [user, organizationId, module, activeProjectId, selectedProjectStage]);
+  // "Ver en plano" (Fase D.1, trazabilidad Presupuesto -> Plano): destino de
+  // navegacion en memoria, nunca persistido -- PresupuestoModule/CatalogoModule
+  // lo escriben al hacer click, VisualAI/PlanoTakeoffWorkspace lo consumen
+  // (abren el plano correcto, la pagina correcta, seleccionan el elemento) y
+  // lo limpian cuando ya lo aplicaron. No hay router real en esta app (ver
+  // `module`/setModule), asi que este es el unico canal para pasar "que
+  // abrir" de un modulo a otro sin acoplar los componentes entre si.
+  const [planoNavigationTarget, setPlanoNavigationTarget] = useState(null);
+  const [pendingOpenApuId, setPendingOpenApuId] = useState(null);
   const [apus, setApus] = useProjectScoped(rawApus, setRawApus, activeProjectId);
   const [budgets, setBudgets] = useProjectScoped(rawBudgets, setRawBudgets, activeProjectId);
   const [catalog, setCatalog] = useProjectScoped(rawCatalog, setRawCatalog, activeProjectId);
@@ -499,7 +557,7 @@ function App(){
   useEffect(() => {
     setZoeContext(prev => ({ ...prev, user, route: module, activeApu: apus[0] || prev.activeApu, budget: budgets[0] || prev.budget, project: projects[0] || prev.project, library: catalog, alerts: prev.alerts || [] }));
   }, [user, module, apus, budgets, projects, catalog]);
-  const companyView = (!company?.logo || company.logo === '/logo.png' || company.logo === '/images/logo-web.png') ? {...company, logo:'/images/logo-web.png?v=zoemec-2026'} : company;
+  const companyView = (!company?.logo || company.logo === '/logo.png' || company.logo.includes('logo-web.png')) ? {...company, logo:'/images/zoemec-logo-oficial.png'} : company;
 
   // Microsoft redirige de vuelta a la app con ?code=...&state=... tras un login
   // real (ver src/lib/onedrive.js). Se captura una sola vez al montar (antes de
@@ -901,12 +959,16 @@ function App(){
   };
   const logout = async () => {
     try { if(firebaseReady) await signOut(auth); } catch {}
+    clearWorkspaceNavigation(window.sessionStorage, user?.uid, organizationId);
+    workspaceNavigationRestoreKey.current = null;
     localStorage.removeItem('zoemec-user');
     setActiveUid(null);
     setUser(null);
     setOrgSession(null);
     setScreen('landing');
   };
+
+  const [createProjectTrigger, setCreateProjectTrigger] = useState(false);
 
   let content;
   const activeProject = projects.find(p => p.id === activeProjectId) || null;
@@ -929,15 +991,50 @@ function App(){
   else if(screen === 'login') content = <Auth mode="login" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} resendVerificationEmail={resendVerificationEmail} company={companyView} />;
   else if(screen === 'register') content = <Auth mode="register" setScreen={setScreen} login={login} loginWithGoogle={loginWithGoogle} resendVerificationEmail={resendVerificationEmail} company={companyView} />;
   else if(!hasValidSession(user)) content = <Landing setScreen={setScreen} login={login} company={companyView} />;
-  else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView} apus={apus} clients={clients} projects={projects} activeProject={activeProject} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} orgSession={orgSession}>
+  else content = <Shell user={user} logout={logout} module={module} setModule={setModule} company={companyView} apus={apus} clients={clients} projects={projects} activeProject={activeProject} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} orgSession={orgSession} onOpenCreateProject={()=>{ setModule('cartera'); setCreateProjectTrigger(true); }}>
+    {COSTOS_GROUP.includes(module) && <SubNavTabs active={module} onSelect={setModule} items={[
+      {key:'costos-resumen',icon:'inicio',label:'Resumen'},
+      {key:'apu',icon:'apu',label:tr('shell.menu.apu')},
+      {key:'presupuestos',icon:'presupuestos',label:tr('shell.menu.presupuestos')},
+      {key:'control-presupuestal',icon:'comparativa',label:tr('shell.menu.controlPresupuestal')},
+      {key:'catalogo',icon:'cuantificaciones',label:tr('shell.menu.catalogo')},
+      {key:'precios-regionales',icon:'presupuestos',label:'Precios regionales'},
+    ]}/>}
+    {REPORTES_GROUP.includes(module) && <SubNavTabs active={module} onSelect={setModule} items={[
+      {key:'reportes',icon:'reportes',label:tr('shell.menu.reportes')},
+      {key:'comparativa',icon:'comparativa',label:tr('shell.menu.comparativa')},
+      {key:'vault',icon:'folder',label:tr('shell.menu.vault')},
+    ]}/>}
     {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} activeProject={activeProject} user={user} demoMode={DEMO_MODE} demoContext={DEMO_MODE ? createDemoContext() : null} />}
-    {module === 'levantamiento' && <LevantamientoModule surveys={surveys} setSurveys={setSurveys} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} onSendToApu={()=>setModule('apu')} currentUserEmail={user?.email || null} organizationId={orgSession?.organization?.id || null} />}
-    {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} rawApus={rawApus} linkApuToProject={linkApuToProject} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} onConfigureLocation={()=>setModule('cartera')} organizationId={orgSession?.organization?.id || null} />}
-    {module === 'presupuestos' && <Budgets company={companyView} budgets={budgets} setBudgets={setBudgets} items={budgetItems} setItems={setBudgetItems} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} />}
-    {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={(pid)=>{ setRawApus(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgets(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawCatalog(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgetItems(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawSurveys(l=>l.filter(x=>(x?.projectId??null)!==pid)); }} />}
+    {module === 'costos-resumen' && <CostosResumen apus={apus} budgets={budgets} catalog={catalog} activeProject={activeProject} setModule={setModule} />}
+    {module === 'levantamiento' && <LevantamientoModule surveys={surveys} setSurveys={setSurveys} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} onSendToApu={()=>setModule('catalogo')} currentUserEmail={user?.email || null} organizationId={orgSession?.organization?.id || null} />}
+    {module === 'catalogo' && <CatalogoModule user={user} organizationId={orgSession?.organization?.id || null} activeProjectId={activeProjectId} activeProject={activeProject} catalog={catalog} onNeedProject={()=>setModule('cartera')} setModule={setModule} onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }} />}
+    {module === 'precios-regionales' && <RegionalPrices apus={apus} activeProject={activeProject} onConfigureLocation={()=>setModule('apu')} />}
+    {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} rawApus={rawApus} linkApuToProject={linkApuToProject} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} onConfigureLocation={()=>setModule('cartera')} setModule={setModule} organizationId={orgSession?.organization?.id || null} pendingOpenApuId={pendingOpenApuId} onPendingOpenApuIdConsumed={()=>setPendingOpenApuId(null)} />}
+    {module === 'presupuestos' && <PresupuestoModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} setModule={setModule} onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }} />}
+    {module === 'control-presupuestal' && <ControlPresupuestalModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} />}
+    {module === 'vault' && <ProjectVaultModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} setModule={setModule} onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }} />}
+    {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={(pid)=>{ setRawApus(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgets(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawCatalog(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgetItems(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawSurveys(l=>l.filter(x=>(x?.projectId??null)!==pid)); }} openCreateProject={createProjectTrigger} onHandledCreateProject={()=>setCreateProjectTrigger(false)} apus={apus} budgets={budgets} onOpenWorkspace={(pid)=>{ setActiveProjectId(pid); setSelectedProjectStage('evidencia'); setModule('project-workspace'); }} />}
+    {module === 'project-workspace' && <ProjectWorkspace
+      projectId={activeProjectId}
+      projects={projects}
+      user={user}
+      organizationId={orgSession?.organization?.id || null}
+      apus={apus}
+      budgets={budgets}
+      surveys={surveys}
+      onBackToProjects={()=>setModule('cartera')}
+      onNavigateToLevantamiento={()=>setModule('levantamiento')}
+      onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }}
+      onNavigateToVault={()=>setModule('vault')}
+      onNavigateToApu={(apu)=>{ setPendingOpenApuId(apu?.id || null); setModule('apu'); }}
+      onNavigateToBudget={()=>setModule('presupuestos')}
+      initialStage={normalizeWorkspaceStage(selectedProjectStage)}
+      onStageChange={setSelectedProjectStage}
+    />}
     {module === 'biblioteca' && <Library user={user} catalog={catalog} setCatalog={setCatalog} setModule={setModule} />}
     {module === 'tecnico' && <TechnicalOffice company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} needsProject={needsProject} onCreateProject={()=>setModule('cartera')} />}
-    {module === 'visual' && <VisualAI user={user} setModule={setModule} />}
+    {module === 'visual' && <VisualAI user={user} setModule={setModule} activeProjectId={activeProjectId} activeProject={activeProject} organizationId={orgSession?.organization?.id || null} onNeedProject={()=>setModule('cartera')} navigationTarget={planoNavigationTarget} onNavigationTargetConsumed={()=>setPlanoNavigationTarget(null)} onReturnToWorkspace={() => setModule('project-workspace')} />}
     {module === 'comunidad' && <Community />}
     {module === 'planes' && <PlansAccess user={user} />}
     {module === 'reportes' && <Reports clients={clients} apus={apus} budgets={budgets} />}
@@ -1354,7 +1451,7 @@ function ComparePublicWrapper({ setScreen }){
   </div>;
 }
 
-function Auth({mode,setScreen,login,loginWithGoogle,resendVerificationEmail,company}){
+export function Auth({mode,setScreen,login,loginWithGoogle,resendVerificationEmail,company}){
   const { t: tr } = useI18n();
   const [name,setName]=useState('');
   const [email,setEmail]=useState('');
@@ -1470,30 +1567,71 @@ function TopSearch({apus=[],clients=[],projects=[],setModule}){
   </div>;
 }
 
-function Shell({children,user,logout,module,setModule,company,apus,clients,projects,activeProject,activeProjectId,setActiveProjectId,orgSession}){
+// Grupos de navegacion del rediseno UX (ver Shell/App mas abajo): Costos y
+// Reportes son entradas unicas en el sidebar que agrupan pantallas que ya
+// existian por separado. Ninguna pantalla cambia -- solo la barra de
+// pestanas (SubNavTabs) que aparece arriba de ellas cuando el modulo activo
+// pertenece al grupo.
+const COSTOS_GROUP = ['costos-resumen','apu','presupuestos','control-presupuestal','catalogo','precios-regionales'];
+const REPORTES_GROUP = ['reportes','comparativa','vault'];
+
+export function Shell({children,user,logout,module,setModule,company,apus,clients,projects,activeProject,activeProjectId,setActiveProjectId,orgSession,onOpenCreateProject}){
   const { theme, toggleTheme } = useTheme();
   const { t: tr, locale, setLocale } = useI18n();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [crearOpen, setCrearOpen] = useState(false);
   const hamburgerRef = useRef(null);
   const drawerCloseRef = useRef(null);
+  const crearRef = useRef(null);
   useEffect(() => { if(drawerOpen) drawerCloseRef.current?.focus(); }, [drawerOpen]);
-  // Comunidad y Planes y acceso se ocultan temporalmente del menu principal
-  // (fase de concurso: se mantienen en el codigo, solo no se muestran en la navegacion).
-  const menu = [
+  // Reestructuracion de navegacion (rediseno UX): el sidebar antiguo tenia
+  // 14+ modulos al mismo nivel. Ahora la navegacion primaria queda en 5
+  // accesos (Inicio, Proyectos, Crear+, Costos, Reportes); Costos y
+  // Reportes son "grupos" que agrupan visualmente modulos que ya existian
+  // como pantallas independientes (ver COSTOS_GROUP/REPORTES_GROUP) --
+  // goTo(module) sigue siendo la misma funcion de siempre, ninguna pantalla
+  // cambio de props ni de logica. El resto de modulos (Levantamiento IA,
+  // Visual IA, Oficina tecnica, Equipo, Admin) se movio a "Mas herramientas"
+  // (secundario, colapsado) sin eliminarse. Comunidad y Planes siguen
+  // ocultos del menu como antes.
+  const costosActive = COSTOS_GROUP.includes(module);
+  const reportesActive = REPORTES_GROUP.includes(module);
+  const primaryMenu = [
     ['inicio','inicio',tr('shell.menu.inicio')],
+    ['cartera','proyectos',tr('shell.menu.cartera'),tr('shell.menu.carteraDesc')],
+  ];
+  const secondaryMenu = [
     ['levantamiento','bim',tr('shell.menu.levantamiento'),tr('shell.menu.levantamientoDesc')],
-    ['apu','apu',tr('shell.menu.apu')],
-    ['presupuestos','presupuestos',tr('shell.menu.presupuestos')],
-    ['cartera','clientes',tr('shell.menu.cartera'),tr('shell.menu.carteraDesc')],
-    ['biblioteca','biblioteca',tr('shell.menu.biblioteca'),tr('shell.menu.bibliotecaDesc')],
     ['visual','render',tr('shell.menu.visual'),tr('shell.menu.visualDesc')],
     ['tecnico','tecnico',tr('shell.menu.tecnico'),tr('shell.menu.tecnicoDesc')],
-    ['reportes','reportes',tr('shell.menu.reportes')],
-    ['comparativa','comparativa',tr('shell.menu.comparativa'),tr('shell.menu.comparativaDesc')],
+    ['biblioteca','biblioteca',tr('shell.menu.biblioteca'),tr('shell.menu.bibliotecaDesc')],
     ...(orgSession?.organization ? [['equipo','clientes','Equipo','Usuarios de tu empresa']] : []),
     ...(user.isAdmin ? [['admin','admin',tr('shell.menu.admin'),tr('shell.menu.adminDesc')]] : [])
   ];
-  const goTo = (m) => { setModule(m); setDrawerOpen(false); };
+  const crearItems = [
+    ['cartera','proyectos',tr('shell.crearMenu.obra'),tr('shell.crearMenu.obraDesc')],
+    ['levantamiento','bim','Subir evidencia','Levantamiento IA'],
+    ['visual','render','Importar archivo','Planos, imágenes o modelos'],
+  ];
+  const goTo = (m) => { setModule(m); setDrawerOpen(false); setCrearOpen(false); };
+  const handleCrearItemClick = (key) => {
+    setDrawerOpen(false);
+    setCrearOpen(false);
+    if(key === 'cartera'){
+      onOpenCreateProject?.();
+      return;
+    }
+    goTo(key);
+  };
+  useEffect(() => {
+    if(!crearOpen) return;
+    const onKey = (e) => { if(e.key === 'Escape') setCrearOpen(false); };
+    const onClick = (e) => { if(crearRef.current && !crearRef.current.contains(e.target)) setCrearOpen(false); };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('mousedown', onClick);
+    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('mousedown', onClick); };
+  }, [crearOpen]);
   // Punto 9 del trial empresarial: el usuario ya ve el TrialBanner completo
   // mas abajo, pero la etiqueta corta junto al nombre en el topbar seguia
   // diciendo "Gratis" (su plan INDIVIDUAL real, nunca tocado al crear la
@@ -1519,33 +1657,71 @@ function Shell({children,user,logout,module,setModule,company,apus,clients,proje
     {drawerOpen && <div className="drawer-backdrop" onClick={()=>setDrawerOpen(false)} aria-hidden="true"/>}
     <aside className="sidebar">
       <div className="sidebar-head">
-        <div className="brand"><ZoemecBrand variant="sidebar" subtitle={tr('shell.brandSubtitle')}/></div>
+        <div className="brand"><ZoemecBrand variant="sidebar"/></div>
         <button className="drawer-close" ref={drawerCloseRef} onClick={()=>{ setDrawerOpen(false); hamburgerRef.current?.focus(); }} aria-label={tr('shell.closeDrawer')}>×</button>
       </div>
-      <div className="menu">{menu.map(m=><button key={m[0]} className={module===m[0]?'active':''} onClick={()=>goTo(m[0])}><span className="mi"><Icon name={m[1]}/></span><span className="menu-copy"><b>{m[2]}</b>{m[3] && <small>{m[3]}</small>}</span></button>)}</div>
-      <button className="plan-box" onClick={()=>goTo('planes')}><b>{tr('shell.planBox.title')}</b><p>{tr('shell.planBox.desc')}</p><div><i style={{width:'68%'}}></i></div><small>{tr('shell.planBox.cta')}</small></button>
-      <button className="logout-side" onClick={logout}>{tr('shell.logout')}</button>
+      <div className="menu">
+        {primaryMenu.map(m=><button key={m[0]} className={(module===m[0] || (m[0]==='cartera' && module==='project-workspace'))?'active':''} onClick={()=>goTo(m[0])}><span className="mi"><Icon name={m[1]}/></span><span className="menu-copy"><b>{m[2]}</b></span></button>)}
+        <div className="menu-crear-wrap" ref={crearRef}>
+          <button type="button" className={'menu-crear'+(crearOpen?' active':'')} onClick={()=>setCrearOpen(v=>!v)} aria-haspopup="true" aria-expanded={crearOpen}>
+            <Icon name="plus" size={16}/><span>{tr('shell.menu.crear')}</span>
+          </button>
+          {crearOpen && <div className="crear-popover" role="menu">
+            <span className="crear-popover-title">{tr('shell.crearMenu.title')}</span>
+            {crearItems.map(([key,icon,label,desc])=><button key={key} type="button" role="menuitem" onClick={()=>handleCrearItemClick(key)}><span className="mi"><Icon name={icon} size={17}/></span><span className="menu-copy"><b>{label}</b><small>{desc}</small></span></button>)}
+          </div>}
+        </div>
+        <button className={costosActive?'active':''} onClick={()=>goTo(costosActive?module:'apu')}><span className="mi"><Icon name="costos"/></span><span className="menu-copy"><b>{tr('shell.menu.costos')}</b></span></button>
+        <button className={reportesActive?'active':''} onClick={()=>goTo(reportesActive?module:'reportes')}><span className="mi"><Icon name="reportes"/></span><span className="menu-copy"><b>{tr('shell.menu.reportes')}</b></span></button>
+      </div>
+      <div className="sidebar-tools">
+        <button type="button" className="menu-more-toggle" onClick={()=>setMoreOpen(v=>!v)} aria-expanded={moreOpen}>
+          <span>{tr('shell.menu.more')}</span><span className={'chev'+(moreOpen?' open':'')}><Icon name="chevronDown" size={13}/></span>
+        </button>
+        {moreOpen && <div className="menu menu-secondary">{secondaryMenu.map(m=><button key={m[0]} className={module===m[0]?'active':''} onClick={()=>goTo(m[0])}><span className="mi"><Icon name={m[1]}/></span><span className="menu-copy"><b>{m[2]}</b></span></button>)}</div>}
+      </div>
+      <button type="button" className="sidebar-user" onClick={()=>goTo('planes')}>
+        <span className="avatar">{user.initials}</span>
+        <span className="sidebar-user-copy"><b>{user.name}</b><small>{tr('shell.footerSettings')}</small></span>
+      </button>
     </aside>
+    <nav className="mobile-bottom-nav" aria-label={tr('shell.menu.more')}>
+      <button className={module==='inicio'?'active':''} onClick={()=>goTo('inicio')}><Icon name="inicio" size={20}/><small>{tr('shell.menu.inicio')}</small></button>
+      <button className={(module==='cartera' || module==='project-workspace')?'active':''} onClick={()=>goTo('cartera')}><Icon name="proyectos" size={20}/><small>{tr('shell.menu.cartera')}</small></button>
+      <button className="mobile-crear" onClick={()=>{ setDrawerOpen(true); setCrearOpen(true); }}><span className="mobile-crear-dot"><Icon name="plus" size={20}/></span><small>{tr('shell.menu.crear')}</small></button>
+      <button className={costosActive?'active':''} onClick={()=>goTo(costosActive?module:'apu')}><Icon name="costos" size={20}/><small>{tr('shell.menu.costos')}</small></button>
+      <button className={reportesActive?'active':''} onClick={()=>goTo(reportesActive?module:'reportes')}><Icon name="reportes" size={20}/><small>{tr('shell.menu.reportes')}</small></button>
+    </nav>
     <main className="main">
       <header className="topbar">
         <button className="hamburger" ref={hamburgerRef} onClick={()=>setDrawerOpen(v=>!v)} aria-label={tr('shell.hamburger')} aria-expanded={drawerOpen}>
           <span/><span/><span/>
         </button>
-        <TopSearch apus={apus} clients={clients} projects={projects} setModule={setModule}/>
         {projects.length>0 && <div className="project-switcher" title={tr('shell.projectSwitcher.title')}>
-          <Icon name="proyectos" size={15}/>
           <select value={activeProjectId||''} onChange={e=>setActiveProjectId(e.target.value)} aria-label={tr('shell.projectSwitcher.ariaLabel')}>
             {projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
-          <button type="button" className="ghost-up" onClick={()=>goTo('cartera')}>{tr('shell.projectSwitcher.new')}</button>
+          <Icon name="chevronDown" size={13}/>
+          <button type="button" className="ghost-up" onClick={()=>onOpenCreateProject?.()}>{tr('shell.projectSwitcher.new')}</button>
         </div>}
-        <div className="user">
-          <div className="locale-switch topbar-locale" role="group" aria-label={tr('toggle.langToggleLabel')}>
-            <button className={locale==='es'?'active':''} onClick={()=>setLocale('es')} aria-pressed={locale==='es'}>ES</button>
-            <button className={locale==='en'?'active':''} onClick={()=>setLocale('en')} aria-pressed={locale==='en'}>EN</button>
-          </div>
-          <button className="theme-toggle" onClick={toggleTheme} aria-label={tr('toggle.themeToggleLabel')} title={theme==='light'?tr('toggle.themeDark'):tr('toggle.themeLight')}><Icon name={theme==='light'?'moon':'sun'} size={17}/></button>
-          <CloudBadge user={user}/><ProcessesIndicator/><NotificationBell user={user}/><span className="avatar">{user.initials}</span><div><b>{user.name}</b><small>{planLabel}</small></div><button className="logout-btn" onClick={logout}>{tr('shell.logout')}</button>
+        <div className="topbar-spacer"/>
+        <TopSearch apus={apus} clients={clients} projects={projects} setModule={setModule}/>
+        <div className="topbar-actions">
+          <NotificationBell user={user}/>
+          <UserMenu avatarLabel={user.initials} name={user.name} subtitle={planLabel}>
+            <div className="user-menu-row user-menu-locale">
+              <span>{tr('toggle.langToggleLabel')}</span>
+              <div className="locale-switch" role="group">
+                <button className={locale==='es'?'active':''} onClick={()=>setLocale('es')} aria-pressed={locale==='es'}>ES</button>
+                <button className={locale==='en'?'active':''} onClick={()=>setLocale('en')} aria-pressed={locale==='en'}>EN</button>
+              </div>
+            </div>
+            <button type="button" className="user-menu-row" onClick={toggleTheme}>
+              <Icon name={theme==='light'?'moon':'sun'} size={16}/><span>{theme==='light'?tr('toggle.themeDark'):tr('toggle.themeLight')}</span>
+            </button>
+            <div className="user-menu-row user-menu-status"><CloudBadge user={user}/><ProcessesIndicator/></div>
+            <button type="button" className="user-menu-row user-menu-logout" onClick={logout}>{tr('shell.logout')}</button>
+          </UserMenu>
         </div>
       </header>
       {orgSession?.organization && <TrialBanner organization={orgSession.organization} />}
@@ -1617,6 +1793,39 @@ const BID_READINESS_STATUS_LABEL_EN = Object.freeze({
   READY: 'Ready to submit', READY_WITH_OBSERVATIONS: 'Ready with observations',
   NEEDS_REVIEW: 'Needs review before submitting', NOT_READY: 'Not ready to submit', NO_DATA: ''
 });
+function CostosResumen({apus=[],budgets=[],catalog=[],activeProject,setModule}){
+  return <section>
+    <PageHead kicker="Costos" title="Resumen de costos" desc="Vista consolidada de APUs, conceptos, presupuestos y cobertura regional del proyecto activo." />
+    <div className="cards-3">
+      <div className="panel"><small className="muted">APUs</small><h2>{apus.length}</h2><button className="soft" onClick={()=>setModule('apu')}>Abrir APU</button></div>
+      <div className="panel"><small className="muted">Conceptos de catálogo</small><h2>{catalog.length}</h2><button className="soft" onClick={()=>setModule('catalogo')}>Abrir Catálogo</button></div>
+      <div className="panel"><small className="muted">Presupuestos</small><h2>{budgets.length}</h2><button className="soft" onClick={()=>setModule('presupuestos')}>Abrir Presupuestos</button></div>
+    </div>
+    <div className="panel" style={{marginTop:16}}>
+      <h2>{activeProject?.name || 'Proyecto activo'}</h2>
+      <p className="muted">La cantidad económica proviene de conceptos confirmados; el P.U. proviene del APU y el presupuesto aplica cantidad × P.U.</p>
+      <div className="visual-actions">
+        <button onClick={()=>setModule('precios-regionales')}>Precios regionales</button>
+        <button className="soft" onClick={()=>setModule('control-presupuestal')}>Control presupuestal</button>
+      </div>
+    </div>
+  </section>;
+}
+
+function RegionalPrices({apus=[],activeProject,onConfigureLocation}){
+  const apu = apus[0] || null;
+  return <section>
+    <PageHead kicker="Costos" title="Precios regionales" desc="Contexto de país, estado y ciudad reutilizando la inteligencia regional existente." />
+    <div className="panel">
+      <h2>{activeProject?.name || 'Proyecto activo'}</h2>
+      <p className="muted">Esta vista reutiliza el contexto regional del APU y los servicios existentes de Price Intelligence. No calcula precios por separado.</p>
+    </div>
+    {apu
+      ? <RegionalContextPanel apu={apu} onConfigureLocation={onConfigureLocation} />
+      : <div className="panel"><EmptyState icon="presupuestos" title="Sin APU disponible" text="Crea o importa un APU para consultar su cobertura regional." /></div>}
+  </section>;
+}
+
 function Dashboard({setModule,apus,clients,budgets,projects,activeProject:activeProjectProp,user}){
   const { t: tr, locale } = useI18n();
   const [remoteStatus,setRemoteStatus] = useState(null);
@@ -1628,37 +1837,15 @@ function Dashboard({setModule,apus,clients,budgets,projects,activeProject:active
   const pr = projects || [];
   const activeProject = activeProjectProp || pr[0] || null;
   const latestApu = apus[0] || null;
-  const activeBudget = budgets[0] || null;
   const budgetCount = budgets.length;
-  const projectCount = pr.length;
   const firebaseOk = remoteStatus?.firebase === 'ok';
   const openaiOk = remoteStatus?.openai === 'ok';
-  const oneDriveOk = Boolean(oneDriveStatus?.connected);
-  const missingPieces = [];
-  if(!firebaseOk) missingPieces.push('Firebase');
-  if(!openaiOk) missingPieces.push('OpenAI');
-  if(libraryCount === 0) missingPieces.push('Biblioteca');
-  if(!latestApu) missingPieces.push('APU activo');
-  if(!budgetCount) missingPieces.push('Presupuesto');
-  const healthSummary = missingPieces.length ? `Faltan: ${missingPieces.join(', ')}` : 'Todos los servicios esenciales están operativos.';
   const riskNotes = [];
   if(!activeProject) riskNotes.push(tr('dash.riskNoProject'));
   if(!latestApu) riskNotes.push(tr('dash.riskNoApu'));
   if(libraryCount === 0) riskNotes.push(tr('dash.riskNoLibrary'));
   if(!openaiOk) riskNotes.push(tr('dash.riskNoAi'));
   if(!firebaseOk) riskNotes.push(tr('dash.riskNoFirebase'));
-  const estados = pr.reduce((m,p)=>{m[p.status]=(m[p.status]||0)+1;return m;},{});
-  const palette = ['#9D6FD0','#2A1740','#C7A35C','#B8A4CC','#B54A62'];
-  const segs = Object.keys(estados).map((k,i)=>({label:k,value:estados[k],color:palette[i%palette.length]}));
-  const spark = budgets.length ? budgets.slice(-8).map((b,i)=>Math.max(1,(Number(b.total)||0)/1000+i)) : [0,0,0,0,0,0,0,0];
-  const pipeline=[
-    ['Doc','Excel / PDF',firebaseOk ? 'ready' : 'watch'],
-    ['Extraer','Conceptos',libraryCount ? 'ready' : 'watch'],
-    ['Clasificar','Especialidad',libraryCount ? 'ready' : 'watch'],
-    ['Evidencia','Fuente técnica',libraryCount ? 'ready' : 'watch'],
-    ['APU','Matriz editable',apus.length ? 'ready' : 'active'],
-    ['Entregar','PDF / XLSX',budgetCount ? 'ready' : 'watch']
-  ];
   useEffect(()=>{
     let alive=true;
     apiGetSafe('/api/status').then(data=>{ if(alive) setRemoteStatus(data); });
@@ -1721,220 +1908,61 @@ function Dashboard({setModule,apus,clients,budgets,projects,activeProject:active
     const ts = [...apus, ...budgets].map(x=>x?.updatedAt?.toMillis?.() || (typeof x?.updatedAt==='number' ? x.updatedAt : 0)).filter(Boolean);
     return ts.length ? Math.max(...ts) : null;
   }, [apus, budgets]);
-  return <section className="ai-os"><PageHead kicker={tr('modules.dashboard.kicker')} title={tr('modules.dashboard.title')} desc={tr('modules.dashboard.desc')} action={<button onClick={()=>setModule('apu')}>{tr('dash.ctaAskZoe')}</button>} />
-    <div className="precon-center">
-      {/* BLOQUE 1 -- Estado del proyecto */}
-      <div className="precon-block precon-status">
-        <h3>{tr('dash.block1Title')}</h3>
-        {activeProject ? <>
-          <div className="precon-status-head">
-            <b>{activeProject.name}</b>
-            <span>{activeProject.client || tr('dash.defaultClient')}</span>
-          </div>
-          <div className="precon-status-stats">
-            <div><small>{tr('dash.kpiPresupuestos')}</small><b>{monto ? money(monto) : '—'}</b></div>
-            <div><small>{tr('dash.kpiApus')}</small><b>{apus.length}</b></div>
-            <div><small>{tr('dash.kpiDocumentos')}</small><b>{libraryCount ?? '—'}</b></div>
-            <div><small>{tr('dash.block1LastUpdate')}</small><b>{lastUpdated ? new Date(lastUpdated).toLocaleDateString(locale==='en'?'en-US':'es-MX') : tr('dash.block1NoUpdates')}</b></div>
-          </div>
-        </> : <EmptyState text={tr('dash.block1Empty')} actionLabel={tr('dash.block1EmptyAction')} onAction={()=>setModule('cartera')}/>}
-      </div>
+  const firstName = (user?.name || '').split(' ')[0] || '';
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? tr('dash.greetingMorning') : hour < 19 ? tr('dash.greetingAfternoon') : tr('dash.greetingEvening');
+  const confidenceValue = confidenceProject?.averageScore ?? null;
+  const confidenceTone = confidenceValue==null ? 'neutral' : confidenceValue>=70 ? 'good' : confidenceValue>=40 ? 'warn' : 'bad';
+  const riskCount = riskProject ? (riskProject.critical||0)+(riskProject.high||0)+(riskProject.medium||0) : null;
+  const riskTone = !riskProject ? 'neutral' : riskLevel==='LOW' ? 'good' : riskLevel==='MEDIUM' ? 'warn' : 'bad';
+  const recentActivityItems = [
+    ...(libraryRecent||[]).slice(0,2).map(f=>tr('dash.activityDocSynced',{name:f.name})),
+    ...apus.slice(0,2).map(a=>tr('dash.activityApuCreated',{ref:a.clave || a.id || ''})),
+    ...budgets.slice(0,2).map(b=>tr('dash.activityBudgetSaved',{name:b.name})),
+  ];
+  const alertItems = [
+    ...riskNotes,
+    ...(findingsPreview.length ? [tr('dash.block5Summary',{count:findingsPreview.length})] : []),
+  ];
+  return <div className="dash2">
+    <div className="dash2-greeting">
+      <h1>{greeting}{firstName ? `, ${firstName}` : ''}</h1>
+      <p>{activeProject?.name || tr('dash.defaultWorkspace')}</p>
+    </div>
 
-      {/* BLOQUE 2 -- Bid Readiness Score */}
-      <div className={`precon-block precon-readiness status-${(bidReadiness.status||'NO_DATA').toLowerCase()}`}>
-        <h3>{tr('dash.block2Title')}</h3>
-        {bidReadiness.score == null ? <p className="precon-empty-msg">{tr('dash.block2Empty')}</p> : <>
-          <div className="precon-readiness-score"><b>{bidReadiness.score}</b><span>/100</span></div>
-          <p className="precon-readiness-status">{locale==='en' ? BID_READINESS_STATUS_LABEL_EN[bidReadiness.status] : bidReadiness.statusLabelEs}</p>
-          {bidReadiness.deductions.length ? <ul className="precon-deductions">
-            {bidReadiness.deductions.map(d=><li key={d.code}>−{d.points} {tr('dash.block2Points')}: {locale==='en' ? d.labelEn : d.labelEs}</li>)}
-          </ul> : <p className="precon-readiness-clean">{tr('dash.block2Clean')}</p>}
-        </>}
+    <Section title={tr('dash.summaryTitle')}>
+      <div className="metric-row">
+        <MetricCard label={tr('dash.metricConfidence')} value={confidenceValue!=null ? `${confidenceValue}%` : '—'} tone={confidenceTone}
+          hint={confidenceProject ? tr('dash.metricConfidenceHint',{high:confidenceProject.high}) : tr('dash.block4Empty')} onClick={()=>setModule('apu')}/>
+        <MetricCard label={tr('dash.metricBudget')} value={monto ? money(monto) : '—'}
+          hint={budgetCount ? tr('dash.metricBudgetHint',{count:budgetCount}) : tr('dash.kpiPresupuestosEmpty')} onClick={()=>setModule('presupuestos')}/>
+        <MetricCard label={tr('dash.metricRisk')} value={riskProject ? String(riskCount) : '—'} tone={riskTone}
+          hint={riskProject ? tr(`dash.riskLevel${riskLevel}`) : tr('dash.block3Empty')} onClick={()=>setModule('apu')}/>
+        <MetricCard label={tr('dash.metricProgress')} value={activeProject ? `${activeProject.progress||0}%` : '—'}
+          hint={activeProject ? tr('dash.metricProgressHint') : tr('dash.block1Empty')} onClick={()=>setModule('cartera')}/>
       </div>
+    </Section>
 
-      {/* BLOQUE 3 -- Riesgo economico */}
-      <div className={`precon-block precon-risk risk-${(riskLevel||'none').toLowerCase()}`}>
-        <h3>{tr('dash.block3Title')}</h3>
-        {!riskProject ? <p className="precon-empty-msg">{tr('dash.block3Empty')}</p> : <>
-          <div className="precon-risk-amount"><b>{money(riskProject.estimatedExposure||0)}</b></div>
-          <p className="precon-risk-level">{tr(`dash.riskLevel${riskLevel}`)}</p>
-          {riskProject.topRisks?.length ? <ul className="precon-risk-list">
-            {riskProject.topRisks.slice(0,3).map(r=><li key={r.apuId}><b>{r.concept||r.apuId}</b> — {tr(`dash.riskLevel${r.severity}`)}</li>)}
-          </ul> : <p className="precon-readiness-clean">{tr('dash.block3Clean')}</p>}
-          <button onClick={()=>setModule('apu')}>{tr('dash.block3Cta')}</button>
-        </>}
-      </div>
+    <Section title={tr('dash.continueTitle')}>
+      <Card className="continue-card" onClick={()=>setModule('apu')}>
+        <span className="continue-card-kicker">{tr('shell.menu.costos')}</span>
+        <p className="continue-card-detail">{tr('dash.continueDetail',{count:apus.length, pct: confidenceValue ?? 0})}</p>
+        <span className="continue-card-cta">{tr('dash.continueCta')} →</span>
+      </Card>
+    </Section>
 
-      {/* BLOQUE 4 -- Confianza */}
-      <div className="precon-block precon-confidence">
-        <h3>{tr('dash.block4Title')}</h3>
-        {!confidenceProject ? <p className="precon-empty-msg">{tr('dash.block4Empty')}</p> : <>
-          <div className="precon-confidence-score"><b>{confidenceProject.averageScore ?? '—'}{confidenceProject.averageScore!=null?'%':''}</b></div>
-          <div className="precon-confidence-breakdown">
-            <span>{tr('dash.block4High',{count:confidenceProject.high})}</span>
-            <span>{tr('dash.block4Medium',{count:confidenceProject.medium})}</span>
-            <span>{tr('dash.block4Low',{count:confidenceProject.low})}</span>
-            <span>{tr('dash.block4Insufficient',{count:confidenceProject.insufficientEvidence})}</span>
-          </div>
-          <button onClick={()=>setModule('apu')}>{tr('dash.block4Cta')}</button>
-        </>}
-      </div>
+    <Section title={tr('dash.recentActivity')}>
+      <Card>
+        {recentActivityItems.length ? <ul className="dash2-list">{recentActivityItems.map((x,i)=><li key={i}><Icon name="doc" size={15}/> {x}</li>)}</ul> : <EmptyState text={tr('dash.recentActivityEmpty')}/>}
+      </Card>
+    </Section>
 
-      {/* BLOQUE 5 -- Hallazgos */}
-      <div className="precon-block precon-findings">
-        <h3>{tr('dash.block5Title')}</h3>
-        {!apus.length ? <p className="precon-empty-msg">{tr('dash.block5Empty')}</p> : findingsPreview.length ? <>
-          <p>{tr('dash.block5Summary',{count:findingsPreview.length})}</p>
-          <ul className="precon-findings-list">
-            {findingsPreview.slice(0,4).map(f=><li key={f.id}><b>{f.concept}</b>: {f.message}</li>)}
-          </ul>
-          <button onClick={()=>setModule('apu')}>{tr('dash.block5Cta')}</button>
-        </> : <p className="precon-readiness-clean">{tr('dash.block5Clean')}</p>}
-      </div>
-
-      {/* BLOQUE 6 -- Flujo de preconstruccion */}
-      <div className="precon-block precon-flow">
-        <h3>{tr('dash.block6Title')}</h3>
-        <div className="precon-flow-steps">
-          {tr('dash.flowSteps').map((s,i)=><React.Fragment key={s}><span className="precon-flow-step">{s}</span>{i<tr('dash.flowSteps').length-1 && <i className="precon-flow-arrow">→</i>}</React.Fragment>)}
-        </div>
-      </div>
-    </div>
-    <div className="demo-hero">
-      <h2>{tr('dash.heroTitle')}</h2>
-      <p>{tr('dash.heroDesc')}</p>
-      <div className="demo-hero-actions">
-        <button onClick={()=>setModule('apu')}><Icon name="apu" size={17}/> {tr('dash.ctaGenerate')}</button>
-        <button className="ghost-up" onClick={()=>setModule('apu')}><Icon name="presupuestos" size={17}/> {tr('dash.ctaImport')}</button>
-      </div>
-      <div className="demo-hero-steps">
-        <div className="demo-hero-step"><b>1</b><span>{tr('dash.step1')}</span></div>
-        <div className="demo-hero-step"><b>2</b><span>{tr('dash.step2')}</span></div>
-        <div className="demo-hero-step"><b>3</b><span>{tr('dash.step3')}</span></div>
-        <div className="demo-hero-step"><b>4</b><span>{tr('dash.step4')}</span></div>
-        <div className="demo-hero-step"><b>5</b><span>{tr('dash.step5')}</span></div>
-      </div>
-    </div>
-    <div className="kpi-row">
-      <div className="kpi-tile"><small>{tr('dash.kpiProyectos')}</small><b>{projectCount}</b><span>{projectCount ? tr('dash.kpiProyectosSub',{count:projectCount}) : tr('dash.kpiProyectosEmpty')}</span></div>
-      <div className="kpi-tile"><small>{tr('dash.kpiApus')}</small><b>{apus.length}</b><span>{apus.length ? tr('dash.kpiApusSub') : tr('dash.kpiApusEmpty')}</span></div>
-      <div className="kpi-tile"><small>{tr('dash.kpiPresupuestos')}</small><b>{budgetCount}</b><span>{monto ? money(monto) : tr('dash.kpiPresupuestosEmpty')}</span></div>
-      <div className="kpi-tile"><small>{tr('dash.kpiDocumentos')}</small><b>{libraryCount ?? '—'}</b><span>{tr('dash.kpiDocumentosSub')}</span></div>
-    </div>
-    <div className="os-grid">
-      <div className="os-command">
-        <div className="os-command-head"><span>{tr('dash.liveIntel')}</span><b>{monto ? money(monto) : tr('dash.noBudgetYet')}</b></div>
-        <h2>{activeProject?.name || tr('dash.defaultWorkspace')}</h2>
-        <p>{activeProject?.client || tr('dash.defaultClient')}</p>
-        <p className="os-summary">{projectCount ? tr('dash.summaryActive',{projects:projectCount,budgets:budgetCount}) : tr('dash.summaryEmpty')}</p>
-        <div className="os-prompt"><i>ZOE</i><span>{tr('dash.zoePrompt')}</span><button onClick={()=>setModule('apu')}>{tr('dash.zoeStart')}</button></div>
-        <div className="os-pipeline">{pipeline.map((p,i)=><button key={p[0]} className={p[2]} onClick={()=>setModule(i<2?'biblioteca':i<5?'apu':'presupuestos')}><b>{p[0]}</b><span>{p[1]}</span></button>)}</div>
-      </div>
-      <div className="os-bim">
-        <div className="twin-central">
-          <h2>{tr('dash.twinTitle')}</h2>
-          <div className="twin-flow" aria-hidden>
-            {tr('dash.twinFlow').map((s,i)=>(
-              <div key={s} className={`twin-step ${i===0? 'start':''}`}><span>{s}</span>{i<7 && <i className="arrow">→</i>}</div>
-            ))}
-          </div>
-          <div className="twin-wrapper">
-            <DigitalTwin apu={apus[0]} compact onOpen={()=>setModule('apu')}/>
-          </div>
-          <div className="twin-insights">
-            <InfoCard title={tr('dash.twinProjectTitle')} value={activeProject?.name || '—'} subtitle={activeProject ? `${activeProject.progress || 0}% avance` : tr('dash.twinProjectEmpty')} actionLabel={activeProject ? tr('dash.twinProjectAction') : tr('dash.twinProjectActionCreate')} onAction={()=>setModule('cartera')}/>
-            <InfoCard title={tr('dash.twinAiTitle')} value={apus.length? tr('dash.twinAiActive'): tr('dash.twinAiInactive')} subtitle={apus.length? tr('dash.twinAiSubActive',{count:apus.length}) : tr('dash.twinAiSubEmpty')} actionLabel={tr('dash.twinAiAction')} onAction={()=>setModule('apu')}/>
-          </div>
-        </div>
-      </div>
-      <div className="os-side">
-        <div className="status-grid">
-          <div className="status-card"><small>{tr('dash.statusProyecto')}</small><b>{activeProject?.name || '—'}</b><span>{activeProject ? `${activeProject.client || ''}` : tr('dash.statusProyectoEmpty')}</span></div>
-          <div className="status-card"><small>{tr('dash.statusIa')}</small><b>{apus.length ? tr('dash.twinAiActive') : tr('dash.twinAiInactive')}</b><span>{apus.length ? tr('dash.statusIaSubActive',{pct:Math.round(apuConfidenceScore(apus[0])*100)/100}) : tr('dash.statusIaSubEmpty')}</span></div>
-                  <div className="status-card"><small>{tr('dash.statusBiblioteca')}</small><b>{libraryCount !== null ? tr('dash.statusBibliotecaDocs',{count:libraryCount}) : '—'}</b><span>{libraryCount !== null ? (libraryCount > 0 ? tr('dash.statusBibliotecaSubOk') : tr('dash.statusBibliotecaSubEmpty')) : (libraryError || tr('dash.statusBibliotecaSubNoData'))}</span></div>
-          <div className="status-card"><small>{tr('dash.statusOneDrive')}</small><b>{oneDriveOk ? tr('dash.statusOneDriveOn') : tr('dash.statusOneDriveOff')}</b><span>{oneDriveOk ? tr('dash.statusOneDriveSubOn') : tr('dash.statusOneDriveSubOff')}</span></div>
-          <div className="status-card"><small>{tr('dash.statusFirebase')}</small><b>{firebaseOk ? tr('dash.statusFirebaseOn') : tr('dash.statusFirebaseOff')}</b><span>{firebaseOk ? tr('dash.statusFirebaseSubOn') : tr('dash.statusFirebaseSubOff')}</span></div>
-          <div className="status-card"><small>{tr('dash.statusOpenAI')}</small><b>{openaiOk ? tr('dash.statusOpenAIOn') : tr('dash.statusOpenAIOff')}</b><span>{openaiOk ? tr('dash.statusOpenAISubOn') : tr('dash.statusOpenAISubOff')}</span></div>
-          <div className="status-card"><small>{tr('dash.statusHealth')}</small><b>{missingPieces.length ? tr('dash.statusHealthMissing',{items:missingPieces.join(', ')}) : tr('dash.statusHealthAllOk')}</b><span>{tr('dash.statusHealthSub',{projects:projectCount,budgets:budgetCount})}</span></div>
-        </div>
-        {riskNotes.length ? <div className="risk-notes"><small>{tr('dash.riskTitle')}</small><ul>{riskNotes.map(note=><li key={note}>{note}</li>)}</ul></div> : null}
-      </div>
-    </div>
-    <div className="quick os-actions"><button onClick={()=>setModule('apu')}><Icon name="apu"/> {tr('dash.quickGenerate')}</button><button onClick={()=>setModule('biblioteca')}><Icon name="biblioteca"/> {tr('dash.quickEvidence')}</button><button onClick={()=>setModule('cartera')}><Icon name="clientes"/> {tr('dash.quickProjects')}</button><button onClick={()=>setModule('presupuestos')}><Icon name="presupuestos"/> {tr('dash.quickDeliverables')}</button></div>
-    <div className="dash-charts">
-      <div className="panel future-panel">
-        <h2>{tr('dash.chartCostTrend')}</h2>
-        <Spark points={spark}/>
-        <div className="chart-foot">
-          <span>{budgets.length ? tr('dash.chartCostTrendSubData') : tr('dash.chartCostTrendSubEmpty')}</span>
-          <b>{budgets.length ? tr('dash.chartCostTrendSynced') : tr('dash.chartCostTrendStandby')}</b>
-        </div>
-      </div>
-      <div className="panel chart-donut future-panel">
-        <h2>{tr('dash.chartProjectMap')}</h2>
-        <Donut segments={segs} center={pr.length || 'IA'} sub="nodos"/>
-        <div className="donut-legend">
-          {segs.length ? segs.map(s=>
-            <span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>
-          ) : (
-            <span><i style={{background:'#C7A35C'}}/>{tr('dash.chartProjectMapEmpty')}</span>
-          )}
-        </div>
-      </div>
-    </div>
-    <div className="grid-3">
-      <div className="panel">
-        <h2>{tr('dash.recentProjects')}</h2>
-        {pr.length ? pr.slice(0,4).map(p=>
-          <div className="project-row" key={p.name}>
-            <div><b>{p.name}</b><small>{p.client}</small></div>
-            <span>{p.progress}%</span>
-            <progress value={p.progress} max="100" />
-          </div>
-        ) : <EmptyState text={tr('dash.recentProjectsEmpty')}/>}
-      </div>
-      <div className="panel">
-        <h2>{tr('dash.recentApus')}</h2>
-        {apus.length ? apus.slice(0,4).map((a,i)=>
-          <div className="mini-list-row" key={a.id||i}>
-            <Icon name="apu" size={15}/>
-            <b>{a.concept || a.clave || `APU ${i+1}`}</b>
-            <span>{apuConfidenceScore(a) ? `${Math.round(apuConfidenceScore(a))}%` : '—'}</span>
-          </div>
-        ) : <EmptyState text={tr('dash.recentApusEmpty')} actionLabel={tr('dash.recentApusAction')} onAction={()=>setModule('apu')}/>}
-      </div>
-      <div className="panel">
-        <h2>{tr('dash.recentBudgets')}</h2>
-        {budgets.length ? budgets.slice(0,4).map((b,i)=>
-          <div className="mini-list-row" key={b.id||i}>
-            <Icon name="presupuestos" size={15}/>
-            <b>{b.name || `Presupuesto ${i+1}`}</b>
-            <span>{b.total ? money(b.total) : '—'}</span>
-          </div>
-        ) : <EmptyState text={tr('dash.recentBudgetsEmpty')} actionLabel={tr('dash.recentBudgetsAction')} onAction={()=>setModule('presupuestos')}/>}
-      </div>
-    </div>
-    <div className="grid-2">
-      <div className="panel">
-        <h2>{tr('dash.recentDocs')}</h2>
-        {libraryRecent === null ? <EmptyState text={libraryError || tr('dash.recentDocsNoData')}/> : libraryRecent.length ? libraryRecent.map(f=>
-          <div className="mini-list-row" key={f.id}>
-            <Icon name="doc" size={15}/>
-            <b>{f.name || 'Documento'}</b>
-            <span>{f.cat || f.ext || '—'}</span>
-          </div>
-        ) : <EmptyState text={tr('dash.recentDocsEmpty')} actionLabel={tr('dash.recentDocsAction')} onAction={()=>setModule('biblioteca')}/>}
-      </div>
-      <div className="panel">
-        <h2>{tr('dash.recentActivity')}</h2>
-        {apus.length || budgets.length || (libraryRecent||[]).length ? [
-          ...(libraryRecent||[]).slice(0,2).map(f=>tr('dash.activityDocSynced',{name:f.name})),
-          ...apus.slice(0,2).map(a=>tr('dash.activityApuCreated',{ref:a.clave || a.id || ''})),
-          ...budgets.slice(0,2).map(b=>tr('dash.activityBudgetSaved',{name:b.name})),
-        ].map((x,i)=><div className="activity" key={i}><Icon name="doc" size={15}/> {x}</div>) : <EmptyState text={tr('dash.recentActivityEmpty')}/>}
-      </div>
-    </div>
-  </section>
+    <Section title={tr('dash.alertsTitle')}>
+      <Card>
+        {alertItems.length ? <ul className="dash2-list dash2-list-alerts">{alertItems.map((n,i)=><li key={i}><Icon name="alerta" size={15}/> {n}</li>)}</ul> : <p className="dash2-alerts-clean">{tr('dash.alertsClean')}</p>}
+      </Card>
+    </Section>
+  </div>
 }
 
 /* Convierte los renglones-objeto del esquema v2 (ver src/domain/apuSchema.js)
@@ -2012,7 +2040,7 @@ function ExecutiveSummaryCards({apu,globalConfidence}){
   if(!hasContent) return null;
   const t = apu.calculated || {};
   const direct = t.direct || 0;
-  const segs = [['Materiales',t.mat,'#9D6FD0'],['Mano de obra',t.mo,'#2A1740'],['Equipo',t.equipo,'#B8A4CC'],['Herramienta',t.herramienta,'#C7A35C']];
+  const segs = [['Materiales',t.mat,'#3BA0D9'],['Mano de obra',t.mo,'#0B2F4A'],['Equipo',t.equipo,'#7B9DB5'],['Herramienta',t.herramienta,'#C7A35C']];
   const validado = apu.validationStatus === 'VALIDADO';
   // Fuente unica de verdad del Confidence global (ver apuConfidence.js): el
   // llamador ya calculo runApuConfidence(apu) una sola vez (se comparte con
@@ -2071,7 +2099,7 @@ function ResourceCards({apu}){
   </div>;
 }
 
-function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog,projects,rawApus,linkApuToProject,activeProjectId,activeProject,onNeedProject,onConfigureLocation,organizationId=null}){
+function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalog,setCatalog,projects,rawApus,linkApuToProject,activeProjectId,activeProject,onNeedProject,onConfigureLocation,setModule,organizationId=null,pendingOpenApuId=null,onPendingOpenApuIdConsumed}){
   const { t: tr } = useI18n();
   const { beginJob, completeJob, failJob, getUnseen, consumeJob } = useAiJobs();
   const requireProject=()=>{
@@ -2087,6 +2115,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   // por defecto -- el flujo existente queda exactamente igual que antes,
   // esta variable solo decide cual panel se muestra.
   const [entryMode,setEntryMode]=useState('ia');
+  const [createApuOpen,setCreateApuOpen]=useState(false);
   // Unidad/Cantidad explicitas (opcionales): parseConceptText adivina unidad y
   // cantidad del texto pegado, pero un concepto en lenguaje natural puede traer
   // numeros que no son la cantidad (ej. "tuberia de 3 a 6 pulgadas" hace que el
@@ -2635,12 +2664,27 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       // /api/price-intelligence de siempre, ver src/domain/intelligence2Runtime.js).
       // Si falla por completo, el borrador conserva los precios ESTIMADO_IA
       // de la IA (igual que antes).
+      // Contexto geografico y economico del APU: si el usuario ya confirmo/
+      // edito la ubicacion de ESTE APU (bloque "Ubicacion y referencia de
+      // costos", ver RegionalContextPanel.jsx) antes de generar, eso tiene
+      // prioridad -- el proyecto activo sigue siendo el fallback cuando el
+      // usuario no toco nada (comportamiento identico al de antes de esta
+      // fase). Nunca se pierde el override del usuario por sobreescribirlo
+      // despues con el snapshot del proyecto.
+      const hasApuLocationOverride = hasAnyLocation(apuV2.ubicacionEstructurada);
+      const effectiveLocationSnapshot = hasApuLocationOverride
+        ? { ubicacionEstructurada: apuV2.ubicacionEstructurada, ubicacion: apuV2.ubicacion || formatLocationDisplay(apuV2.ubicacionEstructurada) }
+        : buildProjectLocationSnapshot(activeProject);
+      const effectiveDateBase = apuV2.fechaBase || draft.fechaBase;
       let enrichedDraft = draft;
       try{
         setAiStatus('Buscando precios de mercado reales y validando equivalencia tecnica...');
         const runContext = createIntelligence2RunContext({
-          location: activeProject?.ubicacion || '', dateBase: draft.fechaBase,
-          country: activeProject?.locationCountry || '', state: activeProject?.locationState || '', city: activeProject?.locationCity || ''
+          location: activeProject?.ubicacion || '', dateBase: effectiveDateBase,
+          country: effectiveLocationSnapshot.ubicacionEstructurada.country || '',
+          state: effectiveLocationSnapshot.ubicacionEstructurada.state || '',
+          city: effectiveLocationSnapshot.ubicacionEstructurada.city || '',
+          zone: effectiveLocationSnapshot.ubicacionEstructurada.region || ''
         });
         const result = await enrichApuWithIntelligence2({
           aiApu: draft, userInput: { concept: parsed.concept, unit: parsed.unit, qty: parsed.qty },
@@ -2657,10 +2701,12 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       // flujos de lote (buildProjectLocationSnapshot) para que los tres
       // queden con el mismo esquema regional; tambien fija `ubicacion`
       // (texto libre, usado por PDF/Excel) al mismo snapshot en vez del
-      // valor heredado del borrador previo.
-      const locationSnapshot = buildProjectLocationSnapshot(activeProject);
-      v2.ubicacionEstructurada = locationSnapshot.ubicacionEstructurada;
-      v2.ubicacion = locationSnapshot.ubicacion;
+      // valor heredado del borrador previo. Contexto geografico del APU:
+      // effectiveLocationSnapshot ya prioriza el override del usuario sobre
+      // el proyecto (ver arriba).
+      v2.ubicacionEstructurada = effectiveLocationSnapshot.ubicacionEstructurada;
+      v2.ubicacion = effectiveLocationSnapshot.ubicacion;
+      v2.fechaBase = effectiveDateBase;
       const shim = legacyShimFromV2(v2, parsed.concept, 'OpenAI API');
       setAiStatus('Validando resultado...');
       skipMigrateIdRef.current = shim.id;
@@ -3243,7 +3289,16 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         reemplaza a la otra -- entryMode solo decide cual panel se
         muestra, el panel de IA de abajo (ai-panel) queda exactamente
         igual que antes cuando entryMode==='ia' (default). */}
-    <div className="visual-actions" style={{marginBottom:10}}>
+    <div className="visual-actions" style={{marginBottom:10,justifyContent:'space-between',alignItems:'flex-start'}}>
+      <div className="menu-crear-wrap">
+        <button type="button" className="menu-crear active" onClick={()=>setCreateApuOpen(v=>!v)} aria-haspopup="menu" aria-expanded={createApuOpen}>+ Crear APU</button>
+        {createApuOpen && <div className="crear-popover" role="menu">
+          <button type="button" role="menuitem" onClick={()=>{setEntryMode('ia');setCreateApuOpen(false);}}><span className="menu-copy"><b>Generar con IA</b><small>Crear desde un concepto</small></span></button>
+          <button type="button" role="menuitem" onClick={()=>{resetAPUForm();setEntryMode('ia');setCreateApuOpen(false);}}><span className="menu-copy"><b>Crear manual</b><small>Editar el APU desde cero</small></span></button>
+          <button type="button" role="menuitem" onClick={()=>{setModule?.('catalogo');setCreateApuOpen(false);}}><span className="menu-copy"><b>Desde concepto cuantificado</b><small>Usar un concepto del Catálogo</small></span></button>
+          <button type="button" role="menuitem" onClick={()=>{fullExcelInputRef.current?.click();setCreateApuOpen(false);}}><span className="menu-copy"><b>Importar</b><small>Importar APU o catálogo Excel</small></span></button>
+        </div>}
+      </div>
       <button type="button" className={entryMode==='ia'?'':'soft'} onClick={()=>setEntryMode('ia')}>{tr('apu.quantModeChooserAI')}</button>
       <button type="button" className={entryMode==='parametrico'?'':'soft'} onClick={()=>setEntryMode('parametrico')}>{tr('apu.quantModeChooserParametric')}</button>
     </div>
@@ -3367,7 +3422,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       </div>}
     </div>}
 
-    <RevisionBandeja apus={apus} user={user} onUpdateApu={saved => { if(!requireProject()) return; setApus([saved, ...apus.filter(x => x.id !== saved.id)]); if(saved.id===professionalApu.id) setApuV2(saved); }} />
+    <RevisionBandeja apus={apus} user={user} onUpdateApu={saved => { if(!requireProject()) return; setApus([saved, ...apus.filter(x => x.id !== saved.id)]); if(saved.id===professionalApu.id) setApuV2(saved); }} initialOpenId={pendingOpenApuId} onInitialOpenIdConsumed={onPendingOpenApuIdConsumed} />
 
     {hasApuContent && <>
       {/* A. Encabezado ejecutivo */}
@@ -3431,7 +3486,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       setApus([saved,...apus.filter(x=>x.id!==saved.id)]);
       if(isNew) markApuUsed();
       clearDraftAutosave(user,'apu','current');
-    }} onFindPrices={findV2Prices} onExcel={exportExcel} onPdf={exportPDF} exportBlocked={isFree && userUsage.apusCreated>=1} exportBlockedReason={tr('apu.exportBlockedReason')} onConfigureLocation={onConfigureLocation}/>
+    }} onFindPrices={findV2Prices} onExcel={exportExcel} onPdf={exportPDF} exportBlocked={isFree && userUsage.apusCreated>=1} exportBlockedReason={tr('apu.exportBlockedReason')} onConfigureLocation={onConfigureLocation} project={activeProject}/>
     <div className="apu-grid legacy-editor-compat">
       <div className="panel">
         <label>{tr('apu.conceptLabel')}</label>
@@ -3546,7 +3601,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
 function Incidence({t}){
   const { t: tr } = useI18n();
   const d = t.direct || 1;
-  const segs = [['m',tr('matrixTable.segMaterials'),t.mat,'#9D6FD0'],['o',tr('matrixTable.segLabor'),t.mo,'#2A1740'],['e',tr('matrixTable.segEquipment'),t.equipo,'#B8A4CC'],['h',tr('matrixTable.segTools'),t.herramienta,'#C7A35C']];
+  const segs = [['m',tr('matrixTable.segMaterials'),t.mat,'#3BA0D9'],['o',tr('matrixTable.segLabor'),t.mo,'#0B2F4A'],['e',tr('matrixTable.segEquipment'),t.equipo,'#7B9DB5'],['h',tr('matrixTable.segTools'),t.herramienta,'#C7A35C']];
   const pct = v => Math.max(0, v/d*100);
   return <div className="incid">
     <small className="hint">{tr('matrixTable.incidenceHint')}</small>
@@ -3588,8 +3643,8 @@ function exportConceptsAPUPDF(concepts, catalog, company, preparedAPUs=[]){
   const W = doc.internal.pageSize.getWidth();
   const H = doc.internal.pageSize.getHeight();
   const M = 12;
-  const purple = [42, 23, 64];
-  const violet = [111, 63, 167];
+  const petrol = [11, 47, 74];
+  const blue = [21, 120, 183];
   const soft = [246, 242, 250];
   const line = [221, 211, 232];
   const safe = (v) => cleanText(v).replace(/\s+/g, ' ').trim();
@@ -3613,7 +3668,7 @@ function exportConceptsAPUPDF(concepts, catalog, company, preparedAPUs=[]){
       }
     };
     check(16);
-    doc.setFillColor(...purple);
+    doc.setFillColor(...petrol);
     doc.rect(M, y, tableW, 7, 'F');
     doc.setTextColor(255);
     doc.setFont('helvetica','bold');
@@ -3669,7 +3724,7 @@ function exportConceptsAPUPDF(concepts, catalog, company, preparedAPUs=[]){
     const totals = calcAPU(apu);
     let y = 14;
 
-    doc.setFillColor(...purple);
+    doc.setFillColor(...petrol);
     doc.roundedRect(M, y, W - M*2, 18, 1.5, 1.5, 'F');
     doc.setTextColor(255);
     doc.setFont('helvetica','bold');
@@ -3703,7 +3758,7 @@ function exportConceptsAPUPDF(concepts, catalog, company, preparedAPUs=[]){
 
     doc.setFont('helvetica','bold');
     doc.setFontSize(8);
-    doc.setTextColor(...violet);
+    doc.setTextColor(...blue);
     doc.text('CONCEPTO ANALIZADO', M, y);
     y += 5;
     doc.setFont('helvetica','normal');
@@ -3765,7 +3820,7 @@ function exportConceptsAPUPDF(concepts, catalog, company, preparedAPUs=[]){
     if(y > H - 32){ doc.addPage(); y = 14; }
     doc.setFont('helvetica','bold');
     doc.setFontSize(7.8);
-    doc.setTextColor(...violet);
+    doc.setTextColor(...blue);
     doc.text('TRAZABILIDAD Y SUPUESTOS IA', M, y);
     y += 5;
     doc.setFont('helvetica','normal');
@@ -3888,7 +3943,7 @@ async function exportConceptsAPUPdfMasterFile(concepts, catalog, company, prepar
   return exportAPUPdfMaster(professional,{fileName:'APU-MAESTRO-ZOEMEC.pdf',company});
 }
 
-function Budgets({company,budgets,setBudgets,items,setItems,activeProjectId,onNeedProject}){
+function Budgets({company,budgets,setBudgets,items,setItems,activeProjectId,onNeedProject,legacyOnly=false}){
   const { t: tr } = useI18n();
   // Antes el 16% estaba repetido como literal en 3 lugares (calculo, export
   // Excel, export PDF) y no leia el campo "iva" de ningun APU. Ahora hay una
@@ -3911,6 +3966,35 @@ function Budgets({company,budgets,setBudgets,items,setItems,activeProjectId,onNe
     const bIva=bTotal*bIvaRate/100;
     kind==='pdf' ? exportBudgetPDF(bItems,bTotal,bIva,company,bIvaRate) : exportBudgetExcel(bItems,bTotal,bIva,bIvaRate);
   };
+  // legacyOnly (Fase D): el Presupuesto real ahora vive en PresupuestoModule
+  // (conceptos del Catalogo + su APU asociado, con capitulos/confianza/Bid
+  // Risk/versionado). Esta pantalla YA NO captura presupuestos nuevos a
+  // mano -- pero los que un usuario ya guardo aqui antes de Fase D nunca se
+  // borran ni se ocultan: siguen visibles y exportables en este modo de
+  // solo lectura ("Presupuestos heredados"), montado dentro de
+  // PresupuestoModule (ver main.jsx, module==='presupuestos').
+  if(legacyOnly){
+    if(!budgets.length) return null;
+    return <div className="panel" style={{marginTop:16}}>
+      <h2>Presupuestos heredados (formato anterior) <small className="hint">({budgets.length})</small></h2>
+      <div className="saved-grid">{budgets.map(b=>{
+        const bItems=b.items||[];
+        const bTotal=bItems.reduce((a,i)=>a+Number(i.qty)*Number(i.pu),0);
+        const bIvaRate=toSafeNonNegativeNumber(b.ivaRate ?? DEFAULT_IVA_RATE);
+        const bWithIva=bTotal*(1+bIvaRate/100);
+        return <div className="saved-card" key={b.id}>
+          <div className="sc-clave">{b.name||'Presupuesto'} · {b.date}</div>
+          <div className="sc-concept">{tr('budget.conceptCount',{count:bItems.length})} · {b.client||'Cliente por definir'}</div>
+          <div className="sc-pu">{money(bWithIva)} <small>{tr('budget.withIva')}</small></div>
+          <div className="sc-actions">
+            <button onClick={()=>downloadSaved(b,'pdf')}>{tr('budget.pdf')}</button>
+            <button onClick={()=>downloadSaved(b,'excel')}>{tr('budget.excel')}</button>
+            <button className="del" onClick={()=>removeSaved(b.id)}>{tr('budget.delete')}</button>
+          </div>
+        </div>;
+      })}</div>
+    </div>;
+  }
   return <section><PageHead kicker={tr('modules.presupuestos.kicker')} title={tr('modules.presupuestos.title')} desc={tr('modules.presupuestos.desc')} action={<button onClick={save}>{tr('budget.save')}</button>} />
     {!activeProjectId && <div className="panel" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap',padding:'14px 18px'}}>
       <p className="muted" style={{margin:0}}>{tr('budget.needProjectBanner')}</p>
@@ -3940,14 +4024,22 @@ function Budgets({company,budgets,setBudgets,items,setItems,activeProjectId,onNe
   </section>
 }
 
-function ClientsProjects({clients,setClients,projects,setProjects,activeProjectId,setActiveProjectId,setModule,onDeleteProjectData}){
-  const { t: tr } = useI18n();
-  return <section><PageHead kicker={tr('projects.centerKicker')} title={tr('projects.centerTitle')} desc={tr('projects.centerDesc')} />
-    <div className="combined-stack">
-      <Projects projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={onDeleteProjectData} embedded />
-      <Clients clients={clients} setClients={setClients} embedded />
-    </div>
-  </section>;
+function ClientsProjects({clients,setClients,projects,setProjects,activeProjectId,setActiveProjectId,setModule,onOpenWorkspace,onDeleteProjectData,openCreateProject,onHandledCreateProject,apus,budgets}){
+  return <ProjectsView
+    projects={projects}
+    setProjects={setProjects}
+    clients={clients}
+    setClients={setClients}
+    activeProjectId={activeProjectId}
+    setActiveProjectId={setActiveProjectId}
+    setModule={setModule}
+    onOpenWorkspace={onOpenWorkspace}
+    onDeleteProjectData={onDeleteProjectData}
+    openCreateProject={openCreateProject}
+    onHandledCreateProject={onHandledCreateProject}
+    apus={apus}
+    budgets={budgets}
+  />;
 }
 
 function Projects({projects,setProjects,activeProjectId,setActiveProjectId,setModule,onDeleteProjectData,embedded=false}){
@@ -4018,6 +4110,10 @@ function Projects({projects,setProjects,activeProjectId,setActiveProjectId,setMo
       setDossierState({projectId, format, status:'error', message:err.message});
     }
   };
+  // Explosion de Materiales/Mano de Obra/Maquinaria (Fase A): panel propio
+  // (ExplosionsPanel.jsx), nunca reusa el estado del Dossier -- son features
+  // independientes que comparten solo el patron de boton "soft" por tarjeta.
+  const [explosionsProjectId,setExplosionsProjectId]=useState(null);
   const remove = (i) => {
     const removed=list[i];
     if(!confirm(tr('projects.confirmDelete',{name:removed?.name||tr('projects.defaultProjectName')}))) return;
@@ -4085,9 +4181,11 @@ function Projects({projects,setProjects,activeProjectId,setActiveProjectId,setMo
           <button className="soft" disabled={dossierState?.projectId===p.id && dossierState?.status==='generating'} onClick={()=>generateProjectDossier(p.id,'PDF')}>{dossierState?.projectId===p.id && dossierState?.format==='PDF' && dossierState?.status==='generating' ? tr('projects.generatingPdf') : tr('projects.dossierPdf')}</button>
           <button className="soft" disabled={dossierState?.projectId===p.id && dossierState?.status==='generating'} onClick={()=>generateProjectDossier(p.id,'XLSX')}>{dossierState?.projectId===p.id && dossierState?.format==='XLSX' && dossierState?.status==='generating' ? tr('projects.generatingExcel') : tr('projects.dossierExcel')}</button>
           {dossierState?.projectId===p.id && dossierState?.status==='error' && <small style={{color:'var(--danger)'}}>{dossierState.message}</small>}
+          <button className="soft" onClick={()=>setExplosionsProjectId(p.id)}>{tr('projects.explosionsButton')}</button>
         </div>}
       </div>
     )}</div> : <div className="panel"><EmptyState icon="proyectos" title={tr('projects.emptyTitle')} text={tr('projects.emptyText')} actionLabel={tr('projects.newProject')} onAction={add}/></div>}
+    {explosionsProjectId && <ExplosionsPanel projectId={explosionsProjectId} onClose={()=>setExplosionsProjectId(null)} />}
   </section>
 }
 function Clients({clients,setClients,embedded=false}){
@@ -4845,9 +4943,18 @@ function parseVisualReport(text){
   return sections.length ? sections : null;
 }
 
-function VisualAI({user, setModule}){
+function VisualAI({user, setModule, activeProjectId=null, activeProject=null, organizationId=null, onNeedProject, navigationTarget=null, onNavigationTargetConsumed, onReturnToWorkspace}){
   const { t: tr } = useI18n();
   const [subview,setSubview]=useState('propuesta');
+  // "Ver en plano" (Fase D.1): un destino de navegacion real (no solo del
+  // tab por defecto 'propuesta') cambia el subview automaticamente al que
+  // corresponde con el origen del concepto -- el usuario nunca tiene que
+  // encontrar a mano donde esta el plano que genero ese renglon.
+  useEffect(()=>{
+    if(!navigationTarget) return;
+    if(navigationTarget.kind==='plano-takeoff-vector') setSubview('takeoffVector');
+    else if(navigationTarget.kind==='plano-takeoff-image') setSubview('takeoff');
+  },[navigationTarget]);
   const [image,setImage]=useState('');
   const [fileName,setFileName]=useState('');
   const [mode,setMode]=useState('fachada');
@@ -4910,8 +5017,10 @@ function VisualAI({user, setModule}){
   const tabs=<div className="visual-modes" style={{marginBottom:14}}>
     <button className={subview==='propuesta'?'active':''} onClick={()=>setSubview('propuesta')}>{tr('visualAi.tabProposal')}</button>
     <button className={subview==='takeoff'?'active':''} onClick={()=>setSubview('takeoff')}>{tr('visualAi.tabTakeoff')}</button>
+    <button className={subview==='takeoffVector'?'active':''} onClick={()=>setSubview('takeoffVector')}>{tr('visualAi.tabTakeoffVector')}</button>
   </div>;
-  if(subview==='takeoff') return <section><PageHead kicker={tr('modules.takeoff.kicker')} title={tr('modules.takeoff.title')} desc={tr('modules.takeoff.desc')} />{tabs}<PlanoTakeoff user={user} setModule={setModule}/></section>;
+  if(subview==='takeoff') return <section><PageHead kicker={tr('modules.takeoff.kicker')} title={tr('modules.takeoff.title')} desc={tr('modules.takeoff.desc')} />{tabs}<PlanoTakeoff user={user} setModule={setModule} activeProjectId={activeProjectId} organizationId={organizationId} onNeedProject={onNeedProject}/></section>;
+  if(subview==='takeoffVector') return <section><PageHead kicker={tr('modules.takeoffVector.kicker')} title={tr('modules.takeoffVector.title')} desc={tr('modules.takeoffVector.desc')} />{tabs}<PlanoTakeoffWorkspace user={user} projectId={activeProjectId} organizationId={organizationId} onNeedProject={onNeedProject} onReturnToWorkspace={onReturnToWorkspace} navigationTarget={navigationTarget?.kind==='plano-takeoff-vector'?navigationTarget:null} onNavigationTargetConsumed={onNavigationTargetConsumed}/></section>;
   return <section><PageHead kicker={tr('visualAi.kicker')} title={tr('visualAi.title')} desc={tr('visualAi.desc')} action={<button onClick={generate}>{tr('visualAi.generateProposal')}</button>} />
     {tabs}
     <div className="visual-grid">
@@ -4948,10 +5057,12 @@ function VisualAI({user, setModule}){
    (action:'similarMatrices'), ambos ya existentes: sin funciones serverless
    nuevas. No dibuja overlays ni bounding boxes (el modelo no da coordenadas
    fiables): solo pagina + evidencia textual, tal como se aprobo. */
-function PlanoTakeoff({user, setModule}){
+function PlanoTakeoff({user, setModule, activeProjectId=null, organizationId=null, onNeedProject}){
   const { t: tr } = useI18n();
   const { beginJob, completeJob, failJob, getUnseen, consumeJob } = useAiJobs();
   const [recoveredTakeoff,setRecoveredTakeoff]=useState(null);
+  const [catalogAddedKeys,setCatalogAddedKeys]=useState(()=>new Set());
+  const [catalogBusyIndex,setCatalogBusyIndex]=useState(-1);
   // Mismo motivo que en APU/generateAI: getUnseen cambia de identidad cuando
   // termina la hidratacion asincrona desde Firestore, asi que se usa como
   // dependencia en vez de [] para no perder la recuperacion en una carrera.
@@ -5053,15 +5164,38 @@ function PlanoTakeoff({user, setModule}){
     }finally{ setBusyIndex(-1); }
   };
 
-  const handleUseInApu=(elemento)=>{
+  // "Agregar al catalogo" (Fase D.1, cierre del hueco Visual AI -> Catalogo):
+  // reemplaza el salto directo al editor de APU -- el flujo correcto es
+  // Plano -> Elemento validado -> Catalogo -> APU -> Presupuesto, nunca
+  // saltarse el Catalogo. Reusa toApuSeed SOLO para su validacion de forma
+  // (concepto/unidad/cantidad utilizables); el resultado real que se manda
+  // al servidor es un concepto de catalogo completo, con origenElementoId
+  // para deduplicar si este mismo elemento se vuelve a enviar.
+  const addElementToCatalog=async(elemento,index)=>{
+    if(!activeProjectId){ window.zoemecNotify?.(tr('takeoff.needsProjectMsg'),'error'); onNeedProject?.(); return; }
     const seed=toApuSeed(elemento);
     if(!seed){
       window.zoemecNotify?.(tr('takeoff.notValidatedMsg'), 'error');
       return;
     }
-    try{ localStorage.setItem('zoemec-pending-plano-seed', JSON.stringify(seed)); }catch{}
-    window.zoemecNotify?.(tr('takeoff.readyForApuMsg',{concept:seed.concept,qty:seed.qty,unit:seed.unit}), 'info');
-    setModule?.('apu');
+    setCatalogBusyIndex(index);
+    try{
+      const origenElementoId=`${result?.visualRequestId||'sin-request'}:${index}`;
+      const res=await apiPost('/api/catalogo-conceptos', {
+        action:'create', projectId:activeProjectId,
+        conceptos:[{
+          clave:`EL-${index+1}`, capitulo:'OTROS', concept:seed.concept, unit:seed.unit, qty:seed.qty, referencePU:seed.referencePU,
+          origenElementoId, origenPlano:{ origen:'plano-takeoff', ...seed.sourceMeta }
+        }]
+      });
+      setCatalogAddedKeys(prev=>new Set(prev).add(origenElementoId));
+      const wasUpdate=(res.updated||0)>0;
+      window.zoemecNotify?.(tr(wasUpdate?'takeoff.updatedInCatalogMsg':'takeoff.addedToCatalogMsg',{concept:seed.concept,qty:seed.qty,unit:seed.unit}), 'success');
+    }catch(err){
+      window.zoemecNotify?.(err?.message||tr('takeoff.addToCatalogFailMsg'), 'error');
+    }finally{
+      setCatalogBusyIndex(-1);
+    }
   };
 
   const estadoLabel={ PROPUESTO_POR_IA:tr('takeoff.stateProposedAI'), REQUIERE_REVISION:tr('takeoff.stateNeedsReview'), VALIDADO_POR_USUARIO:tr('takeoff.stateValidated'), RECHAZADO:tr('takeoff.stateRejected') };
@@ -5091,7 +5225,7 @@ function PlanoTakeoff({user, setModule}){
     </div>
 
     {mimeType.startsWith('image/') && dataBase64
-      ? <PlanoManualMeasure imageDataUrl={dataBase64} fileName={fileName} mimeType={mimeType} setModule={setModule} takeoffRecords={takeoffRecords} setTakeoffRecords={setTakeoffRecords} user={user}/>
+      ? <PlanoManualMeasure imageDataUrl={dataBase64} fileName={fileName} mimeType={mimeType} setModule={setModule} takeoffRecords={takeoffRecords} setTakeoffRecords={setTakeoffRecords} user={user} activeProjectId={activeProjectId} onNeedProject={onNeedProject}/>
       : dataBase64 ? <p className="muted" style={{fontSize:'.78rem'}}>{tr('takeoff.manualOnlyImageHint')}</p> : null}
 
     {result && <div className="panel">
@@ -5123,7 +5257,9 @@ function PlanoTakeoff({user, setModule}){
                 <button className="soft" disabled={busy} onClick={()=>reviewElement(index,'VALIDADO_POR_USUARIO')}>{tr('takeoff.validate')}</button>
                 <button className="row-del" disabled={busy} onClick={()=>reviewElement(index,'RECHAZADO')}>{tr('takeoff.reject')}</button>
                 <button className="soft" disabled={busy} onClick={()=>handleSimilar(index,el)}>{tr('takeoff.similarMatrices')}</button>
-                <button disabled={el.estado!=='VALIDADO_POR_USUARIO'} onClick={()=>handleUseInApu(el)}>{tr('takeoff.useInApu')}</button>
+                {catalogAddedKeys.has(`${result?.visualRequestId||'sin-request'}:${index}`)
+                  ? <span className="muted" style={{fontSize:'.78rem'}}>✓ {tr('planoTakeoff.alreadyInCatalog')}</span>
+                  : <button disabled={el.estado!=='VALIDADO_POR_USUARIO' || catalogBusyIndex===index} onClick={()=>addElementToCatalog(el,index)}>{catalogBusyIndex===index?tr('planoTakeoff.saving'):tr('takeoff.addToCatalog')}</button>}
               </td>
             </tr>
             {similarByIndex[index] && <tr><td colSpan={10}>
@@ -5149,7 +5285,7 @@ function PlanoTakeoff({user, setModule}){
    simulada). El elemento resultante se valida y convierte a semilla de APU
    con el MISMO motor que Planos IA (applyPlanoElementReview/toApuSeed,
    planoReview.js) -- ningun motor nuevo. */
-function PlanoManualMeasure({imageDataUrl, fileName, mimeType, setModule, takeoffRecords, setTakeoffRecords, user}){
+function PlanoManualMeasure({imageDataUrl, fileName, mimeType, setModule, takeoffRecords, setTakeoffRecords, user, activeProjectId=null, onNeedProject}){
   const { t: tr } = useI18n();
   const canvasRef=useRef(null);
   const imgRef=useRef(null);
@@ -5296,8 +5432,16 @@ function PlanoManualMeasure({imageDataUrl, fileName, mimeType, setModule, takeof
     setTakeoffRecords(prev=>upsertTakeoffRecord(prev,record));
   };
 
-  const useInApu=()=>{
+  const [catalogBusy,setCatalogBusy]=useState(false);
+  const [catalogAddedRecordId,setCatalogAddedRecordId]=useState(null);
+  // "Agregar al catalogo" (Fase D.1): mismo criterio que PlanoTakeoff/
+  // PlanoTakeoffWorkspace -- nunca saltar directo al editor de APU, el
+  // elemento validado pasa primero por el Catalogo. origenElementoId usa
+  // el id del registro de trazo local (recordId, ver planoTakeoffStore.js)
+  // para poder deduplicar si el mismo trazo se vuelve a "usar" dos veces.
+  const addToCatalog=async()=>{
     if(!pendingElement) return;
+    if(!activeProjectId){ window.zoemecNotify?.(tr('takeoff.needsProjectMsg'),'error'); onNeedProject?.(); return; }
     const cantidadEditada=cantidadFinal!==''?Number(cantidadFinal):null;
     const huboCorreccion=cantidadEditada!=null && cantidadEditada!==pendingElement.cantidadPropuesta;
     const reviewed=applyPlanoElementReview(pendingElement,{
@@ -5307,18 +5451,33 @@ function PlanoManualMeasure({imageDataUrl, fileName, mimeType, setModule, takeof
     });
     const seed=toApuSeed(reviewed);
     if(!seed){ window.zoemecNotify?.(tr('takeoffManual.noValidQtyMsg'),'error'); return; }
-    // Persiste la correccion manteniendo el historial (cantidad ORIGINAL del
-    // trazo nunca se pierde -- ver planoTakeoffStore.js#applyManualCorrection).
-    if(recordId){
-      setTakeoffRecords(prev=>prev.map(r=>r.id!==recordId?r:applyManualCorrection(r,{
-        cantidadCorregida: huboCorreccion?cantidadEditada:null,
-        descripcionCorregida: reviewed.descripcionCorregida,
-        validatedBy: user?.email||'usuario'
-      })));
+    setCatalogBusy(true);
+    try{
+      // Persiste la correccion manteniendo el historial (cantidad ORIGINAL del
+      // trazo nunca se pierde -- ver planoTakeoffStore.js#applyManualCorrection).
+      if(recordId){
+        setTakeoffRecords(prev=>prev.map(r=>r.id!==recordId?r:applyManualCorrection(r,{
+          cantidadCorregida: huboCorreccion?cantidadEditada:null,
+          descripcionCorregida: reviewed.descripcionCorregida,
+          validatedBy: user?.email||'usuario'
+        })));
+      }
+      const origenElementoId=recordId||`manual-${Date.now()}`;
+      const res=await apiPost('/api/catalogo-conceptos', {
+        action:'create', projectId:activeProjectId,
+        conceptos:[{
+          clave:tipo.toUpperCase(), capitulo:'OTROS', concept:seed.concept, unit:seed.unit, qty:seed.qty, referencePU:seed.referencePU,
+          origenElementoId, origenPlano:{ origen:'plano-takeoff-manual', ...seed.sourceMeta }
+        }]
+      });
+      setCatalogAddedRecordId(origenElementoId);
+      const wasUpdate=(res.updated||0)>0;
+      window.zoemecNotify?.(tr(wasUpdate?'takeoffManual.updatedInCatalogMsg':'takeoffManual.addedToCatalogMsg',{concept:seed.concept,qty:seed.qty,unit:seed.unit}), 'success');
+    }catch(err){
+      window.zoemecNotify?.(err?.message||tr('takeoffManual.addToCatalogFailMsg'), 'error');
+    }finally{
+      setCatalogBusy(false);
     }
-    try{ localStorage.setItem('zoemec-pending-plano-seed', JSON.stringify(seed)); }catch{}
-    window.zoemecNotify?.(tr('takeoffManual.readyForApuMsg',{concept:seed.concept,qty:seed.qty,unit:seed.unit}), 'info');
-    setModule?.('apu');
   };
 
   return <div className="panel plano-manual-measure">
@@ -5348,7 +5507,9 @@ function PlanoManualMeasure({imageDataUrl, fileName, mimeType, setModule, takeof
       {pendingElement.cantidadPropuesta!=null && <div className="grid-2">
         <div><label>{tr('takeoffManual.finalQtyLabel')}</label><input type="number" step="any" value={cantidadFinal} onChange={e=>setCantidadFinal(e.target.value)}/></div>
       </div>}
-      <button disabled={pendingElement.cantidadPropuesta==null} onClick={useInApu}>{tr('takeoffManual.validateAndUse')}</button>
+      {catalogAddedRecordId && catalogAddedRecordId===(recordId||catalogAddedRecordId)
+        ? <span className="muted" style={{fontSize:'.78rem'}}>✓ {tr('planoTakeoff.alreadyInCatalog')}</span>
+        : <button disabled={pendingElement.cantidadPropuesta==null || catalogBusy} onClick={addToCatalog}>{catalogBusy?tr('planoTakeoff.saving'):tr('takeoffManual.addToCatalog')}</button>}
     </div>}
   </div>;
 }
@@ -5429,8 +5590,8 @@ function PlansAccess({user}){
 function Reports({clients,apus,budgets}){
   const total=budgets.reduce((a,b)=>a+(b.total||0),0);
   const hasData = Boolean(clients.length || apus.length || budgets.length);
-  const segs=hasData ? [{label:'Presupuestos',value:budgets.length,color:'#9D6FD0'},{label:'APUs',value:apus.length,color:'#2A1740'},{label:'Clientes',value:clients.length,color:'#C7A35C'}].filter(s=>s.value>0) : [];
-  const bars=[['Presupuestos enviados',Math.min(100,budgets.length*10),'#9D6FD0'],['APU creados',Math.min(100,apus.length*10),'#2A1740'],['Clientes nuevos',Math.min(100,clients.length*10),'#C7A35C']];
+  const segs=hasData ? [{label:'Presupuestos',value:budgets.length,color:'#3BA0D9'},{label:'APUs',value:apus.length,color:'#0B2F4A'},{label:'Clientes',value:clients.length,color:'#C7A35C'}].filter(s=>s.value>0) : [];
+  const bars=[['Presupuestos enviados',Math.min(100,budgets.length*10),'#3BA0D9'],['APU creados',Math.min(100,apus.length*10),'#0B2F4A'],['Clientes nuevos',Math.min(100,clients.length*10),'#C7A35C']];
   const alerts=hasData ? [...apus.slice(0,2).map(a=>`APU ${a.clave || a.id} disponible para revisar`), ...budgets.slice(0,2).map(b=>`Presupuesto ${b.name} en cartera`)] : [];
   return <section><PageHead kicker="Reportes" title="Tablero ejecutivo" desc="Ventas, presupuestos, clientes, APUs, avances, utilidad y rendimiento de la oficina." action={<button onClick={()=>window.print()}>Imprimir reporte</button>} /><div className="report-hero"><div><small>Venta potencial</small><b>{money(total)}</b><span>acumulado</span></div><div><small>Pipeline</small><b>{budgets.length ? 'Activo' : '0%'}</b><span>tasa de cierre</span></div><div><small>Productividad</small><b>{apus.length}</b><span>APU generados</span></div><div><small>Clientes</small><b>{clients.length}</b><span>activos</span></div></div><div className="dash-charts report-grid"><div className="panel"><h2>Cotizacion mensual</h2><Spark points={budgets.length ? budgets.slice(-8).map(b=>Math.max(1,(Number(b.total)||0)/1000)) : [0,0,0,0,0,0,0,0]} h={110}/><div className="chart-foot"><span>{budgets.length ? 'Presupuestos reales' : 'Sin datos reales'}</span><b>{budgets.length ? 'Actualizado' : '0% acumulado'}</b></div></div><div className="panel chart-donut"><h2>Cartera por tipo de obra</h2><Donut segments={segs} center={hasData ? '100%' : '0%'} sub="cartera"/><div className="donut-legend">{segs.length ? segs.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label} <b>{s.value}</b></span>) : <EmptyState text="Sin datos para graficar."/>}</div></div></div><div className="report-bottom"><div className="panel"><h2>Resumen mensual</h2>{bars.map(([label,val,color])=><div className="bar-row" key={label}><span>{label}</span><i><b style={{width:val+'%',background:color}}></b></i><em className="bar-val">{val}%</em></div>)}</div><div className="panel"><h2>Alertas ejecutivas</h2>{alerts.length ? alerts.map(a=><div className="activity" key={a}><Icon name="bell" size={15}/> {a}</div>) : <EmptyState text="Sin alertas hasta que existan movimientos reales."/>}</div></div></section>
 }

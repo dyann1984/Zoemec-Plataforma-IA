@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { migrateLegacyApuToV2 } from '../../domain/apuSchema.js';
 import { finalizeProfessionalAPU } from '../../domain/apuProfessional.js';
 import {
@@ -33,7 +33,7 @@ function estadoBadgeColor(estado){
    Price Intelligence. onUpdateApu(nextRawApu) es responsabilidad del padre
    (normalmente: reemplazar el APU en la lista guardada, mismo patron que
    ProfessionalApuEditor.onSave). */
-export function RevisionBandeja({ apus = [], user, onUpdateApu }){
+export function RevisionBandeja({ apus = [], user, onUpdateApu, initialOpenId = null, onInitialOpenIdConsumed }){
   const [filter, setFilter] = useState(REVIEW_FILTER.TODOS);
   const [search, setSearch] = useState('');
   const [openId, setOpenId] = useState(null);
@@ -53,6 +53,17 @@ export function RevisionBandeja({ apus = [], user, onUpdateApu }){
     if(!q) return base;
     return base.filter(r => String(r.clave).toLowerCase().includes(q) || String(r.concept || '').toLowerCase().includes(q));
   }, [rows, filter, search]);
+
+  /* Deep-link (ReviewStage/CostStage "Abrir APU"): si el padre pide abrir un
+     id concreto y ya esta entre los APUs cargados, lo expande automaticamente
+     -- una sola vez, nunca vuelve a forzarlo si el usuario despues cierra o
+     selecciona otro renglon (por eso se "consume" con el callback). */
+  useEffect(() => {
+    if(initialOpenId != null && finalized.some(({ apu }) => apu.id === initialOpenId)){
+      setOpenId(initialOpenId);
+      onInitialOpenIdConsumed?.();
+    }
+  }, [initialOpenId, finalized, onInitialOpenIdConsumed]);
 
   if(!apus.length) return null;
 

@@ -39,16 +39,16 @@ export function excelCell(value){
 }
 
 export const XLS = {
-  title:{fontWeight:'bold', fontSize:16, color:'#ffffff', backgroundColor:'#2A1740', align:'center', alignVertical:'center'},
-  subtitle:{fontWeight:'bold', color:'#6F3FA7', backgroundColor:'#F2ECF8', align:'center'},
-  head:{fontWeight:'bold', color:'#ffffff', backgroundColor:'#2A1740', align:'center'},
-  section:{fontWeight:'bold', color:'#2A1740', backgroundColor:'#EDE3F6'},
-  total:{fontWeight:'bold', color:'#2A1740', backgroundColor:'#F6F0FB'},
-  grand:{fontWeight:'bold', color:'#ffffff', backgroundColor:'#2A1740'},
-  label:{fontWeight:'bold', color:'#2A1740', backgroundColor:'#F7F2FA'},
+  title:{fontWeight:'bold', fontSize:16, color:'#ffffff', backgroundColor:'#0B2F4A', align:'center', alignVertical:'center'},
+  subtitle:{fontWeight:'bold', color:'#0F6BA8', backgroundColor:'#EAF3F8', align:'center'},
+  head:{fontWeight:'bold', color:'#ffffff', backgroundColor:'#0B2F4A', align:'center'},
+  section:{fontWeight:'bold', color:'#0B2F4A', backgroundColor:'#EAF3F8'},
+  total:{fontWeight:'bold', color:'#0B2F4A', backgroundColor:'#F1F6F8'},
+  grand:{fontWeight:'bold', color:'#ffffff', backgroundColor:'#0B2F4A'},
+  label:{fontWeight:'bold', color:'#0B2F4A', backgroundColor:'#F5F8FA'},
   note:{color:'#6D6078', backgroundColor:'#FBF8FD', wrap:true},
   input:{backgroundColor:'#FFFDF7', color:'#1F162A'},
-  calc:{backgroundColor:'#F7F2FA', format:'$#,##0.00'},
+  calc:{backgroundColor:'#F5F8FA', format:'$#,##0.00'},
   formula:{color:'#6D6078', backgroundColor:'#FBF8FD', wrap:true},
   money:{format:'$#,##0.00'},
   qty:{format:'#,##0.0000'},
@@ -212,8 +212,8 @@ export function exportAPUPDFPro(apu, totals, company){
   const puX = W - 52;
   const impX = W - M - 2;
   const descW = unitX - descX - 10;
-  const purple = [42, 23, 64];
-  const violet = [111, 63, 167];
+  const petrol = [11, 47, 74];
+  const blue = [15, 107, 168];
   const soft = [246, 242, 250];
   const line = [221, 211, 232];
   let y = 14;
@@ -235,12 +235,12 @@ export function exportAPUPDFPro(apu, totals, company){
     check(12);
     doc.setFont('helvetica','bold');
     doc.setFontSize(9);
-    doc.setTextColor(...violet);
+    doc.setTextColor(...blue);
     doc.text(text, M, y);
     y += 6;
   };
 
-  doc.setFillColor(...purple);
+  doc.setFillColor(...petrol);
   doc.roundedRect(M, y, W - M*2, 18, 1.5, 1.5, 'F');
   doc.setTextColor(255);
   doc.setFont('helvetica','bold');
@@ -270,7 +270,7 @@ export function exportAPUPDFPro(apu, totals, company){
 
   doc.setFont('helvetica','bold');
   doc.setFontSize(8);
-  doc.setTextColor(...violet);
+  doc.setTextColor(...blue);
   doc.text('CONCEPTO ANALIZADO', M, y);
   y += 5;
   doc.setFont('helvetica','normal');
@@ -298,7 +298,7 @@ export function exportAPUPDFPro(apu, totals, company){
 
   const section = (title) => {
     check(16);
-    doc.setFillColor(...purple);
+    doc.setFillColor(...petrol);
     doc.rect(M, y, tableW, 7, 'F');
     doc.setTextColor(255);
     doc.setFont('helvetica','bold');
@@ -383,7 +383,7 @@ export function exportAPUPDFPro(apu, totals, company){
   addPage();
   doc.setFont('helvetica','bold');
   doc.setFontSize(13);
-  doc.setTextColor(...purple);
+  doc.setTextColor(...petrol);
   doc.text('ANEXO TECNICO AUDITABLE', M, y);
   y += 8;
   doc.setFont('helvetica','normal');

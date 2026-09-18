@@ -150,8 +150,15 @@ describe('api/gateway.mjs -- ruteo hacia los 6 handlers consolidados', () => {
 
   it('POST /api/challenge-decisions action=record llega al handler real de decisiones', async () => {
     const { idToken } = await createUserAndGetIdToken({ email: uniq('gw-challenge') });
+    const apuId = `APU-GW-CHALLENGE-${Date.now()}`;
+    const projectId = `PRO-GW-CHALLENGE-${Date.now()}`;
+    // handleRecord exige el PROYECTO real (assertProjectAccess sobre
+    // apu.projectId) ademas del APU -- ambos se crean primero, mismo patron
+    // que la prueba de export-events abajo.
+    await call(post('/api/projects', idToken, { action: 'create', id: projectId, name: 'Obra gateway challenge' }));
+    await call(post('/api/apus', idToken, { action: 'create', id: apuId, projectId, apu: apuFixture() }));
     const res = await call(post('/api/challenge-decisions', idToken, {
-      action: 'record', apuId: 'APU-GW-CHALLENGE', challengeId: 'ch-1', decision: 'MAINTAIN', reason: 'Via gateway'
+      action: 'record', apuId, challengeId: 'ch-1', decision: 'MAINTAIN', reason: 'Via gateway'
     }));
     assert.equal(res.statusCode, 200);
     assert.equal(res.body.decision.decision, 'MAINTAIN');
@@ -171,5 +178,30 @@ describe('api/gateway.mjs -- ruteo hacia los 6 handlers consolidados', () => {
     const res = await call(get('/api/export-events', idToken));
     assert.equal(res.statusCode, 200);
     assert.ok(Array.isArray(res.body.events));
+  });
+
+  it('POST /api/catalogo-conceptos action=create llega al handler real del Catalogo de conceptos (Fase D)', async () => {
+    const { idToken } = await createUserAndGetIdToken({ email: uniq('gw-catalogo') });
+    const projectId = `PRO-GW-CATALOGO-${Date.now()}`;
+    // assertProjectAccess exige que el proyecto ya exista y sea accesible
+    // para el caller -- se crea primero, mismo patron que export-events.
+    await call(post('/api/projects', idToken, { action: 'create', id: projectId, name: 'Obra gateway catalogo' }));
+    const res = await call(post('/api/catalogo-conceptos', idToken, {
+      action: 'create', projectId,
+      conceptos: [{ clave: 'GW-1', capitulo: 'CIMENTACION', concept: 'Zapata aislada (gateway)', unit: 'pza', qty: 4 }]
+    }));
+    assert.equal(res.statusCode, 201);
+    assert.equal(res.body.conceptos[0].status, 'PENDIENTE');
+  });
+
+  it('POST /api/presupuestos action=create llega al handler real del Presupuesto (Fase D)', async () => {
+    const { idToken } = await createUserAndGetIdToken({ email: uniq('gw-presupuesto') });
+    const res = await call(post('/api/presupuestos', idToken, {
+      action: 'create', id: `PRE-GW-${Date.now()}`, projectId: 'PRO-GW-PRESUPUESTO',
+      snapshot: { conceptos: [], capituloSubtotals: [], costoDirectoTotal: 0, importeTotal: 0 }
+    }));
+    assert.equal(res.statusCode, 201);
+    assert.equal(res.body.presupuesto.currentVersion, 'V1');
+    assert.equal(res.body.presupuesto.baselineVersion, null);
   });
 });

@@ -110,7 +110,7 @@ function PriceReviewPanel({apu,onChange}){
  </section>;
 }
 
-export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindPrices,user,exportBlocked,exportBlockedReason,onConfigureLocation}){
+export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindPrices,user,exportBlocked,exportBlockedReason,onConfigureLocation,project=null}){
  const final=useMemo(()=>finalizeProfessionalAPU(apu),[apu]);const [notice,setNotice]=useState(null),[modal,setModal]=useState(''),[quotes,setQuotes]=useState([]);
  const [moreOpen,setMoreOpen]=useState(false);
  const [selectedApuElement,setSelectedApuElement]=useState(null);
@@ -265,7 +265,7 @@ export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindP
  const table=(k,title)=><Accordion key={k} title={title} summary={sectionSummary(k)} defaultOpen={k==='labor'}><div className="apu-table-scroll"><table className="data-table"><thead><tr>{SPEC[k].map(([f,l])=><th key={f}>{l}</th>)}<th>Fuente</th><th>Fecha</th><th>Estado</th><th>Región</th><th/></tr></thead><tbody>{rows(k).map((r,i)=>{const rc=regionalCell(r);return <tr key={r.clave||i}>{SPEC[k].map(([f])=><td key={f}><input value={r[f]??''} onChange={e=>update(k,i,f,e.target.value)}/></td>)}<td><input value={r.fuente?.proveedor||''} placeholder={r.fuente?.estado===APU_DATA_STATE.BIBLIOTECA?'Biblioteca ZOEMEC':''} onChange={e=>{const n=structuredClone(apu),x=k==='tools'?n.herramientaMenor.detalle[i]:n[k][i];x.fuente={...(x.fuente||{}),proveedor:e.target.value,estado:x.fuente?.estado||APU_DATA_STATE.REQUIERE_VALIDACION};onChange(n)}}/></td><td><input value={r.fuente?.fecha||''} onChange={e=>{const n=structuredClone(apu),x=k==='tools'?n.herramientaMenor.detalle[i]:n[k][i];x.fuente={...(x.fuente||{}),fecha:e.target.value};onChange(n)}}/></td><td title={r.fuente?.matchMethod?`Método de coincidencia: ${r.fuente.matchMethod} · Confianza: ${r.fuente.confidence??0}% · Origen del precio: ${r.fuente.origenPrecio||''}${r.fuente.catalogItemId?` · Insumo de catálogo: ${r.fuente.catalogItemId}`:''}`:undefined}>{apuDataStateLabel(r.fuente?.estado)}</td><td title={rc.title} className="pro-regional-cell">{rc.text}</td><td><button onClick={()=>remove(k,i)}>×</button></td></tr>;})}</tbody></table></div><button onClick={()=>add(k)}>+ Agregar</button></Accordion>;
  const list=(f,title,object=false)=><Accordion key={f} title={title} summary={`${(apu[f]||[]).length} elemento(s)`}>{(apu[f]||[]).map((v,i)=><div className="pro-list-row" key={i}><textarea value={object?(v.especificacion||v.texto||''):v} onChange={e=>{const n=structuredClone(apu);n[f][i]=object?{...v,[f==='supuestos'?'texto':'especificacion']:e.target.value}:e.target.value;onChange(n)}}/><button onClick={()=>{const n=structuredClone(apu);n[f].splice(i,1);onChange(n)}}>×</button></div>)}<button onClick={()=>onChange({...apu,[f]:[...(apu[f]||[]),object?(f==='supuestos'?{texto:''}:{especificacion:'',criterio:'',norma:''}):'']})}>+ Agregar</button></Accordion>;
  return <div className="professional-apu-editor">
-  <RegionalContextPanel apu={apu} onConfigureLocation={onConfigureLocation}/>
+  <RegionalContextPanel apu={apu} project={project} onChange={onChange} onFindPrices={onFindPrices} onConfigureLocation={onConfigureLocation}/>
   <ZoemecIntelligencePanel apu={apu} onChange={onChange} history={history} onRestoreVersion={restoreVersion} user={user}/>
   <PriceReviewPanel apu={apu} onChange={onChange}/>
   <h3 className="pro-section-title pro-section-title-first">G. Acciones</h3>
@@ -348,7 +348,13 @@ export function ProfessionalApuEditor({apu,onChange,onSave,onExcel,onPdf,onFindP
   </div>
   <h3 className="pro-section-title">F. Datos administrativos</h3>
   <Accordion title="Datos del proyecto" summary={apu.proyecto || apu.cliente || 'Sin capturar'}>
-   <div className="pro-header-grid">{[['proyecto','Proyecto'],['cliente','Cliente'],['ubicacion','Ubicación'],['pais','País'],['estado','Estado'],['municipio','Municipio'],['fechaBase','Fecha base'],['moneda','Moneda'],['tipoCambio','Tipo cambio'],['partida','Partida'],['clave','Clave'],['concept','Concepto'],['unit','Unidad'],['cantidadObra','Cantidad'],['elaboro','Elaboró'],['reviso','Revisó'],['aprobo','Aprobó'],['version','Versión']].map(([f,l])=><label key={f}>{l}<input value={apu[f]??''} onChange={e=>change(f,e.target.value)}/></label>)}</div>
+   {/* pais/estado/municipio (texto libre legado) y fechaBase/moneda se retiraron de aqui:
+       nunca alimentaban busqueda/confianza regional (ver apuRegionalContext.js), y ahora
+       fechaBase/moneda/ubicacion estructurada se editan en el bloque real de arriba
+       ("Ubicacion y referencia de costos", RegionalContextPanel.jsx) -- una sola fuente
+       de verdad, nunca dos campos desincronizados para el mismo dato. `ubicacion` se
+       conserva aqui como texto libre editable (direccion/referencia adicional). */}
+   <div className="pro-header-grid">{[['proyecto','Proyecto'],['cliente','Cliente'],['ubicacion','Ubicación (texto libre)'],['tipoCambio','Tipo cambio'],['partida','Partida'],['clave','Clave'],['concept','Concepto'],['unit','Unidad'],['cantidadObra','Cantidad'],['elaboro','Elaboró'],['reviso','Revisó'],['aprobo','Aprobó'],['version','Versión']].map(([f,l])=><label key={f}>{l}<input value={apu[f]??''} onChange={e=>change(f,e.target.value)}/></label>)}</div>
   </Accordion>
   <h3 className="pro-section-title">H. Costos de Campo y Ajustes Reales</h3>
   <Accordion title="Costos de campo" summary={costosCampoRows.length?`${costosCampoRows.length} registro(s) · ${money(costosCampoRows.reduce((s,r)=>s+calcCostoCampoImporte(r),0))}`:'Sin registros'}>

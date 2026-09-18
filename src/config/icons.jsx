@@ -43,5 +43,8 @@ export const ICONS = {
   alerta:<><path d="M10.3 3.6L1.8 18a1.8 1.8 0 001.5 2.7h17.4a1.8 1.8 0 001.5-2.7L13.7 3.6a1.8 1.8 0 00-3.4 0z"/><path d="M12 9v4M12 17h.01"/></>,
   sun:<><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M2 12h2M20 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></>,
   moon:<><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></>,
-  download:<><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 19h16"/></>
+  download:<><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 19h16"/></>,
+  plus:<><path d="M12 5v14M5 12h14"/></>,
+  chevronDown:<><path d="M6 9l6 6 6-6"/></>,
+  costos:<><path d="M12 1v22"/><path d="M17 5.5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></>
 };

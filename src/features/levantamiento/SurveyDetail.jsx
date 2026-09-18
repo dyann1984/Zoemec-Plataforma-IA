@@ -12,6 +12,7 @@ import { aggregateSurveyTotals, recomputeSurvey } from '../../lib/levantamientoC
 import { auth, storage } from '../../firebase.js';
 import { ConstructionProposalPanel } from './ConstructionProposalPanel.jsx';
 import { fetchEvidenceItemsForSurvey } from '../../services/evidenceItemsApi.js';
+import { syncQuantificationToCatalog } from '../../domain/quantificationCostBridge.js';
 
 const STATUS_I18N_KEY = {
   [SURVEY_STATUS.DRAFT]: 'statusDraft',
@@ -51,7 +52,7 @@ const TAB_I18N_KEY = { datos: 'tabData', plano2d: 'tabPlan2d', vista3d: 'tabView
    de comportamiento ahi). Plano 2D y Vista 3D leen del mismo `survey` que ya
    se recalcula en `persist()`, asi que se actualizan solos al editar una
    medida en la pestana Datos -- no hace falta logica adicional. */
-export function SurveyDetail({ survey, onBack, onChange, onSendToApu, currentUserEmail, initialTab = 'datos' }){
+export function SurveyDetail({ survey, projectId, onBack, onChange, onSendToApu, currentUserEmail, initialTab = 'datos' }){
   const { t: tr } = useI18n();
   const [activeTab, setActiveTab] = useState(initialTab);
   const [activeSpaceId, setActiveSpaceId] = useState(survey.spaces[0]?.id || null);
@@ -129,12 +130,23 @@ export function SurveyDetail({ survey, onBack, onChange, onSendToApu, currentUse
     { key: 'windows', tipo: 'ventana', descripcion: tr('levantamiento.windowsLabel'), cantidad: totals.windowsCount, unidad: 'pza' }
   ];
 
-  const sendToTakeoff = (row) => {
+  const sendToTakeoff = async (row) => {
     const seed = buildPlanoElementFromConcept({
       tipo: row.tipo, descripcion: row.descripcion, cantidad: row.cantidad, unidad: row.unidad,
       survey, space: null, validatedBy: currentUserEmail
     });
     if(!seed){ window.zoemecNotify?.(tr('takeoff.notValidatedMsg'), 'error'); return; }
+    try{
+      await syncQuantificationToCatalog([{
+        projectId, concept: seed.concept, unit: seed.unit, qty: seed.qty,
+        sourceType: 'survey', sourceRecordId: survey.id, sourceElementId: row.key,
+        surveyId: survey.id, confirmedBy: currentUserEmail,
+        clave: `${survey.id}:${row.key}`, capitulo: 'OTROS'
+      }]);
+    }catch(err){
+      window.zoemecNotify?.(err?.message || tr('takeoff.notValidatedMsg'), 'error');
+      return;
+    }
     try{ localStorage.setItem('zoemec-pending-plano-seed', JSON.stringify(seed)); }catch{ /* almacenamiento no disponible */ }
     window.zoemecNotify?.(tr('takeoff.readyForApuMsg', { concept: seed.concept, qty: seed.qty, unit: seed.unit }), 'info');
     onSendToApu?.();

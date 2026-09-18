@@ -168,7 +168,7 @@ export function makeEmptyAPUv2(){
     // region no debe sobrescribir en silencio APU historicos ya
     // aprobados"). country/state/city null = APU generado antes de esta
     // fase o sin ubicacion de proyecto capturada.
-    ubicacionEstructurada: { country: null, state: null, city: null },
+    ubicacionEstructurada: { country: null, state: null, city: null, region: null },
     fechaBase: new Date().toLocaleDateString('es-MX'),
     moneda: 'MXN',
     partida: '',
@@ -335,7 +335,7 @@ export function migrateLegacyApuToV2(apuV1 = {}){
     ubicacion: '',
     // Fase 2: ver comentario en makeEmptyAPUv2 -- un APU v1 migrado nunca
     // tuvo ubicacion estructurada (no existia el concepto), queda null.
-    ubicacionEstructurada: { country: null, state: null, city: null },
+    ubicacionEstructurada: { country: null, state: null, city: null, region: null },
     fechaBase: apuV1.date || new Date().toLocaleDateString('es-MX'),
     moneda: 'MXN',
     partida: '',
@@ -656,7 +656,7 @@ export function normalizeAIApuToV2(raw = {}, fallbackConcept = '', options = {})
     // Fase 2: ver comentario en makeEmptyAPUv2 -- se llena de verdad en
     // main.jsx al generar (copia la ubicacion del proyecto activo en ese
     // momento), aqui nace vacio como el resto del encabezado.
-    ubicacionEstructurada: { country: null, state: null, city: null },
+    ubicacionEstructurada: { country: null, state: null, city: null, region: null },
     fechaBase: new Date().toLocaleDateString('es-MX'),
     moneda: 'MXN',
     partida: '',

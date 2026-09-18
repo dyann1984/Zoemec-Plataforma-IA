@@ -418,13 +418,13 @@ test('TEST 12: lote de conceptos distintos, cada APU conserva sus propios datos 
 
 test('Fase 2: makeEmptyAPUv2/migrateLegacyApuToV2/normalizeAIApuToV2 siempre traen ubicacionEstructurada (nunca hay que verificar su existencia antes de leerla)', () => {
   const vacio = makeEmptyAPUv2();
-  assert.deepEqual(vacio.ubicacionEstructurada, { country: null, state: null, city: null });
+  assert.deepEqual(vacio.ubicacionEstructurada, { country: null, state: null, city: null, region: null });
 
   const migrado = migrateLegacyApuToV2({ id: 'APU-LEGACY', concept: 'x' });
-  assert.deepEqual(migrado.ubicacionEstructurada, { country: null, state: null, city: null });
+  assert.deepEqual(migrado.ubicacionEstructurada, { country: null, state: null, city: null, region: null });
 
   const normalizado = normalizeAIApuToV2(rawAIFixture(), 'fallback', {});
-  assert.deepEqual(normalizado.ubicacionEstructurada, { country: null, state: null, city: null });
+  assert.deepEqual(normalizado.ubicacionEstructurada, { country: null, state: null, city: null, region: null });
 });
 
 test('Fase 2: fuente de material/consumible/mano de obra/equipo/seguridad siempre trae nivelCobertura (null por defecto, nunca ausente)', () => {

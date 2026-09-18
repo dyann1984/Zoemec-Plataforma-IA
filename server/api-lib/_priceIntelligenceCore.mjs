@@ -92,7 +92,7 @@ function tipoTextoPara(kind){
   return 'precio unitario de venta de este material de construccion';
 }
 
-export async function searchMarketReferences({ description = '', unit = '', kind = 'materials', location = '', country = '', state = '', city = '', dateBase = '', categoriaLaboral = '', regionalIntelligence = null } = {}){
+export async function searchMarketReferences({ description = '', unit = '', kind = 'materials', location = '', country = '', state = '', city = '', zone = '', dateBase = '', categoriaLaboral = '', regionalIntelligence = null } = {}){
   if(!process.env.OPENAI_API_KEY) throw new Error('Falta OPENAI_API_KEY en Vercel.');
   const desc = String(description || '').trim();
   if(!desc) throw new Error('Falta la descripcion del insumo a consultar.');
@@ -111,7 +111,13 @@ export async function searchMarketReferences({ description = '', unit = '', kind
   // siendo Mexico exactamente como antes de esta fase (ningun llamador
   // existente cambia de comportamiento si no manda country).
   const countryName = country ? (findCountry(country)?.name || country) : 'Mexico';
-  const structuredLocation = formatLocationDisplay({ country, state, city });
+  // `zone` (Contexto geografico del APU: Región/Zona, ej. "Zona
+  // Metropolitana") enriquece el texto de ubicacion que ve la IA -- NUNCA se
+  // convierte en un nivel nuevo de nivelCobertura (REGIONAL_COVERAGE sigue
+  // siendo ciudad/estado/nacional/no_especificado, ver deriveRegionalConfidence
+  // abajo): ninguna fuente real de precios distingue "zona" de "estado", asi
+  // que inventar esa distincion violaria la regla de nunca fabricar datos.
+  const structuredLocation = formatLocationDisplay({ country, state, city, region: zone });
   const locationContext = structuredLocation || location;
   const isMexico = !country || country === MEXICO_CODE;
 

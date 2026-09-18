@@ -19,6 +19,18 @@ import exportEventsHandler from '../server/api-lib/_route-export-events.mjs';
 import healthHandler from '../server/api-lib/_route-health.mjs';
 import organizationsHandler from '../server/api-lib/_route-organizations.mjs';
 import constructionProposalHandler from '../server/api-lib/_route-construction-proposal.mjs';
+import planoTakeoffsHandler from '../server/api-lib/_route-plano-takeoffs.mjs';
+import catalogoConceptosHandler from '../server/api-lib/_route-catalogo-conceptos.mjs';
+import presupuestosHandler from '../server/api-lib/_route-presupuestos.mjs';
+import changeOrdersHandler from '../server/api-lib/_route-change-orders.mjs';
+import commitmentsHandler from '../server/api-lib/_route-commitments.mjs';
+import progressHandler from '../server/api-lib/_route-progress.mjs';
+import estimatesHandler from '../server/api-lib/_route-estimates.mjs';
+import paymentsHandler from '../server/api-lib/_route-payments.mjs';
+import constructionDnaHandler from '../server/api-lib/_route-construction-dna.mjs';
+import projectVaultHandler from '../server/api-lib/_route-project-vault.mjs';
+import sentinelHandler from '../server/api-lib/_route-sentinel.mjs';
+import assetsHandler from '../server/api-lib/_route-assets.mjs';
 
 const ROUTES = {
   '/api/apus': apusHandler,
@@ -29,6 +41,18 @@ const ROUTES = {
   '/api/health': healthHandler,
   '/api/organizations': organizationsHandler,
   '/api/construction-proposal': constructionProposalHandler,
+  '/api/plano-takeoffs': planoTakeoffsHandler,
+  '/api/catalogo-conceptos': catalogoConceptosHandler,
+  '/api/presupuestos': presupuestosHandler,
+  '/api/change-orders': changeOrdersHandler,
+  '/api/commitments': commitmentsHandler,
+  '/api/progress': progressHandler,
+  '/api/estimates': estimatesHandler,
+  '/api/payments': paymentsHandler,
+  '/api/construction-dna': constructionDnaHandler,
+  '/api/project-vault': projectVaultHandler,
+  '/api/sentinel': sentinelHandler,
+  '/api/assets': assetsHandler,
 };
 
 export default async function handler(req, res){

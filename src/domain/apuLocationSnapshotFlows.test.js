@@ -157,3 +157,14 @@ test('10b. Sin proyecto activo en absoluto (null): ningun flujo lanza, todo qued
     assert.equal(individual.ubicacion, '');
   });
 });
+
+test('11. Proyecto con region/zona (ej. Zona Metropolitana) la propaga en los tres flujos', () => {
+  const projectWithRegion = { locationCountry: 'MX', locationState: 'Estado de México', locationRegion: 'Zona Metropolitana', locationCity: 'Tecámac' };
+  const individual = runIndividualFlow(projectWithRegion);
+  const batch1 = runBatchFlow1_buildBatchAPUs(projectWithRegion, item, 0);
+  const batch2 = runBatchFlow2_runQueueJob(projectWithRegion, item, 0);
+  [individual, batch1, batch2].forEach(v2 => {
+    assert.deepEqual(v2.ubicacionEstructurada, { country: 'MX', state: 'Estado de México', city: 'Tecámac', region: 'Zona Metropolitana' });
+    assert.equal(v2.ubicacion, 'Tecámac, Zona Metropolitana, Estado de México, México');
+  });
+});

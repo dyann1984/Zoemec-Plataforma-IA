@@ -70,6 +70,11 @@ export async function resolveResourcePrice({
     normalizedDescription: resource.description, technicalSpecification: resource.technicalSpecification || '',
     unit: resource.unit, region: resource.region || '', currency: resource.currency || 'MXN',
     country: resource.country || '', state: resource.state || '', city: resource.city || '',
+    // `zone` (Fase Contexto geografico del APU): nivel administrativo NUEVO
+    // "Región / Zona" (ej. "Zona Metropolitana"), distinto de `region` de
+    // arriba (texto libre legado, override manual por recurso) -- mismo
+    // criterio de seguridad que country/state/city (geografia publica).
+    zone: resource.zone || '',
     tenantScope: resource.tenantSpecific && resource.organizationId ? { organizationId: resource.organizationId } : null
   };
 
@@ -99,7 +104,7 @@ export async function resolveResourcePrice({
         description: resource.description, unit: resource.unit, kind: resource.kind || 'materials',
         region: resource.region || '', dateBase: resource.dateBase || '',
         technicalSpecification: resource.technicalSpecification || '',
-        country: resource.country || '', state: resource.state || '', city: resource.city || '',
+        country: resource.country || '', state: resource.state || '', city: resource.city || '', zone: resource.zone || '',
         tenantScope: fingerprintInput.tenantScope
       });
     }catch(err){
@@ -313,7 +318,7 @@ export async function enrichApuWithIntelligence2({
           description: row.descripcion, unit: row.unidad, kind,
           currentPrice: Number(row[priceField]) || 0,
           estado: row.fuente?.estado || null,
-          country: location?.country || '', state: location?.state || '', city: location?.city || '',
+          country: location?.country || '', state: location?.state || '', city: location?.city || '', zone: location?.region || '',
           aiProposedOrigin: row.materialOrigin || null,
           technicallyRequired: Boolean(row.technicallyRequired),
           optional: Boolean(row.optional),

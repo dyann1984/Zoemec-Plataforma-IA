@@ -2,7 +2,7 @@
    React: constantes puras que antes vivian sueltas en src/main.jsx. */
 
 export const defaultCompany = {
-  name: 'ZOEMEC', rfc: 'RFC pendiente', phone: '55 0000 0000', email: 'contacto@zoemec.mx', address: 'México', logo: '/images/logo-web.png?v=zoemec-2026'
+  name: 'ZOEMEC', rfc: 'RFC pendiente', phone: '55 0000 0000', email: 'contacto@zoemec.mx', address: 'México', logo: '/images/zoemec-logo-oficial.png'
 };
 
 export const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true';

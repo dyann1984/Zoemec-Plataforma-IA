@@ -34,3 +34,28 @@ evidence-ebdi-audit/
 # esta carpeta; sin ellos, ese arnes especifico simplemente no carga nada
 # (no rompe build ni tests).
 dev-qa/fixtures-real/
+
+# Salida de arneses de QA que generan archivos reales (PDF/XLSX) para
+# inspeccion manual (ver dev-qa/qa-release-gate-*.mjs) -- son evidencia de
+# una corrida puntual, nunca entregables versionados.
+dev-qa/.out/
+
+# Config local de Claude Code (permisos y comandos de este equipo/usuario
+# especificos, ver .claude/settings.local.json) -- nunca compartido entre
+# maquinas ni parte del producto.
+.claude/
+
+# Herramientas administrativas/de provisioning que operan sobre
+# credenciales o datos REALES de produccion (Firebase Auth real,
+# zoemec-plataforma-ia) -- nunca deben entrar al historial de git, sin
+# importar que no contengan un secreto hardcodeado: el riesgo es el
+# ALCANCE de lo que hacen (crear/modificar cuentas reales), no el
+# contenido del archivo.
+scripts/audit-qa-accounts.mjs
+scripts/provision-super-admin.mjs
+
+# Arneses de seed de UNA SOLA fase historica de QA manual (contra el
+# EMULADOR, nunca produccion) -- narrow/de un solo uso, no tooling
+# reutilizable como scripts/grant-super-admin.mjs o
+# scripts/seed-base-auxiliaries.mjs (esos si estan versionados).
+scripts/qa-seed-fase-*.mjs

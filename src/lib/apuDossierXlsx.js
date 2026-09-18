@@ -33,6 +33,10 @@ function buildPortadaSheet(data, meta){
   kv('Concepto', data.snapshot.concept);
   kv('Unidad', data.snapshot.unit);
   kv('Version', data.revision || 'Sin version guardada');
+  kv('Ubicacion', data.snapshot.ubicacion || 'Sin ubicacion capturada');
+  kv('Moneda', data.snapshot.moneda || 'MXN');
+  kv('Fecha base', data.snapshot.fechaBase || 'Sin fecha base');
+  kv('Referencia de precios', data.regionalReferenceLabel || 'Sin referencia disponible');
   kv('Fecha', meta.fecha);
   kv('Autor', data.createdBy || meta.autor);
   kv('Estado', data.snapshot.validationStatus);

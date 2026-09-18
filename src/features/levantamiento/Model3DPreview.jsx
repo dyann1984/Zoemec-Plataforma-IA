@@ -11,21 +11,45 @@
    Camara centrada en el centro REAL del bounding box (no en el origen) desde
    el inicio -- Survey3DViewer.jsx documenta este mismo bug (un Space de 8x8
    queda fuera de cuadro si la camara apunta a (0,0,0)) como algo encontrado
-   en QA; aqui se evita repetirlo. */
+   en QA; aqui se evita repetirlo.
+
+   Visor 3D profesional (esta fase): el toggle de alto nivel es
+   REALISTA/TECNICO (RENDER_MODE, three3dRenderModes.js) -- REALISTA agrega
+   tone mapping ACES, entorno de estudio neutro, sombras suaves y piso de
+   contacto; TECNICO conserva los VISUALIZATION_MODE ya existentes
+   (Solido/Aristas/Transparente/Alambre) como herramientas secundarias, con
+   fondo claro (nunca el gris oscuro casi plano anterior). NINGUNO de los
+   dos modos escala el modelo de forma no uniforme -- centro/maxDimension/
+   frameScale siguen siendo exactamente los mismos calculos de siempre, solo
+   deciden encuadre de camara, nunca geometria. */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 import {
   createRenderer, createScene, createPerspectiveCamera, createOrbitControls,
-  addImportedModelLighting, createGridHelper, CAMERA_VIEW_PRESETS, applyCameraView
+  addImportedModelLighting, createGridHelper, createAxesHelper, CAMERA_VIEW_PRESETS, applyCameraView,
+  configureRendererQuality, createStudioEnvironment, createContactShadowGround, configureShadowLight,
+  detectRenderQualityPreset
 } from '../../lib/three3dSceneKit.js';
 import {
   VISUALIZATION_MODE, MATERIAL_COLOR_PRESETS, DEFAULT_TECHNICAL_COLOR_HEX,
-  detectMaterialQuality, detectAvailablePartCategories, applyVisualizationMode, disposeVisualizationOverrides
+  detectMaterialQuality, detectAvailablePartCategories, applyVisualizationMode, applyRealisticMode, disposeVisualizationOverrides
 } from '../../lib/three3dVisualizationModes.js';
+import {
+  RENDER_MODE, PERFORMANCE_PRESET, PERFORMANCE_CONFIG, RENDER_MODE_CONFIG, RENDER_MODE_BACKGROUND,
+  buildProfessionalFallbackMaterial
+} from '../../lib/three3dRenderModes.js';
 
-const VISUALIZATION_MODE_ORDER = [
-  VISUALIZATION_MODE.REALISTIC, VISUALIZATION_MODE.SOLID, VISUALIZATION_MODE.TECHNICAL,
+// Sub-modos de TECNICO -- REALISTIC/TECHNICAL de VISUALIZATION_MODE ya no
+// aparecen aqui (REALISTIC vive un nivel arriba como RENDER_MODE.REALISTIC;
+// TECHNICAL -- solido+aristas forzadas -- sigue siendo el sub-modo default
+// al entrar a TECNICO, ver el useEffect de reset de modo mas abajo).
+const TECHNICAL_SUBMODE_ORDER = [
+  VISUALIZATION_MODE.TECHNICAL, VISUALIZATION_MODE.SOLID,
   VISUALIZATION_MODE.EDGES, VISUALIZATION_MODE.TRANSPARENT, VISUALIZATION_MODE.WIREFRAME
 ];
 const MODE_LABEL_KEY = {
@@ -33,9 +57,14 @@ const MODE_LABEL_KEY = {
   [VISUALIZATION_MODE.TECHNICAL]: 'viz3dModeTechnical', [VISUALIZATION_MODE.EDGES]: 'viz3dModeEdges',
   [VISUALIZATION_MODE.TRANSPARENT]: 'viz3dModeTransparent', [VISUALIZATION_MODE.WIREFRAME]: 'viz3dModeWireframe'
 };
+const PERF_LABEL_KEY = {
+  [PERFORMANCE_PRESET.LOW]: 'render3dPerfLow', [PERFORMANCE_PRESET.BALANCED]: 'render3dPerfBalanced', [PERFORMANCE_PRESET.HIGH]: 'render3dPerfHigh'
+};
+const PERF_ORDER = [PERFORMANCE_PRESET.LOW, PERFORMANCE_PRESET.BALANCED, PERFORMANCE_PRESET.HIGH];
 function partLabelKey(category){ return 'viz3dPart' + category.charAt(0).toUpperCase() + category.slice(1); }
 function colorLabelKey(presetId){ return 'viz3dColor' + presetId.charAt(0).toUpperCase() + presetId.slice(1); }
 function hexToCss(hex){ return '#' + hex.toString(16).padStart(6, '0'); }
+const isMobileUA = () => typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent || '');
 
 /* INCIDENTE 3 (visor 3D) -- "rotados/invertidos": el formato OBJ no declara
    cual eje es "arriba" (ver applyDefaultUpAxisCorrection en
@@ -97,34 +126,45 @@ export function Model3DPreview({ object3D, boundingBox, diagnostics = null, onBo
   const mountRef = useRef(null);
   const cameraRef = useRef(null);
   const controlsRef = useRef(null);
+  const rendererRef = useRef(null);
+  const composerRef = useRef(null);
+  const sizeRef = useRef({ width: 0, height: 0 });
 
-  // Fase 1 (visor 3D profesional): "interpretar antes que preguntar" -- el
-  // modo inicial NO es siempre "realista": si el archivo no trae materiales
-  // reales detectables (heuristica en three3dVisualizationModes.js), arranca
-  // directo en "tecnico" (material ZOEMEC), nunca en un gris por defecto sin
-  // explicacion. Se recalcula solo cuando cambia el objeto cargado.
   const materialQuality = useMemo(() => object3D ? detectMaterialQuality(object3D) : null, [object3D]);
   const availableParts = useMemo(() => object3D ? detectAvailablePartCategories(object3D) : [], [object3D]);
-  const [mode, setMode] = useState(VISUALIZATION_MODE.REALISTIC);
+
+  // "Interpretar antes que preguntar" (igual que antes, ahora a nivel
+  // RENDER_MODE): un archivo con materiales reales arranca en REALISTA; sin
+  // evidencia de material real arranca en TECNICO -- nunca un gris por
+  // defecto sin explicacion.
+  const [renderMode, setRenderMode] = useState(RENDER_MODE.REALISTIC);
+  const [perfPreset, setPerfPreset] = useState(() => detectRenderQualityPreset());
+  const [mode, setMode] = useState(VISUALIZATION_MODE.TECHNICAL);
   const [colorHex, setColorHex] = useState(DEFAULT_TECHNICAL_COLOR_HEX);
   const [showEdges, setShowEdges] = useState(false);
   const [partColorOverrides, setPartColorOverrides] = useState({});
+  const [showGrid, setShowGrid] = useState(true);
+  const [showAxes, setShowAxes] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   useEffect(() => {
     if(!materialQuality) return;
-    setMode(materialQuality.hasRealMaterials ? VISUALIZATION_MODE.REALISTIC : VISUALIZATION_MODE.TECHNICAL);
+    setRenderMode(materialQuality.hasRealMaterials ? RENDER_MODE.REALISTIC : RENDER_MODE.TECHNICAL);
+    setMode(VISUALIZATION_MODE.TECHNICAL);
     setPartColorOverrides({});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [object3D]);
 
-  // Aplica el modo/color/aristas activos cada vez que cambian -- separado
-  // del efecto de montaje (mas abajo): cambiar de "Solido" a "Alambre" no
-  // necesita recrear el renderer/camara/controles, solo mutar materiales,
-  // que ya se ven en el siguiente frame del loop de animacion existente.
+  // Aplica el sub-modo TECNICO (Solido/Aristas/Transparente/Alambre) cada
+  // vez que cambia -- SOLO si renderMode es TECNICO; en REALISTA el
+  // material lo decide el efecto pesado de mas abajo (applyRealisticMode),
+  // nunca este. Separado del montaje del renderer: cambiar de "Solido" a
+  // "Alambre" no necesita recrear renderer/camara/luces, solo mutar
+  // materiales, visibles en el siguiente frame del loop ya corriendo.
   useEffect(() => {
-    if(!object3D) return;
+    if(!object3D || renderMode !== RENDER_MODE.TECHNICAL) return;
     applyVisualizationMode(object3D, { mode, colorHex, showEdges, partColorOverrides });
-  }, [object3D, mode, colorHex, showEdges, partColorOverrides]);
+  }, [object3D, renderMode, mode, colorHex, showEdges, partColorOverrides]);
 
   const center = boundingBox ? {
     x: (boundingBox.min.x + boundingBox.max.x) / 2,
@@ -135,36 +175,109 @@ export function Model3DPreview({ object3D, boundingBox, diagnostics = null, onBo
   // Radio del encuadre inicial proporcional al tamano real del modelo -- un
   // modelo de 1m y uno de 40m no pueden usar el mismo offset fijo de camara
   // (CAMERA_VIEW_PRESETS.isometric asume una escala "tipica" de Space, no
-  // sirve tal cual para un archivo importado de tamano arbitrario).
+  // sirve tal cual para un archivo importado de tamano arbitrario). NUNCA
+  // deforma el modelo -- solo mueve la camara, geometria intacta.
   const maxDimension = boundingBox
     ? Math.max(boundingBox.size.x, boundingBox.size.y, boundingBox.size.z, 0.5)
     : 6;
   const frameScale = maxDimension / 6;
+  const groundY = boundingBox ? boundingBox.min.y : 0;
 
+  // Montaje/desmontaje pesado del renderer -- se recrea cuando cambia el
+  // objeto O el modo de render O el preset de rendimiento (cualquiera de
+  // los tres implica luces/entorno/sombras/tone mapping distintos, no solo
+  // un cambio de material). El sub-modo TECNICO (mode/colorHex/etc) NO esta
+  // en las dependencias -- eso lo maneja el efecto liviano de arriba sin
+  // reconstruir nada.
   useEffect(() => {
     const mount = mountRef.current;
     if(!mount || !object3D) return;
-    const width = mount.clientWidth || 480, height = 360;
-    const scene = createScene();
+    const width = mount.clientWidth || 480, height = mount.clientHeight || 360;
+    sizeRef.current = { width, height };
+    const cfg = RENDER_MODE_CONFIG[renderMode];
+    const perfCfg = PERFORMANCE_CONFIG[perfPreset];
+    const shadowsEnabled = cfg.shadows && renderMode === RENDER_MODE.REALISTIC;
+
+    const scene = createScene(RENDER_MODE_BACKGROUND[renderMode]);
     const camera = createPerspectiveCamera(width, height, {
       x: center.x + CAMERA_VIEW_PRESETS.isometric.x * frameScale,
       y: center.y + CAMERA_VIEW_PRESETS.isometric.y * frameScale,
       z: center.z + CAMERA_VIEW_PRESETS.isometric.z * frameScale
     });
-    const renderer = createRenderer(width, height);
+    // preserveDrawingBuffer:true -- costo minimo en GPUs modernas, necesario
+    // para que "Capturar imagen" (mas abajo) pueda leer el canvas en
+    // cualquier momento, no solo dentro del frame que se esta dibujando.
+    const renderer = createRenderer(width, height, { preserveDrawingBuffer: true });
+    configureRendererQuality(renderer, {
+      toneMapping: cfg.toneMapping, exposure: cfg.exposure, shadows: shadowsEnabled,
+      pixelRatio: Math.min((typeof window !== 'undefined' && window.devicePixelRatio) || 1, perfCfg.pixelRatioCap)
+    });
     mount.innerHTML = '';
     mount.appendChild(renderer.domElement);
+    rendererRef.current = renderer;
 
     const controls = createOrbitControls(camera, renderer.domElement);
     controls.target.set(center.x, center.y, center.z);
     controls.minDistance = Math.max(0.1, maxDimension * 0.1);
     controls.maxDistance = maxDimension * 10;
-    addImportedModelLighting(scene, maxDimension);
-    scene.add(createGridHelper(Math.max(20, maxDimension * 2), 20));
+
+    const { key } = addImportedModelLighting(scene, maxDimension, {
+      ambientIntensity: cfg.ambientIntensity, keyIntensity: cfg.keyIntensity, fillIntensity: cfg.fillIntensity
+    });
+
+    let envTexture = null;
+    if(renderMode === RENDER_MODE.REALISTIC){
+      if(shadowsEnabled){
+        configureShadowLight(key, { maxDimension, mapSize: perfCfg.shadowMapSize });
+        object3D.traverse(node => { if(node.isMesh){ node.castShadow = true; node.receiveShadow = true; } });
+      }
+      if(perfCfg.environment){
+        envTexture = createStudioEnvironment(renderer);
+        if(envTexture) scene.environment = envTexture;
+      }
+      if(cfg.groundPlane === 'contact'){
+        scene.add(createContactShadowGround(Math.max(20, maxDimension * 4), groundY));
+      }
+      applyRealisticMode(object3D, {
+        hasRealMaterials: materialQuality?.hasRealMaterials ?? true,
+        fallbackMaterial: buildProfessionalFallbackMaterial(envTexture)
+      });
+    } else {
+      object3D.traverse(node => { if(node.isMesh){ node.castShadow = false; node.receiveShadow = false; } });
+      if(showGrid) scene.add(createGridHelper(Math.max(20, maxDimension * 2), 20));
+      if(showAxes) scene.add(createAxesHelper(maxDimension * 1.2));
+    }
     scene.add(object3D);
 
+    // GTAO (ambient occlusion de post-proceso): SOLO Alto + Realista +
+    // escritorio -- nunca en movil ni en presets bajos/equilibrados (regla
+    // de rendimiento del brief). Envuelto en try/catch: si el contexto
+    // WebGL no soporta algo que GTAOPass necesita, el visor sigue
+    // funcionando con el render directo de siempre, nunca se rompe por
+    // esto.
+    let composer = null;
+    if(perfCfg.ao && renderMode === RENDER_MODE.REALISTIC && !isMobileUA()){
+      try{
+        composer = new EffectComposer(renderer);
+        composer.addPass(new RenderPass(scene, camera));
+        const gtao = new GTAOPass(scene, camera, width, height);
+        gtao.output = GTAOPass.OUTPUT.Default;
+        composer.addPass(gtao);
+        composer.addPass(new OutputPass());
+        composer.setSize(width, height);
+      }catch{
+        composer = null;
+      }
+    }
+    composerRef.current = composer;
+
     let frameId;
-    const animate = () => { controls.update(); renderer.render(scene, camera); frameId = requestAnimationFrame(animate); };
+    const animate = () => {
+      controls.update();
+      if(composerRef.current) composerRef.current.render();
+      else renderer.render(scene, camera);
+      frameId = requestAnimationFrame(animate);
+    };
     animate();
 
     cameraRef.current = camera;
@@ -174,12 +287,43 @@ export function Model3DPreview({ object3D, boundingBox, diagnostics = null, onBo
       controls.dispose();
       scene.remove(object3D);
       disposeVisualizationOverrides(object3D);
+      envTexture?.dispose?.();
+      composerRef.current?.dispose?.();
+      composerRef.current = null;
       renderer.dispose();
       cameraRef.current = null;
       controlsRef.current = null;
+      rendererRef.current = null;
       if(mount) mount.innerHTML = '';
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [object3D, renderMode, perfPreset, showGrid, showAxes]);
+
+  // Responsive real (tablet/movil, y el toggle de pantalla completa): el
+  // efecto de arriba solo mide el contenedor UNA vez al montar -- sin esto,
+  // rotar el dispositivo o entrar/salir de pantalla completa dejaria el
+  // canvas con el tamano/aspecto viejo. ResizeObserver, no un listener de
+  // window "resize" (el contenedor puede cambiar de tamano sin que la
+  // ventana lo haga, ej. al abrir un panel lateral).
+  useEffect(() => {
+    const mount = mountRef.current;
+    if(!mount || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(entries => {
+      const entry = entries[0];
+      if(!entry) return;
+      const width = Math.round(entry.contentRect.width) || sizeRef.current.width;
+      const height = Math.round(entry.contentRect.height) || sizeRef.current.height;
+      if(width === sizeRef.current.width && height === sizeRef.current.height) return;
+      sizeRef.current = { width, height };
+      const camera = cameraRef.current, renderer = rendererRef.current;
+      if(!camera || !renderer || !width || !height) return;
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      renderer.setSize(width, height);
+      composerRef.current?.setSize?.(width, height);
+    });
+    observer.observe(mount);
+    return () => observer.disconnect();
   }, [object3D]);
 
   const setView = (preset) => {
@@ -191,6 +335,34 @@ export function Model3DPreview({ object3D, boundingBox, diagnostics = null, onBo
       up: preset.up
     }, center);
   };
+
+  /* Captura la vista actual tal cual esta en pantalla (modo/preset/camara
+     activos) -- lee directamente el canvas (preserveDrawingBuffer:true en
+     el renderer, ver el efecto de montaje), nunca un render aparte "para la
+     foto" que pudiera verse distinto de lo que el usuario esta viendo. */
+  const captureImage = () => {
+    const canvas = rendererRef.current?.domElement;
+    if(!canvas) return;
+    const link = document.createElement('a');
+    link.download = `zoemec-visor3d-${renderMode}-${Date.now()}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  };
+
+  const toggleFullscreen = () => {
+    const mount = mountRef.current;
+    if(!mount) return;
+    if(!document.fullscreenElement){
+      mount.requestFullscreen?.().then(() => setIsFullscreen(true)).catch(() => {});
+    } else {
+      document.exitFullscreen?.().then(() => setIsFullscreen(false)).catch(() => {});
+    }
+  };
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
 
   /* rotateModel: correccion MANUAL de orientacion (ver comentario arriba de
      este archivo) -- rota el Object3D real 90 grados sobre el eje elegido,
@@ -215,8 +387,37 @@ export function Model3DPreview({ object3D, boundingBox, diagnostics = null, onBo
     onBoundingBoxChange?.(nextBox);
   };
 
+  const isTechnical = renderMode === RENDER_MODE.TECHNICAL;
+
   return <div className="model3d-preview">
     <ModelStatusPanel diagnostics={diagnostics} tr={tr} />
+
+    {/* Toggle de alto nivel Realista/Tecnico -- pedido explicito del brief,
+        separado de los sub-modos tecnicos de abajo. */}
+    <div className="visual-actions" style={{ marginBottom: 6 }}>
+      <button type="button" className={renderMode === RENDER_MODE.REALISTIC ? '' : 'soft'} onClick={() => setRenderMode(RENDER_MODE.REALISTIC)}>
+        {tr('levantamiento.render3dModeRealistic')}
+      </button>
+      <button type="button" className={isTechnical ? '' : 'soft'} onClick={() => setRenderMode(RENDER_MODE.TECHNICAL)}>
+        {tr('levantamiento.render3dModeTechnical')}
+      </button>
+      <span className="muted" style={{ fontSize: '.72rem', alignSelf: 'center', marginLeft: 8 }}>{tr('levantamiento.render3dPerfLabel')}:</span>
+      {PERF_ORDER.map(p => (
+        <button key={p} type="button" className={perfPreset === p ? '' : 'soft'} onClick={() => setPerfPreset(p)}>
+          {tr(`levantamiento.${PERF_LABEL_KEY[p]}`)}
+        </button>
+      ))}
+      <button type="button" className="soft" onClick={captureImage} style={{ marginLeft: 'auto' }}>
+        {tr('levantamiento.render3dCapture')}
+      </button>
+      <button type="button" className="soft" onClick={toggleFullscreen}>
+        {tr(isFullscreen ? 'levantamiento.render3dExitFullscreen' : 'levantamiento.render3dFullscreen')}
+      </button>
+    </div>
+
+    {renderMode === RENDER_MODE.REALISTIC && materialQuality && !materialQuality.hasRealMaterials &&
+      <p className="muted" style={{ fontSize: '.72rem', marginBottom: 6 }}>{tr('levantamiento.render3dRealisticFallbackHint')}</p>}
+
     <div className="visual-actions" style={{ marginBottom: 6 }}>
       <button type="button" className="soft" onClick={() => setView(CAMERA_VIEW_PRESETS.isometric)}>{tr('levantamiento.view3dReset')}</button>
       <button type="button" className="soft" onClick={() => setView(CAMERA_VIEW_PRESETS.top)}>{tr('levantamiento.view3dTop')}</button>
@@ -230,57 +431,71 @@ export function Model3DPreview({ object3D, boundingBox, diagnostics = null, onBo
       <button type="button" className="soft" onClick={() => rotateModel('z')}>{tr('levantamiento.view3dRotateZ')}</button>
     </div>}
 
-    {/* Fase 1 (visor 3D profesional): modos de visualizacion -- nunca mutan
-        el archivo original, solo el material en memoria (ver
-        three3dVisualizationModes.js#applyVisualizationMode). */}
-    <div className="visual-actions" style={{ marginBottom: 6, flexWrap: 'wrap' }}>
-      {VISUALIZATION_MODE_ORDER.map(m => (
-        <button key={m} type="button" className={mode === m ? '' : 'soft'} onClick={() => setMode(m)}>
-          {tr(`levantamiento.${MODE_LABEL_KEY[m]}`)}
-        </button>
-      ))}
-    </div>
+    {/* Sub-modos TECNICO (Fase 1 original, conservados tal cual): nunca
+        mutan el archivo original, solo el material en memoria (ver
+        three3dVisualizationModes.js#applyVisualizationMode). Ocultos en
+        REALISTA -- ese modo no tiene color manual, usa material
+        original/fallback profesional automatico. */}
+    {isTechnical && <>
+      <div className="visual-actions" style={{ marginBottom: 6, flexWrap: 'wrap' }}>
+        {TECHNICAL_SUBMODE_ORDER.map(m => (
+          <button key={m} type="button" className={mode === m ? '' : 'soft'} onClick={() => setMode(m)}>
+            {tr(`levantamiento.${MODE_LABEL_KEY[m]}`)}
+          </button>
+        ))}
+        <label style={{ fontSize: '.72rem', display: 'flex', alignItems: 'center', gap: 4, marginLeft: 8 }}>
+          <input type="checkbox" checked={showGrid} onChange={e => setShowGrid(e.target.checked)} />
+          {tr('levantamiento.render3dShowGrid')}
+        </label>
+        <label style={{ fontSize: '.72rem', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <input type="checkbox" checked={showAxes} onChange={e => setShowAxes(e.target.checked)} />
+          {tr('levantamiento.render3dShowAxes')}
+        </label>
+      </div>
 
-    {materialQuality && !materialQuality.hasRealMaterials && mode !== VISUALIZATION_MODE.REALISTIC &&
-      <p className="muted" style={{ fontSize: '.72rem', marginBottom: 6 }}>{tr('levantamiento.viz3dTechnicalAutoHint')}</p>}
-
-    {mode !== VISUALIZATION_MODE.REALISTIC && <div className="visual-actions" style={{ marginBottom: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-      <span className="muted" style={{ fontSize: '.72rem' }}>{tr('levantamiento.viz3dColorLabel')}:</span>
-      {MATERIAL_COLOR_PRESETS.map(preset => (
-        <button
-          key={preset.id} type="button" title={tr(`levantamiento.${colorLabelKey(preset.id)}`)}
-          onClick={() => setColorHex(preset.hex)}
-          style={{
-            width: 22, height: 22, borderRadius: '50%', padding: 0, cursor: 'pointer',
-            background: hexToCss(preset.hex), border: colorHex === preset.hex ? '2px solid var(--primary)' : '1px solid #0002'
-          }}
-        />
-      ))}
-      <input
-        type="color" value={hexToCss(colorHex)} onChange={e => setColorHex(parseInt(e.target.value.slice(1), 16))}
-        title={tr('levantamiento.viz3dColorCustomLabel')} style={{ width: 26, height: 26, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
-      />
-      {mode !== VISUALIZATION_MODE.EDGES && <label style={{ fontSize: '.72rem', display: 'flex', alignItems: 'center', gap: 4, marginLeft: 8 }}>
-        <input type="checkbox" checked={showEdges} onChange={e => setShowEdges(e.target.checked)} />
-        {tr('levantamiento.viz3dShowEdgesToggle')}
-      </label>}
-    </div>}
-
-    {mode !== VISUALIZATION_MODE.REALISTIC && availableParts.length > 0 && <div className="visual-actions" style={{ marginBottom: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-      <span className="muted" style={{ fontSize: '.72rem' }}>{tr('levantamiento.viz3dPartsLabel')}:</span>
-      {availableParts.map(category => (
-        <span key={category} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <span style={{ fontSize: '.72rem' }}>{tr(`levantamiento.${partLabelKey(category)}`)}</span>
-          <input
-            type="color"
-            value={hexToCss(partColorOverrides[category] ?? colorHex)}
-            onChange={e => setPartColorOverrides(prev => ({ ...prev, [category]: parseInt(e.target.value.slice(1), 16) }))}
-            style={{ width: 22, height: 22, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+      <div className="visual-actions" style={{ marginBottom: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        <span className="muted" style={{ fontSize: '.72rem' }}>{tr('levantamiento.viz3dColorLabel')}:</span>
+        {MATERIAL_COLOR_PRESETS.map(preset => (
+          <button
+            key={preset.id} type="button" title={tr(`levantamiento.${colorLabelKey(preset.id)}`)}
+            onClick={() => setColorHex(preset.hex)}
+            style={{
+              width: 22, height: 22, borderRadius: '50%', padding: 0, cursor: 'pointer',
+              background: hexToCss(preset.hex), border: colorHex === preset.hex ? '2px solid var(--primary)' : '1px solid #0002'
+            }}
           />
-        </span>
-      ))}
-    </div>}
+        ))}
+        <input
+          type="color" value={hexToCss(colorHex)} onChange={e => setColorHex(parseInt(e.target.value.slice(1), 16))}
+          title={tr('levantamiento.viz3dColorCustomLabel')} style={{ width: 26, height: 26, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+        />
+        {mode !== VISUALIZATION_MODE.EDGES && <label style={{ fontSize: '.72rem', display: 'flex', alignItems: 'center', gap: 4, marginLeft: 8 }}>
+          <input type="checkbox" checked={showEdges} onChange={e => setShowEdges(e.target.checked)} />
+          {tr('levantamiento.viz3dShowEdgesToggle')}
+        </label>}
+      </div>
 
-    <div ref={mountRef} style={{ width: '100%', minHeight: 360 }} />
+      {availableParts.length > 0 && <div className="visual-actions" style={{ marginBottom: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        <span className="muted" style={{ fontSize: '.72rem' }}>{tr('levantamiento.viz3dPartsLabel')}:</span>
+        {availableParts.map(category => (
+          <span key={category} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ fontSize: '.72rem' }}>{tr(`levantamiento.${partLabelKey(category)}`)}</span>
+            <input
+              type="color"
+              value={hexToCss(partColorOverrides[category] ?? colorHex)}
+              onChange={e => setPartColorOverrides(prev => ({ ...prev, [category]: parseInt(e.target.value.slice(1), 16) }))}
+              style={{ width: 22, height: 22, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+            />
+          </span>
+        ))}
+      </div>}
+    </>}
+
+    <div
+      ref={mountRef}
+      style={isFullscreen
+        ? { width: '100vw', height: '100vh', background: hexToCss(RENDER_MODE_BACKGROUND[renderMode]) }
+        : { width: '100%', minHeight: 360, height: 360 }}
+    />
   </div>;
 }

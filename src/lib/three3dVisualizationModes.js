@@ -151,6 +151,35 @@ function setMeshEdgesVisible(mesh, visible, colorHex){
   }
 }
 
+/* Modo REALISTA (three3dRenderModes.js#RENDER_MODE.REALISTIC): usa el
+   material ORIGINAL del archivo si detectMaterialQuality dijo que hay
+   materiales reales, o `fallbackMaterial` (un solo MeshPhysicalMaterial
+   PBR profesional, ver buildProfessionalFallbackMaterial en
+   three3dRenderModes.js -- CLONADO por mesh, nunca la MISMA instancia
+   compartida: dos meshes con la misma instancia de material pisarian el
+   envMap/parametros uno del otro al hacer dispose de cualquiera de los
+   dos) cuando no los hay. Reusa ensureOriginalMaterialStored/
+   disposeOverrideMaterial (mismas funciones que applyVisualizationMode) asi
+   que alternar Realista<->Tecnico nunca acumula overrides ni pierde el
+   material original. Nunca activa aristas/wireframe -- esos son
+   herramientas de TECNICO. */
+export function applyRealisticMode(object3D, { hasRealMaterials = true, fallbackMaterial = null } = {}){
+  if(!object3D) return;
+  object3D.traverse(node => {
+    if(!node.isMesh || !node.material) return;
+    ensureOriginalMaterialStored(node);
+    disposeOverrideMaterial(node);
+    setMeshEdgesVisible(node, false);
+    if(hasRealMaterials || !fallbackMaterial){
+      node.material = node.userData.zoemecOriginalMaterial;
+    } else {
+      const clone = fallbackMaterial.clone();
+      node.material = clone;
+      node.userData.zoemecOverrideMaterial = clone;
+    }
+  });
+}
+
 /* Punto de entrada UNICO que Model3DPreview.jsx debe llamar cada vez que
    cambia modo/color/aristas -- idempotente (se puede llamar tantas veces
    como cambie la UI, siempre parte del material ORIGINAL guardado, nunca

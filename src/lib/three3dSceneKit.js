@@ -8,15 +8,135 @@
    comparten estas primitivas mecanicas. */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 
-export function createRenderer(width, height){
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
+/* `preserveDrawingBuffer` (opcional, default false -- CERO cambio de
+   comportamiento para Technical3DViewer.jsx/Survey3DViewer.jsx, que nunca
+   lo pasan): sin esto, el navegador puede limpiar el framebuffer despues de
+   componer cada frame, y `canvas.toDataURL()`/`readPixels()` llamados
+   DESDE FUERA del loop de render (ej. un boton "capturar imagen", o QA)
+   leen buffer vacio. Costo real pero pequeno en GPUs modernas -- solo se
+   activa donde de verdad se necesita capturar el canvas. */
+export function createRenderer(width, height, { preserveDrawingBuffer = false } = {}){
+  const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer });
   renderer.setSize(width, height);
   // Evita que el navegador interprete el gesto de rueda/arrastre sobre el
   // canvas como scroll/gesto de la pagina antes de que OrbitControls reciba
   // el evento -- el resto de la pagina conserva su scroll normal.
   renderer.domElement.style.touchAction = 'none';
   return renderer;
+}
+
+/* Visor 3D profesional (Model3DPreview) -- SOLO estas piezas nuevas, nunca
+   los defaults de createRenderer/addStandardLighting de arriba: Technical3DViewer.jsx
+   (visor de APU) y Survey3DViewer.jsx siguen llamando exactamente las mismas
+   funciones de siempre, sin tocar una sola linea de este archivo que ya
+   usaban -- lo de aqui abajo es PURAMENTE aditivo, nadie mas lo importa
+   todavia. */
+
+/* Tone mapping/exposicion/sombras -- se llama UNA vez tras crear el
+   renderer, nunca dentro del loop de animacion. `shadows=false` dejw
+   shadowMap.enabled en false (costo cero, ver PERFORMANCE_PRESET en
+   three3dRenderModes.js) sin tener que acordarse de desactivarlo aparte. */
+export function configureRendererQuality(renderer, {
+  toneMapping = THREE.NoToneMapping, exposure = 1, shadows = false, pixelRatio = null
+} = {}){
+  renderer.toneMapping = toneMapping;
+  renderer.toneMappingExposure = exposure;
+  renderer.shadowMap.enabled = shadows;
+  if(shadows) renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  if(pixelRatio) renderer.setPixelRatio(Math.min(pixelRatio, 2));
+}
+
+/* Entorno neutro procedural (RoomEnvironment de three.js, NUNCA un HDRI
+   externo descargado -- "no inventar texturas especificas del edificio"
+   tambien aplica a no depender de un asset de iluminacion que no viene con
+   el proyecto). PMREMGenerator es costoso (compila un mapa de convolucion)
+   -- se calcula UNA sola vez por renderer/vida del componente, nunca por
+   frame; el llamador debe guardar el resultado y llamar dispose() en su
+   cleanup. Devuelve null si algo falla (WebGL viejo, contexto perdido) en
+   vez de lanzar -- el modo realista debe seguir viendose bien (solo sin
+   reflejos de entorno) aunque esto no este disponible. */
+export function createStudioEnvironment(renderer){
+  try{
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    pmrem.compileEquirectangularShader();
+    const envRenderTarget = pmrem.fromScene(new RoomEnvironment(), 0.04);
+    pmrem.dispose();
+    return envRenderTarget.texture;
+  }catch{
+    return null;
+  }
+}
+
+/* Piso de contacto: SOLO recibe sombra (ShadowMaterial, transparente donde
+   no hay sombra) -- nunca compite visualmente con el modelo ni con el
+   ground plane "real" que el archivo pudiera traer. Se posiciona en el
+   Y minimo real del bounding box (nunca en Y=0 fijo -- un modelo importado
+   puede empezar en cualquier altura). */
+export function createContactShadowGround(size, groundY){
+  const geometry = new THREE.PlaneGeometry(size, size);
+  const material = new THREE.ShadowMaterial({ opacity: 0.28 });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.y = groundY;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+/* Piso arquitectonico "solido" para modo tecnico (opcional, ver
+   three3dRenderModes.js) -- una superficie clara simple, nunca una textura
+   de material real (evita "inventar" un piso que el archivo no trae). */
+export function createArchitecturalFloor(size, groundY, colorHex = 0xf4f2ee){
+  const geometry = new THREE.PlaneGeometry(size, size);
+  const material = new THREE.MeshStandardMaterial({ color: colorHex, roughness: 0.95, metalness: 0 });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.y = groundY;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+export function createAxesHelper(size){
+  return new THREE.AxesHelper(size);
+}
+
+/* Habilita sombra suave en una luz direccional ya creada -- frustum del
+   shadow camera dimensionado a maxDimension (mismo criterio que
+   addImportedModelLighting: un numero fijo funcionaria "por casualidad"
+   para un tamano de modelo y mal para el resto). mapSize mas chico en
+   dispositivos de gama baja (ver PERFORMANCE_PRESET), nunca 4K fijo. */
+export function configureShadowLight(light, { maxDimension = 6, mapSize = 1024 } = {}){
+  light.castShadow = true;
+  light.shadow.mapSize.set(mapSize, mapSize);
+  const half = maxDimension * 1.5;
+  light.shadow.camera.left = -half;
+  light.shadow.camera.right = half;
+  light.shadow.camera.top = half;
+  light.shadow.camera.bottom = -half;
+  light.shadow.camera.near = 0.1;
+  light.shadow.camera.far = maxDimension * 6;
+  light.shadow.bias = -0.0005;
+  light.shadow.normalBias = 0.02;
+  light.shadow.camera.updateProjectionMatrix();
+}
+
+/* Heuristica de capacidad del dispositivo -- nunca una certeza (no hay forma
+   de medir FPS real de antemano sin renderizar), solo senales baratas de
+   consultar antes del primer frame: nucleos logicos de CPU (proxy comun de
+   "equipo modesto"), pixelRatio (una pantalla 3x cuesta 9x los fragmentos
+   de una 1x al mismo tamano CSS) y si es un dispositivo tactil/movil (menor
+   presupuesto termico/GPU que una laptop). Resuelve a favor de 'equilibrado'
+   cuando la señal es ambigua -- nunca 'alto' por defecto (efectos caros
+   indiscriminados es exactamente lo que el brief pide evitar). */
+export function detectRenderQualityPreset(){
+  if(typeof navigator === 'undefined') return 'equilibrado';
+  const cores = navigator.hardwareConcurrency || 4;
+  const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+  const isMobile = /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent || '');
+  if(isMobile || cores <= 4) return 'bajo';
+  if(cores >= 8 && dpr <= 2) return 'alto';
+  return 'equilibrado';
 }
 
 export function createScene(backgroundColor = 0xf2efe9){
@@ -68,14 +188,25 @@ export function addStandardLighting(scene){
    principal favorece. NUNCA sustituye a addStandardLighting para los
    visores existentes (Survey3DViewer/Technical3DViewer siguen exactamente
    igual, cero riesgo de regresion ahi). */
-export function addImportedModelLighting(scene, maxDimension = 6){
-  scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-  const key = new THREE.DirectionalLight(0xffffff, 0.9);
+/* `ambientIntensity`/`keyIntensity`/`fillIntensity` (opcionales, ver
+   three3dRenderModes.js#RENDER_MODE_CONFIG): mismos defaults 0.7/0.9/0.4 de
+   siempre cuando el llamador no los pasa -- comportamiento identico al
+   historico para cualquier codigo que ya llamaba esta funcion sin el nuevo
+   parametro. Devuelve { ambient, key, fill } para que el llamador pueda
+   activar sombra en `key` (ver configureShadowLight) sin que esta funcion
+   tenga que saber de sombras. */
+export function addImportedModelLighting(scene, maxDimension = 6, {
+  ambientIntensity = 0.7, keyIntensity = 0.9, fillIntensity = 0.4
+} = {}){
+  const ambient = new THREE.AmbientLight(0xffffff, ambientIntensity);
+  scene.add(ambient);
+  const key = new THREE.DirectionalLight(0xffffff, keyIntensity);
   key.position.set(maxDimension, maxDimension * 1.5, maxDimension);
   scene.add(key);
-  const fill = new THREE.DirectionalLight(0xffffff, 0.4);
+  const fill = new THREE.DirectionalLight(0xffffff, fillIntensity);
   fill.position.set(-maxDimension, maxDimension * 0.5, -maxDimension);
   scene.add(fill);
+  return { ambient, key, fill };
 }
 
 export function createGridHelper(size = 20, divisions = 20){

@@ -35,6 +35,48 @@ async function buildGlbFixtureFile(){
   return new File([glb], 'qa-real-materials.glb', { type: 'model/gltf-binary' });
 }
 
+/* QA cierre (matriz completa): faltaba un GLB SIN material real -- un solo
+   mesh, un solo color plano, sin textura -- mismo criterio que
+   detectMaterialQuality (necesita >=2 colores o una textura para contar como
+   "material real"). Cubre el mismo camino que el OBJ pero via glb/GLTFLoader,
+   y sirve tambien como caso "una sola malla" en formato GLB. */
+async function buildGlbSinMaterialFixtureFile(){
+  const scene = new THREE.Scene();
+  const box = new THREE.Mesh(new THREE.BoxGeometry(2, 4, 1.5), new THREE.MeshStandardMaterial({ color: 0x8a8a8a }));
+  box.name = 'Columna_Sin_Material';
+  scene.add(box);
+  const glb = await new Promise((resolve, reject) => {
+    new GLTFExporter().parse(scene, resolve, reject, { binary: true });
+  });
+  return new File([glb], 'qa-no-material.glb', { type: 'model/gltf-binary' });
+}
+
+/* QA cierre: "modelo grande" + "multi-mesh" en un solo fixture -- grilla de
+   cajas independientes (mesh por celda, NUNCA geometria fusionada, para que
+   siga siendo un caso real de muchos meshes) con 2 colores alternados (>=2
+   colores reales). Sirve para medir FPS/draw calls/triangulos bajo carga. */
+async function buildGlbLargeMultiMeshFixtureFile(){
+  const scene = new THREE.Scene();
+  const cols = 20, rows = 20, floors = 3;
+  const matA = new THREE.MeshStandardMaterial({ color: 0xb33a3a });
+  const matB = new THREE.MeshStandardMaterial({ color: 0x2f5f8a });
+  const geo = new THREE.BoxGeometry(0.8, 0.8, 0.8);
+  for(let f = 0; f < floors; f++){
+    for(let x = 0; x < cols; x++){
+      for(let z = 0; z < rows; z++){
+        const mesh = new THREE.Mesh(geo, (x + z) % 2 === 0 ? matA : matB);
+        mesh.name = `Bloque_${f}_${x}_${z}`;
+        mesh.position.set(x - cols / 2, f, z - rows / 2);
+        scene.add(mesh);
+      }
+    }
+  }
+  const glb = await new Promise((resolve, reject) => {
+    new GLTFExporter().parse(scene, resolve, reject, { binary: true });
+  });
+  return new File([glb], 'qa-large-multimesh.glb', { type: 'model/gltf-binary' });
+}
+
 const FIXTURES = {
   obj_sin_material: {
     label: 'OBJ sin material (espera: modo Técnico)',
@@ -47,6 +89,14 @@ const FIXTURES = {
   glb_con_material: {
     label: 'GLB con 2 colores reales (espera: modo Realista + pintar por parte)',
     load: async () => loadModel3D(await buildGlbFixtureFile(), 'glb')
+  },
+  glb_sin_material: {
+    label: 'GLB sin material real (espera: modo Técnico, 1 mesh)',
+    load: async () => loadModel3D(await buildGlbSinMaterialFixtureFile(), 'glb')
+  },
+  glb_grande_multimesh: {
+    label: 'GLB grande multi-mesh (1200 meshes, ~14400 triangulos)',
+    load: async () => loadModel3D(await buildGlbLargeMultiMeshFixtureFile(), 'glb')
   }
 };
 

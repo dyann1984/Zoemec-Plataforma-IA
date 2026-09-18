@@ -225,6 +225,13 @@ export function Model3DPreview({ object3D, boundingBox, diagnostics = null, onBo
       ambientIntensity: cfg.ambientIntensity, keyIntensity: cfg.keyIntensity, fillIntensity: cfg.fillIntensity
     });
 
+    // Helpers propios de esta pasada (piso de contacto/grid/ejes) -- a
+    // diferencia de object3D (propiedad del caller) estos los crea y posee
+    // este efecto, asi que su geometria/material deben liberarse en el
+    // cleanup de mas abajo; renderer.dispose() NO lo hace por si solo (solo
+    // libera recursos propios del renderer, nunca geometrias/materiales de
+    // la escena -- caveat documentado de three.js).
+    const ownedHelpers = [];
     let envTexture = null;
     if(renderMode === RENDER_MODE.REALISTIC){
       if(shadowsEnabled){
@@ -236,7 +243,9 @@ export function Model3DPreview({ object3D, boundingBox, diagnostics = null, onBo
         if(envTexture) scene.environment = envTexture;
       }
       if(cfg.groundPlane === 'contact'){
-        scene.add(createContactShadowGround(Math.max(20, maxDimension * 4), groundY));
+        const ground = createContactShadowGround(Math.max(20, maxDimension * 4), groundY);
+        scene.add(ground);
+        ownedHelpers.push(ground);
       }
       applyRealisticMode(object3D, {
         hasRealMaterials: materialQuality?.hasRealMaterials ?? true,
@@ -244,8 +253,16 @@ export function Model3DPreview({ object3D, boundingBox, diagnostics = null, onBo
       });
     } else {
       object3D.traverse(node => { if(node.isMesh){ node.castShadow = false; node.receiveShadow = false; } });
-      if(showGrid) scene.add(createGridHelper(Math.max(20, maxDimension * 2), 20));
-      if(showAxes) scene.add(createAxesHelper(maxDimension * 1.2));
+      if(showGrid){
+        const grid = createGridHelper(Math.max(20, maxDimension * 2), 20);
+        scene.add(grid);
+        ownedHelpers.push(grid);
+      }
+      if(showAxes){
+        const axes = createAxesHelper(maxDimension * 1.2);
+        scene.add(axes);
+        ownedHelpers.push(axes);
+      }
     }
     scene.add(object3D);
 
@@ -287,6 +304,7 @@ export function Model3DPreview({ object3D, boundingBox, diagnostics = null, onBo
       controls.dispose();
       scene.remove(object3D);
       disposeVisualizationOverrides(object3D);
+      ownedHelpers.forEach(helper => { helper.geometry?.dispose(); helper.material?.dispose(); });
       envTexture?.dispose?.();
       composerRef.current?.dispose?.();
       composerRef.current = null;

@@ -22,6 +22,7 @@ import { computePriceConfidence } from './priceConfidence.js';
 import { CACHE_RESULT } from './priceSearchCache.js';
 import { PRICE_SEARCH_DEFERRED, PRICE_SEARCH_SKIPPED_CATEGORY } from './priceSearchBudget.js';
 import { resolveAuthoritativeInput } from './unitAuthority.js';
+import { APU_DATA_STATE } from './apuSchema.js';
 
 // Exportados (FASE 3, aprendizaje progresivo seguro): server/api-lib/
 // _route-apus.mjs los reusa para saber, por cada renglon de un APU ya
@@ -249,7 +250,15 @@ function attachIntelligence2FieldsToRow(row, resolved){
   // exactamente igual que siempre -- solo se le da un valor derivado del
   // nuevo PRICE_STATUS, nunca se le pide que entienda el vocabulario nuevo.
   if(resolved.priceStatus){
-    row.fuente = { ...(row.fuente || {}), estado: priceStatusToLegacyState(resolved.priceStatus) };
+    // P0 paridad: un precio que ya salio de una biblioteca real (empresa,
+    // proyecto o Biblioteca ZOEMEC -- estado BIBLIOTECA) no se degrada a
+    // ESTIMADO_IA/REQUIERE_VALIDACION solo porque la busqueda de mercado no
+    // encontro referencias: esa ausencia no invalida el precio de la
+    // biblioteca. La busqueda si puede REFORZARLO (VERIFICADO con
+    // referencia ALTO), nunca debilitarlo.
+    const legacy = priceStatusToLegacyState(resolved.priceStatus);
+    const keepLibrary = row.fuente?.estado === APU_DATA_STATE.BIBLIOTECA && legacy !== APU_DATA_STATE.VERIFICADO;
+    row.fuente = { ...(row.fuente || {}), estado: keepLibrary ? APU_DATA_STATE.BIBLIOTECA : legacy };
   }
   return row;
 }

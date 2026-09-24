@@ -83,6 +83,9 @@ import { CatalogoModule } from './features/catalogo/CatalogoModule.jsx';
 import { PresupuestoModule } from './features/presupuesto/PresupuestoModule.jsx';
 import { ControlPresupuestalModule } from './features/control-presupuestal/ControlPresupuestalModule.jsx';
 import { ProjectVaultModule } from './features/vault/ProjectVaultModule.jsx';
+import { OrgLibraryPanel } from './features/library/OrgLibraryPanel.jsx';
+import { fetchApuContextPreview } from './features/library/orgLibraryCloud.js';
+import { mergeClientDiagnostics, applyContextConfidencePenalty } from './domain/apuContextResolution.js';
 import {
   emptyApuWorkspaceState, removeBatchApus, describeAmbiguousSingleExport,
   duplicateGroupKey, groupConceptsByDuplicateKey, defaultBatchSelection, isExportableConceptItem,
@@ -1032,7 +1035,10 @@ function App(){
       initialStage={normalizeWorkspaceStage(selectedProjectStage)}
       onStageChange={setSelectedProjectStage}
     />}
-    {module === 'biblioteca' && <Library user={user} catalog={catalog} setCatalog={setCatalog} setModule={setModule} />}
+    {module === 'biblioteca' && <>
+      {orgSession?.organization && <OrgLibraryPanel user={user} orgSession={orgSession} activeProjectId={activeProjectId} personalCatalog={catalog} />}
+      <Library user={user} catalog={catalog} setCatalog={setCatalog} setModule={setModule} />
+    </>}
     {module === 'tecnico' && <TechnicalOffice company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} needsProject={needsProject} onCreateProject={()=>setModule('cartera')} />}
     {module === 'visual' && <VisualAI user={user} setModule={setModule} activeProjectId={activeProjectId} activeProject={activeProject} organizationId={orgSession?.organization?.id || null} onNeedProject={()=>setModule('cartera')} navigationTarget={planoNavigationTarget} onNavigationTargetConsumed={()=>setPlanoNavigationTarget(null)} onReturnToWorkspace={() => setModule('project-workspace')} />}
     {module === 'comunidad' && <Community />}
@@ -2578,6 +2584,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   // usa para que los tres flujos de generacion (individual + 2 de lote)
   // queden con exactamente el mismo esquema regional (ver buildProjectLocationSnapshot).
   const batchLocationSnapshotRef=useRef(null);
+  const batchOrgCatalogRef=useRef(null);
   // Cambiar de proyecto activo mientras este componente sigue montado (el
   // usuario no sale de "APU Inteligente", solo cambia el selector de proyecto)
   // debe limpiar el borrador en pantalla e invalidar cualquier generacion de
@@ -2624,7 +2631,11 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         const res = await fetch(aiServerUrl('/api/generate-apu'), {
           method:'POST',
           headers:await authHeaders(),
-          body:JSON.stringify({concept:parsed.concept,catalog,schema:'v2',referencePU:parsed.referencePU||0}),
+          // P0 paridad ADMIN vs COLLABORATOR: projectId + contextMode hacen que
+          // el SERVIDOR arme el catalogo con la biblioteca de la empresa
+          // (identica para cualquier miembro); `catalog` (personal) solo se
+          // usa si el usuario no pertenece a una empresa.
+          body:JSON.stringify({concept:parsed.concept,catalog,schema:'v2',referencePU:parsed.referencePU||0,projectId:activeProjectId||null,contextMode:'organization'}),
           signal:controller.signal
         });
         const data = await res.json().catch(()=>({}));
@@ -2677,6 +2688,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         : buildProjectLocationSnapshot(activeProject);
       const effectiveDateBase = apuV2.fechaBase || draft.fechaBase;
       let enrichedDraft = draft;
+      let enrichmentError = null;
       try{
         setAiStatus('Buscando precios de mercado reales y validando equivalencia tecnica...');
         const runContext = createIntelligence2RunContext({
@@ -2692,9 +2704,18 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         });
         enrichedDraft = result.apu;
         if(result.unitWarning) console.warn('[Material & Price Intelligence 2.1] UNIT_WARNING:', result.unitWarning);
-      }catch{ /* Price Intelligence caida por completo: se sigue con el borrador de la IA */ }
+      }catch(err){
+        // Price Intelligence caida: se sigue con el borrador de la IA, pero
+        // ya no en silencio (P0) -- queda en contextDiagnostics y en consola.
+        enrichmentError = err?.message || String(err);
+        console.warn('[Material & Price Intelligence 2.1] enriquecimiento fallido:', enrichmentError);
+      }
+      if(data.context || enrichedDraft.contextDiagnostics){
+        enrichedDraft = { ...enrichedDraft, contextDiagnostics: mergeClientDiagnostics(data.context || enrichedDraft.contextDiagnostics, { enrichmentFailed: Boolean(enrichmentError), enrichmentError }) };
+      }
       setAiStatus('Calculando rendimientos, seguridad, procedimiento y medicion...');
       const v2 = finalizeProfessionalAPU(enrichedDraft);
+      if(v2.contextDiagnostics?.confidencePenalty) v2.confidence = applyContextConfidencePenalty(v2.confidence, v2.contextDiagnostics.confidencePenalty);
       // Fase 2 (APU regionalizados): SNAPSHOT de la ubicacion del proyecto
       // activo en ESTE momento -- nunca un enlace vivo (ver
       // apuSchema.js#ubicacionEstructurada). Misma funcion que usan los dos
@@ -2840,7 +2861,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       const controller = new AbortController();
       const timer = window.setTimeout(() => controller.abort(), 45000);
       try{
-        const res=await fetch(aiServerUrl('/api/generate-apu'),{method:'POST',headers:await authHeaders(),body:JSON.stringify({concept:conceptForAI,catalog,company,mode:'batch-concept',preserveOriginal:true,schema:'v2'}),signal:controller.signal});
+        const res=await fetch(aiServerUrl('/api/generate-apu'),{method:'POST',headers:await authHeaders(),body:JSON.stringify({concept:conceptForAI,catalog,company,mode:'batch-concept',preserveOriginal:true,schema:'v2',projectId:activeProjectId||null,contextMode:'organization'}),signal:controller.signal});
         const data=await readJsonSafe(res);
         if(!res.ok){ const err=new Error(data?.error || 'No fue posible generar con IA'); err.status=res.status; throw err; }
         return data;
@@ -2872,6 +2893,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       // por completo, el renglon conserva su precio ESTIMADO_IA original
       // (nunca bloquea la generacion del APU).
       let enriched = withMeta;
+      let enrichmentError = null;
       try{
         setAiStatus(`Buscando precios de mercado reales para "${item.concept?.slice(0,60) || 'concepto'}"...`);
         const result = await enrichApuWithIntelligence2({
@@ -2880,8 +2902,16 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         });
         enriched = result.apu;
         if(result.unitWarning) console.warn(`[Material & Price Intelligence 2.1] UNIT_WARNING (${item.code || item.concept}):`, result.unitWarning);
-      }catch{ /* si Price Intelligence falla por completo, se sigue con el APU tal cual la IA lo genero */ }
+      }catch(err){
+        // Se sigue con el APU de la IA, pero ya no en silencio (P0).
+        enrichmentError = err?.message || String(err);
+        console.warn(`[Material & Price Intelligence 2.1] enriquecimiento fallido (${item.code || item.concept}):`, enrichmentError);
+      }
+      if(data.context || enriched.contextDiagnostics){
+        enriched = { ...enriched, contextDiagnostics: mergeClientDiagnostics(data.context || enriched.contextDiagnostics, { enrichmentFailed: Boolean(enrichmentError), enrichmentError }) };
+      }
       const v2 = finalizeProfessionalAPU(enriched);
+      if(v2.contextDiagnostics?.confidencePenalty) v2.confidence = applyContextConfidencePenalty(v2.confidence, v2.contextDiagnostics.confidencePenalty);
       v2.aiGenerated = true;
       v2.templateFallback = false;
       v2.family = data.apu?.family || v2.family;
@@ -2894,7 +2924,11 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       return v2;
     }
     const reason = lastError?.name === 'AbortError' ? 'tiempo agotado' : lastError?.status===429 ? 'limite de tasa de OpenAI (429) tras reintentos' : (lastError?.message || 'sin detalle');
-    const fallbackV1 = templateFallbackAPU(item, catalog, index, sourceFile, `IA externa no respondio tras 3 intentos: ${reason}`);
+    // P0 paridad: el respaldo de plantilla usa el catalogo EMPRESARIAL ya
+    // resuelto por el servidor (mismo para cualquier miembro) cuando existe;
+    // el catalogo personal solo si el usuario no pertenece a una empresa.
+    const fallbackCatalog = batchOrgCatalogRef.current || catalog;
+    const fallbackV1 = templateFallbackAPU(item, fallbackCatalog, index, sourceFile, `IA externa no respondio tras 3 intentos: ${reason}`);
     const v2Fallback = finalizeProfessionalAPU(applyConceptMetadataV2(migrateLegacyApuToV2(fallbackV1), item, index, sourceFile));
     v2Fallback.aiGenerated = false;
     v2Fallback.templateFallback = true;
@@ -2924,6 +2958,16 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   };
 
   const buildBatchAPUs=async(list)=>{
+    // P0 paridad: una sola vista previa por corrida de lote trae el catalogo
+    // empresarial ya resuelto para la plantilla de respaldo. Si falla, se
+    // registra y el respaldo usa el catalogo personal (unico disponible).
+    batchOrgCatalogRef.current = null;
+    try{
+      const preview = await fetchApuContextPreview({ projectId: activeProjectId || null, includeCatalog: true });
+      if(preview?.contextMode === 'organization' && Array.isArray(preview.catalog)) batchOrgCatalogRef.current = preview.catalog;
+    }catch(err){
+      console.warn('[P0 contexto empresarial] no se pudo cargar el catalogo de la empresa para el respaldo de plantilla:', err?.message || err);
+    }
     batchIntelligence2ContextRef.current = createIntelligence2RunContext({
       location: activeProject?.ubicacion || '',
       country: activeProject?.locationCountry || '', state: activeProject?.locationState || '', city: activeProject?.locationCity || ''

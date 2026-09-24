@@ -8,7 +8,9 @@
    (Firestore, via server/api-lib/_route-catalogo-conceptos.mjs), asi que un
    fallo de 1 de 30 nunca pierde el progreso de los otros 29, y sobrevive
    tanto un cambio de pantalla como una recarga de la pagina. */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { fetchApuContextPreview } from '../library/orgLibraryCloud.js';
+import { ContextSummary } from '../library/OrgLibraryPanel.jsx';
 import { PageHead, EmptyState } from '../../components/ui/PageElements.jsx';
 import { useCatalogConceptos } from './catalogConceptosCloud.js';
 import { useProjectApus } from './projectApusCloud.js';
@@ -63,6 +65,21 @@ export function CatalogoModule({ user, organizationId, activeProjectId, activePr
   const [batchSummary, setBatchSummary] = useState(null);
 
   const projectApus = useMemo(() => (rawApus || []).filter(a => !a.archivedAt), [rawApus]);
+
+  // P0 paridad: contexto con el que el SERVIDOR generara los APU de este
+  // proyecto (empresa, region, biblioteca, precios de proyecto, historicos)
+  // -- el mismo para cualquier miembro de la empresa (regla 20).
+  const [genContext, setGenContext] = useState(null);
+  const [genContextError, setGenContextError] = useState('');
+  useEffect(() => {
+    if(!organizationId || !activeProjectId) return;
+    let alive = true;
+    setGenContext(null); setGenContextError('');
+    fetchApuContextPreview({ projectId: activeProjectId })
+      .then(c => { if(alive) setGenContext(c); })
+      .catch(err => { if(alive) setGenContextError(err.message); });
+    return () => { alive = false; };
+  }, [organizationId, activeProjectId]);
 
   const markBusy = (id, isBusy) => setBusyIds(prev => {
     const next = new Set(prev);
@@ -174,6 +191,10 @@ export function CatalogoModule({ user, organizationId, activeProjectId, activePr
         desc="Desde cada concepto: asocia un APU existente, genera con IA, genera con el Cuantificador Paramétrico, o déjalo pendiente."
         action={<button onClick={() => setModule?.('presupuestos')}>Ver Presupuesto</button>}
       />
+
+      {organizationId && <div className="panel" style={{ marginBottom: 12, padding: '10px 16px' }}>
+        <ContextSummary context={genContext} error={genContextError} />
+      </div>}
 
       <div className="panel" style={{ marginBottom: 16 }}>
         <h2 style={{ marginTop: 0 }}>Agregar concepto</h2>

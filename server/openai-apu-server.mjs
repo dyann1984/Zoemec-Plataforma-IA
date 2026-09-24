@@ -9,6 +9,8 @@ import oneDriveHandler from '../api/onedrive.mjs';
 import uploadLibraryHandler from '../api/upload-library.mjs';
 import visualAiHandler from '../api/visual-ai.mjs';
 import statusHandler from '../api/status.mjs';
+import generateApuHandler from '../api/generate-apu.mjs';
+import { hasAdminCredentials } from './api-lib/_firebaseAdmin.mjs';
 
 /* Rutas que YA sirve api/gateway.mjs en produccion (Vercel) -- este servidor
    de desarrollo local (`npm run ai`) las monta TAL CUAL, sin reimplementar
@@ -22,7 +24,7 @@ const GATEWAY_PATHS = new Set([
   '/api/export-events', '/api/health', '/api/organizations', '/api/construction-proposal',
   '/api/plano-takeoffs', '/api/catalogo-conceptos', '/api/presupuestos',
   '/api/change-orders', '/api/commitments', '/api/progress', '/api/estimates', '/api/payments',
-  '/api/construction-dna', '/api/project-vault', '/api/sentinel', '/api/assets'
+  '/api/construction-dna', '/api/project-vault', '/api/sentinel', '/api/assets', '/api/org-library'
 ]);
 // Otras funciones serverless de produccion (api/*.mjs, fuera del gateway)
 // que tambien tienen sentido probar contra el emulador localmente.
@@ -106,6 +108,13 @@ const server = http.createServer(async (req, res) => {
     const body = await readBody(req);
     const payload = JSON.parse(body || '{}');
     if(pathname === '/api/generate-apu'){
+      // P0 paridad: con emulador/credenciales se usa el handler REAL
+      // (autenticacion + contexto empresarial server-side), igual que en
+      // produccion. Sin ellos se conserva el atajo historico de desarrollo.
+      if(hasAdminCredentials()){
+        const vercelReq = { method: req.method, url: req.url, headers: req.headers, query: {}, body: payload };
+        return await generateApuHandler(vercelReq, buildVercelRes(res));
+      }
       const wantsV2 = payload?.schema === 'v2';
       const apu = wantsV2 ? await generateAPUv2(payload) : await generateAPU(payload);
       return endJson(res, 200, wantsV2 ? { apu, schemaVersion:2 } : { apu });

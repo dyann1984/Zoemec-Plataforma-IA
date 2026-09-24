@@ -1,5 +1,6 @@
 import { FieldValue, getAdminAuth, getAdminDb, hasAdminCredentials } from './_firebaseAdmin.mjs';
-import { resolveOrgStatus, isActiveTrialStatus } from '../../src/domain/organization.js';
+import { resolveOrgStatus } from '../../src/domain/organization.js';
+import { resolvePaidFeatureEntitlement } from '../../src/domain/orgLibraryPermissions.js';
 
 /* "library" faltaba aqui (bug real, no de seguridad): rules['library'] daba
    undefined para CUALQUIER plan, asi que requireFeature(req,'library') le
@@ -163,19 +164,34 @@ export async function requireFeature(req, feature){
      (resolveOrgStatus lo resuelve aunque el documento todavia no lo refleje,
      ver _orgGuard.mjs), no hay bypass: cae al comportamiento Gratis normal,
      lo que bloquea de facto IA/exportacion (punto 7). */
-  let isActiveTrialOrgMember = false;
+  /* P0 paridad ADMIN vs COLLABORATOR: el derecho ahora cubre tambien a la
+     empresa CONVERTED (pagada), no solo al trial -- antes un colaborador de
+     una empresa pagada caia a su plan personal (Gratis: sin IA) y
+     /api/price-intelligence le respondia 402, dejando su APU sin precios de
+     mercado, mientras el admin siempre era 'Empresa'. El derecho se decide
+     por MEMBRESIA ACTIVA + estado de la organizacion (resolvePaidFeature
+     Entitlement), nunca por el rol dentro de la empresa, y ahora ademas
+     exige que la membresia exista y este activa (antes bastaba con el
+     organizationId del perfil). Rate limit sigue aplicando. */
+  let entitlement = resolvePaidFeatureEntitlement({ isSuperAdmin: isAdmin });
   if(!isAdmin && profile.organizationId){
     try{
-      const orgSnap = await db.collection('organizations').doc(profile.organizationId).get();
-      if(orgSnap.exists){
-        isActiveTrialOrgMember = isActiveTrialStatus(resolveOrgStatus({ id: orgSnap.id, ...orgSnap.data() }));
+      const orgRef = db.collection('organizations').doc(profile.organizationId);
+      const [orgSnap, memberSnap] = await Promise.all([orgRef.get(), orgRef.collection('members').doc(decoded.uid).get()]);
+      if(orgSnap.exists && memberSnap.exists){
+        entitlement = resolvePaidFeatureEntitlement({
+          orgStatus: resolveOrgStatus({ id: orgSnap.id, ...orgSnap.data() }),
+          memberStatus: memberSnap.data()?.status || null
+        });
       }
-    }catch{
-      // Si la lectura de la organizacion falla, cae al comportamiento de plan
-      // individual normal -- nunca se otorga acceso extra por una falla.
+    }catch(err){
+      // Si la lectura de la organizacion falla, cae al plan individual --
+      // nunca se otorga acceso extra por una falla -- pero ya no en
+      // silencio: queda en el log del servidor para diagnostico.
+      console.warn('[authGuard] no se pudo resolver la organizacion del usuario', decoded.uid, err?.message || err);
     }
   }
-  const bypassPlanLimits = isAdmin || isActiveTrialOrgMember;
+  const bypassPlanLimits = entitlement.bypassPlanLimits;
 
   if(!bypassPlanLimits){
     if(feature === 'apu' && currentUsage >= rules.apuLimit){
@@ -213,7 +229,8 @@ export async function requireFeature(req, feature){
     role,
     userRef,
     usageMonth: month,
-    feature
+    feature,
+    entitlementSource: entitlement.source
   };
 }
 

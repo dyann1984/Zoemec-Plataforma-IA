@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { EngineeringCopilot } from '../../apu/EngineeringCopilot.jsx';
 import { useI18n } from '../../../i18n/I18nContext.jsx';
 import { ProjectHeader } from './ProjectHeader.jsx';
 import { ProjectStepper } from './ProjectStepper.jsx';
@@ -142,6 +143,8 @@ export function ProjectWorkspace({
 
   return (
     <div className="project-workspace-container">
+      {project.isDemo && <p className="zi-badge zi-badge-info">DEMO · Datos sintéticos controlados</p>}
+      <details><summary>Analizar proyecto con IA · NVIDIA/Nebius</summary><EngineeringCopilot key={projectId} projectId={projectId} projectName={project.nombre || project.name} /></details>
       <ProjectHeader
         project={project}
         apus={projectApus}

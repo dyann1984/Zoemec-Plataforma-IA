@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useEffect } from 'react';
+import { EngineeringCopilot } from './EngineeringCopilot.jsx';
 import {
   computeZoemecIntelligence, summarizeIntelligence, describeImpact, AUDIT_SEVERITY_FILTERS,
   SCENARIO_LAB_KIND, SCENARIO_LAB_LABEL, buildScenarioLabChange, runScenarioLab, buildScenarioLabPrefillFromChallenge
@@ -633,6 +634,7 @@ export function ZoemecIntelligencePanel({ apu, onChange, history, onRestoreVersi
   };
 
   return <section className="zi-panel">
+    <details><summary>ZOEMEC AI · Explicar este APU con evidencia</summary><EngineeringCopilot projectId={apu.projectId} apuId={apu.id} projectName={apu.proyecto} revision={apu} /></details>
     <div className="zi-panel-head"><h2>ZOEMEC INTELLIGENCE</h2><span className="zi-subtitle">{tr('intel.panelSubtitle')}</span></div>
     <SummaryBar summary={summary} tr={tr} />
     <div className="zi-tabs" role="tablist">

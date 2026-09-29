@@ -576,8 +576,8 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    match /{document=**} {
-      allow read, write: if isSuperAdmin();
+    match /{collection}/{document=**} {
+      allow read, write: if isSuperAdmin() && collection != 'engineeringAiAudit';
     }
   }
 }

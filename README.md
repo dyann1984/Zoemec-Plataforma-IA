@@ -302,3 +302,25 @@ ZOEMEC AI busca convertir documentos, catálogos Excel y conceptos de obra en AP
 No open-source license is currently provided.
 
 All rights reserved.
+
+## Nebius × NVIDIA Global AI Hackathon
+
+Esta entrega agrega un copiloto contextual con Nebius Token Factory y el modelo
+`nvidia/nemotron-3-super-120b-a12b`. Los motores existentes siguen calculando APU,
+Confidence, Bid Risk, auditoría y escenarios. El modelo explica referencias del
+proyecto autorizado; el servidor valida la salida estructurada antes de mostrarla.
+
+Configurar **solo en servidor** `NEBIUS_API_KEY`, `NEBIUS_BASE_URL` y `NEBIUS_MODEL`
+(ver `.env.example`). Ejecutar `npm run ai` y `npm run dev`. Sin clave aparece
+“Nebius no configurado”; no se simula una respuesta real.
+
+Pruebas: `npm run test:nebius`, `npm run test:nebius-api` (emuladores),
+`npm run test:nebius-ui` (Playwright/Edge), `npm test`, `npm run build`.
+Comprobación real manual: `node --env-file=.env.local scripts/nebius-smoke.mjs`.
+La llamada real está pendiente de credencial, no se declara verificada.
+
+La [guía del hackathon](docs/HACKATHON_NEBIUS_NVIDIA.md) contiene arquitectura,
+seguridad, archivos, límites, resultados y pasos exactos para la demo aislada
+**Residencial Las Palmas - Edificio A**. El [baseline](docs/NEBIUS_BASELINE.md)
+distingue la plataforma previa de las funciones nuevas.
+

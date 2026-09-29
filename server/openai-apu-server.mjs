@@ -18,6 +18,7 @@ import statusHandler from '../api/status.mjs';
    /api/generate-apu, /api/assistant y /api/price-intelligence funcionaban en
    local, el resto daba 502 (nada escuchaba en ese puerto para esas rutas). */
 const GATEWAY_PATHS = new Set([
+  '/api/engineering-ai',
   '/api/apus', '/api/projects', '/api/challenge-decisions', '/api/technical-memory',
   '/api/export-events', '/api/health', '/api/organizations', '/api/construction-proposal',
   '/api/plano-takeoffs', '/api/catalogo-conceptos', '/api/presupuestos',
@@ -59,6 +60,7 @@ function loadEnv(fileName){
 function buildVercelRes(raw){
   const shim = {
     _status: 200,
+    setHeader(name, value){ raw.setHeader(name, value); return shim; },
     status(code){ shim._status = code; return shim; },
     json(data){ endJson(raw, shim._status, data); return shim; }
   };

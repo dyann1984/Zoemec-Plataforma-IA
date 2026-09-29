@@ -4,6 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test:nebius": "node --test test/nebiusEngineering.test.mjs",
+    "test:nebius-api": "firebase emulators:exec --project demo-zoemec-nebius --only firestore,auth \"node --test test/nebiusRules.test.mjs test/nebiusApi.test.mjs\"",
+    "test:nebius-ui": "node test/nebiusUi.mjs",
+    "demo:nebius-seed": "node scripts/seed-nebius-demo.mjs",
+    "nebius:smoke": "node scripts/nebius-smoke.mjs",
     "ai": "node server/openai-apu-server.mjs",
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",

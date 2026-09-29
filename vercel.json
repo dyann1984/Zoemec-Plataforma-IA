@@ -27,6 +27,7 @@
     }
   ],
   "rewrites": [
+    { "source": "/api/engineering-ai", "destination": "/api/gateway" },
     { "source": "/api/apus", "destination": "/api/gateway" },
     { "source": "/api/projects", "destination": "/api/gateway" },
     { "source": "/api/challenge-decisions", "destination": "/api/gateway" },

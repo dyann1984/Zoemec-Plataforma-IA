@@ -12,6 +12,7 @@
    las rutas originales se pidio, sin que vercel.json necesite codificar esa
    informacion de ninguna otra forma. */
 import apusHandler from '../server/api-lib/_route-apus.mjs';
+import engineeringAiHandler from '../server/api-lib/_route-engineering-ai.mjs';
 import projectsHandler from '../server/api-lib/_route-projects.mjs';
 import challengeDecisionsHandler from '../server/api-lib/_route-challenge-decisions.mjs';
 import technicalMemoryHandler from '../server/api-lib/_route-technical-memory.mjs';
@@ -33,6 +34,7 @@ import sentinelHandler from '../server/api-lib/_route-sentinel.mjs';
 import assetsHandler from '../server/api-lib/_route-assets.mjs';
 
 const ROUTES = {
+  '/api/engineering-ai': engineeringAiHandler,
   '/api/apus': apusHandler,
   '/api/projects': projectsHandler,
   '/api/challenge-decisions': challengeDecisionsHandler,

@@ -1,5 +1,7 @@
 import { FieldValue, getAdminAuth, getAdminDb, hasAdminCredentials } from './_firebaseAdmin.mjs';
-import { resolveOrgStatus, isActiveTrialStatus } from '../../src/domain/organization.js';
+import { resolveOrgStatus } from '../../src/domain/organization.js';
+import { resolvePaidFeatureEntitlement } from '../../src/domain/orgLibraryPermissions.js';
+import { RATE_LIMIT_CODE, computeRetryAfterSeconds } from '../../src/domain/rateLimitStatus.js';
 
 /* "library" faltaba aqui (bug real, no de seguridad): rules['library'] daba
    undefined para CUALQUIER plan, asi que requireFeature(req,'library') le
@@ -17,8 +19,15 @@ const PLAN_RULES = {
    plan (apuLimit). Antes assistant/visual/ai/library solo verificaban un
    booleano de plan, sin ningun freno de frecuencia: una cuenta de pago (o
    admin) podia hacer scripting de llamadas ilimitadas contra OpenAI/Drive sin
-   ningun control de costo. Los administradores quedan exentos, igual que ya
-   pasa con el limite mensual. */
+   ningun control de costo.
+
+   F1/P0 (paridad por rol): el super admin YA NO esta exento de este limite
+   en los endpoints de datos de empresa (requireFeature). Antes quedaba
+   exento y, con el MISMO input, un colaborador recibia 429 (precios sin
+   evidencia de mercado, lotes incompletos) mientras el admin no -- resultado
+   dependiente del rol. Los privilegios administrativos reales viven en
+   requireSuperAdmin (sin rate limit) y no cambian. El limite MENSUAL de plan
+   (apuLimit) sigue sin aplicarle al super admin (bypassPlanLimits). */
 const RATE_LIMITS = {
   apu: { max: 30, windowMs: 60 * 60 * 1000 },
   assistant: { max: 40, windowMs: 60 * 60 * 1000 },
@@ -43,6 +52,10 @@ async function enforceRateLimit(db, uid, feature){
     if(Number(data.count || 0) >= limit.max){
       const error = new Error('Demasiadas solicitudes en poco tiempo para esta funcion. Espera unos minutos e intenta de nuevo.');
       error.status = 429;
+      // F1: el cliente necesita saber CUANDO reintentar (lote -> "pendiente
+      // por limite", nunca error definitivo).
+      error.code = RATE_LIMIT_CODE;
+      error.retryAfterSeconds = computeRetryAfterSeconds(data.windowStart, limit.windowMs, now);
       throw error;
     }
     tx.update(ref, { count: FieldValue.increment(1) });
@@ -108,7 +121,12 @@ function usageMonth(){
   return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
-export async function requireFeature(req, feature){
+/* opts.deferRateLimit (F1): el llamador cobra el rate limit el mismo, en el
+   momento en que de verdad consume el recurso caro, via
+   authz.consumeRateLimit(). Lo usa /api/price-intelligence para que un
+   resultado servido desde cache NO consuma una busqueda. Sin la opcion, el
+   comportamiento es el de siempre: se cobra aqui mismo. */
+export async function requireFeature(req, feature, { deferRateLimit = false } = {}){
   if(!hasAdminCredentials()){
     const error = new Error('Falta FIREBASE_SERVICE_ACCOUNT_JSON en Vercel para validar usuarios y planes.');
     error.status = 500;
@@ -163,19 +181,34 @@ export async function requireFeature(req, feature){
      (resolveOrgStatus lo resuelve aunque el documento todavia no lo refleje,
      ver _orgGuard.mjs), no hay bypass: cae al comportamiento Gratis normal,
      lo que bloquea de facto IA/exportacion (punto 7). */
-  let isActiveTrialOrgMember = false;
+  /* P0 paridad ADMIN vs COLLABORATOR: el derecho ahora cubre tambien a la
+     empresa CONVERTED (pagada), no solo al trial -- antes un colaborador de
+     una empresa pagada caia a su plan personal (Gratis: sin IA) y
+     /api/price-intelligence le respondia 402, dejando su APU sin precios de
+     mercado, mientras el admin siempre era 'Empresa'. El derecho se decide
+     por MEMBRESIA ACTIVA + estado de la organizacion (resolvePaidFeature
+     Entitlement), nunca por el rol dentro de la empresa, y ahora ademas
+     exige que la membresia exista y este activa (antes bastaba con el
+     organizationId del perfil). Rate limit sigue aplicando. */
+  let entitlement = resolvePaidFeatureEntitlement({ isSuperAdmin: isAdmin });
   if(!isAdmin && profile.organizationId){
     try{
-      const orgSnap = await db.collection('organizations').doc(profile.organizationId).get();
-      if(orgSnap.exists){
-        isActiveTrialOrgMember = isActiveTrialStatus(resolveOrgStatus({ id: orgSnap.id, ...orgSnap.data() }));
+      const orgRef = db.collection('organizations').doc(profile.organizationId);
+      const [orgSnap, memberSnap] = await Promise.all([orgRef.get(), orgRef.collection('members').doc(decoded.uid).get()]);
+      if(orgSnap.exists && memberSnap.exists){
+        entitlement = resolvePaidFeatureEntitlement({
+          orgStatus: resolveOrgStatus({ id: orgSnap.id, ...orgSnap.data() }),
+          memberStatus: memberSnap.data()?.status || null
+        });
       }
-    }catch{
-      // Si la lectura de la organizacion falla, cae al comportamiento de plan
-      // individual normal -- nunca se otorga acceso extra por una falla.
+    }catch(err){
+      // Si la lectura de la organizacion falla, cae al plan individual --
+      // nunca se otorga acceso extra por una falla -- pero ya no en
+      // silencio: queda en el log del servidor para diagnostico.
+      console.warn('[authGuard] no se pudo resolver la organizacion del usuario', decoded.uid, err?.message || err);
     }
   }
-  const bypassPlanLimits = isAdmin || isActiveTrialOrgMember;
+  const bypassPlanLimits = entitlement.bypassPlanLimits;
 
   if(!bypassPlanLimits){
     if(feature === 'apu' && currentUsage >= rules.apuLimit){
@@ -189,7 +222,9 @@ export async function requireFeature(req, feature){
       throw error;
     }
   }
-  if(!isAdmin){
+  // F1/P0: mismo limite anti-abuso para TODOS los roles (incluido super
+  // admin) en endpoints de datos de empresa -- ver RATE_LIMITS arriba.
+  if(!deferRateLimit){
     await enforceRateLimit(db, decoded.uid, feature);
   }
 
@@ -213,7 +248,11 @@ export async function requireFeature(req, feature){
     role,
     userRef,
     usageMonth: month,
-    feature
+    feature,
+    entitlementSource: entitlement.source,
+    // F1: cobro diferido (solo con deferRateLimit). Idempotente por llamada:
+    // cada invocacion cobra UNA unidad real.
+    consumeRateLimit: () => enforceRateLimit(db, decoded.uid, feature)
   };
 }
 

@@ -1,0 +1,32 @@
+{
+  "checkedAt": "2026-09-29T20:00:00.621Z",
+  "provider": "Nebius",
+  "model": "nvidia/nemotron-3-super-120b-a12b",
+  "providerRequestId": "chatcmpl-9a431cc3017e182d",
+  "usage": {
+    "prompt_tokens": 12771,
+    "completion_tokens": 4524,
+    "total_tokens": 17295
+  },
+  "latencyMs": 23524,
+  "status": "real_call_validated",
+  "evidenceRefs": [
+    "E1",
+    "E4",
+    "E21",
+    "E228",
+    "E24",
+    "E46",
+    "E203",
+    "E170",
+    "E181",
+    "E192",
+    "E35",
+    "E214",
+    "E178",
+    "E188",
+    "E199",
+    "E211",
+    "E222"
+  ]
+}

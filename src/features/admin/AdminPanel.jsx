@@ -5,6 +5,7 @@
    accesible para isAdminUser) con las funciones serverless /api/health,
    /api/status, /api/onedrive y /api/google-drive. */
 import { useEffect, useState } from 'react';
+import { NebiusAdminStatus } from './NebiusAdminStatus.jsx';
 import { collection, doc, getDoc, getDocs, limit, orderBy, query, setDoc } from 'firebase/firestore';
 import { db } from '../../firebase.js';
 import { authHeaders, apiPost, apiGetSafe } from '../../services/apiClient.js';
@@ -232,6 +233,7 @@ export function AdminPanel({user}){
       const estimated=(usageTotals.apu||0)*AI_COST_ESTIMATE.apu + (usageTotals.visual||0)*AI_COST_ESTIMATE.visual + (usageTotals.assistant||0)*AI_COST_ESTIMATE.assistant;
       return <div className="panel admin-panel-body">
         <div className="admin-panel-head"><h2>IA y consumo</h2><button className="soft" onClick={()=>{loadUsers();loadLogs();}}>Actualizar</button></div>
+        <NebiusAdminStatus />
         {users===null ? <Busy/> : <>
           <div className="admin-cost-grid">
             <div className="admin-cost-card"><small>Llamadas APU (mes)</small><b>{usageTotals.apu||0}</b></div>

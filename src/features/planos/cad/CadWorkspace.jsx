@@ -9,6 +9,7 @@ import './cad.css';
 import CadCanvas2D, { layerOf } from './CadCanvas2D.jsx';
 import CadViewer3D from './CadViewer3D.jsx';
 import CadPropertiesPanel from './CadPropertiesPanel.jsx';
+import CadGeneratorsSection, { usePlanoConcepts, CadStalenessBanner } from './CadGeneratorsSection.jsx';
 import {
   REVIEW_STATUS, SCALE_STATUS, findElement, deleteElement, setElementReview, addDimension, addSpace,
   rescaleModel, setScale, validateCadModel, confidenceLevel
@@ -86,8 +87,13 @@ function scaleText(scale){
 export default function CadWorkspace({
   initialModel, modelKey, underlay = null, onModelChange, projectId = null, planoId = null, fileName = '',
   user = null, onNeedProject, focusElementId = null, recognitionReport = null, saveLabel = null,
-  topBarExtra = null, onLoadFixture
+  topBarExtra = null, onLoadFixture,
+  // F4: guarda la geometria YA (borrador) y devuelve la revision del plano;
+  // la usan los generadores para validar contra el plano persistido.
+  persistNow = null
 }){
+  const planoConcepts = usePlanoConcepts(projectId, planoId);
+  const [reviewOpenKey, setReviewOpenKey] = useState(0);
   const [history, setHistory] = useState(() => createHistory(initialModel));
   const [draft, setDraft] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
@@ -215,13 +221,20 @@ export default function CadWorkspace({
     if(!(real > 0)){ onError('Captura la distancia real en metros.'); return; }
     const factor = real / calibration.measured;
     let next = rescaleModel(getModel(), factor);
-    next = setScale(next, { status: SCALE_STATUS.CONFIRMADA, fuente: 'referencia_usuario', confidenceLevel: 'ALTA', evidencia: `Calibración manual: ${real} m (dibujo medía ${calibration.measured.toFixed(3)} m).` });
+    next = setScale(next, {
+      status: SCALE_STATUS.CONFIRMADA, fuente: 'referencia_usuario', confidenceLevel: 'ALTA',
+      evidencia: `Calibración manual: ${real} m (dibujo medía ${calibration.measured.toFixed(3)} m).`,
+      // F4: la escala conserva valor, unidad, metodo y referencia usada.
+      method: 'CALIBRACION_MANUAL', unit: 'm', value: factor,
+      reference: { measuredInDrawing: Number(calibration.measured.toFixed(6)), realMeters: real },
+      confirmedAt: new Date().toISOString()
+    });
     commit(next, 'Calibrar escala');
     setCalibration(null); setTool('select');
     notify(`Escala calibrada (factor ${factor.toFixed(4)}). Todas las medidas se recalcularon.`, 'success');
   };
   const confirmScale = () => {
-    commit(setScale(getModel(), { status: SCALE_STATUS.CONFIRMADA, confidenceLevel: 'ALTA', evidencia: `${model.scale?.evidencia || ''} Confirmada por el usuario.`.trim() }), 'Confirmar escala');
+    commit(setScale(getModel(), { status: SCALE_STATUS.CONFIRMADA, confidenceLevel: 'ALTA', evidencia: `${model.scale?.evidencia || ''} Confirmada por el usuario.`.trim(), method: model.scale?.method || 'CONFIRMACION_USUARIO', unit: 'm', confirmedAt: new Date().toISOString() }), 'Confirmar escala');
   };
 
   const acceptAllHigh = () => {
@@ -304,6 +317,12 @@ export default function CadWorkspace({
       </div>
     </nav>
 
+    {/* F4-QA: fila propia del grid (sin grid-area caian recortados debajo de la barra de estado). */}
+    <div className="cad-banners">
+      {scaleNeedsAction && <p className="cad-banner is-error" role="status">Escala sin confirmar: las medidas y cantidades de este plano NO son definitivas (sus generadores quedan INCOMPLETOS). Calibra con una medida conocida o confirma la escala en Revisión.</p>}
+      <CadStalenessBanner concepts={planoConcepts.concepts} projectId={projectId} planoId={planoId} model={model}
+        onReview={() => { setRightTab('review'); setReviewOpenKey(k => k + 1); }} />
+    </div>
     <main className={`cad-center is-${viewMode}`}>
       {(viewMode === 'plan' || viewMode === 'split') && canvas}
       {(viewMode === '3d' || viewMode === 'split') && viewer3d}
@@ -319,6 +338,7 @@ export default function CadWorkspace({
           model={model} getModel={getModel} selectedId={selectedId} issues={issues}
           onChange={commit} onError={onError} onNotify={notify} onSelect={id => focusOn(id)} onAction={onAction}
           projectId={projectId} planoId={planoId} fileName={fileName} user={user} onNeedProject={onNeedProject}
+          persistNow={persistNow} onConceptsChanged={planoConcepts.refresh}
         />}
 
         {rightTab === 'review' && <div className="cad-review">
@@ -342,6 +362,8 @@ export default function CadWorkspace({
             <div className="cad-row"><span>Muros, área neta total</span><b>{summary.totals.wallNetArea.toFixed(2)} <em>m²</em></b></div>
             <div className="cad-row"><span>Espacios, área total</span><b>{summary.totals.spaceArea.toFixed(2)} <em>m²</em></b></div>
           </section>
+          <CadGeneratorsSection projectId={projectId} planoId={planoId} fileName={fileName} getModel={getModel} onNotify={notify} onError={onError}
+            persistNow={persistNow} concepts={planoConcepts.concepts} refreshConcepts={planoConcepts.refresh} autoOpenKey={reviewOpenKey} />
           <section>
             <h4>Pendientes: {pendingCount} {pendingCount === 1 ? 'elemento' : 'elementos'} por validar</h4>
             {pendingCount > 0 && <button type="button" className="soft" onClick={acceptAllHigh}>Aceptar los de confianza ALTA</button>}

@@ -8,7 +8,9 @@
    (Firestore, via server/api-lib/_route-catalogo-conceptos.mjs), asi que un
    fallo de 1 de 30 nunca pierde el progreso de los otros 29, y sobrevive
    tanto un cambio de pantalla como una recarga de la pagina. */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { fetchApuContextPreview } from '../library/orgLibraryCloud.js';
+import { ContextSummary } from '../library/OrgLibraryPanel.jsx';
 import { PageHead, EmptyState } from '../../components/ui/PageElements.jsx';
 import { useCatalogConceptos } from './catalogConceptosCloud.js';
 import { useProjectApus } from './projectApusCloud.js';
@@ -19,30 +21,31 @@ import { suggestParametricElements } from '../../domain/parametricCompatibilityB
 import { migrateLegacyApuToV2 } from '../../domain/apuSchema.js';
 import { PRESUPUESTO_CAPITULOS, capituloLabel } from '../../domain/presupuestoCapitulos.js';
 import { useAiJobs } from '../../contexts/AiJobsContext.jsx';
+import { runCatalogBatch, selectBatchTargets } from './catalogBatchRunner.js';
+import { GeneratorsViewer, quantitySourceLabel } from './GeneratorsViewer.jsx';
+import { exportGeneratorsPdf, exportGeneratorsExcel } from '../../lib/generatorsExport.js';
+import { loadOfficialLogo } from '../../lib/reports/reportPdfKit.js';
+import { fmtQ } from '../../domain/quantityGenerators.js';
+import { isRateLimitError, retryAfterSecondsOf, formatRetryAfter } from '../../domain/rateLimitStatus.js';
 
 const STATUS_LABEL = {
   PENDIENTE: 'Pendiente', GENERANDO: 'Generando...', GENERADO: 'Generado',
-  ASOCIADO: 'Asociado', ERROR: 'Error', REQUIERE_REVISION: 'Requiere revisión'
+  ASOCIADO: 'Asociado', ERROR: 'Error', REQUIERE_REVISION: 'Requiere revisión',
+  PENDIENTE_LIMITE: 'Pendiente por límite' // F1: 429 -- sin APU, reintentable
 };
 const STATUS_BADGE_CLASS = {
   PENDIENTE: 'zi-badge-info', GENERANDO: 'zi-badge-high', GENERADO: 'zi-badge-medium',
-  ASOCIADO: 'zi-badge-medium', ERROR: 'zi-badge-critical', REQUIERE_REVISION: 'zi-badge-high'
+  ASOCIADO: 'zi-badge-medium', ERROR: 'zi-badge-critical', REQUIERE_REVISION: 'zi-badge-high',
+  PENDIENTE_LIMITE: 'zi-badge-high'
 };
+/* F1: "reintentar en ~N min" a partir del retryAt persistido por el servidor. */
+function retryHint(concepto, now = Date.now()){
+  if(concepto.status !== 'PENDIENTE_LIMITE') return null;
+  const ms = concepto.retryAt ? new Date(concepto.retryAt).getTime() - now : 0;
+  return ms > 0 ? `Reintentar ${formatRetryAfter(ms / 1000)}` : 'Listo para reintentar';
+}
 function ConceptStatusBadge({ status }){
   return <span className={`zi-badge ${STATUS_BADGE_CLASS[status] || 'zi-badge-info'}`}>{STATUS_LABEL[status] || status}</span>;
-}
-
-/* Ejecuta hasta `limit` generaciones en paralelo, nunca mas -- un lote de 30
-   conceptos no debe disparar 30 llamadas simultaneas a la IA. */
-async function runWithConcurrency(items, limit, worker){
-  let cursor = 0;
-  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while(cursor < items.length){
-      const item = items[cursor++];
-      await worker(item);
-    }
-  });
-  await Promise.all(runners);
 }
 
 export function CatalogoModule({ user, organizationId, activeProjectId, activeProject, catalog = [], onNeedProject, setModule, onNavigateToPlano }){
@@ -61,8 +64,24 @@ export function CatalogoModule({ user, organizationId, activeProjectId, activePr
   const [busyIds, setBusyIds] = useState(() => new Set());
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchSummary, setBatchSummary] = useState(null);
+  const [generatorsId, setGeneratorsId] = useState(null); // F3: "Ver generadores"
 
   const projectApus = useMemo(() => (rawApus || []).filter(a => !a.archivedAt), [rawApus]);
+
+  // P0 paridad: contexto con el que el SERVIDOR generara los APU de este
+  // proyecto (empresa, region, biblioteca, precios de proyecto, historicos)
+  // -- el mismo para cualquier miembro de la empresa (regla 20).
+  const [genContext, setGenContext] = useState(null);
+  const [genContextError, setGenContextError] = useState('');
+  useEffect(() => {
+    if(!organizationId || !activeProjectId) return;
+    let alive = true;
+    setGenContext(null); setGenContextError('');
+    fetchApuContextPreview({ projectId: activeProjectId })
+      .then(c => { if(alive) setGenContext(c); })
+      .catch(err => { if(alive) setGenContextError(err.message); });
+    return () => { alive = false; };
+  }, [organizationId, activeProjectId]);
 
   const markBusy = (id, isBusy) => setBusyIds(prev => {
     const next = new Set(prev);
@@ -78,36 +97,29 @@ export function CatalogoModule({ user, organizationId, activeProjectId, activePr
       await setStatus(concepto.id, requiresReview ? 'REQUIERE_REVISION' : 'GENERADO', { apuId });
       reloadApus();
     }catch(err){
-      await setStatus(concepto.id, 'ERROR', { error: err.message }).catch(() => {});
+      // F1/P0: 429 -> PENDIENTE POR LIMITE (reintentable), nunca ERROR definitivo.
+      if(isRateLimitError(err)) await setStatus(concepto.id, 'PENDIENTE_LIMITE', { error: err.message, retryAfterSeconds: retryAfterSecondsOf(err) }).catch(() => {});
+      else await setStatus(concepto.id, 'ERROR', { error: err.message }).catch(() => {});
     }finally{
       markBusy(concepto.id, false);
     }
   };
 
   const handleBatch = async (onlyFailed = false) => {
-    const targets = conceptos.filter(c => onlyFailed ? c.status === 'ERROR' : c.status === 'PENDIENTE');
+    const targets = selectBatchTargets(conceptos, { onlyFailed });
     if(!targets.length) return;
     setBatchRunning(true);
     setBatchSummary(null);
     const jobId = beginJob('catalogo-batch', `${targets.length} concepto(s) del catálogo`);
-    let done = 0, ok = 0, failed = 0;
     try{
-      await runWithConcurrency(targets, 3, async (concepto) => {
-        markBusy(concepto.id, true);
-        try{
-          await setStatus(concepto.id, 'GENERANDO', { batchId: jobId });
-          const { apuId, requiresReview } = await generateApuForConcepto({ concepto, catalog, project: activeProject });
-          await setStatus(concepto.id, requiresReview ? 'REQUIERE_REVISION' : 'GENERADO', { apuId, batchId: jobId });
-          ok++;
-        }catch(err){
-          await setStatus(concepto.id, 'ERROR', { error: err.message, batchId: jobId }).catch(() => {});
-          failed++;
-        }finally{
-          done++;
-          markBusy(concepto.id, false);
-        }
+      // F1/P0: runCatalogBatch distingue GENERADO / PENDIENTE POR LIMITE /
+      // ERROR REAL (ver catalogBatchRunner.js).
+      targets.forEach(c => markBusy(c.id, true));
+      const summary = await runCatalogBatch({
+        targets, concurrency: 3, batchId: jobId, setStatus,
+        generate: (concepto) => generateApuForConcepto({ concepto, catalog, project: activeProject }),
+        onItemDone: (concepto) => markBusy(concepto.id, false)
       });
-      const summary = { total: targets.length, ok, failed };
       setBatchSummary(summary);
       reloadApus();
       completeJob(jobId, summary, { label: `Generación de lote (${targets.length} conceptos)` });
@@ -153,8 +165,9 @@ export function CatalogoModule({ user, organizationId, activeProjectId, activePr
     setDraft({ clave: '', capitulo: 'OTROS', concept: '', unit: '', qty: '' });
   };
 
-  const pendingCount = conceptos.filter(c => c.status === 'PENDIENTE').length;
+  const pendingCount = selectBatchTargets(conceptos).length;
   const errorCount = conceptos.filter(c => c.status === 'ERROR').length;
+  const rateLimitedCount = conceptos.filter(c => c.status === 'PENDIENTE_LIMITE').length;
 
   if(!activeProjectId){
     return <section>
@@ -174,6 +187,10 @@ export function CatalogoModule({ user, organizationId, activeProjectId, activePr
         desc="Desde cada concepto: asocia un APU existente, genera con IA, genera con el Cuantificador Paramétrico, o déjalo pendiente."
         action={<button onClick={() => setModule?.('presupuestos')}>Ver Presupuesto</button>}
       />
+
+      {organizationId && <div className="panel" style={{ marginBottom: 12, padding: '10px 16px' }}>
+        <ContextSummary context={genContext} error={genContextError} />
+      </div>}
 
       <div className="panel" style={{ marginBottom: 16 }}>
         <h2 style={{ marginTop: 0 }}>Agregar concepto</h2>
@@ -200,7 +217,12 @@ export function CatalogoModule({ user, organizationId, activeProjectId, activePr
         <button className="soft" disabled={!errorCount || batchRunning} onClick={() => handleBatch(true)}>
           Reintentar solo fallidos ({errorCount})
         </button>
-        {batchSummary && <small className="muted">Último lote: {batchSummary.ok} generado(s), {batchSummary.failed} con error, de {batchSummary.total}.</small>}
+        {conceptos.some(c => c.quantitySource === 'GENERATORS') && <>
+          <button className="soft" onClick={async () => { try{ exportGeneratorsPdf({ conceptos, projectName: activeProject?.name || '', projectId: activeProjectId, project: activeProject, logo: await loadOfficialLogo() }); }catch(err){ window.zoemecNotify?.(err.message, 'error'); } }}>Generadores PDF</button>
+          <button className="soft" onClick={() => exportGeneratorsExcel({ conceptos, projectName: activeProject?.name || '', projectId: activeProjectId, project: activeProject }).catch(err => window.zoemecNotify?.(err.message, 'error'))}>Generadores Excel</button>
+        </>}
+        {batchSummary && <small className="muted">Último lote: {batchSummary.ok + (batchSummary.review || 0)} generado(s){batchSummary.review ? ` (${batchSummary.review} requieren revisión)` : ''}, {batchSummary.rateLimited || 0} pendiente(s) por límite{batchSummary.rateLimited && batchSummary.retryAfterSeconds ? ` (reintentar ${formatRetryAfter(batchSummary.retryAfterSeconds)})` : ''}, {batchSummary.failed} con error, de {batchSummary.total}.</small>}
+        {!batchSummary && rateLimitedCount > 0 && <small className="muted">{rateLimitedCount} concepto(s) pendiente(s) por límite temporal: se reintentan con "Generar APU para conceptos pendientes" cuando termine la espera.</small>}
       </div>
 
       {error && <div className="panel" style={{ borderColor: 'var(--danger)' }}><p className="muted">{error}</p></div>}
@@ -221,10 +243,12 @@ export function CatalogoModule({ user, organizationId, activeProjectId, activePr
                     <td>{capituloLabel(c.capitulo)}</td>
                     <td>{c.concept}</td>
                     <td>{c.unit}</td>
-                    <td>{c.qty}</td>
-                    <td><ConceptStatusBadge status={c.status} />{c.statusError && <div><small style={{ color: 'var(--danger)' }}>{c.statusError}</small></div>}</td>
+                    <td>{fmtQ(c.qty)}<div><small className="muted">{quantitySourceLabel(c)}</small></div>
+                      {c.generatorsStale && <div><small style={{ color: 'var(--danger)' }} title="La geometría del plano cambió; la cantidad no se actualiza hasta que confirmes en el plano (Revisar generadores).">⚠ Generadores desactualizados{Object.values(c.generatorStaleness || {})[0] ? ` (${fmtQ(Object.values(c.generatorStaleness)[0].fromQty)} → ${fmtQ(Object.values(c.generatorStaleness)[0].toQty)})` : ''}</small></div>}</td>
+                    <td><ConceptStatusBadge status={c.status} />{c.statusError && <div><small style={{ color: c.status === 'PENDIENTE_LIMITE' ? 'var(--muted)' : 'var(--danger)' }}>{c.statusError}</small></div>}{retryHint(c) && <div><small className="muted">{retryHint(c)}</small></div>}</td>
                     <td>
                       <div className="sc-actions">
+                        {c.quantitySource === 'GENERATORS' && <button className="soft" onClick={() => setGeneratorsId(c.id)}>Ver generadores</button>}
                         <button className="soft" disabled={busy} onClick={() => setAssociatingId(c.id)}>Asociar APU existente</button>
                         <button className="soft" disabled={busy} onClick={() => runGenerateAI(c)}>{busy ? 'Generando…' : 'Generar con IA'}</button>
                         {parametricSuggestions.length > 0 && (
@@ -278,6 +302,12 @@ export function CatalogoModule({ user, organizationId, activeProjectId, activePr
             </div>
           </div>
         );
+      })()}
+
+      {generatorsId && (() => {
+        const concepto = conceptos.find(c => c.id === generatorsId);
+        if(!concepto) return null;
+        return <GeneratorsViewer concepto={concepto} projectName={activeProject?.name || ''} projectId={activeProjectId} project={activeProject} onClose={() => setGeneratorsId(null)} />;
       })()}
     </section>
   );

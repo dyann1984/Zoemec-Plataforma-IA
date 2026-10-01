@@ -313,6 +313,35 @@ describe('Fase 1: _authGuard.requireFeature sin limites artificiales durante el 
     assert.equal(authz.uid, admin.uid);
   });
 
+  /* P0 paridad ADMIN vs COLLABORATOR: antes solo ACTIVE_TRIAL daba este
+     derecho -- un COLABORADOR de una empresa CONVERTED (pagada) caia a su
+     plan personal Gratis (ai:false) y /api/price-intelligence le respondia
+     402, dejando su APU sin precios de mercado mientras el responsable si
+     los obtenia. */
+  it('P0: un COLABORADOR de una empresa CONVERTED (pagada) tiene IA y cupo de APU como el responsable', async () => {
+    const { admin, organizationId } = await createOrg('converted');
+    const collaborator = await inviteAndAccept({ adminToken: admin.idToken, organizationId, email: uniq('convcollab') });
+    await getAdminDb().collection('organizations').doc(organizationId).update({ status: ORG_STATUS.CONVERTED });
+    await getAdminDb().collection('users').doc(collaborator.uid).set({ usage: { [currentUsageMonth()]: { apu: 5 } } }, { merge: true });
+    for(const member of [admin, collaborator]){
+      const ai = await requireFeature({ headers: { authorization: `Bearer ${member.idToken}` } }, 'ai');
+      assert.equal(ai.entitlementSource, 'organization');
+      const apu = await requireFeature({ headers: { authorization: `Bearer ${member.idToken}` } }, 'apu');
+      assert.equal(apu.uid, member.uid);
+    }
+  });
+
+  it('P0: un miembro DESHABILITADO pierde el derecho de la empresa (vuelve a su plan personal)', async () => {
+    const { admin, organizationId } = await createOrg('disabledent');
+    const collaborator = await inviteAndAccept({ adminToken: admin.idToken, organizationId, email: uniq('discollab') });
+    await getAdminDb().collection('organizations').doc(organizationId).update({ status: ORG_STATUS.CONVERTED });
+    await getAdminDb().collection('organizations').doc(organizationId).collection('members').doc(collaborator.uid).update({ status: 'disabled' });
+    await assert.rejects(
+      requireFeature({ headers: { authorization: `Bearer ${collaborator.idToken}` } }, 'ai'),
+      (err) => err.status === 402
+    );
+  });
+
   it('un miembro de organizacion con el trial YA vencido SI vuelve a quedar sujeto al limite Gratis (1 APU)', async () => {
     const { admin, organizationId } = await createOrg('bypassexpired');
     await getAdminDb().collection('organizations').doc(organizationId).update({

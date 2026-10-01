@@ -1,5 +1,8 @@
 import { generateAPU, generateAPUv2 } from '../server/api-lib/_openaiApuCore.mjs';
 import { markFeatureUsed, requireFeature } from '../server/api-lib/_authGuard.mjs';
+import { loadOrgContext } from '../server/api-lib/_orgGuard.mjs';
+import { getAdminDb } from '../server/api-lib/_firebaseAdmin.mjs';
+import { runApuGeneration, wantsServerContext } from '../server/api-lib/_apuGenerateCore.mjs';
 
 export default async function handler(req, res){
   if(req.method !== 'POST'){
@@ -8,18 +11,29 @@ export default async function handler(req, res){
   }
   try{
     const authz = await requireFeature(req, 'apu');
-    // schema:'v2' es aditivo y opcional: nadie en la UI actual lo manda, asi
-    // que el flujo por defecto (sin ese campo) sigue devolviendo exactamente
-    // el mismo shape { ok, apu } de siempre.
-    const wantsV2 = req.body?.schema === 'v2';
-    const apu = wantsV2 ? await generateAPUv2(req.body || {}) : await generateAPU(req.body || {});
+    const body = req.body || {};
+    // schema:'v2' es aditivo y opcional. projectId/contextMode (P0 paridad
+    // ADMIN vs COLLABORATOR) activan la resolucion server-side del contexto
+    // empresarial; sin ellos se conserva el comportamiento historico.
+    const needsContext = wantsServerContext(body);
+    const orgContext = needsContext ? await loadOrgContext(authz.uid) : null;
+    const { apu, wantsV2, context } = await runApuGeneration({
+      body, authz, orgContext,
+      db: needsContext ? getAdminDb() : null,
+      generate: (payload, { wantsV2: v2 }) => v2 ? generateAPUv2(payload) : generateAPU(payload)
+    });
     await markFeatureUsed(authz);
-    res.status(200).json(wantsV2 ? { ok:true, apu, schemaVersion:2 } : { ok:true, apu });
+    res.status(200).json(wantsV2 ? { ok:true, apu, schemaVersion:2, context } : { ok:true, apu, context });
   }catch(err){
     /* "error" se mantiene como string (compatibilidad con el frontend actual,
        que hace data?.error || fallback). ok/errorCode se agregan de forma
        aditiva para clientes nuevos, sin romper el contrato existente. */
     const message = err.message || 'No se pudo generar el APU con IA.';
-    res.status(err.status || 400).json({ ok:false, error:message, errorCode:String(err.status || 400) });
+    // F1: code/retryAfterSeconds (aditivos) para que un lote distinga
+    // "pendiente por limite" (429) de un error real.
+    const body = { ok:false, error:message, errorCode:String(err.status || 400) };
+    if(err.code) body.code = err.code;
+    if(err.retryAfterSeconds) body.retryAfterSeconds = err.retryAfterSeconds;
+    res.status(err.status || 400).json(body);
   }
 }

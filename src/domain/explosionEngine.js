@@ -13,6 +13,7 @@
    ese esquema; no migra nada, no acepta v1. */
 
 import { computeSnapshotHash } from './snapshotHash.js';
+import { toExplosionLines } from './budgetScope.js';
 
 export const EXPLOSION_ENGINE_VERSION = 'explosion-v1';
 
@@ -152,6 +153,50 @@ export function assertSingleTenantScope(apuDocs){
   }
 }
 
+/* ---------- F2: lineas de explosion + trazabilidad comun ---------- */
+
+/* Una "linea" es la unidad de consumo: (APU, cantidad autoritativa, concepto
+   de origen o null si el APU es independiente) -- ver
+   src/domain/budgetScope.js#toExplosionLines. Los 4 motores (materiales,
+   auxiliares, mano de obra, maquinaria) leen la cantidad SOLO de aqui: nunca
+   de snapshot.cantidadObra directamente. */
+export function explosionLinesOf(input){
+  const lines = toExplosionLines(input);
+  assertSingleTenantScope(lines.map(l => l.apuDoc));
+  return lines;
+}
+
+/* Trazabilidad INSUMO -> APU -> CONCEPTO -> CAPITULO -> PROYECTO que viaja
+   en cada origen (contribucion individual) de cualquier explosion. */
+export function lineTrace(line){
+  const snapshot = line.apuDoc?.snapshot || {};
+  const c = line.concepto;
+  return {
+    lineId: line.lineId,
+    apuId: line.apuDoc?.id ?? null,
+    apuClave: snapshot.clave ?? null,
+    apuConcept: snapshot.concept ?? '',
+    conceptoId: c?.id ?? null,
+    conceptoClave: c?.clave ?? null,
+    conceptoDescripcion: c?.concept ?? null,
+    capitulo: c?.capitulo ?? null,
+    capituloLabel: c?.capituloLabel ?? null,
+    projectId: c?.projectId ?? line.apuDoc?.projectId ?? snapshot.projectId ?? null,
+    cantidadConcepto: line.qty,
+    quantitySource: line.quantitySource
+  };
+}
+
+/* Etiqueta legible de una contribucion: "Capitulo > Concepto (APU)" o
+   "APU independiente". Una sola funcion para pantalla, PDF y XLSX. */
+export function originLabel(o){
+  if(o?.conceptoId){
+    const concepto = o.conceptoClave ? `${o.conceptoClave} ${o.conceptoDescripcion || ''}`.trim() : (o.conceptoDescripcion || o.conceptoId);
+    return `${o.capituloLabel || o.capitulo || 'Sin capitulo'} > ${concepto} > ${o.apuClave || o.apuId} (cant. ${Number(o.cantidadConcepto || 0).toLocaleString('es-MX', { maximumFractionDigits: 4 })})`;
+  }
+  return `${o?.apuConcept || o?.apuClave || o?.apuId} (APU independiente, cant. ${Number(o?.cantidadConcepto || 0).toLocaleString('es-MX', { maximumFractionDigits: 4 })})`;
+}
+
 /* ---------- Snapshot serializable/versionable (Fase A, sin coleccion nueva) ---------- */
 
 /* Forma unica devuelta por buildMaterialExplosion/buildLaborExplosion/
@@ -162,7 +207,9 @@ export function assertSingleTenantScope(apuDocs){
    documento `explosionSnapshots/{id}` en una subfase futura sin tener que
    tocar el motor: bastaria con un endpoint que reciba este mismo objeto. */
 export async function buildExplosionSnapshot({ projectId = null, organizationId = null, sourceApuIds = [], totals = {}, rows = {} }){
-  const base = { projectId, organizationId, sourceApuIds: [...sourceApuIds].sort(), engineVersion: EXPLOSION_ENGINE_VERSION, totals, rows };
+  // sourceApuIds puede recibir ids de lineas; se deduplica (un APU usado en
+  // varios conceptos aparece una sola vez).
+  const base = { projectId, organizationId, sourceApuIds: [...new Set(sourceApuIds)].sort(), engineVersion: EXPLOSION_ENGINE_VERSION, totals, rows };
   const reconciliationHash = await computeSnapshotHash(base);
   return { ...base, generatedAt: new Date().toISOString(), reconciliationHash };
 }

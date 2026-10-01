@@ -6,8 +6,8 @@
 .cad-ws{
   display:grid;
   grid-template-columns:136px minmax(0,1fr) 316px;
-  grid-template-rows:auto minmax(0,1fr) auto;
-  grid-template-areas:"top top top" "tools center right" "status status status";
+  grid-template-rows:auto auto minmax(0,1fr) auto;
+  grid-template-areas:"top top top" "banners banners banners" "tools center right" "status status status";
   height:calc(100vh - 150px);
   min-height:600px;
   border:1px solid var(--line);
@@ -23,6 +23,10 @@
   grid-area:top; display:flex; align-items:center; gap:10px; flex-wrap:wrap;
   padding:6px 10px; border-bottom:1px solid var(--line); background:var(--surface-soft-1, var(--paper));
 }
+/* F4-QA: avisos del plano (escala sin confirmar, generadores desactualizados). */
+.cad-banners{ grid-area:banners; display:flex; flex-direction:column; gap:6px; padding:6px 10px; border-bottom:1px solid var(--line); }
+.cad-banners:empty{ display:none; }
+.cad-banners .cad-banner{ margin:0; }
 .cad-segmented{ display:inline-flex; border:1px solid var(--line-2); border-radius:7px; overflow:hidden; }
 .cad-segmented button{
   border:0; border-radius:0; background:transparent; color:var(--ink-text); padding:5px 14px; min-height:0; box-shadow:none; font-weight:600;
@@ -238,8 +242,8 @@
 }
 @media (max-width: 820px){
   .cad-ws{
-    grid-template-columns:minmax(0,1fr); grid-template-rows:auto auto minmax(420px,60vh) auto auto;
-    grid-template-areas:"top" "tools" "center" "right" "status"; height:auto;
+    grid-template-columns:minmax(0,1fr); grid-template-rows:auto auto auto minmax(420px,60vh) auto auto;
+    grid-template-areas:"top" "banners" "tools" "center" "right" "status"; height:auto;
   }
   .cad-tools{ flex-direction:row; overflow-x:auto; border-right:0; border-bottom:1px solid var(--line); }
   .cad-tool-group{ flex-direction:row; }

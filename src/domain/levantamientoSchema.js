@@ -158,7 +158,20 @@ export function makeEmptySpace({ name = '', length = 0, width = 0, height = 0 } 
    Import3DSurveyForm guardan aqui el resultado de
    normalizeStylePreferences (ver evidenceStylePreferences.js) -- este
    archivo no valida su contenido, esa normalizacion ya la hizo el llamador. */
-export function makeEmptySurvey({ id = null, projectId = null, name = '', description = '', sourceType = SURVEY_SOURCE_TYPE.MANUAL, importMeta = null, scanMedia = [], stylePreferences = null } = {}){
+/* cadPlanos (Fase 1 del plan integral): mapa opcional {spaceId -> cadModel}
+   que persiste la geometria EDITABLE derivada de un Space (via
+   surveyToCadModel). null | ausente = el usuario nunca abrio la pestana
+   "Editar en CAD" para ningun espacio -- comportamiento previo intacto.
+
+   Convivencia con `spaces` (regla 9 del encargo: nunca migracion destructiva
+   Survey<->CAD): survey.spaces conserva las dimensiones DECLARADAS por el
+   maestro; survey.cadPlanos[spaceId] es la geometria EDITADA en CAD. Se
+   guardan las dos fuentes por separado a proposito: si el maestro rehace
+   el levantamiento en obra, no debe borrar la version CAD que el
+   proyectista ya edito. Cada cadModel es un objeto JSON plano (~2-5 KB
+   para un Space rectangular con 4 muros + 2 aberturas + 4 cotas), muy por
+   debajo del limite de 950 KB de useCloudState. */
+export function makeEmptySurvey({ id = null, projectId = null, name = '', description = '', sourceType = SURVEY_SOURCE_TYPE.MANUAL, importMeta = null, scanMedia = [], stylePreferences = null, cadPlanos = null } = {}){
   const now = Date.now();
   return {
     id: id || ('LEV-' + uid()),
@@ -169,6 +182,7 @@ export function makeEmptySurvey({ id = null, projectId = null, name = '', descri
     importMeta,
     scanMedia,
     stylePreferences,
+    cadPlanos,
     status: SURVEY_STATUS.DRAFT,
     spaces: [],
     createdAt: now,

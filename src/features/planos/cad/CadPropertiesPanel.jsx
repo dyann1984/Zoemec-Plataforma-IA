@@ -7,10 +7,16 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   CAD_KIND, OPENING_TYPE, REVIEW_STATUS, CAD_SOURCE, findElement, updateWall, updateOpening, updateSpace,
   updateDimension, deleteElement, setElementReview, setElementAssignment, openingsOnWall, elementDisplayStatus,
-  computeWallMetrics, resolveDimension, confidenceLevel
+  computeWallMetrics, resolveDimension, confidenceLevel,
+  setWallLength, resizeRectangularSpace, rectangularSpaceBox, wallHeightSource, wallThicknessSource, spaceCeilingHeightSource, dimensionSourceLabel, DIMENSION_SOURCE
 } from '../../../domain/cadModel.js';
 import { buildElementTakeoff, isAssignmentStale, conceptQuantityFromModel, markConceptSynced } from '../../../domain/cadTakeoff.js';
-import { listProjectConcepts, listProjectApus, createConceptFromElement, updateConceptQuantity, associateConceptApu } from './cadConceptService.js';
+import { listProjectConcepts, listProjectApus, createConceptFromElement, associateConceptApu, syncConceptGenerators } from './cadConceptService.js';
+import { computeGeometryImpact, formatImpactSummary } from '../../../domain/economicImpact.js';
+import { calcAPU } from '../../../lib/apuCalc.js';
+import { isConceptInApprovedBudget, detectSpecChange, BASELINE_STATUS } from '../../../domain/budgetBaselineLookup.js';
+import { composeGeometryChangeDescription, composeGeometryChangeMotivo, buildGeometryEvidence, buildChangeOrderPayload, findDuplicateChangeOrder } from '../../../domain/changeOrderFromGeometry.js';
+import { listProjectPresupuestos, listProjectChangeOrders, createChangeOrder } from './budgetBaselineService.js';
 
 const fmt = (n, d = 2) => (Number.isFinite(Number(n)) ? Number(n).toFixed(d) : '—');
 const SOURCE_LABEL = { [CAD_SOURCE.USER]: 'Dibujado por el usuario', [CAD_SOURCE.VECTOR]: 'Geometría vectorial del PDF', [CAD_SOURCE.AI]: 'Propuesto por IA', [CAD_SOURCE.FIXTURE]: 'Fixture de prueba' };
@@ -34,6 +40,12 @@ function NumField({ label, value, unit = 'm', onCommit, disabled = false, min = 
   </label>;
 }
 
+/* F4: procedencia visible de una dimension (una DEFAULT nunca parece medida). */
+function SourceNote({ source }){
+  const isDefault = source === DIMENSION_SOURCE.DEFAULT;
+  return <small className={isDefault ? 'cad-warn' : 'muted'} style={{ display: 'block', margin: '-4px 0 6px', fontSize: '.72rem' }}>{isDefault ? '⚠ ' : ''}Origen: {dimensionSourceLabel(source)}</small>;
+}
+
 function ReadRow({ label, value, unit, strong = false }){
   return <div className={`cad-row ${strong ? 'is-strong' : ''}`}><span>{label}</span><b>{value}{unit ? <em> {unit}</em> : null}</b></div>;
 }
@@ -51,7 +63,8 @@ const KIND_TITLE = { wall: 'Muro', space: 'Espacio', dimension: 'Cota' };
 
 export default function CadPropertiesPanel({
   model, getModel, selectedId, issues, onChange, onError, onNotify, onSelect, onAction,
-  projectId, planoId, fileName, user, onNeedProject
+  projectId, planoId, fileName, user, onNeedProject,
+  persistNow = null, onConceptsChanged = null
 }){
   const found = selectedId ? findElement(model, selectedId) : null;
   const [quantifyOpen, setQuantifyOpen] = useState(false);
@@ -62,12 +75,53 @@ export default function CadPropertiesPanel({
   const [query, setQuery] = useState('');
   const [newConcept, setNewConcept] = useState('');
   const [busy, setBusy] = useState(false);
+  // Fase 2 del plan integral: contexto de baseline y OCs del proyecto.
+  // Se carga on-demand la primera vez que el usuario selecciona un
+  // elemento con `assignment` (evita hacer red al abrir el CAD).
+  const [baselineCtx, setBaselineCtx] = useState(null); // {status, presupuestoId, cantidadContractual, puContractual, ...}
+  const [changeOrders, setChangeOrders] = useState(null);
+  const [baselineLoading, setBaselineLoading] = useState(false);
+  const [createdOc, setCreatedOc] = useState(null); // OC recien creada desde este panel, para dar feedback inmediato
 
-  useEffect(() => { setQuantifyOpen(false); setConceptMode(null); setQuantityField(null); setQuery(''); }, [selectedId]);
+  useEffect(() => {
+    setQuantifyOpen(false); setConceptMode(null); setQuantityField(null); setQuery('');
+    // Se resetea el contexto de baseline al cambiar de elemento -- el
+    // baseline es especifico al concepto asociado al elemento.
+    setBaselineCtx(null); setCreatedOc(null);
+  }, [selectedId]);
 
   const takeoff = useMemo(() => (found && found.kind !== CAD_KIND.DIMENSION ? buildElementTakeoff(model, selectedId) : null), [model, selectedId, found]);
   const myIssues = (issues || []).filter(i => i.id === selectedId);
   const status = selectedId ? elementDisplayStatus(issues, selectedId) : null;
+
+  // Fase 2: carga el contexto de baseline (presupuestos + OCs del proyecto)
+  // cuando el elemento seleccionado tiene assignment.conceptId. Se hace UNA
+  // vez por (projectId, conceptoId) para no golpear la red en cada re-render.
+  const activeConceptId = found?.element?.assignment?.conceptId || null;
+  useEffect(() => {
+    if(!projectId || !activeConceptId){ setBaselineCtx(null); return; }
+    let alive = true;
+    setBaselineLoading(true);
+    Promise.all([listProjectPresupuestos(projectId), listProjectChangeOrders(projectId)])
+      .then(([presupuestos, ocs]) => {
+        if(!alive) return;
+        const ctx = isConceptInApprovedBudget(presupuestos, activeConceptId);
+        setBaselineCtx(ctx);
+        setChangeOrders(ocs);
+      })
+      .catch(() => { if(alive){ setBaselineCtx(null); setChangeOrders(null); } })
+      .finally(() => { if(alive) setBaselineLoading(false); });
+    return () => { alive = false; };
+  }, [projectId, activeConceptId]);
+
+  const refreshBaselineCtx = async () => {
+    if(!projectId || !activeConceptId) return;
+    try{
+      const [presupuestos, ocs] = await Promise.all([listProjectPresupuestos(projectId), listProjectChangeOrders(projectId)]);
+      setBaselineCtx(isConceptInApprovedBudget(presupuestos, activeConceptId));
+      setChangeOrders(ocs);
+    }catch(err){ onError?.(err.message); }
+  };
 
   if(!found){
     return <div className="cad-props-empty">
@@ -103,11 +157,24 @@ export default function CadPropertiesPanel({
     try{ setApus(await listProjectApus(projectId)); }catch(err){ onError?.(err.message); setApus([]); }
   };
 
-  const syncConcept = async (conceptId, unit, baseModel, extraPatch = {}) => {
-    const { qty, mismatched } = conceptQuantityFromModel(baseModel, conceptId, unit);
+  /* F3: la cantidad del concepto ya no se envia como numero suelto -- se
+     envian los GENERADORES de todos los elementos de este plano ligados al
+     concepto (operacion, deducciones, cantidad por elemento) y el servidor
+     recalcula qty = SUM(generadores). Incluye qty 0 cuando ya no queda
+     ningun elemento (antes `if(qty > 0)` dejaba la cantidad vieja). */
+  const syncConcept = async (conceptId, unit, baseModel, extraPatch = {}, expectedRevision = undefined) => {
+    const { mismatched } = conceptQuantityFromModel(baseModel, conceptId, unit);
     if(mismatched.length) onNotify?.(`Objetos con unidad distinta no se sumaron: ${mismatched.join(', ')}`, 'error');
-    if(qty > 0) await updateConceptQuantity(conceptId, qty);
-    return { next: markConceptSynced(baseModel, conceptId, extraPatch), qty };
+    // F4: la geometria (incluida la liga elemento->concepto) se guarda YA en
+    // el servidor; el servidor reconstruye los generadores desde ESE plano.
+    const planoRevision = persistNow ? await persistNow(baseModel) : null;
+    const res = await syncConceptGenerators({ conceptId, projectId, planoId, fileName, model: baseModel, expectedRevision, reason: `Sincronizado desde el plano ${fileName || planoId}`, planoRevision });
+    onConceptsChanged?.();
+    const agg = res.aggregate || {};
+    if(agg.incomplete?.length) onNotify?.(`Generadores incompletos (no suman): ${agg.incomplete.join(', ')}`, 'error');
+    if(agg.inconsistent?.length) onNotify?.(`Generadores inconsistentes (deducciones > bruto): ${agg.inconsistent.join(', ')}`, 'error');
+    const generatorRevision = res.concepto?.generatorRevisions?.[planoId] ?? null;
+    return { next: markConceptSynced(baseModel, conceptId, { ...extraPatch, generatorRevision }), qty: res.concepto?.qty ?? 0 };
   };
 
   const linkConcept = async (c) => {
@@ -118,7 +185,7 @@ export default function CadPropertiesPanel({
         conceptId: c.id, clave: c.clave || '', concept: c.concept, unit: c.unit, capitulo: c.capitulo || null,
         quantityField: activeLine.key, apuId: c.apuId || null, apuLabel: c.apuId || null
       });
-      const { next, qty } = await syncConcept(c.id, c.unit, base);
+      const { next, qty } = await syncConcept(c.id, c.unit, base, {}, Number(c.generatorRevisions?.[planoId] || 0));
       onChange(next, `Ligar ${element.id} a concepto`);
       onNotify?.(`${element.id} ligado a "${c.concept}" · cantidad del concepto ${fmt(qty)} ${c.unit}`, 'success');
       setConceptMode(null);
@@ -140,7 +207,10 @@ export default function CadPropertiesPanel({
         conceptId: c.id, clave: c.clave || '', concept: c.concept, unit: c.unit, capitulo: c.capitulo || null,
         quantityField: activeLine.key, apuId: c.apuId || null, apuLabel: c.apuId || null
       });
-      onChange(markConceptSynced(base, c.id), `Crear concepto para ${element.id}`);
+      // F3: el concepto nace con la cantidad del elemento y en seguida pasa a
+      // cantidad DESDE GENERADORES (con su operacion persistida).
+      const { next } = await syncConcept(c.id, c.unit, base, {}, Number(c.generatorRevisions?.[planoId] || 0));
+      onChange(next, `Crear concepto para ${element.id}`);
       onNotify?.(`Concepto creado en el catálogo: ${c.concept}`, 'success');
       setConceptMode(null);
     }catch(err){ onError?.(err.message); }finally{ setBusy(false); }
@@ -149,11 +219,109 @@ export default function CadPropertiesPanel({
   const resync = async () => {
     const a = element.assignment;
     if(!a || !requireProject()) return;
+    // Regla 2 del encargo -- "Si el concepto SI esta en presupuesto
+    // aprobado: NO permitir modificar directamente la cantidad
+    // contractual". El bloqueo es DURO: no se ofrece "continuar de todas
+    // formas". La ruta unica es Crear Orden de Cambio (createOcFromGeometry).
+    if(baselineCtx?.status === BASELINE_STATUS.APPROVED){
+      onError?.('Este concepto pertenece a un presupuesto aprobado. La cantidad contractual no puede sobrescribirse directamente: usa "Crear Orden de Cambio".');
+      return;
+    }
+    // Para presupuestos BORRADOR o sin presupuesto, sigue la confirmacion
+    // suave de Fase 1 (informativa, no bloqueante).
+    if(assignedLine && Number.isFinite(Number(a.syncedQty)) && Number(a.syncedQty) !== Number(assignedLine.value) && a.apuId){
+      const impactCheck = computeGeometryImpact({
+        previousQty: a.syncedQty, currentQty: assignedLine.value, pu: a.apuPu
+      });
+      const money = (n) => Number(n).toLocaleString('es-MX', { style: 'currency', currency: 'MXN' });
+      const summary = impactCheck.deltaAmount != null
+        ? `Se modifica la cantidad del concepto de ${fmt(a.syncedQty)} a ${fmt(assignedLine.value)} ${a.unit}. Impacto economico ${impactCheck.deltaAmount >= 0 ? '+' : ''}${money(impactCheck.deltaAmount)}.`
+        : `Se modifica la cantidad del concepto de ${fmt(a.syncedQty)} a ${fmt(assignedLine.value)} ${a.unit}.`;
+      const ok = window.confirm(`${summary}\n\nEste concepto todavia no esta en un presupuesto aprobado, la sincronizacion es directa. Continuar?`);
+      if(!ok) return;
+    }
     setBusy(true);
     try{
-      const { next, qty } = await syncConcept(a.conceptId, a.unit, getModel());
+      const { next, qty } = await syncConcept(a.conceptId, a.unit, getModel(), {}, a.generatorRevision ?? undefined);
       onChange(next, `Sincronizar cantidad de ${a.concept}`);
       onNotify?.(`Cantidad actualizada en el catálogo: ${fmt(qty)} ${a.unit}`, 'success');
+    }catch(err){ onError?.(err.message); }finally{ setBusy(false); }
+  };
+
+  /* Fase 2: crear Orden de Cambio desde el CAD cuando el concepto esta
+     protegido por baseline aprobado. NUNCA modifica el baseline
+     directamente -- delega en /api/change-orders?action=create, el server
+     recalcula cantidadAnterior/pu con datos reales, y la OC nace en
+     BORRADOR (regla 6 del encargo: baseline intacto hasta que la OC pase
+     por su propio flujo de aprobacion). */
+  const createOcFromGeometry = async () => {
+    const a = element.assignment;
+    if(!a || !requireProject() || !baselineCtx) return;
+    if(baselineCtx.status !== BASELINE_STATUS.APPROVED){
+      onError?.('Este concepto no esta en un presupuesto aprobado. Usa Sincronizar cantidad.');
+      return;
+    }
+    const cantidadNueva = Number(assignedLine?.value);
+    if(!(cantidadNueva >= 0)){ onError?.('Cantidad actual invalida.'); return; }
+    const origenElementoId = `${planoId || ''}:${element.id}`;
+    // Dedupe (regla 8 del encargo)
+    const { duplicate, staleDraft } = findDuplicateChangeOrder({
+      changeOrders: changeOrders || [], conceptoId: a.conceptId, origenElementoId, cantidadNueva
+    });
+    if(duplicate){
+      setCreatedOc(duplicate);
+      onNotify?.(`Ya existe una Orden de Cambio (${duplicate.folio || duplicate.id}) para este cambio.`, 'info');
+      return;
+    }
+    if(staleDraft){
+      const ok = window.confirm(`Ya existe una OC en borrador (${staleDraft.folio || staleDraft.id}) para ${a.concept} sobre este mismo elemento, pero con una cantidad distinta (${fmt(staleDraft.cantidadNueva)} ${a.unit}). Se creara una nueva OC en lugar de duplicar; puedes cancelar la borrador anterior manualmente. Continuar?`);
+      if(!ok) return;
+    }
+    // Deteccion de cambio de especificacion (regla 12): si la unidad
+    // vigente del takeoff difiere de la contractual, se marca como
+    // extraordinario y se advierte al usuario.
+    const spec = detectSpecChange({
+      contractualUnit: baselineCtx.unit, currentUnit: a.unit,
+      contractualApuId: baselineCtx.apuId, currentApuId: a.apuId
+    });
+    if(spec.requiresNewApu){
+      const ok = window.confirm(`Advertencia: ${spec.reason}\n\nSe registrara la OC pero requerira un APU nuevo antes de aprobarse. Continuar?`);
+      if(!ok) return;
+    }
+    const elementLabel = element.id;
+    const evidencia = buildGeometryEvidence({
+      origenElementoId,
+      planoId, surveyId: null, spaceId: null,
+      cadElementId: element.id, cadElementKind: found?.kind || null,
+      // propertyChanged es informativo -- se toma "cantidad" cuando no hay
+      // un cambio de propiedad geometrica identificable en este momento
+      // (el panel no rastrea el detalle de que edicion cambio la cantidad,
+      // solo el estado actual del takeoff vs syncedQty).
+      propertyChanged: 'cantidad',
+      oldValue: Number(a.syncedQty) || Number(baselineCtx.cantidadContractual),
+      newValue: cantidadNueva,
+      requiresNewApu: spec.requiresNewApu, requiresNewApuReason: spec.reason,
+      createdBy: user?.email || user?.uid || null
+    });
+    const motivo = composeGeometryChangeMotivo({ elementLabel });
+    const descripcion = composeGeometryChangeDescription({
+      elementLabel,
+      cantidadAnterior: baselineCtx.cantidadContractual,
+      cantidadNueva,
+      unit: a.unit,
+      conceptLabel: a.concept
+    });
+    const payload = buildChangeOrderPayload({
+      projectId, conceptoId: a.conceptId, cantidadNueva, motivo, descripcion, evidencia
+    });
+    setBusy(true);
+    try{
+      const oc = await createChangeOrder(payload);
+      if(oc){
+        setCreatedOc(oc);
+        setChangeOrders(prev => [...(prev || []), oc]);
+        onNotify?.(`Orden de Cambio ${oc.folio || oc.id} creada en borrador. El baseline permanece intacto hasta que se apruebe.`, 'success');
+      }
     }catch(err){ onError?.(err.message); }finally{ setBusy(false); }
   };
 
@@ -162,10 +330,12 @@ export default function CadPropertiesPanel({
     if(!a) return;
     const base = setElementAssignment(getModel(), element.id, null);
     onChange(base, `Quitar concepto de ${element.id}`);
-    if(projectId){
+    if(projectId && planoId){
+      // F3: el elemento deja de aportar con trazabilidad (historial), aun si
+      // la cantidad resultante es 0.
       try{
-        const { qty } = conceptQuantityFromModel(base, a.conceptId, a.unit);
-        if(qty > 0) await updateConceptQuantity(a.conceptId, qty);
+        const { next } = await syncConcept(a.conceptId, a.unit, base, {}, a.generatorRevision ?? undefined);
+        onChange(next, `Recalcular generadores de ${a.concept}`);
       }catch(err){ onError?.(err.message); }
     }
   };
@@ -177,7 +347,16 @@ export default function CadPropertiesPanel({
     try{
       await associateConceptApu(a.conceptId, apu.id);
       const label = apu.clave || apu.id;
-      const next = markConceptSynced(getModel(), a.conceptId, { apuId: apu.id, apuLabel: label });
+      // apuPu (Fase 1 del plan integral): el P.U. calculado del APU se
+      // estampa en el assignment para que el panel pueda mostrar el
+      // impacto economico de un cambio de geometria sin tener que hacer
+      // una llamada de red adicional. Sigue siendo aditivo: assignment.pu
+      // ausente => la UI muestra solo el delta de cantidad. calcAPU no
+      // muta el apu; puede lanzar si el shape es completamente invalido
+      // -- se cubre y se degrada a null en vez de romper el assignment.
+      let apuPu = null;
+      try{ apuPu = Number(calcAPU(apu)?.pu) || null; }catch{ apuPu = null; }
+      const next = markConceptSynced(getModel(), a.conceptId, { apuId: apu.id, apuLabel: label, apuPu });
       onChange(next, `Asignar APU a ${a.concept}`);
       onNotify?.(`APU ${label} asociado al concepto "${a.concept}"`, 'success');
       setConceptMode(null);
@@ -192,9 +371,12 @@ export default function CadPropertiesPanel({
     const m = computeWallMetrics(model, element);
     const ops = openingsOnWall(model, element.id);
     fields = <div className="cad-fields">
-      <NumField label="Longitud" value={m.length} autoFocusKey="edit" onCommit={v => apply(md => updateWall(md, element.id, { length: v }), `Longitud ${element.id}`)} />
+      {/* F4: cota manual REAL -- mueve el nodo final conectado (muros/espacio), no es una etiqueta */}
+      <NumField label="Longitud" value={m.length} autoFocusKey="edit" onCommit={v => apply(md => setWallLength(md, element.id, v), `Longitud ${element.id} → ${fmt(v)} m`)} />
       <NumField label="Espesor" value={element.thickness} onCommit={v => apply(md => updateWall(md, element.id, { thickness: v }), `Espesor ${element.id}`)} />
+      <SourceNote source={wallThicknessSource(element)} />
       <NumField label="Altura" value={element.height} onCommit={v => apply(md => updateWall(md, element.id, { height: v }), `Altura ${element.id}`)} />
+      <SourceNote source={wallHeightSource(element)} />
       <details className="cad-coords"><summary>Coordenadas (inicio / final)</summary>
         <div className="cad-fields is-grid">
           <NumField label="Inicio X" value={element.x1} onCommit={v => apply(md => updateWall(md, element.id, { x1: v }), `Mover inicio ${element.id}`)} />
@@ -250,7 +432,13 @@ export default function CadPropertiesPanel({
           onBlur={e => { if(e.target.value.trim() && e.target.value !== element.name) apply(md => updateSpace(md, element.id, { name: e.target.value }), `Renombrar ${element.id}`); }}
           onKeyDown={e => { if(e.key === 'Enter') e.currentTarget.blur(); }} />
       </label>
+      {rectangularSpaceBox(element) && <>
+        {/* F4: dimensiones reales del espacio rectangular: estiran muros, vertices y cotas */}
+        <NumField label="Largo (X)" value={rectangularSpaceBox(element).length} onCommit={v => apply(md => resizeRectangularSpace(md, element.id, { length: v }), `Largo ${element.id} → ${fmt(v)} m`)} />
+        <NumField label="Ancho (Y)" value={rectangularSpaceBox(element).width} onCommit={v => apply(md => resizeRectangularSpace(md, element.id, { width: v }), `Ancho ${element.id} → ${fmt(v)} m`)} />
+      </>}
       <NumField label="Altura de plafón" value={element.ceilingHeight ?? model.defaults.wallHeight} onCommit={v => apply(md => updateSpace(md, element.id, { ceilingHeight: v }), `Altura ${element.id}`)} />
+      <SourceNote source={spaceCeilingHeightSource(element)} />
     </div>;
     metrics = <div className="cad-metrics">
       {takeoff.lines.filter(l => l.key !== 'volume').map(l => <ReadRow key={l.key} label={l.label} value={fmt(l.value)} unit={l.unit} strong={l.primary} />)}
@@ -304,21 +492,76 @@ export default function CadPropertiesPanel({
     {relations}
 
     {kind !== CAD_KIND.DIMENSION && <div className="cad-chain">
-      <span className="cad-chain-title">Concepto / APU</span>
-      {a ? <>
-        <div className="cad-chain-flow">
-          <b>{element.id}</b><i>→</i>
-          <span>{assignedLine ? `${fmt(assignedLine.value)} ${assignedLine.unit}` : '—'}</span><i>→</i>
-          <span title={a.concept}>{a.clave ? `${a.clave} · ` : ''}{a.concept}</span><i>→</i>
-          <span>{a.apuId ? `APU ${a.apuLabel || a.apuId}` : 'Sin APU'}</span>
-        </div>
-        {stale && <p className="cad-warn">La geometría cambió desde la última sincronización ({fmt(a.syncedQty)} → {fmt(assignedLine?.value)} {a.unit}).</p>}
-        <div className="cad-actions">
-          {stale && <button type="button" disabled={busy} onClick={resync}>Sincronizar cantidad</button>}
-          <button type="button" className="soft" disabled={busy} onClick={loadApus}>{a.apuId ? 'Cambiar APU' : 'Asignar APU'}</button>
-          <button type="button" className="soft" disabled={busy} onClick={unlink}>Quitar liga</button>
-        </div>
-      </> : <p className="muted" style={{ margin: '2px 0' }}>Sin asignar</p>}
+      <span className="cad-chain-title">Costo · Concepto / APU</span>
+      {a ? (() => {
+        // Fase 2: cuando el concepto pertenece a un presupuesto aprobado,
+        // se muestra el bloque CAMBIO CONTRACTUAL con Cantidad
+        // contractual/actual/variacion/P.U./impacto y el boton "Crear
+        // Orden de Cambio" -- el boton "Sincronizar cantidad" no aparece
+        // en este caso (regla 2 del encargo: bloqueo duro).
+        const isBaselineApproved = baselineCtx?.status === BASELINE_STATUS.APPROVED;
+        const isBaselineDraft = baselineCtx?.status === BASELINE_STATUS.DRAFT;
+        // Cantidad "anterior" a comparar:
+        //   - Baseline aprobado: la CONTRACTUAL (baselineCtx.cantidadContractual)
+        //     -- es la que la OC debe cambiar.
+        //   - Otros: la ultima sincronizada al catalogo (a.syncedQty)
+        //     -- el flujo de Fase 1.
+        const previousQty = isBaselineApproved ? baselineCtx.cantidadContractual : a.syncedQty;
+        // P.U. a usar para el impacto:
+        //   - Baseline: el contractual (baselineCtx.puContractual) -- regla
+        //     11 del encargo ("preservar PU contractual si el alcance sigue
+        //     siendo el mismo").
+        //   - Otros: el que el CAD tiene cacheado del APU asignado.
+        const puForImpact = isBaselineApproved ? baselineCtx.puContractual : a.apuPu;
+        const impact = computeGeometryImpact({
+          previousQty, currentQty: assignedLine?.value ?? 0, pu: puForImpact
+        });
+        const summary = formatImpactSummary(impact, { unit: a.unit || '', currency: 'MXN' });
+        // Cambio de especificacion (regla 12): mostrar aviso si aplica.
+        const spec = isBaselineApproved
+          ? detectSpecChange({ contractualUnit: baselineCtx.unit, currentUnit: a.unit, contractualApuId: baselineCtx.apuId, currentApuId: a.apuId })
+          : { requiresNewApu: false, reason: null };
+        // Detectar OC existente para este cambio (dedupe visual)
+        const originKey = `${planoId || ''}:${element.id}`;
+        const existingOc = createdOc || findDuplicateChangeOrder({
+          changeOrders: changeOrders || [], conceptoId: a.conceptId,
+          origenElementoId: originKey, cantidadNueva: assignedLine?.value ?? 0
+        }).duplicate;
+        return <>
+          <div className="cad-chain-flow">
+            <b>{element.id}</b><i>→</i>
+            <span title={a.concept}>{a.clave ? `${a.clave} · ` : ''}{a.concept}</span><i>→</i>
+            <span>{a.apuId ? `APU ${a.apuLabel || a.apuId}` : 'Sin APU'}</span>
+          </div>
+          {isBaselineApproved && <p className="cad-source" style={{ background: 'var(--warn-soft, rgba(200,150,0,0.08))', padding: '4px 8px', borderRadius: 4 }}>
+            ⚠ Cambio contractual · Presupuesto <b>{baselineCtx.presupuestoId}</b> baseline <b>{baselineCtx.baselineVersion}</b>
+          </p>}
+          {isBaselineDraft && <p className="cad-source">Concepto en presupuesto borrador ({baselineCtx.presupuestoId}) — sincronización directa permitida.</p>}
+          <div className="cad-metrics">
+            <ReadRow label={isBaselineApproved ? 'Cantidad contractual' : 'Cantidad sincronizada'} value={summary.previousQtyText} />
+            <ReadRow label="Cantidad actual" value={summary.currentQtyText} strong={stale} />
+            <ReadRow label="Variación" value={summary.deltaQtyText} strong={stale} />
+            <ReadRow label={isBaselineApproved ? 'P.U. contractual' : 'P.U.'} value={summary.puText} />
+            <ReadRow label="Impacto económico" value={summary.deltaAmountText} strong={summary.hasCostImpact} />
+          </div>
+          {spec.requiresNewApu && <p className="cad-warn is-error">⚠ Cambio de especificación: {spec.reason}</p>}
+          {isBaselineApproved && stale && !existingOc && <p className="cad-warn">Este concepto pertenece a un presupuesto aprobado. La cantidad contractual no puede sobrescribirse directamente.</p>}
+          {stale && !isBaselineApproved && summary.hasCostImpact && <p className="cad-warn">Este cambio de geometría todavía no se ha aplicado al catálogo.</p>}
+          {existingOc && <p className="cad-source" style={{ background: 'var(--info-soft, rgba(47,127,209,0.08))', padding: '4px 8px', borderRadius: 4 }}>
+            Orden de Cambio: <b>{existingOc.folio || existingOc.id}</b> · Estado: <b>{existingOc.status}</b>
+          </p>}
+          <div className="cad-actions">
+            {baselineLoading && <span className="muted" style={{ fontSize: '.72rem' }}>Verificando presupuesto…</span>}
+            {isBaselineApproved && stale && !existingOc && <button type="button" disabled={busy} onClick={createOcFromGeometry}>Crear Orden de Cambio</button>}
+            {existingOc && <button type="button" className="soft" disabled={busy} onClick={() => onAction('openChangeOrder', { changeOrderId: existingOc.id })}>Abrir Orden de Cambio</button>}
+            {stale && !isBaselineApproved && <button type="button" disabled={busy} onClick={resync}>Sincronizar cantidad</button>}
+            {a.apuId && <button type="button" className="soft" disabled={busy} onClick={() => onAction('openApu', { apuId: a.apuId })}>Abrir APU</button>}
+            <button type="button" className="soft" disabled={busy} onClick={loadApus}>{a.apuId ? 'Cambiar APU' : 'Asignar APU'}</button>
+            <button type="button" className="soft" disabled={busy} onClick={unlink}>Quitar liga</button>
+            {baselineCtx && <button type="button" className="soft" disabled={busy || baselineLoading} onClick={refreshBaselineCtx} title="Volver a consultar presupuestos y OCs del proyecto">Actualizar contexto</button>}
+          </div>
+        </>;
+      })() : <p className="muted" style={{ margin: '2px 0' }}>Sin asignar</p>}
     </div>}
 
     {actions.length > 0 && <div className="cad-actions">

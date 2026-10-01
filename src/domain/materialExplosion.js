@@ -15,7 +15,7 @@
    unidades incompatibles (ver explosionEngine.js#groupKeyFor). */
 import { toSafeNonNegativeNumber } from '../lib/apuCalc.js';
 import {
-  assertSingleTenantScope, groupKeyFor, reconcilePrice, round2, buildExplosionSnapshot
+  groupKeyFor, reconcilePrice, round2, buildExplosionSnapshot, explosionLinesOf, lineTrace
 } from './explosionEngine.js';
 
 const POR_LOTE = 'POR_LOTE';
@@ -35,13 +35,16 @@ const POR_LOTE = 'POR_LOTE';
      ENTRE cantidadObra para el precio unitario del concepto, asi que
      multiplicar de vuelta por cantidadObra solo recupera el costo total del
      lote, nunca lo escala). */
-function computeContribution(snapshot, row){
+/* F2: `qty` es la cantidad AUTORITATIVA de la linea (concepto.qty si el APU
+   esta vinculado a un concepto; apu.cantidadObra solo si es independiente --
+   ver budgetScope.js). Un lote con cantidad 0 no existe: sin consumo fantasma. */
+function computeContribution(qty, row){
   const consumo = toSafeNonNegativeNumber(row?.consumo);
   const desperdicioPct = toSafeNonNegativeNumber(row?.desperdicioPct);
   const precioUnitario = toSafeNonNegativeNumber(row?.precioUnitario);
-  const cantidadObra = toSafeNonNegativeNumber(snapshot?.cantidadObra);
+  const cantidad = toSafeNonNegativeNumber(qty);
   const esPorLote = row?.integracion === POR_LOTE;
-  const factor = esPorLote ? 1 : cantidadObra;
+  const factor = esPorLote ? (cantidad > 0 ? 1 : 0) : cantidad;
   const cantidadBaseAportada = consumo * factor;
   const cantidadFinalAportada = consumo * (1 + desperdicioPct / 100) * factor;
   const importeAportadoReal = cantidadFinalAportada * precioUnitario; // al precio REAL de este origen (nunca al consolidado)
@@ -55,13 +58,13 @@ function priceConfidenceOf(row){
   return Number.isFinite(fromFuente) ? fromFuente : 0;
 }
 
-function buildResourceExplosion(apuDocs, kind){
-  const docs = Array.isArray(apuDocs) ? apuDocs.filter(Boolean) : [];
-  assertSingleTenantScope(docs);
+function buildResourceExplosion(input, kind){
+  const lines = explosionLinesOf(input);
   const groups = new Map();
 
-  for(const doc of docs){
-    const snapshot = doc?.snapshot || {};
+  for(const line of lines){
+    const snapshot = line.apuDoc?.snapshot || {};
+    const trace = lineTrace(line);
     const rows = Array.isArray(snapshot[kind]) ? snapshot[kind] : [];
     for(const row of rows){
       const key = groupKeyFor(row, kind);
@@ -74,12 +77,11 @@ function buildResourceExplosion(apuDocs, kind){
           origenes: []
         });
       }
-      const contribution = computeContribution(snapshot, row);
+      const contribution = computeContribution(line.qty, row);
       groups.get(key).origenes.push({
-        apuId: doc.id,
-        apuClave: snapshot.clave ?? null,
-        apuConcept: snapshot.concept ?? '',
+        ...trace,
         rowClave: row?.clave ?? null,
+        consumoUnitario: toSafeNonNegativeNumber(row?.consumo),
         cantidadBaseAportada: contribution.cantidadBaseAportada,
         cantidadFinalAportada: contribution.cantidadFinalAportada,
         precioUnitario: toSafeNonNegativeNumber(row?.precioUnitario),
@@ -129,6 +131,7 @@ function buildResourceExplosion(apuDocs, kind){
       fuentes: fuentesDistintas,
       regiones: regionesDistintas,
       apusOrigen: [...new Set(group.origenes.map(o => o.apuId))],
+      conceptosOrigen: [...new Set(group.origenes.map(o => o.conceptoId).filter(Boolean))],
       origenes: origenesConImporteConsolidado
     };
   }).sort((a, b) => b.importe - a.importe);
@@ -160,12 +163,12 @@ export function summarizeMaterialExplosion(rows){
    una subfase futura lo persista en `explosionSnapshots/{id}` sin tocar
    este motor. */
 export async function buildMaterialExplosionSnapshot({ apuDocs, projectId, organizationId }){
-  const docs = Array.isArray(apuDocs) ? apuDocs.filter(Boolean) : [];
-  const materials = buildMaterialExplosion(docs);
-  const auxiliares = buildAuxiliariesExplosion(docs);
+  const lines = explosionLinesOf(apuDocs);
+  const materials = buildMaterialExplosion(lines);
+  const auxiliares = buildAuxiliariesExplosion(lines);
   return buildExplosionSnapshot({
     projectId, organizationId,
-    sourceApuIds: docs.map(d => d.id),
+    sourceApuIds: lines.map(l => l.apuDoc.id),
     totals: { materials: summarizeMaterialExplosion(materials), auxiliares: summarizeMaterialExplosion(auxiliares) },
     rows: { materials, auxiliares }
   });

@@ -119,7 +119,7 @@ export function extractAllValidatedCatalogRows(docs){
   return (Array.isArray(docs) ? docs : []).flatMap(doc => extractValidatedCatalogRows(doc));
 }
 
-function catalogDedupeKey(row){
+export function catalogDedupeKey(row){
   if(row?.clave) return `clave:${String(row.clave).trim().toLowerCase()}`;
   const desc = String(row?.desc || '').trim().toLowerCase();
   const unidad = String(row?.unidad || '').trim().toLowerCase();

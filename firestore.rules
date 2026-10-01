@@ -388,12 +388,47 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // F4 -- Levantamientos en servidor: lectura para el dueno o miembros
+    // activos de la empresa; escritura SOLO via
+    // server/api-lib/_route-levantamientos.mjs (Admin SDK).
+    match /levantamientos/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    match /levantamientosAudit/{docId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+
     // Catalogo de conceptos (Fase D): documento actual + auditoria
     // append-only, mismo patron que apus/planoTakeoffs. Un concepto es
     // esencialmente estatico (clave/capitulo/descripcion/unidad/cantidad/
     // origen) asi que, a diferencia de apus/planoTakeoffs, no tiene
     // coleccion de versiones propia -- toda escritura pasa por
     // server/api-lib/_route-catalogo-conceptos.mjs (SDK Admin).
+    // Biblioteca EMPRESARIAL (P0 paridad ADMIN vs COLLABORATOR): mismo
+    // patron que apus/catalogConceptos. Lectura: cualquier miembro ACTIVO de
+    // la organizacion del documento (el rol no interviene -- un colaborador
+    // usa la misma biblioteca que su responsable para generar APU). Nunca
+    // lectura global ni por "estar autenticado". Escritura: solo via
+    // server/api-lib/_route-org-library.mjs (Admin SDK), que exige
+    // company_manager (canManageOrgLibrary) y fija organizationId desde la
+    // membresia real, nunca desde el cliente.
+    match /orgLibrary/{docId} {
+      allow read: if isSuperAdmin()
+        || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));
+      allow write: if false;
+    }
+    // Auditoria de la biblioteca empresarial: solo el responsable de ESA
+    // empresa (y super admin) la consulta; append-only via Admin SDK.
+    match /orgLibraryAudit/{docId} {
+      allow read: if isSuperAdmin()
+        || (resource.data.get('organizationId', null) != null && isCompanyManager(resource.data.organizationId));
+      allow write: if false;
+    }
+
     match /catalogConceptos/{docId} {
       allow read: if isSuperAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid)
         || (resource.data.get('organizationId', null) != null && isActiveOrgMember(resource.data.organizationId));

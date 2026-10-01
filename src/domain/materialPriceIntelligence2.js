@@ -22,12 +22,28 @@ import { computePriceConfidence } from './priceConfidence.js';
 import { CACHE_RESULT } from './priceSearchCache.js';
 import { PRICE_SEARCH_DEFERRED, PRICE_SEARCH_SKIPPED_CATEGORY } from './priceSearchBudget.js';
 import { resolveAuthoritativeInput } from './unitAuthority.js';
+import { APU_DATA_STATE } from './apuSchema.js';
 
 // Exportados (FASE 3, aprendizaje progresivo seguro): server/api-lib/
 // _route-apus.mjs los reusa para saber, por cada renglon de un APU ya
 // guardado, en que campo vive su precio -- nunca se duplica este mapeo.
 export const RESOURCE_KINDS = Object.freeze(['materials', 'labor', 'equipment', 'seguridad']);
 export const PRICE_FIELD_BY_KIND = Object.freeze({ materials: 'precioUnitario', seguridad: 'precioUnitario', labor: 'salarioBase', equipment: 'tarifa' });
+
+/* F1/P0: la busqueda de ESTE recurso fallo (429, red, OpenAI, presupuesto
+   diario agotado). Estado distinto de PRICE_SEARCH_DEFERRED (tope local por
+   corrida) y de un CACHE_MISS exitoso: el renglon conserva su precio y queda
+   explicitamente "sin evidencia por fallo", con el motivo en priceSearchError. */
+export const PRICE_SEARCH_FAILED = 'PRICE_SEARCH_FAILED';
+
+/* Motivo de fallo normalizado y seguro para persistir (sin stack ni datos
+   privados): lo que la UI/auditoria necesita para explicar y reintentar. */
+function toSearchError(err){
+  const status = Number(err?.status) || null;
+  const code = err?.code || (status === 429 ? 'RATE_LIMITED' : 'SEARCH_ERROR');
+  const retryAfterSeconds = Number(err?.retryAfterSeconds) > 0 ? Math.ceil(Number(err.retryAfterSeconds)) : null;
+  return { code, status, message: String(err?.message || err || 'Busqueda de precio fallida').slice(0, 300), retryAfterSeconds, failedAt: new Date().toISOString() };
+}
 
 function priceDispersionPct(references){
   const alto = (Array.isArray(references) ? references : []).filter(r => r?.match?.verdict === 'ALTO' && Number(r.precioNormalizado) > 0);
@@ -107,11 +123,16 @@ export async function resolveResourcePrice({
         country: resource.country || '', state: resource.state || '', city: resource.city || '', zone: resource.zone || '',
         tenantScope: fingerprintInput.tenantScope
       });
+      // F1: el servidor respondio 200 pero SIN busqueda por presupuesto
+      // diario global agotado -- tampoco es un resultado valido de mercado.
+      if(searchResult?.deferred === true && searchResult?.reason){
+        searchError = toSearchError({ code: searchResult.reason, message: 'Presupuesto diario de busquedas de precio agotado en el servidor.' });
+      }
     }catch(err){
-      // Regla 12.K: la busqueda fallo (red/OpenAI caido) -- se conserva
+      // Regla 12.K: la busqueda fallo (red/OpenAI caido/429) -- se conserva
       // AI_ESTIMATE_UNVERIFIED (nunca se inventa un precio ni una
       // referencia) y el error queda visible para auditoria, nunca oculto.
-      searchError = err?.message || String(err);
+      searchError = toSearchError(err);
       searchResult = { fichaTecnica: null, referencias: [], precioRecomendado: null, nivelEvidencia: 'ESTIMADO_IA' };
     }
     // El servidor (server/api-lib/_priceIntelligenceCache.mjs) es quien
@@ -142,6 +163,23 @@ export async function resolveResourcePrice({
     });
 
     const selectedReference = references.find(r => r?.match?.verdict === 'ALTO') || null;
+
+    // F1/P0: un fallo (429, red, presupuesto agotado) NUNCA se guarda en el
+    // cache como resultado valido -- antes quedaba 7 dias en el cache de
+    // sesion y la siguiente generacion leia CACHE_HIT degradado aunque el
+    // limite ya hubiera pasado. Se devuelve con la misma forma que un
+    // resultado resuelto (el renglon se marca igual), mas searchFailed.
+    if(searchError){
+      return {
+        cacheResult: cached.result, queryHash: cached.queryHash, origin, deferred: false,
+        searchFailed: true, searchError,
+        references, selectedReference: null, technicalMatch: null,
+        normalization, priceStatus, priceConfidence: confidence, precioRecomendado: null,
+        regionalConfidence: null, regionalFallbackLevel: null, ubicacionConsultada: null, regionalIntelligence: null,
+        searchedAt: null, expiresAt: null
+      };
+    }
+
     const entry = await cache.save(fingerprintInput, {
       references, selectedReference, technicalMatch: searchResult?.fichaTecnica || null,
       normalization, priceStatus, priceConfidence: confidence,
@@ -235,7 +273,11 @@ function attachIntelligence2FieldsToRow(row, resolved){
   row.normalization = resolved.normalization ?? null;
   row.priceSearchStatus = resolved.skippedCategory ? PRICE_SEARCH_SKIPPED_CATEGORY
     : resolved.deferred ? PRICE_SEARCH_DEFERRED
+    : resolved.searchFailed ? PRICE_SEARCH_FAILED
     : (resolved.cacheResult || null);
+  // F1/P0: motivo del fallo persistido en el propio renglon (diagnostico y
+  // reintento) -- null cuando la busqueda no fallo.
+  row.priceSearchError = resolved.searchFailed ? (resolved.searchError || null) : null;
   if(resolved.normalization?.normalizationRequired) row.normalizationStatus = 'NORMALIZATION_REQUIRED';
   row.priceRecord = {
     ...(row.priceRecord || {}),
@@ -249,7 +291,15 @@ function attachIntelligence2FieldsToRow(row, resolved){
   // exactamente igual que siempre -- solo se le da un valor derivado del
   // nuevo PRICE_STATUS, nunca se le pide que entienda el vocabulario nuevo.
   if(resolved.priceStatus){
-    row.fuente = { ...(row.fuente || {}), estado: priceStatusToLegacyState(resolved.priceStatus) };
+    // P0 paridad: un precio que ya salio de una biblioteca real (empresa,
+    // proyecto o Biblioteca ZOEMEC -- estado BIBLIOTECA) no se degrada a
+    // ESTIMADO_IA/REQUIERE_VALIDACION solo porque la busqueda de mercado no
+    // encontro referencias: esa ausencia no invalida el precio de la
+    // biblioteca. La busqueda si puede REFORZARLO (VERIFICADO con
+    // referencia ALTO), nunca debilitarlo.
+    const legacy = priceStatusToLegacyState(resolved.priceStatus);
+    const keepLibrary = row.fuente?.estado === APU_DATA_STATE.BIBLIOTECA && legacy !== APU_DATA_STATE.VERIFICADO;
+    row.fuente = { ...(row.fuente || {}), estado: keepLibrary ? APU_DATA_STATE.BIBLIOTECA : legacy };
   }
   return row;
 }
@@ -297,7 +347,13 @@ export async function enrichApuWithIntelligence2({
   apu.unitWarning = unitWarning;
   apu.userInputOverrides = overriddenFields;
 
+  // F1/P0 -- REGLA FUNDAMENTAL: este enriquecimiento es EVIDENCIA, nunca
+  // sustituye el dato economico. Ningun campo de precio/cantidad/rendimiento
+  // del renglon se modifica aqui (attachIntelligence2FieldsToRow solo agrega
+  // campos de evidencia); lo verifica test/f1RoleParity.e2e.test.mjs (T5).
   let deferredCount = 0;
+  let searchedCount = 0;
+  const failures = [];
   for(const kind of RESOURCE_KINDS){
     const kindEnabled = !Array.isArray(resourceTypes) || resourceTypes.includes(kind);
     const rows = Array.isArray(apu[kind]) ? apu[kind] : [];
@@ -327,9 +383,27 @@ export async function enrichApuWithIntelligence2({
         concept: resolved.concept ?? concept, cache, budget, telemetry, searchFn, ttlMsFor, inFlightRegistry
       });
       attachIntelligence2FieldsToRow(row, resolvedResource);
+      searchedCount++;
       if(resolvedResource.deferred) deferredCount++;
+      if(resolvedResource.searchFailed) failures.push({ kind, descripcion: row.descripcion, ...resolvedResource.searchError });
     }
   }
 
-  return { apu, unitWarning, deferredCount };
+  const failedReasons = summarizeFailedReasons(failures);
+  return { apu, unitWarning, deferredCount, failedCount: failures.length, failedReasons, searchedCount };
+}
+
+/* Agrupa fallos por codigo: [{code, status, message, count, retryAfterSeconds
+   (el mayor), resources:[...descripciones]}]. Orden estable por codigo. */
+export function summarizeFailedReasons(failures = []){
+  const byCode = new Map();
+  for(const f of failures){
+    const key = f.code || 'SEARCH_ERROR';
+    const cur = byCode.get(key) || { code: key, status: f.status ?? null, message: f.message || '', count: 0, retryAfterSeconds: null, resources: [] };
+    cur.count++;
+    if(f.retryAfterSeconds) cur.retryAfterSeconds = Math.max(cur.retryAfterSeconds || 0, f.retryAfterSeconds);
+    if(f.descripcion && cur.resources.length < 20) cur.resources.push(f.descripcion);
+    byCode.set(key, cur);
+  }
+  return [...byCode.values()].sort((a, b) => a.code.localeCompare(b.code));
 }

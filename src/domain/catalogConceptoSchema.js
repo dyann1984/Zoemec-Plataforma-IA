@@ -14,7 +14,11 @@ export const CATALOG_CONCEPTO_STATUS = Object.freeze({
   GENERADO: 'GENERADO',
   ASOCIADO: 'ASOCIADO',
   ERROR: 'ERROR',
-  REQUIERE_REVISION: 'REQUIERE_REVISION'
+  REQUIERE_REVISION: 'REQUIERE_REVISION',
+  // F1/P0: la generacion no se completo por un limite TEMPORAL (HTTP 429).
+  // NO es un error definitivo ni un concepto terminado: queda sin APU y es
+  // reintentable a partir de retryAt (ver _route-catalogo-conceptos.mjs).
+  PENDIENTE_LIMITE: 'PENDIENTE_LIMITE'
 });
 
 /* Transiciones legales (mismo criterio que apuBatchQueue.js#ITEM_STATUS,
@@ -26,9 +30,13 @@ export const CATALOG_CONCEPTO_STATUS = Object.freeze({
    no terminal via "Asociar APU existente", nunca sobreescribe un concepto
    ya GENERADO/ASOCIADO sin que el usuario lo pida). */
 const LEGAL_TRANSITIONS = Object.freeze({
-  PENDIENTE: ['GENERANDO', 'ASOCIADO'],
-  GENERANDO: ['GENERADO', 'REQUIERE_REVISION', 'ERROR', 'ASOCIADO'],
-  ERROR: ['GENERANDO', 'ASOCIADO'],
+  // F1: PENDIENTE/ERROR -> PENDIENTE_LIMITE cuando el lote ya recibio un 429
+  // y deja de lanzar llamadas para los conceptos restantes (no se martilla
+  // el limite); GENERANDO -> PENDIENTE_LIMITE cuando la llamada misma recibio 429.
+  PENDIENTE: ['GENERANDO', 'ASOCIADO', 'PENDIENTE_LIMITE'],
+  GENERANDO: ['GENERADO', 'REQUIERE_REVISION', 'ERROR', 'ASOCIADO', 'PENDIENTE_LIMITE'],
+  ERROR: ['GENERANDO', 'ASOCIADO', 'PENDIENTE_LIMITE'],
+  PENDIENTE_LIMITE: ['GENERANDO', 'ASOCIADO'],
   REQUIERE_REVISION: ['GENERANDO', 'ASOCIADO', 'GENERADO'],
   GENERADO: ['ASOCIADO', 'GENERANDO'],
   ASOCIADO: ['GENERANDO']
@@ -73,6 +81,15 @@ export function makeEmptyCatalogConcepto({
     apuId: null, apuVersionId: null,
     matchConfidence: null, matchMethod: null,
     parametric: null,
+    // F3: de donde sale qty. MANUAL (captura/importacion, comportamiento
+    // historico) o GENERATORS (qty = SUM(generadores.netQuantity), ver
+    // src/domain/quantityGenerators.js). Documentos anteriores sin el campo
+    // se leen como MANUAL.
+    quantitySource: 'MANUAL',
+    generadores: [],
+    elementIds: [],
+    generatorRevisions: {},
+    quantityHistory: [],
     status: CATALOG_CONCEPTO_STATUS.PENDIENTE,
     statusError: null,
     batchId: null,
@@ -119,7 +136,12 @@ export function validateCatalogConcepto(concepto){
   if(!concepto?.projectId) errors.push('El concepto debe pertenecer a un proyecto.');
   if(!concepto?.concept?.trim()) errors.push('El concepto necesita una descripcion.');
   if(!concepto?.unit?.trim()) errors.push('El concepto necesita una unidad.');
-  if(!(Number(concepto?.qty) > 0)) errors.push('El concepto necesita una cantidad mayor a cero.');
+  // F3: un concepto alimentado por generadores puede quedar en 0 cuando sus
+  // elementos se eliminan del plano (nunca conserva una cantidad sin
+  // respaldo); uno manual sigue exigiendo cantidad > 0.
+  if(concepto?.quantitySource === 'GENERATORS'){
+    if(!(Number(concepto?.qty) >= 0)) errors.push('La cantidad desde generadores no puede ser negativa.');
+  }else if(!(Number(concepto?.qty) > 0)) errors.push('El concepto necesita una cantidad mayor a cero.');
   if(!Object.values(CATALOG_CONCEPTO_STATUS).includes(concepto?.status)) errors.push('status invalido.');
   return { valid: errors.length === 0, errors };
 }

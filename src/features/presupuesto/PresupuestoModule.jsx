@@ -11,13 +11,12 @@ import { PageHead, EmptyState } from '../../components/ui/PageElements.jsx';
 import { useCatalogConceptos } from '../catalogo/catalogConceptosCloud.js';
 import { useProjectApus } from '../catalogo/projectApusCloud.js';
 import { usePresupuesto } from './presupuestoCloud.js';
-import { aggregatePresupuesto } from '../../domain/presupuestoAggregation.js';
 import { capituloLabel } from '../../domain/presupuestoCapitulos.js';
-import { calcAPUv2 } from '../../lib/apuCalc.js';
-import { runApuConfidence } from '../../domain/apuConfidence.js';
-import { runBidRisk } from '../../domain/bidRisk.js';
+import { SYNC_STATUS, APU_STATUS } from '../../domain/budgetScope.js';
+import { EXPLOSION_SCOPE } from '../../domain/explosionData.js';
+import { buildPresupuestoView } from '../../domain/presupuestoView.js';
 import { money } from '../../lib/apuExport.js';
-import { exportPresupuestoExcel, exportPresupuestoPDF } from '../../lib/presupuestoExport.js';
+import { exportProjectReport } from '../../lib/reports/reportExports.js';
 import { uid } from '../../utils/id.js';
 import ExplosionsPanel from '../explosions/ExplosionsPanel.jsx';
 
@@ -31,17 +30,6 @@ function BidRiskBadge({ severity }){
   return <span className={`zi-badge zi-badge-${severity.toLowerCase()}`}>{severity}</span>;
 }
 
-function originCantidad(concepto){
-  if(concepto.origenPlano) return `Plano${concepto.origenPlano.fileName ? ` (${concepto.origenPlano.fileName})` : ''}`;
-  return 'Manual';
-}
-function originPrecio(concepto, apu){
-  if(concepto.status === 'ASOCIADO') return 'APU asociado';
-  if(apu?.templateGenerated) return 'Paramétrico';
-  if(apu) return 'IA';
-  return '—';
-}
-
 export function PresupuestoModule({ user, activeProjectId, activeProject, onNeedProject, setModule, onNavigateToPlano }){
   const { conceptos, loading: loadingConceptos } = useCatalogConceptos(user, activeProjectId);
   // Copia propia y fresca de los APUs del proyecto -- nunca el `rawApus`
@@ -53,29 +41,11 @@ export function PresupuestoModule({ user, activeProjectId, activeProject, onNeed
   const [approving, setApproving] = useState(false);
   const [newBudgetOpen, setNewBudgetOpen] = useState(false);
 
-  const apuById = useMemo(() => new Map((rawApus || []).map(a => [a.id, a])), [rawApus]);
-
-  const aggregation = useMemo(() => {
-    const rows = conceptos.map(c => {
-      const apu = c.apuId ? apuById.get(c.apuId) : null;
-      const totals = apu ? (apu.calculated || calcAPUv2(apu)) : null;
-      const confidence = apu ? runApuConfidence(apu).status : null;
-      const bidRisk = apu ? runBidRisk(apu).severity : null;
-      return {
-        conceptoId: c.id, clave: c.clave, capitulo: c.capitulo, concept: c.concept, unit: c.unit, qty: c.qty,
-        apuId: c.apuId || null, apuVersionId: c.apuVersionId || null,
-        pu: totals?.pu ?? 0, direct: totals?.direct ?? 0, iva: totals?.iva ?? 0,
-        confidenceStatus: confidence, bidRiskSeverity: bidRisk,
-        origenCantidad: originCantidad(c), origenPrecio: originPrecio(c, apu),
-        // Trazabilidad Presupuesto -> Concepto -> APU -> Plano (Fase D.1,
-        // punto 2): se preserva tal cual el origenPlano del concepto (nunca
-        // se recalcula aqui) para que "Ver en plano" sepa que planoTakeoffId/
-        // pagina/elemento abrir.
-        origenPlano: c.origenPlano || null
-      };
-    });
-    return aggregatePresupuesto(rows);
-  }, [conceptos, apuById]);
+  /* F2: buildBudgetScope es la UNICA fuente de "que conceptos y con que
+     cantidad" -- la misma que usa la Explosion del presupuesto. F5: la vista
+     completa vive en buildPresupuestoView (domain) para que pantalla, PDF y
+     XLSX del Centro de Reportes salgan de la MISMA funcion. */
+  const aggregation = useMemo(() => buildPresupuestoView({ conceptos, apuDocs: rawApus || [] }), [conceptos, rawApus]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -131,8 +101,9 @@ export function PresupuestoModule({ user, activeProjectId, activeProject, onNeed
                 : <button className="soft" disabled={!presupuesto || approving} onClick={handleApproveBaseline}>{approving ? 'Aprobando…' : 'Aprobar como Baseline'}</button>}
               <button className="soft" disabled={saving} onClick={handleSave}>{saving ? 'Guardando…' : (presupuesto ? `Guardar nueva versión (actual ${presupuesto.currentVersion})` : 'Guardar presupuesto')}</button>
               <button className="soft" onClick={() => setExplosionsOpen(true)}>Ver explosiones</button>
-              <button className="soft" onClick={() => exportPresupuestoExcel({ presupuesto: presupuesto || { projectId: activeProjectId }, aggregation, projectName: activeProject?.name })}>Excel</button>
-              <button className="soft" onClick={() => exportPresupuestoPDF({ presupuesto: presupuesto || { projectId: activeProjectId }, aggregation, projectName: activeProject?.name })}>PDF</button>
+              {/* F5: mismo documento que el Centro de Reportes (datos autoritativos del servidor). */}
+              <button className="soft" onClick={() => exportProjectReport(activeProjectId, 'PRESUPUESTO', 'XLSX', { generatedBy: user?.email }).catch(err => window.zoemecNotify?.(err.message, 'error'))}>Excel</button>
+              <button className="soft" onClick={() => exportProjectReport(activeProjectId, 'PRESUPUESTO', 'PDF', { generatedBy: user?.email }).catch(err => window.zoemecNotify?.(err.message, 'error'))}>PDF</button>
             </div>
           </div>
 
@@ -151,7 +122,11 @@ export function PresupuestoModule({ user, activeProjectId, activeProject, onNeed
                         <td>{r.qty}</td>
                         <td>{money(r.pu)}</td>
                         <td>{money(r.importe)}</td>
-                        <td>{r.apuId ? 'Sí' : <span className="muted">Pendiente</span>}</td>
+                        <td>
+                          {r.hasApu ? 'Sí' : r.apuStatus === APU_STATUS.APU_NO_DISPONIBLE ? <span style={{ color: 'var(--danger)' }}>No disponible</span> : <span className="muted">Pendiente</span>}
+                          {r.sync?.status === SYNC_STATUS.CANTIDAD_ACTUALIZADA && <div><small className="muted" title={`El APU se generó con ${r.sync.cantidadObraApu}; el importe y la explosión ya usan la cantidad vigente del concepto (${r.sync.cantidadConcepto}). No requiere regenerar el APU.`}>Cantidad actualizada{r.puDependeDeCantidad ? ' · P.U. recalculado (lote)' : ''}</small></div>}
+                          {r.sync?.status === SYNC_STATUS.COMPOSICION_CAMBIADA && <div><small style={{ color: 'var(--warning, #b7791f)' }} title={`Asociado a ${r.sync.versionAsociada}; versión vigente del APU: ${r.sync.versionVigente}.`}>Composición del APU cambió ({r.sync.versionAsociada} → {r.sync.versionVigente})</small></div>}
+                        </td>
                         <td><ConfidenceBadge status={r.confidenceStatus} /></td>
                         <td><BidRiskBadge severity={r.bidRiskSeverity} /></td>
                         <td>{r.origenCantidad}</td>
@@ -179,7 +154,7 @@ export function PresupuestoModule({ user, activeProjectId, activeProject, onNeed
           )}
         </>}
 
-      {explosionsOpen && <ExplosionsPanel projectId={activeProjectId} onClose={() => setExplosionsOpen(false)} />}
+      {explosionsOpen && <ExplosionsPanel projectId={activeProjectId} scope={EXPLOSION_SCOPE.PRESUPUESTO} onClose={() => setExplosionsOpen(false)} />}
     </section>
   );
 }

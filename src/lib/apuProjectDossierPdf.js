@@ -21,7 +21,7 @@ import { buildProjectLocationSnapshot } from '../domain/geography.js';
 
 function drawPortada(doc, data, meta){
   const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), M = 16;
-  doc.setFillColor(42, 23, 64); doc.rect(0, 0, W, 62, 'F');
+  doc.setFillColor(11, 47, 74); doc.rect(0, 0, W, 62, 'F');
   doc.setTextColor(255); doc.setFont('helvetica', 'bold'); doc.setFontSize(20);
   doc.text('ZOEMEC', W / 2, 28, { align: 'center' });
   doc.setFontSize(11); doc.text('DOSSIER DE PROYECTO -- MULTI-APU', W / 2, 40, { align: 'center' });

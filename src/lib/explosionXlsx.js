@@ -11,15 +11,26 @@
 import writeXlsxFileBrowser from 'write-excel-file/browser';
 import { xcell, XLS, exportWorkbookExcel, money } from './apuExport.js';
 import { apiPost } from '../services/apiClient.js';
-import { loadProjectApus, loadProjectMeta } from './apuProjectDossierData.js';
+import { loadProjectMeta } from './apuProjectDossierData.js';
 import { laborEconomicView, laborResourceView } from '../domain/laborExplosion.js';
-import { computeExplosionData } from '../domain/explosionData.js';
+import { loadScopedExplosion, assertExplosionHasLines, EXPLOSION_SCOPE } from './explosionInputs.js';
+import { originLabel } from '../domain/explosionEngine.js';
+
+/* F2: alcance declarado al pie de cada hoja (que entra y que no). */
+function scopeNoteRows(explosion, width){
+  if(!explosion) return [];
+  const s = explosion.summary || {};
+  const alcance = explosion.scope === EXPLOSION_SCOPE.PRESUPUESTO
+    ? `Alcance: PRESUPUESTO -- ${s.conceptosConApu || 0} concepto(s) con APU; cantidad = cantidad vigente del concepto. Excluidos: ${s.conceptosSinApu || 0} sin APU, ${s.conceptosConApuNoDisponible || 0} con APU archivado/inexistente, ${s.apusFueraDelPresupuesto || 0} APU(s) fuera del presupuesto.`
+    : `Alcance: PROYECTO -- ${s.conceptosConApu || 0} concepto(s) con APU (cantidad del concepto) + ${s.apusIndependientes || 0} APU(s) independiente(s) (cantidad propia del APU).`;
+  return [pad([], width), pad([asCell(alcance, XLS.note)], width)];
+}
 
 const asCell = (value, style = {}) => xcell(value, style);
 const pad = (row, width) => { const full = [...row]; while(full.length < width) full.push(null); return full; };
 const RULE_LABEL = { UNICO: 'Unico', MAYOR_CONFIANZA: 'Mayor confianza', EMPATE_MEDIANA: 'Empate -> mediana' };
 
-function buildMaterialSheet(title, rows){
+function buildMaterialSheet(title, rows, explosion = null){
   const head = ['Clave', 'Descripcion', 'Unidad', 'Cantidad base', 'Desperdicio %', 'Cantidad final', 'Precio unitario', 'Importe', 'Regla de precio', 'Confianza', 'APUs de origen'];
   const out = [pad(head.map(h => asCell(h, XLS.head)), head.length)];
   if(!rows.length){
@@ -35,7 +46,7 @@ function buildMaterialSheet(title, rows){
     ], head.length));
     r.origenes.forEach(o => {
       out.push(pad([
-        asCell(''), asCell(`  → ${o.apuConcept || o.apuClave || o.apuId}`, { ...XLS.note, wrap: true }), asCell(''),
+        asCell(''), asCell(`  → ${originLabel(o)}`, { ...XLS.note, wrap: true }), asCell(''),
         asCell(o.cantidadBaseAportada, XLS.qty), asCell(''), asCell(o.cantidadFinalAportada, XLS.qty),
         asCell(o.precioUnitario, XLS.money), asCell(o.importeConsolidado, XLS.money),
         asCell(''), asCell(o.priceConfidence != null ? `${Math.round(o.priceConfidence)}%` : ''), asCell('')
@@ -43,10 +54,11 @@ function buildMaterialSheet(title, rows){
     });
   });
   out.push(pad([asCell('TOTAL', XLS.total), null, null, null, null, null, null, asCell(rows.reduce((s, r) => s + r.importe, 0), { ...XLS.total, ...XLS.money })], head.length));
+  out.push(...scopeNoteRows(explosion, head.length));
   return { sheet: title, rows: out, widths: [16, 32, 8, 12, 10, 12, 12, 14, 16, 10, 12], stickyRowsCount: 1, orientation: 'landscape' };
 }
 
-function buildLaborSheet(rows){
+function buildLaborSheet(rows, explosion = null){
   const economica = laborEconomicView(rows);
   const recursos = laborResourceView(rows);
   const head = ['Oficio', 'Categoria', 'Costo/jornada', 'Jornadas', 'Cuadrilla', 'Horas', 'Importe', 'Regla de costo', 'Confianza', 'Conceptos de origen'];
@@ -63,14 +75,15 @@ function buildLaborSheet(rows){
       asCell(r.apusOrigen.length)
     ], head.length));
     r.origenes.forEach(o => {
-      out.push(pad([asCell(`  → ${o.apuConcept || o.apuClave || o.apuId}`, { ...XLS.note, wrap: true }), null, null, asCell(o.jornadasAportadas, XLS.qty)], head.length));
+      out.push(pad([asCell(`  → ${originLabel(o)}`, { ...XLS.note, wrap: true }), null, null, asCell(o.jornadasAportadas, XLS.qty), null, null, asCell(o.importeConsolidado, XLS.money)], head.length));
     });
   });
   out.push(pad([asCell('TOTAL', XLS.total), null, null, null, null, null, asCell(rows.reduce((s, r) => s + r.importe, 0), { ...XLS.total, ...XLS.money })], head.length));
+  out.push(...scopeNoteRows(explosion, head.length));
   return { sheet: 'MANO DE OBRA', rows: out, widths: [26, 14, 14, 12, 12, 12, 14, 18, 10, 12], stickyRowsCount: 1, orientation: 'landscape' };
 }
 
-function buildMachinerySheet(machinery){
+function buildMachinerySheet(machinery, explosion = null){
   const head = ['Categoria', 'Clave', 'Descripcion', 'Unidad', 'Horas', 'Tarifa referencia', 'Importe', 'APUs de origen'];
   const out = [pad(head.map(h => asCell(h, XLS.head)), head.length)];
   const sections = [['MAQUINARIA PESADA', machinery.maquinaria], ['EQUIPO', machinery.equipo], ['HERRAMIENTA MENOR', machinery.herramientaMenor]];
@@ -85,32 +98,40 @@ function buildMachinerySheet(machinery){
         asCell(r.importe, XLS.money),
         asCell(r.apusOrigen.length)
       ], head.length));
+      (r.origenes || []).forEach(o => {
+        out.push(pad([null, null, asCell(`  → ${originLabel(o)}`, { ...XLS.note, wrap: true }), null, o.horasAportadas != null ? asCell(o.horasAportadas, XLS.qty) : null, null, asCell(o.importeAportadoReal, XLS.money)], head.length));
+      });
     });
   });
   if(!any) out.push(pad([asCell('Sin maquinaria/equipo/herramienta menor para este proyecto.', XLS.note)], head.length));
   const total = [...machinery.maquinaria, ...machinery.equipo, ...machinery.herramientaMenor].reduce((s, r) => s + r.importe, 0);
   out.push(pad([asCell('TOTAL', XLS.total), null, null, null, null, null, asCell(total, { ...XLS.total, ...XLS.money })], head.length));
+  out.push(...scopeNoteRows(explosion, head.length));
   return { sheet: 'MAQUINARIA Y EQUIPO', rows: out, widths: [18, 16, 32, 8, 10, 14, 14, 12], stickyRowsCount: 1, orientation: 'landscape' };
 }
 
-export async function exportExplosionExcel({ projectId, company = {}, fileName, writeXlsxFileImpl } = {}){
+/* F2: `explosion` (opcional) = objeto YA calculado por computeScopedExplosion
+   (el mismo que muestra el panel en pantalla) -- si se pasa, el archivo se
+   arma exactamente con esos datos, sin recalcular. Sin el, se carga con el
+   mismo loader (loadScopedExplosion). `scope`: PRESUPUESTO | PROYECTO. */
+export async function exportExplosionExcel({ projectId, company = {}, fileName, writeXlsxFileImpl, scope = EXPLOSION_SCOPE.PROYECTO, explosion = null } = {}){
   if(!projectId) throw new Error('Falta projectId para generar la Explosion.');
-  const [apuDocs, project] = await Promise.all([loadProjectApus(projectId), loadProjectMeta(projectId)]);
-  if(!apuDocs.length) throw new Error('El proyecto no tiene ningun APU guardado (server-side) para generar la Explosion.');
-  const { materials, auxiliares, labor, machinery } = computeExplosionData(apuDocs);
+  const [loaded, project] = await Promise.all([explosion ? Promise.resolve(explosion) : loadScopedExplosion({ projectId, scope }), loadProjectMeta(projectId)]);
+  assertExplosionHasLines(loaded);
+  const { materials, auxiliares, labor, machinery } = loaded.data;
 
   const sheets = [
-    buildMaterialSheet('MATERIALES', materials),
-    buildLaborSheet(labor),
-    buildMachinerySheet(machinery),
-    buildMaterialSheet('AUXILIARES', auxiliares)
+    buildMaterialSheet('MATERIALES', materials, loaded),
+    buildLaborSheet(labor, loaded),
+    buildMachinerySheet(machinery, loaded),
+    buildMaterialSheet('AUXILIARES', auxiliares, loaded)
   ];
 
-  await exportWorkbookExcel(sheets, fileName || `${projectId}-EXPLOSION-ZOEMEC.xlsx`, writeXlsxFileImpl || writeXlsxFileBrowser);
+  await exportWorkbookExcel(sheets, fileName || `${projectId}-EXPLOSION${loaded.scope === EXPLOSION_SCOPE.PRESUPUESTO ? '-PRESUPUESTO' : ''}-ZOEMEC.xlsx`, writeXlsxFileImpl || writeXlsxFileBrowser);
 
   try{
     await apiPost('/api/export-events', { action: 'record', scope: 'EXPLOSION', projectId, format: 'XLSX', mode: 'TECNICO' });
   }catch{ /* el archivo ya se genero; un fallo de auditoria secundaria no revierte la exportacion */ }
 
-  return { sheets, project, materials, auxiliares, labor, machinery };
+  return { sheets, project, materials, auxiliares, labor, machinery, explosion: loaded };
 }

@@ -1,9 +1,10 @@
 /* Panel "Explosiones" de un proyecto (Fase A). Consume EXCLUSIVAMENTE
-   loadProjectApus (GET /api/apus?projectId=, ver apuProjectDossierData.js)
-   -- nunca recibe un arreglo de APUs armado por el llamador -- y
-   computeExplosionData (src/domain/explosionData.js), el MISMO motor que
-   usan exportExplosionPdf/exportExplosionExcel: la tabla en pantalla y los
-   archivos exportados nunca pueden divergir porque nunca hay dos calculos.
+   loadScopedExplosion (F2: APUs + conceptos del servidor -> alcance
+   PRESUPUESTO/PROYECTO, ver src/lib/explosionInputs.js y
+   src/domain/budgetScope.js) -- nunca recibe un arreglo de APUs armado por
+   el llamador -- y pasa el MISMO objeto calculado a exportExplosionPdf/
+   exportExplosionExcel: la tabla en pantalla y los archivos exportados
+   nunca pueden divergir porque nunca hay dos calculos.
 
    Multi-tenant: la seguridad real vive en el servidor (_route-apus.mjs
    filtra por organizationId/ownerUid derivado del token) y en
@@ -12,10 +13,11 @@
    resultado o el error tal cual. */
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useI18n } from '../../i18n/I18nContext.jsx';
-import { loadProjectApus } from '../../lib/apuProjectDossierData.js';
-import { computeExplosionData } from '../../domain/explosionData.js';
+import { loadScopedExplosion, assertExplosionHasLines, EXPLOSION_SCOPE } from '../../lib/explosionInputs.js';
+import { originLabel } from '../../domain/explosionEngine.js';
 import { laborEconomicView, laborResourceView } from '../../domain/laborExplosion.js';
 import { exportExplosionPdf } from '../../lib/explosionPdf.js';
+import { exportExplosionFromScreen } from '../../lib/reports/reportExports.js';
 import { exportExplosionExcel } from '../../lib/explosionXlsx.js';
 import { money, num } from '../../lib/apuExport.js';
 
@@ -52,7 +54,7 @@ function ResourceTable({ rows, tab, tr, expanded, toggleExpand }){
             <td>{r.origenes?.length ? <button type="button" className="soft" onClick={() => toggleExpand(key)}>{isOpen ? tr('explosions.hideBreakdown') : tr('explosions.viewBreakdown')}</button> : null}</td>
           </tr>
           {isOpen && r.origenes.map((o, oi) => <tr key={oi} className="muted">
-            <td /><td>&rarr; {o.apuConcept || o.apuClave || o.apuId}</td><td />
+            <td /><td>&rarr; {originLabel(o)}</td><td />
             {tab === 'machinery' ? <td>{o.horasAportadas != null ? num(o.horasAportadas) : 'N/D'}</td> : <>
               <td>{num(o.cantidadBaseAportada)}</td><td /><td>{num(o.cantidadFinalAportada)}</td>
             </>}
@@ -107,7 +109,7 @@ function LaborTable({ rows, tr, expanded, toggleExpand }){
               <td><button type="button" className="soft" onClick={() => toggleExpand(key)}>{isOpen ? tr('explosions.hideBreakdown') : tr('explosions.viewBreakdown')}</button></td>
             </tr>
             {isOpen && r.origenes.map((o, oi) => <tr key={oi} className="muted">
-              <td /><td>&rarr; {o.apuConcept || o.apuClave || o.apuId}</td>
+              <td /><td>&rarr; {originLabel(o)}</td>
               <td colSpan={view === 'economic' ? 4 : 3}>{num(o.jornadasAportadas)} jornadas — {money(o.importeConsolidado)}</td>
               <td /><td />
             </tr>)}
@@ -118,9 +120,13 @@ function LaborTable({ rows, tr, expanded, toggleExpand }){
   </>;
 }
 
-export default function ExplosionsPanel({ projectId, onClose }){
+/* F2: `scope` = PRESUPUESTO (abierto desde Presupuesto: solo conceptos con
+   APU, cantidad del concepto) o PROYECTO (default: conceptos + APUs
+   independientes con su propia cantidad). El objeto calculado se pasa TAL
+   CUAL a los exportadores: pantalla, PDF y XLSX nunca divergen. */
+export default function ExplosionsPanel({ projectId, onClose, scope = EXPLOSION_SCOPE.PROYECTO }){
   const { t: tr } = useI18n();
-  const [state, setState] = useState({ status: 'loading', data: null, error: null });
+  const [state, setState] = useState({ status: 'loading', data: null, error: null, explosion: null });
   const [tab, setTab] = useState('materials');
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState('importe');
@@ -129,14 +135,15 @@ export default function ExplosionsPanel({ projectId, onClose }){
 
   useEffect(() => {
     let cancelled = false;
-    setState({ status: 'loading', data: null, error: null });
-    loadProjectApus(projectId).then(apuDocs => {
+    setState({ status: 'loading', data: null, error: null, explosion: null });
+    loadScopedExplosion({ projectId, scope }).then(explosion => {
       if(cancelled) return;
-      if(!apuDocs.length){ setState({ status: 'error', data: null, error: 'El proyecto no tiene ningun APU guardado.' }); return; }
-      setState({ status: 'ready', data: computeExplosionData(apuDocs), error: null });
-    }).catch(err => { if(!cancelled) setState({ status: 'error', data: null, error: err.message }); });
+      try{ assertExplosionHasLines(explosion); }
+      catch(err){ setState({ status: 'error', data: null, error: err.message, explosion }); return; }
+      setState({ status: 'ready', data: explosion.data, error: null, explosion });
+    }).catch(err => { if(!cancelled) setState({ status: 'error', data: null, error: err.message, explosion: null }); });
     return () => { cancelled = true; };
-  }, [projectId]);
+  }, [projectId, scope]);
 
   const flatRows = useMemo(() => {
     if(state.status !== 'ready') return [];
@@ -164,7 +171,11 @@ export default function ExplosionsPanel({ projectId, onClose }){
   const runExport = async format => {
     setExportState({ format, status: 'generating' });
     try{
-      await (format === 'PDF' ? exportExplosionPdf : exportExplosionExcel)({ projectId });
+      // F5: alcance PRESUPUESTO -> documento unificado del Centro de Reportes
+      // con el MISMO objeto de pantalla; alcance PROYECTO conserva el
+      // exportador F2 (el Centro de Reportes solo emite el alcance presupuesto).
+      if(scope === EXPLOSION_SCOPE.PRESUPUESTO) await exportExplosionFromScreen(projectId, state.explosion, format);
+      else await (format === 'PDF' ? exportExplosionPdf : exportExplosionExcel)({ projectId, scope, explosion: state.explosion });
       setExportState(null);
     }catch(err){ setExportState({ format, status: 'error', message: err.message }); }
   };
@@ -181,6 +192,11 @@ export default function ExplosionsPanel({ projectId, onClose }){
       {state.status === 'error' && <p style={{ color: 'var(--danger)' }}>{tr('explosions.errorLoading', { message: state.error })}</p>}
 
       {state.status === 'ready' && <>
+        {state.explosion?.summary && <p className="muted" style={{ marginTop: 0 }}>
+          {scope === EXPLOSION_SCOPE.PRESUPUESTO
+            ? `Alcance: presupuesto — ${state.explosion.summary.conceptosConApu} concepto(s) con APU, cantidad = cantidad vigente del concepto. Excluidos: ${state.explosion.summary.conceptosSinApu} sin APU, ${state.explosion.summary.conceptosConApuNoDisponible} con APU archivado/inexistente, ${state.explosion.summary.apusFueraDelPresupuesto} APU(s) fuera del presupuesto.`
+            : `Alcance: proyecto — ${state.explosion.summary.conceptosConApu} concepto(s) con APU (cantidad del concepto) + ${state.explosion.summary.apusIndependientes} APU(s) independiente(s) (cantidad propia del APU).`}
+        </p>}
         <div className="sc-actions" style={{ marginBottom: 12, flexWrap: 'wrap' }}>
           {TABS.map(id => <button key={id} type="button" className={tab === id ? '' : 'soft'} onClick={() => changeTab(id)}>{tr(`explosions.${TAB_LABEL_KEY[id]}`)}</button>)}
         </div>

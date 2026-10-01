@@ -27,7 +27,10 @@ export function aggregatePresupuesto(rows = []){
       ...r,
       capitulo,
       qty, pu, direct, iva,
-      hasApu: Boolean(r?.apuId),
+      // F2: si el alcance (budgetScope.js) ya decidio que el APU no esta
+      // disponible (archivado/inexistente), se respeta: apuId se conserva
+      // para trazabilidad pero no cuenta como "tiene APU".
+      hasApu: typeof r?.hasApu === 'boolean' ? r.hasApu : Boolean(r?.apuId),
       importe: qty * pu,
       directoImporte: qty * direct
     };

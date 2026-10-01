@@ -39,6 +39,30 @@ export const SCALE_STATUS = Object.freeze({
   CONFIRMADA: 'CONFIRMADA', PENDIENTE: 'PENDIENTE', NO_DETERMINADA: 'NO_DETERMINADA'
 });
 
+/* F4 -- PROCEDENCIA de cada dimension relevante (altura/espesor de muro,
+   altura de plafon). Valores compatibles con el `thicknessSource` historico
+   ('USUARIO'/'DIBUJO'/'DEFAULT'):
+     USUARIO       capturada/corregida a mano en el CAD (MANUAL)
+     LEVANTAMIENTO medida en obra en la captura del levantamiento (MANUAL)
+     DIBUJO        detectada del dibujo/vector (DETECTED)
+     IMPORTADO     tomada de un archivo importado (IMPORTED)
+     DEFAULT       valor por defecto: NUNCA se presenta como medido
+   Un elemento guardado antes de F4 no trae el campo: se lee 'SIN_REGISTRO'
+   (no se afirma que sea medido ni default). */
+export const DIMENSION_SOURCE = Object.freeze({
+  MANUAL: 'USUARIO', SURVEY: 'LEVANTAMIENTO', DETECTED: 'DIBUJO', IMPORTED: 'IMPORTADO', DEFAULT: 'DEFAULT', UNKNOWN: 'SIN_REGISTRO'
+});
+const DIMENSION_SOURCE_LABEL = Object.freeze({
+  USUARIO: 'capturada', LEVANTAMIENTO: 'medida en levantamiento', DIBUJO: 'detectada del plano', IMPORTADO: 'importada', DEFAULT: 'valor por defecto (no medido)', SIN_REGISTRO: 'sin registro de origen'
+});
+export function dimensionSourceLabel(source){ return DIMENSION_SOURCE_LABEL[source || DIMENSION_SOURCE.UNKNOWN] || String(source); }
+export function wallHeightSource(wall){ return wall?.heightSource || DIMENSION_SOURCE.UNKNOWN; }
+export function wallThicknessSource(wall){ return wall?.thicknessSource || DIMENSION_SOURCE.UNKNOWN; }
+export function spaceCeilingHeightSource(space){
+  if(!(Number(space?.ceilingHeight) > 0)) return DIMENSION_SOURCE.DEFAULT;
+  return space?.ceilingHeightSource || DIMENSION_SOURCE.UNKNOWN;
+}
+
 const ID_PREFIX = Object.freeze({ wall: 'M', door: 'P', window: 'V', space: 'ESP', dimension: 'C' });
 const COLLECTION = Object.freeze({ wall: 'walls', opening: 'openings', space: 'spaces', dimension: 'dimensions' });
 
@@ -405,6 +429,7 @@ export function addWall(model, input = {}){
   const wall = {
     id, x1, y1, x2, y2, thickness, height,
     thicknessSource: input.thicknessSource || (input.thickness != null ? 'USUARIO' : 'DEFAULT'),
+    heightSource: input.heightSource || (input.height != null ? DIMENSION_SOURCE.MANUAL : DIMENSION_SOURCE.DEFAULT),
     source: input.source || CAD_SOURCE.USER,
     review: input.review || userReview(),
     sourceElementId: input.sourceElementId || null,
@@ -431,9 +456,67 @@ export function updateWall(model, id, patch = {}){
     next = { ...next, x2: next.x1 + d.x * length, y2: next.y1 + d.y * length };
   }
   if(patch.thickness != null){ next.thickness = assertPositive(patch.thickness, 'Espesor'); next.thicknessSource = 'USUARIO'; }
-  if(patch.height != null) next.height = assertPositive(patch.height, 'Altura');
+  if(patch.height != null){ next.height = assertPositive(patch.height, 'Altura'); next.heightSource = patch.heightSource || DIMENSION_SOURCE.MANUAL; }
   if(wallLength(next) < MIN_WALL_LENGTH_M) throw new Error(`Un muro debe medir al menos ${MIN_WALL_LENGTH_M} m.`);
   return withCollection(model, CAD_KIND.WALL, list => list.map(w => w.id === id ? next : w));
+}
+
+/* F4 -- Cota manual REAL de un muro: cambia la longitud conservando inicio y
+   direccion y mueve el nodo final CONECTADO (muros, vertices de espacios y
+   cotas libres que compartian esa esquina) -- nunca deja la planta
+   despegada ni un espacio con el area vieja. Es la edicion que usa el panel
+   de propiedades ("Longitud"). */
+export function setWallLength(model, id, length){
+  const wall = (model.walls || []).find(w => w.id === id);
+  if(!wall) throw new Error(`No existe el muro ${id}.`);
+  const L = assertPositive(length, 'Longitud');
+  if(L < MIN_WALL_LENGTH_M) throw new Error(`Un muro debe medir al menos ${MIN_WALL_LENGTH_M} m.`);
+  const d = wallDirection(wall);
+  return moveWallEndpoint(model, id, 'end', { x: wall.x1 + d.x * L, y: wall.y1 + d.y * L }, { connected: true });
+}
+
+/* F4 -- Dimensiones de un espacio RECTANGULAR alineado a ejes (el que genera
+   un levantamiento manual): "Largo" (eje X) y "Ancho" (eje Y). Estira el
+   modelo real: todo nodo sobre el lado lejano (muros, vertices, cotas
+   libres) se desplaza; los vanos conservan su posicion relativa. Devuelve
+   error si el espacio no es un rectangulo alineado (se edita por vertices). */
+export function rectangularSpaceBox(space){
+  const pts = space?.points || [];
+  if(pts.length !== 4) return null;
+  const xs = [...new Set(pts.map(p => r4(p.x)))], ys = [...new Set(pts.map(p => r4(p.y)))];
+  if(xs.length !== 2 || ys.length !== 2) return null;
+  const [minX, maxX] = xs.sort((a, b) => a - b), [minY, maxY] = ys.sort((a, b) => a - b);
+  return { minX, maxX, minY, maxY, length: r4(maxX - minX), width: r4(maxY - minY) };
+}
+export function resizeRectangularSpace(model, spaceId, { length = null, width = null } = {}){
+  const space = (model.spaces || []).find(s => s.id === spaceId);
+  if(!space) throw new Error(`No existe el espacio ${spaceId}.`);
+  const box = rectangularSpaceBox(space);
+  if(!box) throw new Error('Solo un espacio rectangular alineado a los ejes se edita por largo/ancho; edita sus vertices.');
+  let next = model;
+  const shift = (axis, edge, delta) => {
+    const onEdge = v => Math.abs(v - edge) <= JOIN_TOLERANCE_M;
+    const mv = p => (axis === 'x' ? onEdge(p.x) : onEdge(p.y)) ? { x: axis === 'x' ? p.x + delta : p.x, y: axis === 'y' ? p.y + delta : p.y } : p;
+    next = {
+      ...next,
+      walls: (next.walls || []).map(w => {
+        const a = mv({ x: w.x1, y: w.y1 }), b = mv({ x: w.x2, y: w.y2 });
+        return { ...w, x1: a.x, y1: a.y, x2: b.x, y2: b.y };
+      }),
+      spaces: (next.spaces || []).map(s => ({ ...s, points: s.points.map(mv) })),
+      dimensions: (next.dimensions || []).map(d => d.ref ? d : { ...d, a: d.a ? mv(d.a) : d.a, b: d.b ? mv(d.b) : d.b })
+    };
+  };
+  if(length != null){
+    const L = assertPositive(length, 'Largo');
+    shift('x', box.maxX, L - box.length);
+  }
+  if(width != null){
+    const W = assertPositive(width, 'Ancho');
+    shift('y', box.maxY, W - box.width);
+  }
+  for(const w of next.walls || []) if(wallLength(w) < MIN_WALL_LENGTH_M) throw new Error(`El muro ${w.id} quedaria demasiado corto.`);
+  return next;
 }
 
 /* Mueve un extremo de muro. Con `connected` (default), todo lo que compartia
@@ -549,6 +632,7 @@ export function addSpace(model, input = {}){
     id, name: String(input.name || '').trim() || `Espacio ${id.split('-').pop()}`,
     points,
     ceilingHeight: input.ceilingHeight != null ? assertPositive(input.ceilingHeight, 'Altura de plafon') : null,
+    ceilingHeightSource: input.ceilingHeight != null ? (input.ceilingHeightSource || DIMENSION_SOURCE.MANUAL) : DIMENSION_SOURCE.DEFAULT,
     source: input.source || CAD_SOURCE.USER,
     review: input.review || userReview(),
     assignment: null
@@ -561,7 +645,10 @@ export function updateSpace(model, id, patch = {}){
   if(!space) throw new Error(`No existe el espacio ${id}.`);
   const next = { ...space };
   if(patch.name != null) next.name = String(patch.name).trim() || space.name;
-  if(patch.ceilingHeight !== undefined) next.ceilingHeight = patch.ceilingHeight == null || patch.ceilingHeight === '' ? null : assertPositive(patch.ceilingHeight, 'Altura de plafon');
+  if(patch.ceilingHeight !== undefined){
+    next.ceilingHeight = patch.ceilingHeight == null || patch.ceilingHeight === '' ? null : assertPositive(patch.ceilingHeight, 'Altura de plafon');
+    next.ceilingHeightSource = next.ceilingHeight == null ? DIMENSION_SOURCE.DEFAULT : (patch.ceilingHeightSource || DIMENSION_SOURCE.MANUAL);
+  }
   if(patch.points){
     const pts = patch.points.map(p => ({ x: assertFinite(p.x, 'X'), y: assertFinite(p.y, 'Y') }));
     if(pts.length < 3 || polygonArea(pts) < 0.01) throw new Error('El espacio quedaria sin area valida.');

@@ -32,6 +32,8 @@ import constructionDnaHandler from '../server/api-lib/_route-construction-dna.mj
 import projectVaultHandler from '../server/api-lib/_route-project-vault.mjs';
 import sentinelHandler from '../server/api-lib/_route-sentinel.mjs';
 import assetsHandler from '../server/api-lib/_route-assets.mjs';
+import orgLibraryHandler from '../server/api-lib/_route-org-library.mjs';
+import levantamientosHandler from '../server/api-lib/_route-levantamientos.mjs';
 
 const ROUTES = {
   '/api/engineering-ai': engineeringAiHandler,
@@ -55,6 +57,8 @@ const ROUTES = {
   '/api/project-vault': projectVaultHandler,
   '/api/sentinel': sentinelHandler,
   '/api/assets': assetsHandler,
+  '/api/org-library': orgLibraryHandler,
+  '/api/levantamientos': levantamientosHandler, // F4
 };
 
 export default async function handler(req, res){

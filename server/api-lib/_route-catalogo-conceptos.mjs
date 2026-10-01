@@ -17,6 +17,7 @@ import { loadOrgContext, assertOrgNotExpired, canAccessOrgScopedDoc, assertProje
 import { buildProjectLocationSnapshot, hasAnyLocation } from '../../src/domain/geography.js';
 import { makeEmptyCatalogConcepto, validateCatalogConcepto, isLegalStatusTransition, CATALOG_CONCEPTO_STATUS } from '../../src/domain/catalogConceptoSchema.js';
 import { normalizeCapitulo } from '../../src/domain/presupuestoCapitulos.js';
+import { verifyGenerator, aggregateGenerators, diffGenerators, QUANTITY_SOURCE_KIND, buildConceptGenerators, geometryHash } from '../../src/domain/quantityGenerators.js';
 
 const COLLECTION = 'catalogConceptos';
 const AUDIT_COLLECTION = 'catalogConceptosAudit';
@@ -118,6 +119,9 @@ async function handleCreate(req, res){
       const withLocation = await resolveConceptLocation(db, seed, projectId);
       const patch = {};
       UPDATABLE_ON_DEDUP.forEach(f => { if(withLocation[f] !== undefined) patch[f] = withLocation[f]; });
+      // F3: un concepto alimentado por generadores conserva su cantidad
+      // (solo set-generators la mueve, con trazabilidad).
+      if(existing.quantitySource === QUANTITY_SOURCE_KIND.GENERATORS) delete patch.qty;
       toUpdate.push({ ...existing, ...patch, ubicacion: withLocation.ubicacion ?? existing.ubicacion, ubicacionEstructurada: withLocation.ubicacionEstructurada ?? existing.ubicacionEstructurada, updatedAt: now });
       continue;
     }
@@ -182,6 +186,14 @@ async function handleUpdate(req, res){
     if(!canAccessOrgScopedDoc(current, authz, orgContext)) throw httpError(403, 'Este concepto pertenece a otro usuario.');
     const safePatch = {};
     ALLOWED_FIELDS.forEach(f => { if(patch[f] !== undefined) safePatch[f] = patch[f]; });
+    // F3: la cantidad de un concepto alimentado por generadores SOLO la
+    // mueve set-generators (con operacion, historial y auditoria); una
+    // edicion directa desincronizaria la cantidad de su respaldo geometrico.
+    if(safePatch.qty !== undefined && current.quantitySource === QUANTITY_SOURCE_KIND.GENERATORS && Number(safePatch.qty) !== Number(current.qty)){
+      const e = httpError(409, 'La cantidad de este concepto proviene de generadores del plano: recalcula los generadores en lugar de editarla a mano.');
+      e.code = 'QUANTITY_FROM_GENERATORS';
+      throw e;
+    }
     if(safePatch.capitulo) safePatch.capitulo = normalizeCapitulo(safePatch.capitulo);
     const next = { ...current, ...safePatch, updatedAt: new Date().toISOString() };
     const { valid, errors } = validateCatalogConcepto(next);
@@ -209,7 +221,12 @@ async function handleSetStatus(req, res){
   const authz = await requireAuth(req);
   const orgContext = await loadOrgContext(authz.uid);
   assertOrgNotExpired(orgContext);
-  const { id, status, apuId, apuVersionId, error, batchId, parametric } = req.body || {};
+  const { id, status, apuId, apuVersionId, error, batchId, parametric, retryAfterSeconds } = req.body || {};
+  // F1/P0: PENDIENTE_LIMITE conserva el motivo y CUANDO reintentar (el
+  // servidor calcula retryAt a partir de retryAfterSeconds; nunca confia en
+  // una fecha del cliente).
+  const isRateLimited = status === CATALOG_CONCEPTO_STATUS.PENDIENTE_LIMITE;
+  const retrySeconds = isRateLimited && Number(retryAfterSeconds) > 0 ? Math.ceil(Number(retryAfterSeconds)) : null;
   if(!id || !status) throw httpError(400, 'Faltan id/status.');
   if(!Object.values(CATALOG_CONCEPTO_STATUS).includes(status)) throw httpError(400, `status desconocido: ${status}.`);
   const db = getAdminDb();
@@ -225,7 +242,10 @@ async function handleSetStatus(req, res){
     }
     const next = {
       ...current, status, updatedAt: new Date().toISOString(),
-      statusError: status === CATALOG_CONCEPTO_STATUS.ERROR ? String(error || 'Error desconocido') : null,
+      statusError: status === CATALOG_CONCEPTO_STATUS.ERROR ? String(error || 'Error desconocido')
+        : isRateLimited ? String(error || 'Limite temporal de solicitudes alcanzado.') : null,
+      retryAfterSeconds: isRateLimited ? retrySeconds : null,
+      retryAt: isRateLimited && retrySeconds ? new Date(Date.now() + retrySeconds * 1000).toISOString() : null,
       apuId: apuId !== undefined ? apuId : current.apuId,
       apuVersionId: apuVersionId !== undefined ? apuVersionId : current.apuVersionId,
       batchId: batchId !== undefined ? batchId : current.batchId,
@@ -309,7 +329,112 @@ async function handleArchive(req, res){
   res.status(200).json({ concepto: next });
 }
 
-const ACTIONS = { create: handleCreate, update: handleUpdate, 'set-status': handleSetStatus, 'associate-apu': handleAssociateApu, archive: handleArchive };
+/* F3 -- SET-GENERATORS: reemplaza los generadores de UN plano (planoId) del
+   concepto y recalcula qty = SUM(generadores) EN EL SERVIDOR con la regla
+   unica de src/domain/quantityGenerators.js (el qty del cliente se ignora).
+   - Cada generador se verifica aritmeticamente (bruto = producto de
+     dimensiones, neto = bruto - deducciones, nunca negativo).
+   - Concurrencia: generatorRevisions[planoId] + expectedRevision -> 409
+     GENERATOR_CONFLICT (mismo patron que save-version de APU/Presupuesto).
+   - Historial: quantityHistory (valor anterior/nuevo, plano, revision,
+     cambios por elemento, actor, fecha) + auditoria append-only.
+   Los generadores de OTROS planos del mismo concepto se conservan. */
+const MAX_GENERATORS_PER_CONCEPT = 500;
+const MAX_QUANTITY_HISTORY = 50;
+async function handleSetGenerators(req, res){
+  const authz = await requireAuth(req);
+  const orgContext = await loadOrgContext(authz.uid);
+  assertOrgNotExpired(orgContext);
+  const { id, planoId, generators, expectedRevision, reason, planoRevision = null } = req.body || {};
+  if(!id || !planoId || !Array.isArray(generators)) throw httpError(400, 'Faltan id/planoId/generators.');
+  const db = getAdminDb();
+  const docRef = db.collection(COLLECTION).doc(String(id));
+  const planoRef = db.collection('planoTakeoffs').doc(String(planoId));
+  const auditRef = db.collection(AUDIT_COLLECTION).doc();
+  const result = await db.runTransaction(async (tx) => {
+    const [snap, planoSnap] = await Promise.all([tx.get(docRef), tx.get(planoRef)]);
+    if(!snap.exists) throw httpError(404, 'El concepto no existe.');
+    const current = snap.data();
+    if(!canAccessOrgScopedDoc(current, authz, orgContext)) throw httpError(403, 'Este concepto pertenece a otro usuario.');
+    if(current.archivedAt) throw httpError(409, 'El concepto esta archivado.');
+    /* F4 -- VALIDACION CONTRA LA GEOMETRIA PERSISTIDA: si el plano vive en
+       el servidor, los generadores se RECONSTRUYEN aqui desde su cadModel
+       vigente y deben coincidir (elementId + geometryHash) con los que el
+       usuario reviso; si no, 409 GEOMETRY_CHANGED (revisar/recalcular).
+       Lo que se guarda son los generadores construidos por el SERVIDOR. */
+    let serverBuilt = null;
+    if(planoSnap.exists){
+      const plano = planoSnap.data();
+      if(!canAccessOrgScopedDoc(plano, authz, orgContext)) throw httpError(403, 'El plano pertenece a otra empresa.');
+      if(plano.projectId && String(plano.projectId) !== String(current.projectId)) throw httpError(400, 'El plano y el concepto pertenecen a proyectos distintos.');
+      const geometryChanged = (detail) => { const e = httpError(409, `La geometria del plano cambio desde que se prepararon estos generadores (${detail}). Revisa los cambios y vuelve a recalcular.`); e.code = 'GEOMETRY_CHANGED'; e.currentRevision = Number(plano.revision || 0); return e; };
+      if(planoRevision != null && Number(planoRevision) !== Number(plano.revision || 0)) throw geometryChanged(`revision ${planoRevision} vs ${Number(plano.revision || 0)}`);
+      serverBuilt = buildConceptGenerators(plano.snapshot?.cadModel, String(id), { planoId: String(planoId), projectId: current.projectId, fileName: plano.fileName || '', sourceRevision: Number(plano.revision || 0) });
+      const key = list => JSON.stringify(list.map(g => [g.generatorId, geometryHash(g)]).sort());
+      if(key(serverBuilt) !== key(generators)) throw geometryChanged('los elementos o sus medidas no coinciden con el plano guardado');
+    }
+    const sourceGenerators = serverBuilt || generators;
+    const revisions = { ...(current.generatorRevisions || {}) };
+    const currentRev = Number(revisions[planoId] || 0);
+    if(expectedRevision !== undefined && expectedRevision !== null && Number(expectedRevision) !== currentRev){
+      const e = httpError(409, `Conflicto de generadores: esperabas la revision ${expectedRevision} del plano, pero la vigente es ${currentRev}. Recarga antes de recalcular.`);
+      e.code = 'GENERATOR_CONFLICT'; e.currentRevision = currentRev;
+      throw e;
+    }
+    const now = new Date().toISOString();
+    const previousForPlano = (current.generadores || []).filter(g => g.planoId === planoId);
+    const prevById = new Map(previousForPlano.map(g => [g.generatorId, g]));
+    const incoming = sourceGenerators.map(g => ({
+      ...g, planoId: String(planoId), conceptId: String(id), projectId: current.projectId,
+      createdAt: prevById.get(g.generatorId)?.createdAt || g.createdAt || now, updatedAt: now
+    }));
+    const invalid = incoming.map(g => ({ generatorId: g.generatorId, errors: verifyGenerator(g) })).filter(x => x.errors.length);
+    if(invalid.length) throw httpError(400, `Generadores invalidos: ${JSON.stringify(invalid)}`);
+    if(incoming.some(g => g.planoId !== String(planoId))) throw httpError(400, 'Todos los generadores deben pertenecer al plano indicado.');
+    const merged = [...(current.generadores || []).filter(g => g.planoId !== planoId), ...incoming];
+    if(merged.length > MAX_GENERATORS_PER_CONCEPT) throw httpError(400, `Demasiados generadores (${merged.length} > ${MAX_GENERATORS_PER_CONCEPT}).`);
+    const agg = aggregateGenerators(merged, current.unit);
+    const diff = diffGenerators(previousForPlano, incoming);
+    const nextRev = currentRev + 1;
+    revisions[planoId] = nextRev;
+    const historyEntry = {
+      at: now, from: Number(current.qty) || 0, to: agg.qty,
+      fromSource: current.quantitySource || QUANTITY_SOURCE_KIND.MANUAL, source: QUANTITY_SOURCE_KIND.GENERATORS,
+      planoId: String(planoId), revision: nextRev, changes: diff.changes, actor: authz.email || authz.uid, reason: reason || null
+    };
+    const next = {
+      ...current,
+      quantitySource: QUANTITY_SOURCE_KIND.GENERATORS,
+      generadores: merged,
+      elementIds: agg.elementIds,
+      qty: agg.qty,
+      generatorRevisions: revisions,
+      generatorSummary: { counted: agg.countedElementIds, incomplete: agg.incomplete, inconsistent: agg.inconsistent, unitMismatch: agg.unitMismatch },
+      quantityHistory: [...(current.quantityHistory || []), historyEntry].slice(-MAX_QUANTITY_HISTORY),
+      updatedAt: now
+    };
+    // F4: confirmar limpia la marca automatica de desactualizacion de este plano.
+    const staleMap = { ...(current.generatorStaleness || {}) };
+    delete staleMap[planoId];
+    next.generatorStaleness = staleMap;
+    next.generatorsStale = Object.values(staleMap).some(x => x?.stale);
+    historyEntry.geometryVerified = Boolean(serverBuilt);
+    historyEntry.planoRevision = serverBuilt ? Number(planoSnap.data().revision || 0) : null;
+    const { valid, errors } = validateCatalogConcepto(next);
+    if(!valid) throw httpError(400, `Concepto invalido tras recalcular generadores: ${errors.join(' ')}`);
+    tx.set(docRef, next);
+    appendAudit(tx, auditRef, {
+      entryId: next.id, action: 'CATALOGO_CONCEPTO_GENERATORS_UPDATED', previousStatus: String(historyEntry.from), newStatus: String(historyEntry.to),
+      actor: authz.uid, actorEmail: authz.email, reason: reason || `Generadores del plano ${planoId} (rev ${nextRev})`, source: 'api',
+      projectId: next.projectId, conceptoId: next.id, organizationId: current.organizationId ?? null, ownerUid: authz.uid,
+      planoId: String(planoId), revision: nextRev, changes: diff.changes
+    });
+    return { concepto: next, diff, aggregate: agg, geometryVerified: Boolean(serverBuilt) };
+  });
+  res.status(200).json(result);
+}
+
+const ACTIONS = { create: handleCreate, update: handleUpdate, 'set-status': handleSetStatus, 'associate-apu': handleAssociateApu, archive: handleArchive, 'set-generators': handleSetGenerators };
 
 export default async function handler(req, res){
   try{
@@ -322,6 +447,7 @@ export default async function handler(req, res){
   }catch(err){
     const body = { error: err.message || 'No se pudo completar la solicitud.' };
     if(err.code) body.code = err.code;
+    if(err.currentRevision !== undefined) body.currentRevision = err.currentRevision; // F3: 409 GENERATOR_CONFLICT
     res.status(err.status || 400).json(body);
   }
 }

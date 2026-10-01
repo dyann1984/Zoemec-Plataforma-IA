@@ -1,0 +1,31 @@
+<!doctype html>
+<!-- F5-QA: visor de PDFs generados (pdf.js del proyecto). Uso:
+     /test/qa/f4/pdf-viewer.html?file=/__qa/out/PRESUPUESTO.pdf&pages=1-3&scale=1.4 -->
+<html lang="es"><head><meta charset="utf-8"><title>QA PDF</title>
+<style>body{margin:0;background:#8a9099;font-family:Arial}#info{color:#fff;padding:6px 10px;font-size:12px}canvas{display:block;margin:8px auto;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.4)}</style></head>
+<body><div id="info">cargando…</div><div id="pages"></div>
+<script type="module">
+import * as pdfjsLib from 'pdfjs-dist/build/pdf.mjs';
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).href;
+const q = new URLSearchParams(location.search);
+const file = q.get('file'); const scale = Number(q.get('scale') || 1.3);
+const data = new Uint8Array(await (await fetch(file)).arrayBuffer());
+const doc = await pdfjsLib.getDocument({ data }).promise;
+const [a, b] = (q.get('pages') || `1-${doc.numPages}`).split('-').map(Number);
+document.getElementById('info').textContent = `${file} — ${doc.numPages} página(s)`;
+for(let i = a; i <= Math.min(b || a, doc.numPages); i++){
+  const page = await doc.getPage(i);
+  const vp = page.getViewport({ scale });
+  const cv = document.createElement('canvas'); cv.width = vp.width; cv.height = vp.height;
+  const fit = q.get('fit');
+  if(fit === 'h'){ cv.style.height = 'calc(100vh - 34px)'; cv.style.width = 'auto'; }
+  if(fit === 'w'){ cv.style.width = '98vw'; cv.style.height = 'auto'; }
+  document.getElementById('pages').appendChild(cv);
+  await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+  if(q.get('save')){
+    const base = file.split('/').pop().replace(/\.pdf$/i, '');
+    await fetch(`/__qa/png?name=${encodeURIComponent(`${base}-p${i}.png`)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dataUrl: cv.toDataURL('image/png') }) });
+  }
+}
+window.__qaPdfReady = doc.numPages;
+</script></body></html>

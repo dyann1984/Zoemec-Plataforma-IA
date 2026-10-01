@@ -7,15 +7,16 @@ import { jsPDF } from 'jspdf';
 import { money } from './apuExport.js';
 import { newSectionDrawer, pdfText } from './apuDossierPdf.js';
 import { apiPost } from '../services/apiClient.js';
-import { loadProjectApus, loadProjectMeta } from './apuProjectDossierData.js';
-import { computeExplosionData } from '../domain/explosionData.js';
+import { loadProjectMeta } from './apuProjectDossierData.js';
 import { laborEconomicView, laborResourceView } from '../domain/laborExplosion.js';
+import { loadScopedExplosion, assertExplosionHasLines, EXPLOSION_SCOPE } from './explosionInputs.js';
+import { originLabel } from '../domain/explosionEngine.js';
 
 const RULE_LABEL = { UNICO: 'Unico', MAYOR_CONFIANZA: 'Mayor confianza', EMPATE_MEDIANA: 'Empate -> mediana' };
 
 function drawPortada(doc, meta, data){
   const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), M = 16;
-  doc.setFillColor(42, 23, 64); doc.rect(0, 0, W, 62, 'F');
+  doc.setFillColor(11, 47, 74); doc.rect(0, 0, W, 62, 'F');
   doc.setTextColor(255); doc.setFont('helvetica', 'bold'); doc.setFontSize(20);
   doc.text('ZOEMEC', W / 2, 28, { align: 'center' });
   doc.setFontSize(11); doc.text('EXPLOSION DE MATERIALES, MANO DE OBRA Y MAQUINARIA', W / 2, 40, { align: 'center' });
@@ -26,6 +27,10 @@ function drawPortada(doc, meta, data){
   field('Proyecto:', meta.proyecto);
   field('Cliente:', meta.cliente);
   field('Fecha:', meta.fecha);
+  field('Alcance:', data.scope === EXPLOSION_SCOPE.PRESUPUESTO ? 'Presupuesto (cantidad vigente de cada concepto)' : 'Proyecto (conceptos + APUs independientes)');
+  field('Conceptos con APU:', data.summary?.conceptosConApu ?? 0);
+  if(data.scope !== EXPLOSION_SCOPE.PRESUPUESTO) field('APUs independientes:', data.summary?.apusIndependientes ?? 0);
+  else field('Excluidos:', `${data.summary?.conceptosSinApu ?? 0} sin APU, ${data.summary?.conceptosConApuNoDisponible ?? 0} con APU no disponible, ${data.summary?.apusFueraDelPresupuesto ?? 0} APU(s) fuera`);
   field('Materiales consolidados:', data.materials.length);
   field('Oficios de mano de obra:', data.labor.length);
   field('Importe materiales:', money(data.materials.reduce((s, r) => s + r.importe, 0)));
@@ -82,12 +87,28 @@ function drawMachinerySection(doc, meta, machinery){
   return s;
 }
 
-export async function exportExplosionPdf({ projectId, company = {}, save = true, fileName } = {}){
+/* F2: contribuciones individuales (INSUMO -> CAPITULO > CONCEPTO > APU),
+   mismas cifras que "Ver desglose" en pantalla y que las filas indentadas
+   del XLSX. */
+function drawContributionsSection(doc, meta, title, rows){
+  doc.addPage();
+  const s = newSectionDrawer(doc, meta);
+  s.title(title);
+  const flat = rows.flatMap(r => (r.origenes || []).map(o => [r.descripcion, r.unidad, originLabel(o), (o.cantidadFinalAportada ?? 0).toFixed(4), money(o.importeConsolidado ?? o.importeAportadoReal ?? 0)]));
+  if(!flat.length){ s.emptyNote('Sin contribuciones.'); return s; }
+  s.table(['Insumo', 'Unidad', 'Capitulo > Concepto > APU (cantidad)', 'Cantidad aportada', 'Importe'], flat, [2, 0.7, 3.6, 1.1, 1.2]);
+  return s;
+}
+
+/* `explosion` (opcional) = objeto YA calculado (computeScopedExplosion) que
+   muestra el panel -- el PDF usa exactamente esos datos. `scope`:
+   PRESUPUESTO | PROYECTO (default PROYECTO, comportamiento historico). */
+export async function exportExplosionPdf({ projectId, company = {}, save = true, fileName, scope = EXPLOSION_SCOPE.PROYECTO, explosion = null } = {}){
   if(!projectId) throw new Error('Falta projectId para generar la Explosion.');
-  const [apuDocs, project] = await Promise.all([loadProjectApus(projectId), loadProjectMeta(projectId)]);
-  if(!apuDocs.length) throw new Error('El proyecto no tiene ningun APU guardado (server-side) para generar la Explosion.');
-  const { materials, auxiliares, labor, machinery } = computeExplosionData(apuDocs);
-  const data = { materials, auxiliares, labor, machinery, apuCount: apuDocs.length };
+  const [loaded, project] = await Promise.all([explosion ? Promise.resolve(explosion) : loadScopedExplosion({ projectId, scope }), loadProjectMeta(projectId)]);
+  assertExplosionHasLines(loaded);
+  const { materials, auxiliares, labor, machinery } = loaded.data;
+  const data = { materials, auxiliares, labor, machinery, apuCount: loaded.summary?.apusDistintos ?? 0, scope: loaded.scope, summary: loaded.summary };
   const meta = {
     proyecto: company?.name || project?.name || '', cliente: company?.client || project?.client || '',
     clave: projectId, versionLabel: 'EXPLOSION', fecha: new Date().toLocaleDateString('es-MX')
@@ -99,6 +120,7 @@ export async function exportExplosionPdf({ projectId, company = {}, save = true,
   drawLaborSection(doc, meta, labor).footer();
   drawMachinerySection(doc, meta, machinery).footer();
   drawMaterialSection(doc, meta, 'AUXILIARES', auxiliares).footer();
+  drawContributionsSection(doc, meta, 'CONTRIBUCIONES POR CONCEPTO -- MATERIALES', materials).footer();
 
   const total = doc.internal.getNumberOfPages();
   const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), M = 14;
@@ -108,11 +130,11 @@ export async function exportExplosionPdf({ projectId, company = {}, save = true,
     doc.text(pdfText(`Pagina ${i} de ${total}`), W - M, H - 6, { align: 'right' });
   }
 
-  if(save !== false) doc.save(fileName || `${projectId}-EXPLOSION-ZOEMEC.pdf`);
+  if(save !== false) doc.save(fileName || `${projectId}-EXPLOSION${loaded.scope === EXPLOSION_SCOPE.PRESUPUESTO ? '-PRESUPUESTO' : ''}-ZOEMEC.pdf`);
 
   try{
     await apiPost('/api/export-events', { action: 'record', scope: 'EXPLOSION', projectId, format: 'PDF', mode: 'TECNICO' });
   }catch{ /* el archivo ya se genero; un fallo de auditoria secundaria no revierte la exportacion */ }
 
-  return { doc, data, project };
+  return { doc, data, project, explosion: loaded };
 }

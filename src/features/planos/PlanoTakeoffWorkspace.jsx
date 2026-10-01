@@ -24,6 +24,7 @@ import { createEmptyCadModel } from '../../domain/cadModel.js';
 import { buildCadModelFromRecognition, proposeScale } from '../../domain/cadRecognition.js';
 import { buildFixtureCadModel } from '../../domain/cadFixture.js';
 import { saveUnderlay, loadUnderlay } from './underlayCache.js';
+import { useCadDraftPersistence } from './useCadDraftPersistence.js';
 
 const LOCAL_KEY = 'zoemec.cadPlano.local';
 
@@ -81,13 +82,19 @@ export default function PlanoTakeoffWorkspace({ user, projectId = null, organiza
   const [focusElementId, setFocusElementId] = useState(null);
   const [localDraft] = useState(() => { try{ return JSON.parse(localStorage.getItem(LOCAL_KEY) || 'null'); }catch{ return null; } });
 
+  const [pendingPdf, setPendingPdf] = useState(null); // F4: seleccion de pagina de un PDF multipagina
+  const [underlayScope, setUnderlayScope] = useState(null); // 'device' | 'missing' | null
+
   const planoIdRef = useRef(null);
-  const currentVersionRef = useRef(null);
-  const saveTimerRef = useRef(null);
-  const savingRef = useRef(false);
-  const pendingSnapshotRef = useRef(null);
   const latestRef = useRef({ elementos: [], resolvedScale: null, fileName: '' });
   latestRef.current = { elementos, resolvedScale, fileName };
+  const latestModelRef = useRef(null);
+
+  /* F4: AUTOSAVE = borrador vigente (save-draft, sin version historica);
+     "Guardar version" = checkpoint inmutable. */
+  const persistence = useCadDraftPersistence({
+    buildSnapshot: model => ({ elementos: latestRef.current.elementos, escalaResuelta: latestRef.current.resolvedScale, fileName: latestRef.current.fileName, cadModel: model })
+  });
 
   const setPlano = id => { planoIdRef.current = id; setPlanoId(id); };
 
@@ -99,56 +106,38 @@ export default function PlanoTakeoffWorkspace({ user, projectId = null, organiza
   useEffect(() => { loadExistingPlanos(); }, [loadExistingPlanos]);
 
   /* ---------- persistencia ---------- */
-  const flushSave = useCallback(async () => {
-    if(savingRef.current || !pendingSnapshotRef.current) return;
-    const snapshot = pendingSnapshotRef.current;
-    pendingSnapshotRef.current = null;
-    if(!planoIdRef.current){
-      try{ localStorage.setItem(LOCAL_KEY, JSON.stringify({ snapshot, at: Date.now() })); setSaveState({ status: 'local', at: Date.now() }); }
-      catch{ setSaveState({ status: 'error', message: 'No se pudo guardar localmente.' }); }
-      return;
-    }
-    savingRef.current = true;
-    setSaveState({ status: 'saving' });
-    try{
-      const res = await apiPost('/api/plano-takeoffs', { action: 'save-version', id: planoIdRef.current, snapshot, expectedParentVersionId: currentVersionRef.current });
-      currentVersionRef.current = res.planoTakeoff.currentVersion;
-      setSaveState({ status: 'saved', at: Date.now(), version: res.planoTakeoff.currentVersion });
-    }catch(err){
-      if(err?.code === 'VERSION_CONFLICT') setSaveState({ status: 'conflict', message: tr('planoTakeoff.saveConflict') });
-      else{
-        try{ localStorage.setItem(LOCAL_KEY, JSON.stringify({ snapshot, planoId: planoIdRef.current, at: Date.now() })); }catch{ /* sin espacio */ }
-        setSaveState({ status: 'error', message: `${err.message || 'Error al guardar'} (copia local conservada)` });
-      }
-    }finally{
-      savingRef.current = false;
-      if(pendingSnapshotRef.current) flushSave();
-    }
-  }, [tr]);
-
   const onModelChange = useCallback((model) => {
+    latestModelRef.current = model;
+    if(planoIdRef.current){ persistence.onModelChange(model); return; }
+    // Sin plano en el servidor (sin conexion): borrador SOLO local, avisado.
     const { elementos: els, resolvedScale: sc, fileName: fn } = latestRef.current;
-    pendingSnapshotRef.current = { elementos: els, escalaResuelta: sc, fileName: fn, cadModel: model };
-    if(saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(flushSave, 800);
-  }, [flushSave]);
-  useEffect(() => () => { if(saveTimerRef.current) clearTimeout(saveTimerRef.current); }, []);
+    try{ localStorage.setItem(LOCAL_KEY, JSON.stringify({ snapshot: { elementos: els, escalaResuelta: sc, fileName: fn, cadModel: model }, at: Date.now() })); setSaveState({ status: 'local', at: Date.now() }); }
+    catch{ setSaveState({ status: 'error', message: 'No se pudo guardar localmente.' }); }
+  }, [persistence]);
 
-  const createRemotePlano = async ({ name, mimeType, numPages = 1, snapshot, underlayForCache }) => {
+  const createRemotePlano = async ({ name, mimeType, numPages = 1, snapshot, underlayForCache, sourceKind = null }) => {
     const id = `PLANO-${uid()}-${Date.now().toString(36)}`;
     try{
-      const created = await apiPost('/api/plano-takeoffs', { action: 'create', id, projectId, fileName: name, mimeType, numPages, snapshot });
+      const created = await apiPost('/api/plano-takeoffs', { action: 'create', id, projectId, fileName: name, mimeType, numPages, snapshot, sourceKind });
       setPlano(id);
-      currentVersionRef.current = created.planoTakeoff.currentVersion;
+      persistence.bind(id, Number(created.planoTakeoff.revision || 0), created.planoTakeoff.currentVersion);
       setSaveState({ status: 'saved', at: Date.now(), version: created.planoTakeoff.currentVersion });
-      if(underlayForCache) saveUnderlay(id, underlayForCache);
+      if(underlayForCache){ saveUnderlay(id, underlayForCache); setUnderlayScope('device'); }
       loadExistingPlanos();
     }catch(err){
       setPlano(null);
-      currentVersionRef.current = null;
+      persistence.bind(null, null);
       try{ localStorage.setItem(LOCAL_KEY, JSON.stringify({ snapshot, at: Date.now() })); }catch{ /* sin espacio */ }
       setSaveState({ status: 'local', message: `Sin conexión con el servidor (${err.message || 'error'}): guardado solo en este equipo.` });
     }
+  };
+
+  const checkpoint = async () => {
+    if(!planoIdRef.current){ window.zoemecNotify?.('Guarda el plano en el servidor antes de crear una versión.', 'error'); return; }
+    try{
+      const doc = await persistence.checkpoint(latestModelRef.current || cad.model, 'Guardar versión');
+      if(doc) window.zoemecNotify?.(`Versión ${doc.currentVersion} guardada (rev. ${doc.revision}).`, 'success');
+    }catch(err){ window.zoemecNotify?.(err.message, 'error'); }
   };
 
   const startModel = (model, { key, rep = null } = {}) => {
@@ -175,10 +164,28 @@ export default function PlanoTakeoffWorkspace({ user, projectId = null, organiza
         setUnderlay(ul);
         startModel(model);
         setStatus({ kind: 'ready', message: 'Imagen cargada: calibra la escala con una medida conocida y traza encima.' });
-        await createRemotePlano({ name: selected.name, mimeType: selected.type, snapshot: { elementos: [], escalaResuelta: null, fileName: selected.name, cadModel: model }, underlayForCache: ul });
+        await createRemotePlano({ name: selected.name, mimeType: selected.type, snapshot: { elementos: [], escalaResuelta: null, fileName: selected.name, cadModel: model }, underlayForCache: ul, sourceKind: 'PLANO_IMAGEN' });
         return;
       }
-      const rendered = await renderPdfUnderlay(dataUrl, 1);
+      // F4: PDF multipagina -> el usuario elige la pagina a trazar (una por plano).
+      const pdfDoc = await loadPdfDocument(dataUrl);
+      if(pdfDoc.numPages > 1){
+        setPendingPdf({ dataUrl, name: selected.name, type: selected.type, numPages: pdfDoc.numPages, page: 1 });
+        setStatus({ kind: 'ready', message: `El PDF tiene ${pdfDoc.numPages} páginas: elige cuál trazar.` });
+        return;
+      }
+      await processPdfPage({ dataUrl, name: selected.name, type: selected.type }, 1);
+    }catch(err){
+      setStatus({ kind: 'error', message: err.message || 'No se pudo abrir el plano.' });
+      window.zoemecNotify?.(err.message || 'No se pudo abrir el plano.', 'error');
+    }
+  };
+
+  const processPdfPage = async ({ dataUrl, name, type }, pageNumber) => {
+    setPendingPdf(null);
+    const selected = { name, type };
+    try{
+      const rendered = await renderPdfUnderlay(dataUrl, pageNumber);
       setUnderlay(rendered.underlay);
       setStatus({ kind: 'analyzing', message: tr('planoTakeoff.analyzing') });
       let result = null, analysisError = null;
@@ -189,16 +196,16 @@ export default function PlanoTakeoffWorkspace({ user, projectId = null, organiza
       const scaleRes = result?.resolvedScale || null;
       setElementos(els); setResolvedScale(scaleRes);
       const { model, report: rep } = buildCadModelFromRecognition({
-        elementos: els, resolvedScale: scaleRes, pageNumber: 1, toViewport: rendered.toViewport,
-        underlay: { kind: 'pdf', page: 1, widthUnits: rendered.underlay.widthUnits, heightUnits: rendered.underlay.heightUnits }
+        elementos: els, resolvedScale: scaleRes, pageNumber, toViewport: rendered.toViewport,
+        underlay: { kind: 'pdf', page: pageNumber, widthUnits: rendered.underlay.widthUnits, heightUnits: rendered.underlay.heightUnits }
       });
       startModel(model, { rep });
       setStatus(analysisError
         ? { kind: 'error', message: `El análisis automático no está disponible (${analysisError.message || 'error'}). Puedes trazar el plano manualmente.` }
         : { kind: 'ready', message: `Análisis: ${rep.walls} muros, ${rep.doors} puertas, ${rep.windows} ventanas, ${rep.spaces} espacios propuestos — revisa y acepta.` });
       await createRemotePlano({
-        name: selected.name, mimeType: selected.type || 'application/pdf', numPages: result?.numPages || rendered.numPages,
-        snapshot: { elementos: els, escalaResuelta: scaleRes, fileName: selected.name, cadModel: model }, underlayForCache: rendered.underlay
+        name: pageNumber > 1 ? `${selected.name} (pág. ${pageNumber})` : selected.name, mimeType: selected.type || 'application/pdf', numPages: result?.numPages || rendered.numPages,
+        snapshot: { elementos: els, escalaResuelta: scaleRes, fileName: selected.name, cadModel: model }, underlayForCache: rendered.underlay, sourceKind: 'PLANO_PDF'
       });
     }catch(err){
       setStatus({ kind: 'error', message: err.message || 'No se pudo abrir el plano.' });
@@ -212,7 +219,7 @@ export default function PlanoTakeoffWorkspace({ user, projectId = null, organiza
     setFileName(name); setUnderlay(null); setElementos([]); setResolvedScale(null); setFocusElementId(null);
     startModel(model);
     setStatus({ kind: 'ready', message: 'Fixture 8.00 × 8.00 m, altura 3.00 m, puerta 0.90 × 2.10 m, ventana 2.00 × 1.20 m.' });
-    await createRemotePlano({ name, mimeType: 'application/x-zoemec-fixture', snapshot: { elementos: [], escalaResuelta: null, fileName: name, cadModel: model } });
+    await createRemotePlano({ name, mimeType: 'application/x-zoemec-fixture', snapshot: { elementos: [], escalaResuelta: null, fileName: name, cadModel: model }, sourceKind: 'FIXTURE' });
   };
 
   const reopenPlanoTakeoff = async (id) => {
@@ -220,7 +227,7 @@ export default function PlanoTakeoffWorkspace({ user, projectId = null, organiza
     if(!data?.planoTakeoff){ window.zoemecNotify?.('No se encontró el plano.', 'error'); return false; }
     const p = data.planoTakeoff;
     setPlano(p.id);
-    currentVersionRef.current = p.currentVersion;
+    persistence.bind(p.id, Number(p.revision || 0), p.currentVersion);
     const snap = p.snapshot || {};
     const els = snap.elementos || [];
     setFileName(p.fileName || p.id); setElementos(els); setResolvedScale(snap.escalaResuelta || null);
@@ -232,16 +239,17 @@ export default function PlanoTakeoffWorkspace({ user, projectId = null, organiza
     }
     const cached = await loadUnderlay(p.id);
     setUnderlay(cached && model.underlay ? cached : null);
-    startModel(model, { key: `${p.id}:${p.currentVersion}`, rep });
+    setUnderlayScope(!model.underlay ? null : cached ? 'device' : 'missing');
+    startModel(model, { key: `${p.id}:${p.revision || 0}:${p.currentVersion}`, rep });
     setSaveState({ status: 'saved', at: Date.now(), version: p.currentVersion });
-    setStatus({ kind: 'ready', message: cached || !model.underlay ? '' : 'El plano original no está en este equipo; la geometría y las cantidades sí se recuperaron.' });
+    setStatus({ kind: 'ready', message: cached || !model.underlay ? '' : 'El plano original no está en este equipo; la geometría y las cantidades sí se recuperaron del servidor.' });
     return true;
   };
 
   const restoreLocalDraft = () => {
     const snap = localDraft?.snapshot;
     if(!snap?.cadModel) return;
-    setPlano(null); currentVersionRef.current = null;
+    setPlano(null); persistence.bind(null, null);
     setFileName(snap.fileName || 'Borrador local'); setElementos(snap.elementos || []); setResolvedScale(snap.escalaResuelta || null);
     setUnderlay(null);
     startModel(snap.cadModel, { key: `local:${localDraft.at}` });
@@ -259,13 +267,11 @@ export default function PlanoTakeoffWorkspace({ user, projectId = null, organiza
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navigationTarget]);
 
-  const saveLabel = {
-    saving: tr('planoTakeoff.saving'),
-    saved: `${tr('planoTakeoff.saved')}${saveState.version ? ` · ${saveState.version}` : ''}`,
-    local: saveState.message || 'Guardado en este equipo',
-    conflict: saveState.message,
-    error: saveState.message
-  }[saveState.status] || null;
+  // F4: con plano en el servidor manda el estado del borrador/checkpoint;
+  // sin servidor, el aviso de guardado SOLO local.
+  const saveLabel = planoId
+    ? persistence.saveLabel
+    : ({ local: saveState.message || 'Guardado solo en este equipo', error: saveState.message }[saveState.status] || null);
 
   const topBarExtra = <>
     <label className="cad-file-btn">
@@ -274,10 +280,11 @@ export default function PlanoTakeoffWorkspace({ user, projectId = null, organiza
     </label>
     {(existingPlanos.length > 0 || localDraft?.snapshot?.cadModel) && <select className="cad-open-select" value="" onChange={e => { if(e.target.value === '__local__') restoreLocalDraft(); else if(e.target.value) reopenPlanoTakeoff(e.target.value); }} aria-label={tr('planoTakeoff.existingTitle')}>
       <option value="">{tr('planoTakeoff.reopen')}…</option>
-      {existingPlanos.map(p => <option key={p.id} value={p.id}>{p.fileName || p.id} · {p.currentVersion}</option>)}
+      {existingPlanos.map(p => <option key={p.id} value={p.id}>{p.fileName || p.id} · {p.currentVersion}{p.revision ? ` · rev. ${p.revision}` : ''}</option>)}
       {localDraft?.snapshot?.cadModel && <option value="__local__">Borrador local · {new Date(localDraft.at).toLocaleString()}</option>}
     </select>}
     <button type="button" className="soft" onClick={loadFixture}>Fixture 8×8</button>
+    {planoId && <button type="button" className="soft" onClick={checkpoint} disabled={persistence.saveState.status === 'saving'}>Guardar versión</button>}
     {fileName && <span className="cad-file-name" title={fileName}>{fileName}</span>}
   </>;
 
@@ -286,7 +293,18 @@ export default function PlanoTakeoffWorkspace({ user, projectId = null, organiza
       <button type="button" className="soft" onClick={onReturnToWorkspace}>Volver a Cuantificación</button>
     </div>}
     {status.message && <p className={`cad-banner is-${status.kind}`} role="status">{status.message}</p>}
+    {pendingPdf && <div className="cad-banner is-ready" role="dialog" aria-label="Elegir página del PDF">
+      Página a trazar:{' '}
+      <select value={pendingPdf.page} onChange={e => setPendingPdf(p => ({ ...p, page: Number(e.target.value) }))}>
+        {Array.from({ length: pendingPdf.numPages }, (_, i) => <option key={i + 1} value={i + 1}>Página {i + 1}</option>)}
+      </select>{' '}
+      <button type="button" onClick={() => processPdfPage(pendingPdf, pendingPdf.page)}>Abrir página</button>{' '}
+      <button type="button" className="soft" onClick={() => { setPendingPdf(null); setStatus({ kind: 'idle', message: '' }); }}>Cancelar</button>
+    </div>}
+    {underlayScope === 'device' && <p className="muted" style={{ fontSize: '.78rem', margin: '0 0 6px' }}>Plano original disponible únicamente en este dispositivo. La geometría, la escala y las cantidades sí están guardadas en el servidor.</p>}
+    {persistence.saveState.status === 'conflict' && <p className="cad-banner is-error" role="alert">{persistence.saveState.message} <button type="button" className="soft" onClick={() => planoId && reopenPlanoTakeoff(planoId)}>Recargar</button></p>}
     <CadWorkspace
+      persistNow={planoId ? persistence.persistNow : null}
       initialModel={cad.model} modelKey={cad.key} underlay={underlay} onModelChange={onModelChange}
       projectId={projectId} planoId={planoId} fileName={fileName} user={user} onNeedProject={onNeedProject}
       focusElementId={focusElementId} recognitionReport={report} saveLabel={saveLabel}

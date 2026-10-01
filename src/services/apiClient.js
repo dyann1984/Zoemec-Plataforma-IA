@@ -47,6 +47,12 @@ export async function apiPost(path, body){
     const err = new Error(data.error || 'No se pudo completar la solicitud.');
     if(data.code) err.code = data.code;
     if(data.currentVersion) err.currentVersion = data.currentVersion;
+    if(data.currentRevision !== undefined) err.currentRevision = data.currentRevision; // F3
+    // F1/P0: status HTTP + retryAfterSeconds, para que un 429 se distinga de
+    // un error real (lotes: PENDIENTE POR LIMITE; precios: PRICE_SEARCH_FAILED
+    // con motivo). Aditivo: ningun llamador existente depende de su ausencia.
+    err.status = res.status;
+    if(data.retryAfterSeconds) err.retryAfterSeconds = data.retryAfterSeconds;
     throw err;
   }
   return data;

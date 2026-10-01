@@ -13,7 +13,7 @@
    proyecto/presupuesto. */
 import { toSafeNonNegativeNumber } from '../lib/apuCalc.js';
 import {
-  assertSingleTenantScope, groupKeyFor, reconcilePrice, foldDescription, buildExplosionSnapshot
+  groupKeyFor, reconcilePrice, foldDescription, buildExplosionSnapshot, explosionLinesOf, lineTrace
 } from './explosionEngine.js';
 
 /* Clasificacion heuristica de "categoria" de oficio -- SOLO para agrupar/
@@ -55,14 +55,15 @@ function priceConfidenceOf(row){
   return Number.isFinite(fromFuente) ? fromFuente : 0;
 }
 
-export function buildLaborExplosion(apuDocs){
-  const docs = Array.isArray(apuDocs) ? apuDocs.filter(Boolean) : [];
-  assertSingleTenantScope(docs);
+export function buildLaborExplosion(input){
+  const lines = explosionLinesOf(input);
   const groups = new Map();
 
-  for(const doc of docs){
-    const snapshot = doc?.snapshot || {};
-    const cantidadObra = toSafeNonNegativeNumber(snapshot.cantidadObra);
+  for(const line of lines){
+    const snapshot = line.apuDoc?.snapshot || {};
+    const trace = lineTrace(line);
+    // F2: cantidad autoritativa de la linea (concepto.qty si esta vinculado).
+    const cantidadObra = toSafeNonNegativeNumber(line.qty);
     const rows = Array.isArray(snapshot.labor) ? snapshot.labor : [];
     for(const row of rows){
       const key = groupKeyFor(row, 'labor');
@@ -81,9 +82,8 @@ export function buildLaborExplosion(apuDocs){
       const horasPorJornada = toSafeNonNegativeNumber(row?.jornada) || 8;
       const costoPorJornada = toSafeNonNegativeNumber(row?.salarioBase) * (toSafeNonNegativeNumber(row?.fsr) || 1);
       groups.get(key).origenes.push({
-        apuId: doc.id,
-        apuClave: snapshot.clave ?? null,
-        apuConcept: snapshot.concept ?? '',
+        ...trace,
+        jornadasUnitarias,
         cuadrilla: row?.cuadrilla ?? null,
         rendimiento: row?.rendimiento ?? null,
         jornadaHoras: horasPorJornada,
@@ -124,6 +124,7 @@ export function buildLaborExplosion(apuDocs){
       reconciliationEmpatados: reconciliation.empatados,
       confianza: reconciliation.confidence,
       apusOrigen: [...new Set(group.origenes.map(o => o.apuId))],
+      conceptosOrigen: [...new Set(group.origenes.map(o => o.conceptoId).filter(Boolean))],
       origenes: origenesConImporteConsolidado
     };
   }).sort((a, b) => b.importe - a.importe);
@@ -163,7 +164,7 @@ export function laborResourceView(rows, { projectWorkingDays = null } = {}){
     jornadas: r.totalJornadas,
     trabajadoresEquivalentes: hasDuration ? r.totalJornadas / projectWorkingDays : null,
     trabajadoresEquivalentesNota: hasDuration ? null : 'Requiere la duracion (jornadas habiles) del proyecto para calcularse -- no se estima sin ese dato real.',
-    conceptosOrigen: r.origenes.map(o => ({ apuId: o.apuId, apuClave: o.apuClave, apuConcept: o.apuConcept, jornadas: o.jornadasAportadas }))
+    conceptosOrigen: r.origenes.map(o => ({ apuId: o.apuId, apuClave: o.apuClave, apuConcept: o.apuConcept, conceptoId: o.conceptoId, conceptoClave: o.conceptoClave, capitulo: o.capitulo, cantidadConcepto: o.cantidadConcepto, jornadas: o.jornadasAportadas }))
   }));
 }
 
@@ -177,11 +178,11 @@ export function summarizeLaborExplosion(rows){
 }
 
 export async function buildLaborExplosionSnapshot({ apuDocs, projectId, organizationId }){
-  const docs = Array.isArray(apuDocs) ? apuDocs.filter(Boolean) : [];
-  const labor = buildLaborExplosion(docs);
+  const lines = explosionLinesOf(apuDocs);
+  const labor = buildLaborExplosion(lines);
   return buildExplosionSnapshot({
     projectId, organizationId,
-    sourceApuIds: docs.map(d => d.id),
+    sourceApuIds: lines.map(l => l.apuDoc.id),
     totals: { labor: summarizeLaborExplosion(labor) },
     rows: { labor }
   });

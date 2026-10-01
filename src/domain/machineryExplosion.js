@@ -24,7 +24,7 @@
    confiable, agrega una clasificacion explicita y documentada"). */
 import { toSafeNonNegativeNumber, calcEquipmentRow, calcLaborRow, calcHerramientaDetalleRow } from '../lib/apuCalc.js';
 import {
-  assertSingleTenantScope, groupKeyFor, reconcilePrice, buildExplosionSnapshot
+  groupKeyFor, reconcilePrice, buildExplosionSnapshot, explosionLinesOf, lineTrace
 } from './explosionEngine.js';
 
 export const MACHINERY_CATEGORY = Object.freeze({
@@ -53,11 +53,14 @@ function priceConfidenceOf(row){
    real aportado al proyecto (mismo truco que ya usa POR_LOTE internamente:
    dividir entre cantidadContractual y luego multiplicar por esa misma
    cantidad recupera el costo total del lote sin duplicarlo). */
-function buildEquipmentGroup(docs, categoryFilter){
+function buildEquipmentGroup(lines, categoryFilter){
   const groups = new Map();
-  for(const doc of docs){
-    const snapshot = doc?.snapshot || {};
-    const cantidadObra = toSafeNonNegativeNumber(snapshot.cantidadObra);
+  for(const line of lines){
+    const snapshot = line.apuDoc?.snapshot || {};
+    const trace = lineTrace(line);
+    // F2: cantidad autoritativa de la linea -- tambien es la cantidad
+    // contractual con la que calcEquipmentRow reparte POR_LOTE.
+    const cantidadObra = toSafeNonNegativeNumber(line.qty);
     const ctx = { cantidadContractual: cantidadObra };
     const rows = Array.isArray(snapshot.equipment) ? snapshot.equipment : [];
     for(const row of rows){
@@ -75,7 +78,8 @@ function buildEquipmentGroup(docs, categoryFilter){
       const esHoras = row?.integracion !== 'AMORTIZABLE' && row?.integracion !== 'POR_JORNADA' && /\b(hr|hora|horas)\b/i.test(String(row?.unidad || ''));
       const horasAportadas = esHoras ? toSafeNonNegativeNumber(row?.cantidad) * cantidadObra : null;
       groups.get(key).origenes.push({
-        apuId: doc.id, apuClave: snapshot.clave ?? null, apuConcept: snapshot.concept ?? '',
+        ...trace,
+        costoPorUnidadConcepto,
         integracion: row?.integracion || 'POR_UNIDAD_OBRA',
         cantidadDeclarada: row?.cantidad ?? null,
         tarifa: toSafeNonNegativeNumber(row?.tarifa),
@@ -110,6 +114,7 @@ function finalizeGroups(groups){
       reconciliationEmpatados: reconciliation.empatados,
       confianza: reconciliation.confidence,
       apusOrigen: [...new Set(group.origenes.map(o => o.apuId))],
+      conceptosOrigen: [...new Set(group.origenes.map(o => o.conceptoId).filter(Boolean))],
       origenes: group.origenes
     };
   }).sort((a, b) => b.importe - a.importe);
@@ -125,11 +130,12 @@ function finalizeGroups(groups){
    consolidado, no 20. */
 const PORCENTAJE_SYNTHETIC_KEY = 'desc:herramienta menor (% de mano de obra)|unidad:global';
 
-function buildHandToolGroup(docs){
+function buildHandToolGroup(lines){
   const groups = new Map();
-  for(const doc of docs){
-    const snapshot = doc?.snapshot || {};
-    const cantidadObra = toSafeNonNegativeNumber(snapshot.cantidadObra);
+  for(const line of lines){
+    const snapshot = line.apuDoc?.snapshot || {};
+    const trace = lineTrace(line);
+    const cantidadObra = toSafeNonNegativeNumber(line.qty); // F2: cantidad autoritativa
     const hm = snapshot.herramientaMenor || { modo: 'porcentaje', porcentaje: 0, detalle: [] };
     if(hm.modo === 'detalle'){
       for(const row of (Array.isArray(hm.detalle) ? hm.detalle : [])){
@@ -139,7 +145,7 @@ function buildHandToolGroup(docs){
         }
         const costoPorUnidadConcepto = toSafeNonNegativeNumber(calcHerramientaDetalleRow(row));
         groups.get(key).origenes.push({
-          apuId: doc.id, apuClave: snapshot.clave ?? null, apuConcept: snapshot.concept ?? '',
+          ...trace,
           modo: 'detalle', cantidadDeclarada: row?.cantidad ?? null,
           priceConfidence: priceConfidenceOf(row),
           importeAportadoReal: costoPorUnidadConcepto * cantidadObra,
@@ -153,7 +159,7 @@ function buildHandToolGroup(docs){
         groups.set(PORCENTAJE_SYNTHETIC_KEY, { key: PORCENTAJE_SYNTHETIC_KEY, clave: null, descripcion: 'Herramienta menor (% de mano de obra)', unidad: 'global', origenes: [] });
       }
       groups.get(PORCENTAJE_SYNTHETIC_KEY).origenes.push({
-        apuId: doc.id, apuClave: snapshot.clave ?? null, apuConcept: snapshot.concept ?? '',
+        ...trace,
         modo: 'porcentaje', porcentajeAplicado: porcentaje,
         priceConfidence: 0,
         importeAportadoReal: moPerUnit * porcentaje / 100 * cantidadObra,
@@ -167,17 +173,17 @@ function buildHandToolGroup(docs){
     unidad: group.unidad,
     importe: group.origenes.reduce((s, o) => s + o.importeAportadoReal, 0),
     apusOrigen: [...new Set(group.origenes.map(o => o.apuId))],
+    conceptosOrigen: [...new Set(group.origenes.map(o => o.conceptoId).filter(Boolean))],
     origenes: group.origenes
   })).sort((a, b) => b.importe - a.importe);
 }
 
-export function buildMachineryExplosion(apuDocs){
-  const docs = Array.isArray(apuDocs) ? apuDocs.filter(Boolean) : [];
-  assertSingleTenantScope(docs);
+export function buildMachineryExplosion(input){
+  const lines = explosionLinesOf(input);
   return {
-    maquinaria: buildEquipmentGroup(docs, MACHINERY_CATEGORY.MAQUINARIA_PESADA),
-    equipo: buildEquipmentGroup(docs, MACHINERY_CATEGORY.EQUIPO),
-    herramientaMenor: buildHandToolGroup(docs)
+    maquinaria: buildEquipmentGroup(lines, MACHINERY_CATEGORY.MAQUINARIA_PESADA),
+    equipo: buildEquipmentGroup(lines, MACHINERY_CATEGORY.EQUIPO),
+    herramientaMenor: buildHandToolGroup(lines)
   };
 }
 
@@ -187,11 +193,11 @@ export function summarizeMachineryExplosion({ maquinaria, equipo, herramientaMen
 }
 
 export async function buildMachineryExplosionSnapshot({ apuDocs, projectId, organizationId }){
-  const docs = Array.isArray(apuDocs) ? apuDocs.filter(Boolean) : [];
-  const machinery = buildMachineryExplosion(docs);
+  const lines = explosionLinesOf(apuDocs);
+  const machinery = buildMachineryExplosion(lines);
   return buildExplosionSnapshot({
     projectId, organizationId,
-    sourceApuIds: docs.map(d => d.id),
+    sourceApuIds: lines.map(l => l.apuDoc.id),
     totals: { machinery: summarizeMachineryExplosion(machinery) },
     rows: { machinery }
   });

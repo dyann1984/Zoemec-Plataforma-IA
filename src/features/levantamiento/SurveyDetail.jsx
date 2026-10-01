@@ -8,11 +8,14 @@ import { PageHead } from '../../components/ui/PageElements.jsx';
 import { useI18n } from '../../i18n/I18nContext.jsx';
 import { SURVEY_STATUS, SURVEY_SOURCE_TYPE, makeEmptySpace } from '../../domain/levantamientoSchema.js';
 import { SCAN_MEDIA_KIND } from '../../domain/levantamientoMedia.js';
-import { aggregateSurveyTotals, recomputeSurvey } from '../../lib/levantamientoCalc.js';
+import { recomputeSurvey } from '../../lib/levantamientoCalc.js';
 import { auth, storage } from '../../firebase.js';
 import { ConstructionProposalPanel } from './ConstructionProposalPanel.jsx';
 import { fetchEvidenceItemsForSurvey } from '../../services/evidenceItemsApi.js';
 import { syncQuantificationToCatalog } from '../../domain/quantificationCostBridge.js';
+import { SurveyCadTab } from './SurveyCadTab.jsx';
+import { computeSurveyQuantities, spaceHasCad, spacePlanoId, QUANTITY_ORIGIN, GEOMETRY_MODE } from '../../domain/levantamientoCadLink.js';
+import { loadPlano } from '../planos/cadPlanoCloud.js';
 
 const STATUS_I18N_KEY = {
   [SURVEY_STATUS.DRAFT]: 'statusDraft',
@@ -39,8 +42,18 @@ function formatDuration(seconds){
   return `${mm}:${ss}`;
 }
 
-const BASE_TABS = ['datos', 'plano2d', 'vista3d', 'cuantificacion'];
-const TAB_I18N_KEY = { datos: 'tabData', plano2d: 'tabPlan2d', vista3d: 'tabView3d', cuantificacion: 'tabQuantification', multimedia: 'phoneScanTabMultimedia', propuesta: 'tabProposal' };
+/* Fase 1 del plan integral: se agrega 'cad' entre 'vista3d' y
+   'cuantificacion' -- pestana "Editar plano CAD" que abre el CadWorkspace
+   ya funcional (2D dibujable, 3D, propiedades, cotas, historial, snap,
+   ligas concepto/APU con impacto economico) sobre la geometria derivada
+   del Space, sin obligar al usuario a subir un PDF o pasar por Visual IA.
+   La convivencia con 'datos'/'plano2d'/'vista3d' es intencional (regla 9
+   del encargo): 'datos' guarda las medidas declaradas por el maestro,
+   'plano2d'/'vista3d' las visualizan de solo lectura, y 'cad' es la
+   version editable evolutiva que se persiste en survey.cadPlanos. */
+const BASE_TABS = ['datos', 'plano2d', 'vista3d', 'cad', 'cuantificacion'];
+const TAB_I18N_KEY = { datos: 'tabData', plano2d: 'tabPlan2d', vista3d: 'tabView3d', cad: 'tabCad', cuantificacion: 'tabQuantification', multimedia: 'phoneScanTabMultimedia', propuesta: 'tabProposal' };
+const TAB_FALLBACK_LABEL = { cad: 'Editar plano 2D/3D' };
 
 /* Vista "Abrir" de un levantamiento ya guardado: permite editar nombre,
    espacios, puertas y ventanas, y persiste con onChange (que en
@@ -57,7 +70,24 @@ export function SurveyDetail({ survey, projectId, onBack, onChange, onSendToApu,
   const [activeTab, setActiveTab] = useState(initialTab);
   const [activeSpaceId, setActiveSpaceId] = useState(survey.spaces[0]?.id || null);
   const [mediaUrls, setMediaUrls] = useState({});
-  const totals = aggregateSurveyTotals(survey);
+  /* F4: si un espacio tiene plano CAD, sus cantidades salen del cadModel
+     PERSISTIDO en el servidor (fuente autoritativa), nunca de largo/ancho/
+     alto historicos. Los modelos se recargan al volver a Datos/Cuantificacion
+     (tras editar el CAD). */
+  const [cadModels, setCadModels] = useState({});
+  const linksKey = JSON.stringify(survey.cadLinks || {});
+  useEffect(() => {
+    let alive = true;
+    const linked = (survey.spaces || []).filter(s => spaceHasCad(survey, s.id));
+    if(!linked.length){ setCadModels({}); return undefined; }
+    Promise.all(linked.map(async s => [s.id, (await loadPlano(spacePlanoId(survey, s.id)))?.snapshot?.cadModel || null]))
+      .then(pairs => { if(alive) setCadModels(Object.fromEntries(pairs.filter(([, m]) => m))); })
+      .catch(() => {});
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [survey.id, linksKey, activeTab]);
+  const quantities = computeSurveyQuantities(survey, cadModels);
+  const totals = quantities.totals;
   const statusLabel = tr(`levantamiento.${STATUS_I18N_KEY[survey.status] || 'statusDraft'}`);
   const activeSpace = survey.spaces.find(s => s.id === activeSpaceId) || survey.spaces[0] || null;
   const scanMedia = survey.scanMedia || [];
@@ -123,12 +153,18 @@ export function SurveyDetail({ survey, projectId, onBack, onChange, onSendToApu,
      de planoReview.js (TIPOS_ELEMENTO) listo para el gate de Takeoff --
      buildPlanoElementFromConcept no calcula nada nuevo, solo empaqueta lo
      que aggregateSurveyTotals ya calculo. */
+  // F4: el envio "manual" al catalogo solo aplica a los espacios SIN CAD
+  // (cantidad desde captura manual). Los espacios con CAD se ligan desde el
+  // plano (generadores trazables, F3) -- nunca se mezclan ambas fuentes.
+  const manualRows = quantities.rows.filter(r => r.origin === QUANTITY_ORIGIN.MANUAL && r.q);
+  const manualSum = k => manualRows.reduce((s, r) => s + r.q[k], 0);
   const quantRows = [
-    { key: 'floor', tipo: 'piso', descripcion: tr('levantamiento.quantConceptFloor'), cantidad: totals.floorArea, unidad: 'm2' },
-    { key: 'wallNet', tipo: 'muro', descripcion: tr('levantamiento.quantConceptWallNet'), cantidad: totals.wallNetArea, unidad: 'm2' },
-    { key: 'doors', tipo: 'puerta', descripcion: tr('levantamiento.doorsLabel'), cantidad: totals.doorsCount, unidad: 'pza' },
-    { key: 'windows', tipo: 'ventana', descripcion: tr('levantamiento.windowsLabel'), cantidad: totals.windowsCount, unidad: 'pza' }
+    { key: 'floor', tipo: 'piso', descripcion: tr('levantamiento.quantConceptFloor'), cantidad: manualSum('floorArea'), unidad: 'm2' },
+    { key: 'wallNet', tipo: 'muro', descripcion: tr('levantamiento.quantConceptWallNet'), cantidad: manualSum('wallNetArea'), unidad: 'm2' },
+    { key: 'doors', tipo: 'puerta', descripcion: tr('levantamiento.doorsLabel'), cantidad: manualSum('doorsCount'), unidad: 'pza' },
+    { key: 'windows', tipo: 'ventana', descripcion: tr('levantamiento.windowsLabel'), cantidad: manualSum('windowsCount'), unidad: 'pza' }
   ];
+  const modeLabel = { [GEOMETRY_MODE.CAD_AUTHORITATIVE]: 'Geometría desde plano CAD', [GEOMETRY_MODE.MIXTO]: 'Geometría mixta (CAD + captura manual)', [GEOMETRY_MODE.LEGACY_MANUAL]: 'Cantidad desde captura manual' }[quantities.mode];
 
   const sendToTakeoff = async (row) => {
     const seed = buildPlanoElementFromConcept({
@@ -163,9 +199,23 @@ export function SurveyDetail({ survey, projectId, onBack, onChange, onSendToApu,
       <div><small>{tr('levantamiento.statWindows')}</small><b>{totals.windowsCount}</b></div>
       <div><small>{tr('levantamiento.statSpaces')}</small><b>{totals.spacesCount}</b></div>
     </div>
+    <p className="muted" style={{ fontSize: '.8rem', margin: '4px 0 10px' }}>
+      {modeLabel}{survey.revision ? ` · rev. ${survey.revision}` : ''}{survey.updatedBy ? ` · ${survey.updatedBy}` : ''}
+      {quantities.pendingSpaces.length > 0 && ' · cargando plano CAD de algunos espacios…'}
+      {quantities.unconfirmedScale.length > 0 && <b style={{ color: 'var(--danger)' }}> · escala sin confirmar en {quantities.unconfirmedScale.length} plano(s): cantidades no definitivas</b>}
+    </p>
 
     <div className="survey-tabs" role="tablist">
-      {tabs.map(t => <button key={t} type="button" role="tab" aria-selected={activeTab === t} className={`survey-tab${activeTab === t ? ' active' : ''}`} onClick={() => setActiveTab(t)}>{tr(`levantamiento.${TAB_I18N_KEY[t]}`)}</button>)}
+      {tabs.map(t => {
+        // tr() en este proyecto devuelve la clave si no la resuelve. Para
+        // 'cad' (agregada en Fase 1 del plan integral) todavia no hay
+        // entrada de i18n en ninguna locale -- si tr() devuelve la clave
+        // literal, se usa el fallback en espanol de TAB_FALLBACK_LABEL.
+        const key = `levantamiento.${TAB_I18N_KEY[t]}`;
+        const translated = tr(key);
+        const label = translated === key && TAB_FALLBACK_LABEL[t] ? TAB_FALLBACK_LABEL[t] : translated;
+        return <button key={t} type="button" role="tab" aria-selected={activeTab === t} className={`survey-tab${activeTab === t ? ' active' : ''}`} onClick={() => setActiveTab(t)}>{label}</button>;
+      })}
     </div>
 
     {activeTab === 'datos' && <div className="panel survey-form">
@@ -188,7 +238,16 @@ export function SurveyDetail({ survey, projectId, onBack, onChange, onSendToApu,
       </>}
 
       <div className="survey-spaces-list">
-        {survey.spaces.map(space => <SpaceCard key={space.id} space={space} onUpdate={next => updateSpace(space.id, next)} onRemove={survey.spaces.length > 1 ? () => removeSpace(space.id) : null} />)}
+        {survey.spaces.map(space => spaceHasCad(survey, space.id)
+          ? <div key={space.id}>
+            <p className="muted" style={{ fontSize: '.8rem', margin: '8px 0 4px' }}>
+              <b>{space.name || space.id}</b>: la geometría vive en el <b>plano CAD</b> (fuente autoritativa). La captura inicial se conserva solo como referencia; edita medidas en <button type="button" className="soft" onClick={() => { setActiveSpaceId(space.id); setActiveTab('cad'); }}>Editar plano 2D/3D</button>
+            </p>
+            <fieldset disabled style={{ border: 0, padding: 0, margin: 0, opacity: 0.7 }}>
+              <SpaceCard space={space} onUpdate={() => {}} onRemove={null} />
+            </fieldset>
+          </div>
+          : <SpaceCard key={space.id} space={space} onUpdate={next => updateSpace(space.id, next)} onRemove={survey.spaces.length > 1 ? () => removeSpace(space.id) : null} />)}
       </div>
       <button type="button" className="soft" onClick={addSpace}>{tr('levantamiento.addSpace')}</button>
     </div>}
@@ -204,23 +263,63 @@ export function SurveyDetail({ survey, projectId, onBack, onChange, onSendToApu,
         <p className="muted" style={{ fontSize: '.82rem', marginBottom: 10 }}>{tr('levantamiento.import3dDerivedViewNotice')}</p>}
       {!activeSpace
         ? <p className="muted">{tr('levantamiento.plan2dNeedsDimsMsg')}</p>
+        : spaceHasCad(survey, activeSpace.id)
+          ? <p className="muted">Este espacio tiene plano CAD: su 2D y 3D se muestran desde esa única geometría en <button type="button" className="soft" onClick={() => setActiveTab('cad')}>Editar plano 2D/3D</button> (las vistas de la captura inicial ya no aplican).</p>
         : activeTab === 'plano2d'
           ? <SpaceFloorPlan2D space={activeSpace} />
           : <Survey3DViewer space={activeSpace} onSelectElement={() => {}} />}
     </div>}
 
+    {activeTab === 'cad' && <div className="panel">
+      {survey.spaces.length > 1 && <div className="nf" style={{ marginBottom: 10 }}>
+        <label>{tr('levantamiento.selectSpaceLabel')}</label>
+        <select value={activeSpace?.id || ''} onChange={e => setActiveSpaceId(e.target.value)}>
+          {survey.spaces.map(s => <option key={s.id} value={s.id}>{s.name || s.id}</option>)}
+        </select>
+      </div>}
+      {!activeSpace
+        ? <p className="muted">Agrega un espacio en la pestaña Datos.</p>
+        : <SurveyCadTab
+            survey={survey}
+            space={activeSpace}
+            projectId={projectId}
+            user={{ email: currentUserEmail }}
+            onChange={onChange}
+            onModelChange={m => setCadModels(prev => ({ ...prev, [activeSpace.id]: m }))}
+          />}
+    </div>}
+
     {activeTab === 'cuantificacion' && <div className="panel survey-quant">
       {!survey.spaces.length
         ? <p className="muted">{tr('levantamiento.quantNoSpacesMsg')}</p>
-        : <table className="survey-quant-table">
-          <tbody>
-            {quantRows.map(row => <tr key={row.key}>
-              <td>{row.descripcion}</td>
-              <td>{fmt(row.cantidad)} {row.unidad === 'm2' ? 'm²' : row.unidad}</td>
-              <td><button type="button" className="soft" onClick={() => sendToTakeoff(row)} disabled={!(Number(row.cantidad) > 0)}>{tr('levantamiento.sendToTakeoff')}</button></td>
-            </tr>)}
-          </tbody>
-        </table>}
+        : <>
+          {/* F4: desglose por espacio con el ORIGEN de cada cantidad */}
+          <table className="survey-quant-table">
+            <thead><tr><th>Espacio</th><th>Origen</th><th>Piso</th><th>Muros netos</th><th>Puertas</th><th>Ventanas</th></tr></thead>
+            <tbody>
+              {quantities.rows.map(r => <tr key={r.spaceId}>
+                <td>{r.name || r.spaceId}</td>
+                <td>{r.origin === QUANTITY_ORIGIN.CAD ? 'Plano CAD' : 'Cantidad desde captura manual'}{r.q && !r.q.scaleConfirmed ? ' (escala sin confirmar)' : ''}</td>
+                {r.q ? <><td>{fmt(r.q.floorArea)} m²</td><td>{fmt(r.q.wallNetArea)} m²</td><td>{r.q.doorsCount}</td><td>{r.q.windowsCount}</td></> : <td colSpan={4} className="muted">cargando plano…</td>}
+              </tr>)}
+            </tbody>
+          </table>
+          {quantities.rows.some(r => r.origin === QUANTITY_ORIGIN.CAD) && <p className="muted" style={{ fontSize: '.8rem' }}>
+            Las cantidades de los espacios con plano CAD se envían al catálogo desde <b>Editar plano 2D/3D</b> (selecciona el muro o espacio → Cuantificar → concepto): así quedan con sus generadores trazables y se actualizan con control al editar la geometría.
+          </p>}
+          {manualRows.length > 0 && <>
+            <h4 style={{ margin: '12px 0 4px' }}>Espacios sin plano CAD (captura manual)</h4>
+            <table className="survey-quant-table">
+              <tbody>
+                {quantRows.map(row => <tr key={row.key}>
+                  <td>{row.descripcion}</td>
+                  <td>{fmt(row.cantidad)} {row.unidad === 'm2' ? 'm²' : row.unidad} <small className="muted">· captura manual</small></td>
+                  <td><button type="button" className="soft" onClick={() => sendToTakeoff(row)} disabled={!(Number(row.cantidad) > 0)}>{tr('levantamiento.sendToTakeoff')}</button></td>
+                </tr>)}
+              </tbody>
+            </table>
+          </>}
+        </>}
     </div>}
 
     {activeTab === 'multimedia' && <div className="panel">

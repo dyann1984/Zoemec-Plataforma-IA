@@ -530,14 +530,20 @@ function assertExportableApus(list){
   }
 }
 
-export async function exportAPUExcelV2(apus,options={}){
+/* F5: composicion del libro APU expuesta (misma lista/orden de siempre) para
+   que el Centro de Reportes escriba el MISMO libro sin duplicar builders. */
+export function buildAPUWorkbookSheets(apus,options={}){
   const list=Array.isArray(apus)?apus:[apus];
   assertExportableApus(list);
   const priceSheet=buildPriceIntelligenceSheet(list);
   const conceptSheets=disambiguateSheetNames(list.map(buildProfessionalAPUSheet));
   const portadaSheet=buildPortadaSheet(list,options.company||{},{logo:options.logo});
   const parametrosSheet=buildParametrosSheet(list,{ivaMode:options.ivaMode,engineVersion:options.engineVersion});
-  const sheets=[portadaSheet,buildProfessionalSummarySheet(list),buildControlRevisionSheet(list),parametrosSheet,...conceptSheets,...(priceSheet?[priceSheet]:[])];
+  return [portadaSheet,buildProfessionalSummarySheet(list),buildControlRevisionSheet(list),parametrosSheet,...conceptSheets,...(priceSheet?[priceSheet]:[])];
+}
+
+export async function exportAPUExcelV2(apus,options={}){
+  const sheets=buildAPUWorkbookSheets(apus,options);
   await exportWorkbookExcel(sheets,options.fileName||'APU-PROFESIONAL-ZOEMEC.xlsx',options.writeXlsxFileImpl||writeXlsxFileBrowser); return sheets;
 }
 
@@ -893,10 +899,19 @@ function drawMasterPortada(doc,finalized,company={}){
   const costoDirectoTotal=finalized.reduce((s,a)=>s+Number(a.calculated?.direct||0)*Number(a.cantidadObra||0),0);
   const importeGeneral=finalized.reduce((s,a)=>s+Number(a.calculated?.importeTotal||0),0);
 
-  doc.setFillColor(42,23,64);doc.rect(0,0,W,70,'F');
+  if(company?.logo?.dataUrl&&company.logo.ratio){
+    // F5: logo OFICIAL (proporcion real del PNG, nunca deformado) sobre fondo blanco.
+    const lh=26,lw=lh*company.logo.ratio;
+    doc.addImage(company.logo.dataUrl,'PNG',W/2-lw/2,10,lw,lh,'zoemec-logo','FAST');
+    doc.setFillColor(11,47,74);doc.rect(0,42,W,28,'F');
+    doc.setTextColor(255);doc.setFont('helvetica','bold');doc.setFontSize(12);doc.text('ANALISIS DE PRECIOS UNITARIOS',W/2,53,{align:'center'});
+    doc.setFont('helvetica','normal');doc.setFontSize(9);doc.text('Catalogo completo -- PDF maestro',W/2,62,{align:'center'});
+  }else{
+  doc.setFillColor(11,47,74);doc.rect(0,0,W,70,'F');
   doc.setTextColor(255);doc.setFont('helvetica','bold');doc.setFontSize(22);doc.text('ZOEMEC',W/2,34,{align:'center'});
   doc.setFontSize(12);doc.text('ANALISIS DE PRECIOS UNITARIOS',W/2,46,{align:'center'});
   doc.setFont('helvetica','normal');doc.setFontSize(9);doc.text('Catalogo completo -- PDF maestro',W/2,56,{align:'center'});
+  }
 
   let y=86;doc.setTextColor(30);
   const field=(label,value)=>{doc.setFont('helvetica','bold');doc.setFontSize(9);doc.text(pdfTextGlobal(label),M,y);doc.setFont('helvetica','normal');doc.text(pdfTextGlobal(value||'Por definir'),M+50,y);y+=8;};
@@ -928,7 +943,7 @@ function drawMasterPagedTable(doc,{title,heads,widthsRatio,rows,footerLabel}){
   const colW=ratios.map(r=>(W-2*M)*r/totalRatio);
   const colX=[M]; colW.forEach((w,i)=>{ if(i<colW.length-1) colX.push(colX[i]+w); });
   let y=12, page=doc.getNumberOfPages();
-  const drawTitle=()=>{doc.setFillColor(42,23,64);doc.rect(M,y,W-2*M,9,'F');doc.setTextColor(255);doc.setFont('helvetica','bold');doc.setFontSize(10);doc.text(pdfTextGlobal(title),W/2,y+6,{align:'center'});y+=12;};
+  const drawTitle=()=>{doc.setFillColor(11,47,74);doc.rect(M,y,W-2*M,9,'F');doc.setTextColor(255);doc.setFont('helvetica','bold');doc.setFontSize(10);doc.text(pdfTextGlobal(title),W/2,y+6,{align:'center'});y+=12;};
   const drawHeads=()=>{doc.setFillColor(234,240,247);doc.rect(M,y,W-2*M,6,'F');doc.setTextColor(30);doc.setFont('helvetica','bold');doc.setFontSize(6.6);heads.forEach((h,i)=>doc.text(pdfTextGlobal(h),colX[i]+1,y+4));y+=6;doc.setFont('helvetica','normal');doc.setTextColor(30);};
   const footer=()=>{doc.setFontSize(6.5);doc.setTextColor(120);doc.text(pdfTextGlobal(footerLabel||title),M,H-6);};
   const newPage=()=>{footer();doc.addPage();page++;y=12;drawHeads();};
@@ -978,7 +993,7 @@ function drawMasterResumen(doc,finalized){
 function drawMasterControlRevision(doc,finalized,company={}){
   const W=doc.internal.pageSize.getWidth(),M=12;
   let y=12;
-  doc.setFillColor(42,23,64);doc.rect(M,y,W-2*M,9,'F');doc.setTextColor(255);doc.setFont('helvetica','bold');doc.setFontSize(10);doc.text('CONTROL DE REVISION',W/2,y+6,{align:'center'});y+=13;
+  doc.setFillColor(11,47,74);doc.rect(M,y,W-2*M,9,'F');doc.setTextColor(255);doc.setFont('helvetica','bold');doc.setFontSize(10);doc.text('CONTROL DE REVISION',W/2,y+6,{align:'center'});y+=13;
   doc.setTextColor(30);doc.setFontSize(7.5);
   const line=text=>{doc.text(pdfTextGlobal(text),M,y);y+=5.5;};
   const validados=finalized.filter(a=>a.validationStatus==='VALIDADO').length;

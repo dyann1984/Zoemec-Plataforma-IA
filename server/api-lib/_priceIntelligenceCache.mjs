@@ -110,7 +110,12 @@ function logCacheWriteFailure({ queryHash, operation, errorCode, error }){
 export async function searchMarketReferencesWithCache({
   description, unit, kind = 'materials', location = '', dateBase = '', categoriaLaboral = '',
   technicalSpecification = '', region = '', country = '', state = '', city = '', zone = '', currency = 'MXN', tenantScope = null,
-  maxDailySearches = DEFAULT_MAX_DAILY_SEARCHES, searchImpl = searchMarketReferences, db = null, store = null
+  maxDailySearches = DEFAULT_MAX_DAILY_SEARCHES, searchImpl = searchMarketReferences, db = null, store = null,
+  // F1/P0: se invoca SOLO cuando hace falta una busqueda web real (cache
+  // MISS/EXPIRED), antes del presupuesto diario global. /api/price-intelligence
+  // cobra aqui el rate limit por usuario -- un CACHE_HIT nunca lo consume.
+  // Si lanza (429), la excepcion se propaga tal cual al endpoint.
+  beforeWebSearch = null
 } = {}){
   const database = db || getAdminDb();
   // `store` inyectable (pruebas): permite forzar un store roto sin tener
@@ -149,6 +154,7 @@ export async function searchMarketReferencesWithCache({
   }
 
   const cacheStatus = lookup.result === CACHE_RESULT.EXPIRED ? CACHE_RESULT.EXPIRED : CACHE_RESULT.MISS;
+  if(typeof beforeWebSearch === 'function') await beforeWebSearch();
   const budget = await claimDailySearchBudget(database, maxDailySearches);
   if(!budget.allowed){
     // Presupuesto diario agotado (regla 9/13 del hardening): NUNCA se

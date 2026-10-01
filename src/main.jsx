@@ -22,6 +22,7 @@ import { exportProjectDossierPdf } from './lib/apuProjectDossierPdf.js';
 import { exportProjectDossierExcel } from './lib/apuProjectDossierXlsx.js';
 import ExplosionsPanel from './features/explosions/ExplosionsPanel.jsx';
 import PlanoTakeoffWorkspace from './features/planos/PlanoTakeoffWorkspace.jsx';
+import ReportCenter from './features/reportes/ReportCenter.jsx';
 import {
   money, num, excelCell, XLS, xcell, fcell, styleHeader, styleSection,
   exportRowsCSV, exportRowsExcel, exportWorkbookExcel,
@@ -78,11 +79,16 @@ import { toApuSeed, applyPlanoElementReview } from './domain/planoReview.js';
 import { calibrateScale, measureElement } from './domain/planoMeasurement.js';
 import { createTakeoffRecord, applyManualCorrection, upsertTakeoffRecord, findLatestTakeoffForFile, hashFileContent } from './domain/planoTakeoffStore.js';
 import { LevantamientoModule } from './features/levantamiento/LevantamientoModule.jsx';
+import { useProjectSurveys } from './features/levantamiento/levantamientoCloud.js';
 import { QuantifierWizard } from './features/quantifier/QuantifierWizard.jsx';
 import { CatalogoModule } from './features/catalogo/CatalogoModule.jsx';
 import { PresupuestoModule } from './features/presupuesto/PresupuestoModule.jsx';
 import { ControlPresupuestalModule } from './features/control-presupuestal/ControlPresupuestalModule.jsx';
 import { ProjectVaultModule } from './features/vault/ProjectVaultModule.jsx';
+import { ProgramaModule } from './features/programa/ProgramaModule.jsx';
+import { OrgLibraryPanel } from './features/library/OrgLibraryPanel.jsx';
+import { fetchApuContextPreview } from './features/library/orgLibraryCloud.js';
+import { mergeClientDiagnostics, applyContextConfidencePenalty, normalizeEnrichmentPartial } from './domain/apuContextResolution.js';
 import {
   emptyApuWorkspaceState, removeBatchApus, describeAmbiguousSingleExport,
   duplicateGroupKey, groupConceptsByDuplicateKey, defaultBatchSelection, isExportableConceptItem,
@@ -92,8 +98,9 @@ import {
 import {
   ITEM_STATUS, createBatchJob, fingerprintCatalog, selectNextBatch,
   markItemStatus, markItemError, markItemDone, retryFailedItems, cancelJob,
-  summarizeJob, isJobComplete
+  summarizeJob, isJobComplete, markItemRateLimited, markPendingRateLimited
 } from './domain/apuBatchQueue.js';
+import { isRateLimitError, retryAfterSecondsOf, formatRetryAfter, makeRateLimitError } from './domain/rateLimitStatus.js';
 import {
   saveJobMeta, saveItemState, loadJob, markJobCancelled,
   setActiveBatchId, getActiveBatchId, clearActiveBatchId, deleteJob as deleteQueueJob
@@ -474,6 +481,11 @@ function App(){
   const [rawCatalog, setRawCatalog] = useCloudState(user, 'zoemec-catalogo', []);
   const [rawBudgetItems, setRawBudgetItems] = useCloudState(user, 'zoemec-budget-items', [{concept:'Muro de block 15 cm',unit:'m²',qty:120,pu:825.39},{concept:'Piso cerámico 30x30 cm',unit:'m²',qty:86,pu:384.51}]);
   const [rawSurveys, setRawSurveys] = useCloudState(user, 'zoemec-levantamientos', []);
+  // Fase 3: actividades del programa de obra. Se persiste con useCloudState
+  // (mismo patron que apus/budgets/surveys). Un endpoint dedicado
+  // /api/activities queda como espacio para fase futura si se necesita
+  // transaccionalidad multiusuario.
+  const [rawActivities, setRawActivities] = useCloudState(user, 'zoemec-programa-actividades', []);
   // activeProjectId: aislamiento real de datos por proyecto (seccion 13/1 del
   // sprint). apus/budgets/catalog/budgetItems que el resto de la app usa son
   // la vista YA filtrada al proyecto activo; el almacenamiento completo (todas
@@ -521,11 +533,17 @@ function App(){
   // abrir" de un modulo a otro sin acoplar los componentes entre si.
   const [planoNavigationTarget, setPlanoNavigationTarget] = useState(null);
   const [pendingOpenApuId, setPendingOpenApuId] = useState(null);
+  const [showLegacyReports, setShowLegacyReports] = useState(false); // F5: tablero legacy (retiro en F6)
   const [apus, setApus] = useProjectScoped(rawApus, setRawApus, activeProjectId);
   const [budgets, setBudgets] = useProjectScoped(rawBudgets, setRawBudgets, activeProjectId);
   const [catalog, setCatalog] = useProjectScoped(rawCatalog, setRawCatalog, activeProjectId);
   const [budgetItems, setBudgetItems] = useProjectScoped(rawBudgetItems, setRawBudgetItems, activeProjectId);
-  const [surveys, setSurveys] = useProjectScoped(rawSurveys, setRawSurveys, activeProjectId);
+  // F4: `surveys` (bloque local por usuario) ya NO es la fuente principal:
+  // solo alimenta la migracion perezosa y queda como respaldo durante V1.
+  // La fuente es el servidor (/api/levantamientos), compartida con la empresa.
+  const [surveys] = useProjectScoped(rawSurveys, setRawSurveys, activeProjectId);
+  const surveyStore = useProjectSurveys(user, activeProjectId, surveys);
+  const [activities, setActivities] = useProjectScoped(rawActivities, setRawActivities, activeProjectId);
   useEffect(() => {
     const onAdd = (e) => { if(e?.detail) setBudgetItems(list => [...list, e.detail]); };
     window.addEventListener('zoemec-budget-add', onAdd);
@@ -1007,12 +1025,24 @@ function App(){
     ]}/>}
     {module === 'inicio' && <Dashboard setModule={setModule} apus={apus} clients={clients} budgets={budgets} projects={projects} activeProject={activeProject} user={user} demoMode={DEMO_MODE} demoContext={DEMO_MODE ? createDemoContext() : null} />}
     {module === 'costos-resumen' && <CostosResumen apus={apus} budgets={budgets} catalog={catalog} activeProject={activeProject} setModule={setModule} />}
-    {module === 'levantamiento' && <LevantamientoModule surveys={surveys} setSurveys={setSurveys} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} onSendToApu={()=>setModule('catalogo')} currentUserEmail={user?.email || null} organizationId={orgSession?.organization?.id || null} />}
+    {module === 'levantamiento' && <LevantamientoModule store={surveyStore} activeProjectId={activeProjectId} onNeedProject={()=>setModule('cartera')} onSendToApu={()=>setModule('catalogo')} currentUserEmail={user?.email || null} organizationId={orgSession?.organization?.id || null} />}
     {module === 'catalogo' && <CatalogoModule user={user} organizationId={orgSession?.organization?.id || null} activeProjectId={activeProjectId} activeProject={activeProject} catalog={catalog} onNeedProject={()=>setModule('cartera')} setModule={setModule} onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }} />}
     {module === 'precios-regionales' && <RegionalPrices apus={apus} activeProject={activeProject} onConfigureLocation={()=>setModule('apu')} />}
     {module === 'apu' && <APU company={companyView} user={user} usage={usage} setUsage={setUsage} apus={apus} setApus={setApus} budgets={budgets} setBudgets={setBudgets} catalog={catalog} setCatalog={setCatalog} projects={projects} rawApus={rawApus} linkApuToProject={linkApuToProject} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} onConfigureLocation={()=>setModule('cartera')} setModule={setModule} organizationId={orgSession?.organization?.id || null} pendingOpenApuId={pendingOpenApuId} onPendingOpenApuIdConsumed={()=>setPendingOpenApuId(null)} />}
     {module === 'presupuestos' && <PresupuestoModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} setModule={setModule} onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }} />}
     {module === 'control-presupuestal' && <ControlPresupuestalModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} />}
+    {module === 'programa' && <ProgramaModule
+      activeProjectId={activeProjectId}
+      activities={activities}
+      setActivities={setActivities}
+      apus={apus}
+      projectStartDate={activeProject?.startDate || activeProject?.fechaInicio || null}
+      presupuestoRows={[]}
+      changeOrders={[]}
+      progressEntries={[]}
+      presupuestoVigente={0}
+      onNeedProject={()=>setModule('cartera')}
+    />}
     {module === 'vault' && <ProjectVaultModule user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} setModule={setModule} onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }} />}
     {module === 'cartera' && <ClientsProjects clients={clients} setClients={setClients} projects={projects} setProjects={setProjects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setModule={setModule} onDeleteProjectData={(pid)=>{ setRawApus(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgets(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawCatalog(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawBudgetItems(l=>l.filter(x=>(x?.projectId??null)!==pid)); setRawSurveys(l=>l.filter(x=>(x?.projectId??null)!==pid)); }} openCreateProject={createProjectTrigger} onHandledCreateProject={()=>setCreateProjectTrigger(false)} apus={apus} budgets={budgets} onOpenWorkspace={(pid)=>{ setActiveProjectId(pid); setSelectedProjectStage('evidencia'); setModule('project-workspace'); }} />}
     {module === 'project-workspace' && <ProjectWorkspace
@@ -1022,7 +1052,7 @@ function App(){
       organizationId={orgSession?.organization?.id || null}
       apus={apus}
       budgets={budgets}
-      surveys={surveys}
+      surveys={surveyStore.surveys}
       onBackToProjects={()=>setModule('cartera')}
       onNavigateToLevantamiento={()=>setModule('levantamiento')}
       onNavigateToPlano={(target)=>{ setPlanoNavigationTarget(target); setModule('visual'); }}
@@ -1032,12 +1062,19 @@ function App(){
       initialStage={normalizeWorkspaceStage(selectedProjectStage)}
       onStageChange={setSelectedProjectStage}
     />}
-    {module === 'biblioteca' && <Library user={user} catalog={catalog} setCatalog={setCatalog} setModule={setModule} />}
+    {module === 'biblioteca' && <>
+      {orgSession?.organization && <OrgLibraryPanel user={user} orgSession={orgSession} activeProjectId={activeProjectId} personalCatalog={catalog} />}
+      <Library user={user} catalog={catalog} setCatalog={setCatalog} setModule={setModule} />
+    </>}
     {module === 'tecnico' && <TechnicalOffice company={companyView} setCompany={setCompany} catalog={catalog} setCatalog={setCatalog} needsProject={needsProject} onCreateProject={()=>setModule('cartera')} />}
     {module === 'visual' && <VisualAI user={user} setModule={setModule} activeProjectId={activeProjectId} activeProject={activeProject} organizationId={orgSession?.organization?.id || null} onNeedProject={()=>setModule('cartera')} navigationTarget={planoNavigationTarget} onNavigationTargetConsumed={()=>setPlanoNavigationTarget(null)} onReturnToWorkspace={() => setModule('project-workspace')} />}
     {module === 'comunidad' && <Community />}
     {module === 'planes' && <PlansAccess user={user} />}
-    {module === 'reportes' && <Reports clients={clients} apus={apus} budgets={budgets} />}
+    {/* F5: Centro de Reportes. El tablero anterior (Reports, indicadores no
+        autoritativos) se conserva accesible hasta su retiro en F6. */}
+    {module === 'reportes' && (showLegacyReports
+      ? <><div className="panel" style={{marginBottom:12,display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}><span className="muted">Tablero anterior (legacy): sus indicadores no provienen de los motores autoritativos. Se retirará en F6.</span><button className="soft" onClick={()=>setShowLegacyReports(false)}>Volver al Centro de Reportes</button></div><Reports clients={clients} apus={apus} budgets={budgets} /></>
+      : <ReportCenter user={user} activeProjectId={activeProjectId} activeProject={activeProject} onNeedProject={()=>setModule('cartera')} onShowLegacy={()=>setShowLegacyReports(true)} />)}
     {module === 'comparativa' && <ComparePage />}
     {module === 'equipo' && orgSession?.organization && <TeamPanel organizationId={orgSession.organization.id} membership={orgSession.membership} />}
     {module === 'admin' && user.isAdmin && <AdminPanel user={user} />}
@@ -1604,6 +1641,7 @@ export function Shell({children,user,logout,module,setModule,company,apus,client
   const secondaryMenu = [
     ['levantamiento','bim',tr('shell.menu.levantamiento'),tr('shell.menu.levantamientoDesc')],
     ['visual','render',tr('shell.menu.visual'),tr('shell.menu.visualDesc')],
+    ['programa','check','Programa de Obra','Actividades, rendimientos y avance'],
     ['tecnico','tecnico',tr('shell.menu.tecnico'),tr('shell.menu.tecnicoDesc')],
     ['biblioteca','biblioteca',tr('shell.menu.biblioteca'),tr('shell.menu.bibliotecaDesc')],
     ...(orgSession?.organization ? [['equipo','clientes','Equipo','Usuarios de tu empresa']] : []),
@@ -2450,10 +2488,10 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       const budget = { id:'PRE-'+uid(), name:`Presupuesto ${sourceName}`, client:'Cliente por definir', items, ivaRate:DEFAULT_IVA_RATE, total:subtotal+iva, date:new Date().toLocaleDateString('es-MX') };
       if(items.length) setBudgets(prev => [budget, ...prev]);
       const summary = summarizeJob(finished);
-      setBatchResult({ conceptsTotal: conceptBatch.concepts.length, selected: selectedList.length, generated: apuList.length, review: summary.requiere_revision, errors: summary.error, cancelled: finished.cancelled, budget, excludedConcepts });
+      setBatchResult({ conceptsTotal: conceptBatch.concepts.length, selected: selectedList.length, generated: apuList.length, review: summary.requiere_revision, errors: summary.error, rateLimited: summary.pendiente_limite, retryAfterSeconds: summary.retryAfterSeconds, cancelled: finished.cancelled, budget, excludedConcepts });
       setAiStatus(finished.cancelled
         ? `Lote cancelado: ${summary.done} de ${summary.total} conceptos procesados antes de cancelar.`
-        : `Lote terminado: ${summary.terminado} listos, ${summary.requiere_revision} con observaciones, ${summary.error} con error.`);
+        : `Lote terminado: ${summary.terminado} listos, ${summary.requiere_revision} con observaciones, ${summary.error} con error${summary.pendiente_limite ? `, ${summary.pendiente_limite} pendientes por límite (sin APU; reintentar ${formatRetryAfter(summary.retryAfterSeconds)})` : ''}.`);
     }catch(error){
       alert(`No se pudo generar el lote seleccionado: ${error?.message || 'error desconocido'}.`);
     }finally{
@@ -2578,6 +2616,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   // usa para que los tres flujos de generacion (individual + 2 de lote)
   // queden con exactamente el mismo esquema regional (ver buildProjectLocationSnapshot).
   const batchLocationSnapshotRef=useRef(null);
+  const batchOrgCatalogRef=useRef(null);
   // Cambiar de proyecto activo mientras este componente sigue montado (el
   // usuario no sale de "APU Inteligente", solo cambia el selector de proyecto)
   // debe limpiar el borrador en pantalla e invalidar cualquier generacion de
@@ -2624,10 +2663,16 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         const res = await fetch(aiServerUrl('/api/generate-apu'), {
           method:'POST',
           headers:await authHeaders(),
-          body:JSON.stringify({concept:parsed.concept,catalog,schema:'v2',referencePU:parsed.referencePU||0}),
+          // P0 paridad ADMIN vs COLLABORATOR: projectId + contextMode hacen que
+          // el SERVIDOR arme el catalogo con la biblioteca de la empresa
+          // (identica para cualquier miembro); `catalog` (personal) solo se
+          // usa si el usuario no pertenece a una empresa.
+          body:JSON.stringify({concept:parsed.concept,catalog,schema:'v2',referencePU:parsed.referencePU||0,projectId:activeProjectId||null,contextMode:'organization'}),
           signal:controller.signal
         });
         const data = await res.json().catch(()=>({}));
+        // F1/P0: 429 tipado (retryAfterSeconds) -- nunca se reintenta a ciegas.
+        if(res.status === 429) throw makeRateLimitError(data?.error, data?.retryAfterSeconds ?? null);
         if(!res.ok){ const err = new Error(data?.error || 'No se pudo generar con IA.'); err.status = res.status; throw err; }
         return data;
       }finally{
@@ -2637,11 +2682,11 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     try{
       setAiStatus('Generando recursos: mano de obra, materiales, herramienta y equipo...');
       let data=null, lastAttemptError=null;
-      for(let tryNum=0; tryNum<3 && !data; tryNum++){
+      for(let tryNum=0; tryNum<3 && !data && !isRateLimitError(lastAttemptError); tryNum++){
         try{
           if(tryNum>0){
             setAiStatus(`Reintentando generación con IA (intento ${tryNum+1} de 3)...`);
-            await new Promise(r=>setTimeout(r, lastAttemptError?.status===429 ? 6000*tryNum : 2500*tryNum));
+            await new Promise(r=>setTimeout(r, 2500*tryNum));
           }
           data = await attemptGenerate();
         }catch(error){ lastAttemptError = error; }
@@ -2677,6 +2722,8 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         : buildProjectLocationSnapshot(activeProject);
       const effectiveDateBase = apuV2.fechaBase || draft.fechaBase;
       let enrichedDraft = draft;
+      let enrichmentError = null;
+      let enrichmentPartial = null;
       try{
         setAiStatus('Buscando precios de mercado reales y validando equivalencia tecnica...');
         const runContext = createIntelligence2RunContext({
@@ -2691,10 +2738,21 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
           concept: parsed.concept, ...runContext
         });
         enrichedDraft = result.apu;
+        // F1/P0: fallo PARCIAL de busquedas (429/red) -> ENRICHMENT_PARTIAL visible.
+        enrichmentPartial = normalizeEnrichmentPartial(result);
         if(result.unitWarning) console.warn('[Material & Price Intelligence 2.1] UNIT_WARNING:', result.unitWarning);
-      }catch{ /* Price Intelligence caida por completo: se sigue con el borrador de la IA */ }
+      }catch(err){
+        // Price Intelligence caida: se sigue con el borrador de la IA, pero
+        // ya no en silencio (P0) -- queda en contextDiagnostics y en consola.
+        enrichmentError = err?.message || String(err);
+        console.warn('[Material & Price Intelligence 2.1] enriquecimiento fallido:', enrichmentError);
+      }
+      if(data.context || enrichedDraft.contextDiagnostics){
+        enrichedDraft = { ...enrichedDraft, contextDiagnostics: mergeClientDiagnostics(data.context || enrichedDraft.contextDiagnostics, { enrichmentFailed: Boolean(enrichmentError), enrichmentError, enrichmentPartial }) };
+      }
       setAiStatus('Calculando rendimientos, seguridad, procedimiento y medicion...');
       const v2 = finalizeProfessionalAPU(enrichedDraft);
+      if(v2.contextDiagnostics?.confidencePenalty) v2.confidence = applyContextConfidencePenalty(v2.confidence, v2.contextDiagnostics.confidencePenalty);
       // Fase 2 (APU regionalizados): SNAPSHOT de la ubicacion del proyecto
       // activo en ESTE momento -- nunca un enlace vivo (ver
       // apuSchema.js#ubicacionEstructurada). Misma funcion que usan los dos
@@ -2725,6 +2783,17 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       completeJob(jobId, { shim, v2, usedFallback:false, unit:parsed.unit, qty:parsed.qty, referencePU:parsed.referencePU }, { notify:false });
     }catch(err){
       if(requestId !== aiRequestSeqRef.current) return;
+      // F1/P0: un 429 NO se sustituye por la plantilla (seria un resultado
+      // economico distinto por un limite temporal). Se informa cuando
+      // reintentar; el usuario conserva el concepto y puede reintentar,
+      // usar el modo parametrico o capturar manualmente.
+      if(isRateLimitError(err)){
+        const wait = formatRetryAfter(retryAfterSecondsOf(err));
+        setAiStatus(`Límite temporal de generación alcanzado. Reintenta ${wait}. No se generó ningún APU.`);
+        alert(`Límite temporal de generación con IA alcanzado. Reintenta ${wait}. No se aplicó ninguna plantilla ni se modificó ningún precio.`);
+        failJob(jobId, err, { notify:false, label: parsed.concept });
+        return;
+      }
       const reason = err?.name==='AbortError' ? 'la IA tardo demasiado en responder' : friendlyServiceError(err,'servidor no disponible');
       const next = templateFallbackAPU({concept:parsed.concept, unit:parsed.unit, qty:parsed.qty, referencePU:parsed.referencePU, variables:conceptVariablesFromParsed(parsed)}, catalog, 0, 'Plantilla tecnica ZOEMEC', reason);
       setConcept(next.concept);
@@ -2840,8 +2909,10 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       const controller = new AbortController();
       const timer = window.setTimeout(() => controller.abort(), 45000);
       try{
-        const res=await fetch(aiServerUrl('/api/generate-apu'),{method:'POST',headers:await authHeaders(),body:JSON.stringify({concept:conceptForAI,catalog,company,mode:'batch-concept',preserveOriginal:true,schema:'v2'}),signal:controller.signal});
+        const res=await fetch(aiServerUrl('/api/generate-apu'),{method:'POST',headers:await authHeaders(),body:JSON.stringify({concept:conceptForAI,catalog,company,mode:'batch-concept',preserveOriginal:true,schema:'v2',projectId:activeProjectId||null,contextMode:'organization'}),signal:controller.signal});
         const data=await readJsonSafe(res);
+        // F1/P0: 429 tipado con retryAfterSeconds.
+        if(res.status===429) throw makeRateLimitError(data?.error, data?.retryAfterSeconds ?? null);
         if(!res.ok){ const err=new Error(data?.error || 'No fue posible generar con IA'); err.status=res.status; throw err; }
         return data;
       }finally{
@@ -2849,16 +2920,15 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       }
     };
     let data=null, lastError=null;
-    for(let tryNum=0; tryNum<3 && !data; tryNum++){
+    for(let tryNum=0; tryNum<3 && !data && !isRateLimitError(lastError); tryNum++){
       try{
-        if(tryNum>0){
-          // 429 (limite de tasa) espera mas que un error de red/timeout comun.
-          const backoff = lastError?.status===429 ? 6000*tryNum : 2500*tryNum;
-          await new Promise(r=>setTimeout(r, backoff));
-        }
+        if(tryNum>0) await new Promise(r=>setTimeout(r, 2500*tryNum));
         data = await attempt();
       }catch(error){ lastError = error; }
     }
+    // F1/P0: un 429 NO cae a la plantilla (seria un APU con otros numeros por
+    // un limite temporal): se propaga y la cola marca PENDIENTE POR LIMITE.
+    if(!data && isRateLimitError(lastError)) throw lastError;
     if(data){
       const withMeta = applyConceptMetadataV2(data.apu, item, index, sourceFile);
       // Material & Price Intelligence 2.1 (integracion final): mismo
@@ -2872,6 +2942,8 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       // por completo, el renglon conserva su precio ESTIMADO_IA original
       // (nunca bloquea la generacion del APU).
       let enriched = withMeta;
+      let enrichmentError = null;
+      let enrichmentPartial = null;
       try{
         setAiStatus(`Buscando precios de mercado reales para "${item.concept?.slice(0,60) || 'concepto'}"...`);
         const result = await enrichApuWithIntelligence2({
@@ -2879,9 +2951,18 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
           concept: item.concept, ...batchIntelligence2ContextRef.current
         });
         enriched = result.apu;
+        enrichmentPartial = normalizeEnrichmentPartial(result); // F1/P0
         if(result.unitWarning) console.warn(`[Material & Price Intelligence 2.1] UNIT_WARNING (${item.code || item.concept}):`, result.unitWarning);
-      }catch{ /* si Price Intelligence falla por completo, se sigue con el APU tal cual la IA lo genero */ }
+      }catch(err){
+        // Se sigue con el APU de la IA, pero ya no en silencio (P0).
+        enrichmentError = err?.message || String(err);
+        console.warn(`[Material & Price Intelligence 2.1] enriquecimiento fallido (${item.code || item.concept}):`, enrichmentError);
+      }
+      if(data.context || enriched.contextDiagnostics){
+        enriched = { ...enriched, contextDiagnostics: mergeClientDiagnostics(data.context || enriched.contextDiagnostics, { enrichmentFailed: Boolean(enrichmentError), enrichmentError, enrichmentPartial }) };
+      }
       const v2 = finalizeProfessionalAPU(enriched);
+      if(v2.contextDiagnostics?.confidencePenalty) v2.confidence = applyContextConfidencePenalty(v2.confidence, v2.contextDiagnostics.confidencePenalty);
       v2.aiGenerated = true;
       v2.templateFallback = false;
       v2.family = data.apu?.family || v2.family;
@@ -2894,7 +2975,11 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       return v2;
     }
     const reason = lastError?.name === 'AbortError' ? 'tiempo agotado' : lastError?.status===429 ? 'limite de tasa de OpenAI (429) tras reintentos' : (lastError?.message || 'sin detalle');
-    const fallbackV1 = templateFallbackAPU(item, catalog, index, sourceFile, `IA externa no respondio tras 3 intentos: ${reason}`);
+    // P0 paridad: el respaldo de plantilla usa el catalogo EMPRESARIAL ya
+    // resuelto por el servidor (mismo para cualquier miembro) cuando existe;
+    // el catalogo personal solo si el usuario no pertenece a una empresa.
+    const fallbackCatalog = batchOrgCatalogRef.current || catalog;
+    const fallbackV1 = templateFallbackAPU(item, fallbackCatalog, index, sourceFile, `IA externa no respondio tras 3 intentos: ${reason}`);
     const v2Fallback = finalizeProfessionalAPU(applyConceptMetadataV2(migrateLegacyApuToV2(fallbackV1), item, index, sourceFile));
     v2Fallback.aiGenerated = false;
     v2Fallback.templateFallback = true;
@@ -2924,6 +3009,16 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
   };
 
   const buildBatchAPUs=async(list)=>{
+    // P0 paridad: una sola vista previa por corrida de lote trae el catalogo
+    // empresarial ya resuelto para la plantilla de respaldo. Si falla, se
+    // registra y el respaldo usa el catalogo personal (unico disponible).
+    batchOrgCatalogRef.current = null;
+    try{
+      const preview = await fetchApuContextPreview({ projectId: activeProjectId || null, includeCatalog: true });
+      if(preview?.contextMode === 'organization' && Array.isArray(preview.catalog)) batchOrgCatalogRef.current = preview.catalog;
+    }catch(err){
+      console.warn('[P0 contexto empresarial] no se pudo cargar el catalogo de la empresa para el respaldo de plantilla:', err?.message || err);
+    }
     batchIntelligence2ContextRef.current = createIntelligence2RunContext({
       location: activeProject?.ubicacion || '',
       country: activeProject?.locationCountry || '', state: activeProject?.locationState || '', city: activeProject?.locationCity || ''
@@ -3040,13 +3135,27 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
           setApus(prev => [tagged, ...prev.filter(x => x.clave !== tagged.clave || x.batchId !== tagged.batchId)]);
           setLastBatchApuIds(prev => [...prev, tagged.id]);
         }catch(error){
-          job = markItemError(job, entry.itemKey, error);
-          const finishedEntry = job.items.find(it => it.itemKey === entry.itemKey);
-          if(persist) await saveItemState(db, user.uid, job.batchId, finishedEntry).catch(() => {});
+          if(isRateLimitError(error)){
+            // F1/P0: PENDIENTE POR LIMITE (sin APU, reintentable) -- nunca
+            // ERROR definitivo ni plantilla. Los items que aun no arrancan
+            // tambien quedan pendientes: no se sigue martillando el limite.
+            const limitInfo = { message: error.message, retryAfterSeconds: retryAfterSecondsOf(error) };
+            job = markItemRateLimited(job, entry.itemKey, limitInfo);
+            job = markPendingRateLimited(job, limitInfo);
+            if(persist){
+              for(const it of job.items.filter(x => x.status === ITEM_STATUS.PENDIENTE_LIMITE)){
+                await saveItemState(db, user.uid, job.batchId, it).catch(() => {});
+              }
+            }
+          }else{
+            job = markItemError(job, entry.itemKey, error);
+            const finishedEntry = job.items.find(it => it.itemKey === entry.itemKey);
+            if(persist) await saveItemState(db, user.uid, job.batchId, finishedEntry).catch(() => {});
+          }
         }
         setActiveJob(job);
         const summary = summarizeJob(job);
-        setAiStatus(`Procesando lote "${sourceFile}": ${summary.done} de ${summary.total} conceptos (${summary.terminado} listos, ${summary.requiere_revision} con observaciones, ${summary.error} con error).`);
+        setAiStatus(`Procesando lote "${sourceFile}": ${summary.done} de ${summary.total} conceptos (${summary.terminado} listos, ${summary.requiere_revision} con observaciones, ${summary.error} con error${summary.pendiente_limite ? `, ${summary.pendiente_limite} pendientes por límite (reintentar ${formatRetryAfter(summary.retryAfterSeconds)})` : ''}).`);
       }));
     }
     if(persist && isJobComplete(job) && !job.cancelled){
@@ -3066,10 +3175,10 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       setActiveJob(retried);
       const finished = await runQueueJob(retried);
       const summary = summarizeJob(finished);
-      setBatchResult(prev => prev ? { ...prev, generated: finished.items.filter(it => it.apu).length, review: summary.requiere_revision, errors: summary.error, cancelled: finished.cancelled } : prev);
+      setBatchResult(prev => prev ? { ...prev, generated: finished.items.filter(it => it.apu).length, review: summary.requiere_revision, errors: summary.error, rateLimited: summary.pendiente_limite, retryAfterSeconds: summary.retryAfterSeconds, cancelled: finished.cancelled } : prev);
       setAiStatus(finished.cancelled
         ? `Reintento cancelado: ${summary.done} de ${summary.total} conceptos procesados.`
-        : `Reintento terminado: ${summary.terminado} listos, ${summary.requiere_revision} con observaciones, ${summary.error} con error.`);
+        : `Reintento terminado: ${summary.terminado} listos, ${summary.requiere_revision} con observaciones, ${summary.error} con error${summary.pendiente_limite ? `, ${summary.pendiente_limite} pendientes por límite (reintentar ${formatRetryAfter(summary.retryAfterSeconds)})` : ''}.`);
     }finally{
       setBatchBusy(false);
     }
@@ -3396,6 +3505,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
           <span>{tr('apu.resultGenerated')} <b>{batchResult.generated}</b></span>
           <span>{tr('apu.resultReview')} <b>{batchResult.review}</b></span>
           <span>{tr('apu.resultErrors')} <b>{batchResult.errors}</b></span>
+          {batchResult.rateLimited>0 && <span>Pendientes por límite (sin APU, reintentar {formatRetryAfter(batchResult.retryAfterSeconds)}) <b>{batchResult.rateLimited}</b></span>}
           <span>{tr('apu.resultSubtotal')} <b>{money(batchResult.budget.items.reduce((s,it)=>s+Number(it.qty)*Number(it.pu),0))}</b></span>
           <span>{tr('apu.resultTotalIva')} <b>{money(batchResult.budget.total)}</b></span>
         </div>
@@ -3406,6 +3516,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
         </div>}
         <div className="batch-result-actions">
           {batchResult.errors>0 && <button className="soft danger" onClick={retryFailedInActiveJob} disabled={batchBusy}>{batchBusy?tr('apu.retrying'):tr('apu.retryFailed',{count:batchResult.errors})}</button>}
+          {!(batchResult.errors>0) && batchResult.rateLimited>0 && <button className="soft" onClick={retryFailedInActiveJob} disabled={batchBusy}>{batchBusy?tr('apu.retrying'):`Reintentar ${batchResult.rateLimited} pendiente(s) por límite`}</button>}
           {/* Entregable profesional (RESUMEN + CONTROL_REVISION + 1 hoja APU
               completa por concepto -- exportConceptBatch -> exportAPUExcelV2,
               sin tocar): boton principal, primero y sin la clase "soft" que

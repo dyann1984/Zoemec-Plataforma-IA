@@ -24,14 +24,19 @@ export const ITEM_STATUS = Object.freeze({
   TERMINADO: 'terminado',
   REQUIERE_REVISION: 'requiere_revision',
   ERROR: 'error',
-  CANCELADO: 'cancelado'
+  CANCELADO: 'cancelado',
+  // F1/P0: la IA respondio 429 (limite temporal). Terminal PARA ESTA
+  // CORRIDA (el lote termina sin martillar el limite), pero NO es un error:
+  // el item no tiene APU y es reintentable (retryFailedItems lo reencola).
+  PENDIENTE_LIMITE: 'pendiente_limite'
 });
 
 const TERMINAL_STATUSES = new Set([
   ITEM_STATUS.TERMINADO,
   ITEM_STATUS.REQUIERE_REVISION,
   ITEM_STATUS.ERROR,
-  ITEM_STATUS.CANCELADO
+  ITEM_STATUS.CANCELADO,
+  ITEM_STATUS.PENDIENTE_LIMITE
 ]);
 
 const IN_FLIGHT_STATUSES = new Set([
@@ -135,6 +140,38 @@ export function markItemError(job, itemKey, error){
   });
 }
 
+/* F1/P0: 429 en ESTE item -> PENDIENTE_LIMITE (sin APU, sin contar como
+   error), con el motivo y cuando reintentar. */
+export function markItemRateLimited(job, itemKey, { message = '', retryAfterSeconds = null } = {}){
+  const current = job.items.find(it => it.itemKey === itemKey);
+  return updateItem(job, itemKey, {
+    status: ITEM_STATUS.PENDIENTE_LIMITE,
+    error: String(message || 'Limite temporal de solicitudes alcanzado.'),
+    retryAfterSeconds: retryAfterSeconds ?? null,
+    retryAt: retryAfterSeconds ? new Date(Date.now() + retryAfterSeconds * 1000).toISOString() : null,
+    apu: null,
+    attempts: (current?.attempts || 0) + 1,
+    finishedAt: Date.now()
+  });
+}
+
+/* F1/P0: tras el primer 429 del lote, los items que aun no arrancaron
+   (PENDIENTE) pasan a PENDIENTE_LIMITE sin llamar a la IA -- la ventana dura
+   minutos; seguir llamando solo consumiria cupo y fallaria igual. */
+export function markPendingRateLimited(job, { message = '', retryAfterSeconds = null } = {}){
+  let next = job;
+  job.items.filter(it => it.status === ITEM_STATUS.PENDIENTE).forEach(it => {
+    next = updateItem(next, it.itemKey, {
+      status: ITEM_STATUS.PENDIENTE_LIMITE,
+      error: String(message || 'Limite temporal de solicitudes alcanzado.'),
+      retryAfterSeconds: retryAfterSeconds ?? null,
+      retryAt: retryAfterSeconds ? new Date(Date.now() + retryAfterSeconds * 1000).toISOString() : null,
+      finishedAt: Date.now()
+    });
+  });
+  return next;
+}
+
 export function markItemDone(job, itemKey, apu, { requiresReview = false } = {}){
   const current = job.items.find(it => it.itemKey === itemKey);
   return updateItem(job, itemKey, {
@@ -154,8 +191,9 @@ export function retryFailedItems(job){
   return {
     ...job,
     updatedAt: Date.now(),
-    items: job.items.map(it => it.status === ITEM_STATUS.ERROR
-      ? { ...it, status: ITEM_STATUS.PENDIENTE, error: null }
+    // F1: PENDIENTE_LIMITE tambien se reencola (nunca fue un error real).
+    items: job.items.map(it => (it.status === ITEM_STATUS.ERROR || it.status === ITEM_STATUS.PENDIENTE_LIMITE)
+      ? { ...it, status: ITEM_STATUS.PENDIENTE, error: null, retryAfterSeconds: null, retryAt: null }
       : it)
   };
 }
@@ -179,7 +217,8 @@ export function cancelJob(job){
 }
 
 export function summarizeJob(job){
-  const counts = { pendiente: 0, enProceso: 0, terminado: 0, requiere_revision: 0, error: 0, cancelado: 0 };
+  const counts = { pendiente: 0, enProceso: 0, terminado: 0, requiere_revision: 0, error: 0, cancelado: 0, pendiente_limite: 0 };
+  let retryAfterSeconds = null;
   job.items.forEach(it => {
     if(it.status === ITEM_STATUS.PENDIENTE) counts.pendiente++;
     else if(IN_FLIGHT_STATUSES.has(it.status)) counts.enProceso++;
@@ -187,9 +226,13 @@ export function summarizeJob(job){
     else if(it.status === ITEM_STATUS.REQUIERE_REVISION) counts.requiere_revision++;
     else if(it.status === ITEM_STATUS.ERROR) counts.error++;
     else if(it.status === ITEM_STATUS.CANCELADO) counts.cancelado++;
+    else if(it.status === ITEM_STATUS.PENDIENTE_LIMITE){
+      counts.pendiente_limite++;
+      if(it.retryAfterSeconds) retryAfterSeconds = Math.max(retryAfterSeconds || 0, it.retryAfterSeconds);
+    }
   });
-  const done = counts.terminado + counts.requiere_revision + counts.error + counts.cancelado;
-  return { total: job.total, ...counts, done, remaining: job.total - done };
+  const done = counts.terminado + counts.requiere_revision + counts.error + counts.cancelado + counts.pendiente_limite;
+  return { total: job.total, ...counts, done, remaining: job.total - done, retryAfterSeconds };
 }
 
 export function isJobComplete(job){

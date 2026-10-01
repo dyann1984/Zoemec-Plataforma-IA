@@ -1,8 +1,20 @@
-.engineering-copilot{border:1px solid #b8d3ed;border-radius:12px;padding:20px;margin:16px 0;background:var(--panel,#fff);color:var(--text,#12324d);min-width:0}
-.engineering-copilot h2{color:#1764a5;font-size:1.2rem}.engineering-copilot p,.engineering-copilot li,.engineering-copilot summary{overflow-wrap:anywhere}
+.zi-copilot-prominent{border:2px solid #1764a5;border-radius:12px;padding:4px;margin:16px 0;background:linear-gradient(135deg,#eaf3fb 0%,#fff 100%)}
+.engineering-copilot{border:1px solid #b8d3ed;border-radius:12px;padding:20px;background:var(--panel,#fff);color:var(--text,#12324d);min-width:0}
+.engineering-copilot h2{color:#1764a5;font-size:1.2rem;margin:0 0 8px}.engineering-copilot p,.engineering-copilot li,.engineering-copilot summary{overflow-wrap:anywhere}
+.engineering-powered-by{font-size:.82rem;color:#5a7a99;margin:2px 0 10px}
 .engineering-quick{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}.engineering-copilot label{display:block;margin:12px 0}
 .engineering-copilot textarea{display:block;width:100%;min-height:90px;box-sizing:border-box}.engineering-copilot input:not([type=checkbox]){display:block;max-width:100%;box-sizing:border-box}
 .engineering-copilot button{min-height:44px}.engineering-copilot details{padding:8px 0}.engineering-copilot summary{cursor:pointer;min-height:30px}
 .engineering-copilot pre{white-space:pre-wrap;overflow-wrap:anywhere}.engineering-indicator{border-left:3px solid #1764a5;padding:8px 12px;margin:12px 0}
 .engineering-answer small{overflow-wrap:anywhere}.engineering-copilot li{margin-bottom:10px}.engineering-copilot [role=alert]{color:#a22323}
+.engineering-executive-summary{background:#f0f7ff;border-left:4px solid #1764a5;padding:12px 16px;border-radius:0 8px 8px 0;margin:12px 0}
+.engineering-executive-summary h3{margin:0 0 6px;font-size:1rem;color:#1764a5}
+.engineering-executive-summary p{margin:4px 0}
+.engineering-demo-badge{background:#fff3cd;padding:6px 12px;border-radius:6px;display:inline-block;margin-bottom:8px}
+.engineering-technical-details{margin-top:16px;border-top:1px solid #d0dfe8;padding-top:8px}
+.engineering-technical-details>summary{color:#5a7a99;font-size:.85rem}
+.engineering-disclaimer{font-size:.82rem;color:#7a8fa0;margin-top:12px;font-style:italic}
+.engineering-offline{color:#a22323;font-weight:600}
+.zi-tabs-secondary{margin-top:-1px;padding-top:0;border-top:1px dashed #b8d3ed}
+.zi-tab-more{font-style:italic;color:#5a7a99}
 @media(max-width:600px){.engineering-copilot{padding:12px}.engineering-quick{display:grid;grid-template-columns:1fr}.engineering-copilot button{width:100%}}

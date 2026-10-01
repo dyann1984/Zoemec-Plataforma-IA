@@ -582,7 +582,8 @@ function HistorialTab({ history, onRestore }){
   </div>)}</div>;
 }
 
-const TAB_KEYS = ['resumen', 'confidence', 'bidrisk', 'auditoria', 'challenge', 'escenarios', 'evidencia', 'memoria', 'historial'];
+const PRIMARY_TABS = ['resumen', 'confidence', 'bidrisk', 'auditoria'];
+const SECONDARY_TABS = ['challenge', 'escenarios', 'evidencia', 'memoria', 'historial'];
 
 /* ZOEMEC INTELLIGENCE (Fase 5 + Fase 6): unico punto de montaje de los 4
    motores de dominio dentro del editor, mas persistencia real de Memoria
@@ -633,13 +634,22 @@ export function ZoemecIntelligencePanel({ apu, onChange, history, onRestoreVersi
     setTab('escenarios');
   };
 
+  const [showMore, setShowMore] = useState(false);
+  const isSecondary = SECONDARY_TABS.includes(tab);
+
   return <section className="zi-panel">
-    <details><summary>ZOEMEC AI · Explicar este APU con evidencia</summary><EngineeringCopilot projectId={apu.projectId} apuId={apu.id} projectName={apu.proyecto} revision={apu} /></details>
+    <div className="zi-copilot-prominent">
+      <EngineeringCopilot projectId={apu.projectId} apuId={apu.id} projectName={apu.proyecto} revision={apu} />
+    </div>
     <div className="zi-panel-head"><h2>ZOEMEC INTELLIGENCE</h2><span className="zi-subtitle">{tr('intel.panelSubtitle')}</span></div>
     <SummaryBar summary={summary} tr={tr} />
     <div className="zi-tabs" role="tablist">
-      {TAB_KEYS.map(key => <button key={key} type="button" role="tab" aria-selected={tab === key} className={`zi-tab${tab === key ? ' active' : ''}`} onClick={() => setTab(key)}>{tr(`intel.tabs.${key}`)}</button>)}
+      {PRIMARY_TABS.map(key => <button key={key} type="button" role="tab" aria-selected={tab === key} className={`zi-tab${tab === key ? ' active' : ''}`} onClick={() => setTab(key)}>{tr(`intel.tabs.${key}`)}</button>)}
+      <button type="button" className={`zi-tab zi-tab-more${showMore || isSecondary ? ' active' : ''}`} onClick={() => setShowMore(v => !v)} aria-expanded={showMore || isSecondary}>{tr('intel.tabs.masAnalisis') || 'Mas analisis'} {showMore ? '▴' : '▾'}</button>
     </div>
+    {(showMore || isSecondary) && <div className="zi-tabs zi-tabs-secondary" role="tablist">
+      {SECONDARY_TABS.map(key => <button key={key} type="button" role="tab" aria-selected={tab === key} className={`zi-tab${tab === key ? ' active' : ''}`} onClick={() => setTab(key)}>{tr(`intel.tabs.${key}`)}</button>)}
+    </div>}
     <div className="zi-tabpanel">
       {tab === 'resumen' && <ResumenTab apu={apu} intelligence={intelligence} confidence={intelligence.confidence} bidRisk={intelligence.bidRisk} />}
       {tab === 'confidence' && <ConfidenceTab confidence={intelligence.confidence} />}

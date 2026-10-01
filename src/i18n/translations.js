@@ -1520,10 +1520,10 @@ export const translations = {
       recoveredDiscard: 'Descartar',
     },
     intel: {
-      confidenceLabel: 'Confidence',
-      bidRiskLabel: 'Bid Risk',
+      confidenceLabel: 'Confianza',
+      bidRiskLabel: 'Riesgo de oferta',
       auditLabel: 'Auditoría',
-      challengeLabel: 'Challenge',
+      challengeLabel: 'Cuestionamientos',
       confidenceUnavailable: 'Confidence no disponible: {reason}',
       bidRiskUnavailable: 'Bid Risk no disponible: {reason}',
       auditUnavailable: 'Auditor no disponible: {reason}',
@@ -1546,10 +1546,11 @@ export const translations = {
       notCalculable: 'NO CALCULABLE',
       unitCost: 'Costo unitario',
       projectCost: 'Costo proyecto',
-      panelSubtitle: 'Auditor · Challenge · Confidence · Bid Risk · Scenario · Memoria',
+      panelSubtitle: 'Auditoría · Cuestionamientos · Confianza · Riesgo · Escenarios · Memoria',
       tabs: {
-        resumen: 'Resumen', confidence: 'Confidence', bidrisk: 'Bid Risk', auditoria: 'Auditoría',
-        challenge: 'Challenge', escenarios: 'Escenarios', evidencia: 'Evidencia', memoria: 'Memoria', historial: 'Historial',
+        resumen: 'Resumen', confidence: 'Confianza', bidrisk: 'Riesgo', auditoria: 'Auditoría',
+        challenge: 'Cuestionamientos', escenarios: 'Escenarios', evidencia: 'Evidencia', memoria: 'Memoria', historial: 'Historial',
+        masAnalisis: 'Mas analisis',
       },
     },
     compare: {
@@ -3146,6 +3147,7 @@ export const translations = {
       tabs: {
         resumen: 'Summary', confidence: 'Confidence', bidrisk: 'Bid Risk', auditoria: 'Audit',
         challenge: 'Challenge', escenarios: 'Scenarios', evidencia: 'Evidence', memoria: 'Memory', historial: 'History',
+        masAnalisis: 'More analysis',
       },
     },
     compare: {

@@ -144,7 +144,7 @@ export function ProjectWorkspace({
   return (
     <div className="project-workspace-container">
       {project.isDemo && <p className="zi-badge zi-badge-info">DEMO · Datos sintéticos controlados</p>}
-      <details><summary>Analizar proyecto con IA · NVIDIA/Nebius</summary><EngineeringCopilot key={projectId} projectId={projectId} projectName={project.nombre || project.name} /></details>
+      <div className="zi-copilot-prominent"><EngineeringCopilot key={projectId} projectId={projectId} projectName={project.nombre || project.name} /></div>
       <ProjectHeader
         project={project}
         apus={projectApus}

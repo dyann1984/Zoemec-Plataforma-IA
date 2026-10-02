@@ -13,7 +13,7 @@ const page = await browser.newPage();
 let mode = 'not-configured'; let lastBody; let delayedResolve;
 const fixture = createNebiusDemo();
 const built = buildEngineeringContext({ ...fixture, identity: { uid: fixture.project.ownerUid, organizationId: fixture.project.organizationId, memberStatus: 'active' } });
-const sample = { requestId: 'UI-MOCK', timestamp: '2026-09-29', project: built.context.project, indicators: built.indicators, missingData: built.context.missingData,
+const sample = { ok: true, requestId: 'UI-MOCK', timestamp: '2026-09-29', project: built.context.project, indicators: built.indicators, missingData: built.context.missingData,
   answer: { provider: 'Nebius (MOCK DE PRUEBA)', model: 'MOCK', summary: { text: 'La evidencia requiere revisión.', evidenceRefs: ['E1'] }, confidence: 'low', facts: ['E1'],
     inferences: [], risks: [], recommendedActions: [{ text: 'Verificar la fuente.', evidenceRefs: ['E1'] }], evidenceRefs: built.context.refs.slice(0, 6), missingData: [] } };
 const errors = [];
@@ -24,6 +24,8 @@ await page.route('**/*', async route => {
   if (url.pathname !== '/api/engineering-ai') return route.continue();
   if (route.request().method() === 'GET') return route.fulfill({ json: { configured: mode !== 'not-configured', status: mode === 'not-configured' ? 'Nebius no configurado' : 'Configurado (MOCK)' } });
   lastBody = route.request().postDataJSON();
+  if (mode === 'malformed') return route.fulfill({ json: {} });
+  if (mode === 'timeout') return;
   if (mode === 'error') return route.fulfill({ status: 502, json: { error: 'La respuesta no superó la validación de evidencia.', code: 'INVALID_MODEL_OUTPUT' } });
   if (mode === 'insufficient') return route.fulfill({ status: 422, json: { error: 'ZOEMEC no dispone de evidencia suficiente para responder con confianza.' } });
   if (mode === 'delayed') await new Promise(resolve => { delayedResolve = resolve; });
@@ -36,10 +38,11 @@ try {
   assert.equal(await page.getByRole('button', { name: 'Consultar con evidencia' }).isDisabled(), true);
   mode = 'success'; await page.reload();
   await page.getByText('Configurado (MOCK)', { exact: true }).waitFor();
-  await page.getByRole('button', { name: 'Explicar Confidence' }).click();
+  await page.getByRole('button', { name: 'Explicar confianza' }).click();
   await page.getByRole('heading', { name: 'Conclusión', exact: true }).waitFor();
   assert.equal(lastBody.projectId, fixture.project.id);
-  for (const heading of ['Evidencia', 'Riesgos', 'Acciones recomendadas', 'Limitaciones / datos faltantes']) assert.equal(await page.getByRole('heading', { name: heading, exact: true }).count(), 1);
+  for (const heading of ['Indicadores calculados por ZOEMEC', 'Riesgos', 'Acciones recomendadas', 'Limitaciones / datos faltantes']) assert.equal(await page.getByRole('heading', { name: heading, exact: true }).count(), 1);
+  await page.getByText('Detalles técnicos y evidencia', { exact: true }).click();
   await page.getByText('E1 · project.name', { exact: true }).click();
   await page.getByText('Escenario determinístico de materiales', { exact: true }).click();
   await page.getByRole('checkbox').check();
@@ -53,11 +56,20 @@ try {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `No overflow ${width}`);
     await page.screenshot({ path: `.tmp/nebius-ui/copilot-${width}.png`, fullPage: true });
   }
-  mode = 'error'; await page.getByRole('button', { name: 'Analizar Bid Risk' }).click();
+  mode = 'error'; await page.getByRole('button', { name: 'Analizar riesgo' }).click();
   await page.getByRole('alert').waitFor(); assert.match(await page.getByRole('alert').textContent(), /validación/);
-  mode = 'insufficient'; await page.getByRole('button', { name: 'Analizar Bid Risk' }).click();
+  mode = 'insufficient'; await page.getByRole('button', { name: 'Analizar riesgo' }).click();
   await page.getByText(/ZOEMEC no dispone de evidencia suficiente/).waitFor();
-  mode = 'delayed'; await page.getByRole('button', { name: 'Explicar Confidence' }).click();
+  mode = 'malformed'; await page.getByRole('button', { name: 'Explicar confianza' }).click();
+  await page.getByRole('alert').waitFor(); assert.match(await page.getByRole('alert').textContent(), /validada/);
+  await page.clock.install();
+  mode = 'timeout'; await page.getByRole('button', { name: 'Explicar confianza' }).click();
+  await page.getByText('Consultando datos autorizados y esperando la explicación de Nebius…').waitFor();
+  await page.clock.fastForward(56000);
+  await page.getByRole('alert').waitFor(); assert.match(await page.getByRole('alert').textContent(), /tardó demasiado/);
+  assert.equal(await page.getByRole('button', { name: 'Explicar confianza' }).isEnabled(), true);
+  await page.clock.resume();
+  mode = 'delayed'; await page.getByRole('button', { name: 'Explicar confianza' }).click();
   await page.getByText('Consultando datos autorizados y esperando la explicación de Nebius…').waitFor();
   await page.getByRole('button', { name: 'Cambiar proyecto de prueba' }).click();
   delayedResolve();

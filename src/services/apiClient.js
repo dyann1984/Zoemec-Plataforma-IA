@@ -32,9 +32,10 @@ export async function readJsonSafe(res){
   catch{ return { error: httpErrorMessage(res.status, `El servidor respondio un formato invalido (HTTP ${res.status}).`) }; }
 }
 
-export async function apiPost(path, body){
+export async function apiPost(path, body, { signal } = {}){
   const res = await fetch(path, {
     method:'POST',
+    signal,
     headers:await authHeaders(),
     body:JSON.stringify(body || {})
   });

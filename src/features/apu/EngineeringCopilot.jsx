@@ -53,6 +53,7 @@ export function EngineeringCopilot({ projectId, apuId, projectName, revision }) 
   const [percent, setPercent] = useState('8');
   const [refresh, setRefresh] = useState(0);
   const generation = useRef(0);
+  const pending = useRef(null);
   useEffect(() => {
     const current = ++generation.current;
     setResult(null); setError(''); setBusy(false); setQuestion(''); setScenarioEnabled(false); setStatus(null);
@@ -68,18 +69,23 @@ export function EngineeringCopilot({ projectId, apuId, projectName, revision }) 
       clearTimeout(timer);
       if (generation.current === current) setStatus({ unavailable: true, offline: true });
     });
-    return () => { generation.current++; clearTimeout(timer); };
+    return () => { generation.current++; clearTimeout(timer); pending.current?.abort(); pending.current = null; };
   }, [projectId, apuId, revision, refresh]);
   async function ask(text, analysis = 'answerEngineeringQuestion') {
-    if (busy || !text.trim()) return;
+    if (pending.current || busy || !text.trim()) return;
     const current = generation.current;
+    const controller = new AbortController();
+    pending.current = controller;
+    let timer;
+    const expired = new Promise((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('El análisis tardó demasiado. Puedes volver a intentarlo.')); }, 55000); });
     setBusy(true); setError(''); setResult(null);
     try {
-      const response = await apiPost('/api/engineering-ai', { projectId, ...(apuId ? { apuId } : {}), question: text, analysis,
-        ...(scenarioEnabled && apuId ? { scenario: { kind: 'MATERIAL_PERCENT', resourceDescripcion: resource, value: Number(percent) } } : {}) });
+      const response = await Promise.race([apiPost('/api/engineering-ai', { projectId, ...(apuId ? { apuId } : {}), question: text, analysis,
+        ...(scenarioEnabled && apuId ? { scenario: { kind: 'MATERIAL_PERCENT', resourceDescripcion: resource, value: Number(percent) } } : {}) }, { signal: controller.signal }), expired]);
+      if (!response?.ok || typeof response.answer?.summary?.text !== 'string' || !Array.isArray(response.answer.summary.evidenceRefs) || !['evidenceRefs', 'inferences', 'risks', 'recommendedActions', 'missingData'].every(k => Array.isArray(response.answer[k])) || !Array.isArray(response.indicators) || !Array.isArray(response.missingData)) throw new Error('No se recibió una respuesta validada. Intenta de nuevo.');
       if (current === generation.current) setResult(response);
-    } catch (err) { if (current === generation.current) setError(err.message || 'No se pudo analizar. Intenta de nuevo.'); }
-    finally { if (current === generation.current) setBusy(false); }
+    } catch (err) { if (current === generation.current) setError(controller.signal.aborted ? 'El análisis tardó demasiado. Puedes volver a intentarlo.' : err.message || 'No se pudo analizar. Intenta de nuevo.'); }
+    finally { clearTimeout(timer); if (pending.current === controller) pending.current = null; if (current === generation.current) setBusy(false); }
   }
   const disabled = busy || !projectId || !status?.configured;
   const statusMessage = status?.offline

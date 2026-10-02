@@ -57,17 +57,19 @@ export function validateEngineeringResponse(raw, context) {
   const all = [...result.facts, ...result.summary.evidenceRefs, ...['inferences', 'risks', 'recommendedActions'].flatMap(k => result[k].flatMap(s => s.evidenceRefs))];
   return { ...result, evidenceRefs: [...new Set(all)].map(id => refs.get(id)) };
 }
+export const FREE_FORM_SUFFIX = '\nPregunta libre: refiere cada valor por su identificador de evidencia (ej: "según E5", "la referencia E12 muestra el precio registrado"). ZOEMEC renderiza los valores reales junto a cada referencia; cero dígitos en campos text.';
 export function createNebiusProvider({ env = process.env, fetchImpl = fetch } = {}) {
   const config = nebiusConfig(env);
   async function analyze({ context, question, analysis }) {
     if (!config.apiKey) throw aiError('NEBIUS_NOT_CONFIGURED', 503);
+    const systemContent = analysis === 'answerEngineeringQuestion' ? SYSTEM_PROMPT + FREE_FORM_SUFFIX : SYSTEM_PROMPT;
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 45000);
     try {
       const response = await fetchImpl(`${config.baseUrl}/chat/completions`, { method: 'POST', redirect: 'error', signal: controller.signal,
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey}` },
         body: JSON.stringify({ model: config.model, max_tokens: 16384, temperature: 0,
           response_format: { type: 'json_schema', json_schema: { name: 'zoemec_engineering', strict: true, schema: RESPONSE_SCHEMA } },
-          messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: JSON.stringify({ analysis, question, data: context }) }] }) });
+          messages: [{ role: 'system', content: systemContent }, { role: 'user', content: JSON.stringify({ analysis, question, data: context }) }] }) });
       if (!response.ok) throw aiError(response.status === 429 ? 'NEBIUS_RATE_LIMIT' : 'NEBIUS_API_ERROR', response.status === 429 ? 429 : 502);
       const body = await response.text();
       if (body.length > 100000) throw aiError('INVALID_MODEL_OUTPUT', 502);

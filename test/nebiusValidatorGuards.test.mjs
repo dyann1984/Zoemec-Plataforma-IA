@@ -64,3 +64,26 @@ test('F. evidenceRefs vacío donde se requiere -> DENY', () => {
   const r = valid(); r.summary.evidenceRefs = []; throwsInvalid(r);
   const r2 = valid(); r2.facts = []; throwsInvalid(r2);
 });
+
+test('G. respuesta de pregunta libre sin dígitos con evidenceRefs ricos -> PASS', () => {
+  const r = {
+    summary: { text: 'La oferta requiere revisión de la evidencia de precios y las fuentes registradas antes de la presentación.', evidenceRefs: ['E1', 'E2'] },
+    confidence: 'medium', facts: ['E1', 'E2', 'E3'],
+    inferences: [
+      { text: 'La confianza del análisis sugiere áreas que requieren verificación adicional antes de proceder.', evidenceRefs: ['E2'] },
+      { text: 'El riesgo calculado indica que la exposición económica registrada merece atención prioritaria.', evidenceRefs: ['E3'] }
+    ],
+    risks: [{ text: 'Los hallazgos de auditoría incluyen observaciones relevantes para la competitividad de la oferta.', evidenceRefs: ['E1', 'E3'] }],
+    recommendedActions: [
+      { text: 'Verificar las fuentes de precio registradas en las referencias correspondientes.', evidenceRefs: ['E1'] },
+      { text: 'Revisar los hallazgos de auditoría para confirmar que las observaciones han sido atendidas.', evidenceRefs: ['E3'] }
+    ],
+    missingData: ['No se dispone de cotizaciones comparativas de otros proveedores.', 'Faltan evidencias de rendimientos en campo para este tipo de obra.']
+  };
+  const out = validateEngineeringResponse(r, context);
+  assert.equal(out.confidence, 'medium');
+  assert.equal(out.evidenceRefs.length, 3);
+  assert.equal(out.inferences.length, 2);
+  assert.equal(out.risks.length, 1);
+  assert.equal(out.recommendedActions.length, 2);
+});

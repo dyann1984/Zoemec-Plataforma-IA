@@ -4,7 +4,7 @@ import { createNebiusDemo } from '../src/domain/nebiusDemo.js';
 import { createMemoryFirestore } from './helpers/memoryFirestore.mjs';
 import { buildEngineeringContext, assertScope } from '../server/api-lib/_engineeringContext.mjs';
 import { runEngineeringAnalysis, loadEngineeringProject, validateEngineeringRequest } from '../server/api-lib/_engineeringOrchestrator.mjs';
-import { createNebiusProvider, validateEngineeringResponse, DEFAULT_MODEL, SYSTEM_PROMPT } from '../server/api-lib/_nebiusProvider.mjs';
+import { createNebiusProvider, validateEngineeringResponse, DEFAULT_MODEL, SYSTEM_PROMPT, FREE_FORM_SUFFIX } from '../server/api-lib/_nebiusProvider.mjs';
 import { computeZoemecIntelligence, runScenarioLab, buildScenarioLabChange } from '../src/features/apu/zoemecIntelligence.js';
 const identity = { uid: 'alice', organizationId: 'orgA', memberStatus: 'active' };
 const fixture = () => createNebiusDemo({ ownerUid: identity.uid, organizationId: identity.organizationId });
@@ -25,7 +25,12 @@ test('Nebius provider uses documented endpoint, server key, JSON schema, selecte
     assert.equal(options.headers.Authorization, 'Bearer test-only-secret');
     const sent = JSON.parse(options.body);
     assert.equal(sent.model, DEFAULT_MODEL); assert.equal(sent.response_format.type, 'json_schema');
-    assert.equal(sent.messages[0].content, SYSTEM_PROMPT);
+    const userPayload = JSON.parse(sent.messages[1].content);
+    if (userPayload.analysis === 'answerEngineeringQuestion') {
+      assert.equal(sent.messages[0].content, SYSTEM_PROMPT + FREE_FORM_SUFFIX);
+    } else {
+      assert.equal(sent.messages[0].content, SYSTEM_PROMPT);
+    }
     assert.ok(!options.body.includes('test-only-secret'));
     return new Response(JSON.stringify(completion(rawAnswer())));
   } });
@@ -131,4 +136,37 @@ test('Demo catalog and saved APU share quantity and association', () => {
   assert.equal(f.conceptos[0].qty, f.apus[0].snapshot.cantidadObra);
   assert.equal(f.conceptos[0].apuId, f.apus[0].id);
   assert.equal(f.project.isDemo, true);
+});
+test('Free-form question uses reinforced system prompt and accepts digit-free prose', async () => {
+  const f = setup();
+  const freeFormAnswer = () => ({
+    summary: { text: 'La oferta requiere revisión de evidencia de precios y verificación de fuentes antes de ser presentada.', evidenceRefs: ['E1'] },
+    confidence: 'medium', facts: ['E1', 'E2'],
+    inferences: [{ text: 'La confianza del análisis sugiere que existen áreas que requieren verificación adicional.', evidenceRefs: ['E2'] }],
+    risks: [{ text: 'Los hallazgos de auditoría registrados incluyen observaciones que podrían afectar la oferta.', evidenceRefs: ['E3'] }],
+    recommendedActions: [{ text: 'Verificar las fuentes de precio registradas antes de la presentación formal.', evidenceRefs: ['E1'] }],
+    missingData: ['No se dispone de cotizaciones comparativas de otros proveedores.']
+  });
+  let capturedSystem;
+  const provider = createNebiusProvider({ env, fetchImpl: async (_, options) => {
+    const sent = JSON.parse(options.body);
+    capturedSystem = sent.messages[0].content;
+    return new Response(JSON.stringify(completion(freeFormAnswer())));
+  } });
+  const result = await provider.answerEngineeringQuestion({ context: f.context, question: '¿Qué debería revisar antes de presentar esta oferta?' });
+  assert.equal(capturedSystem, SYSTEM_PROMPT + FREE_FORM_SUFFIX);
+  assert.equal(result.confidence, 'medium');
+  assert.ok(result.evidenceRefs.length > 0);
+  assert.ok(!/\d/.test(result.summary.text));
+});
+test('Free-form with digits in prose is still rejected by grounding', async () => {
+  const f = setup();
+  const badAnswer = () => ({
+    summary: { text: 'La oferta tiene 3 hallazgos críticos y una exposición de 50530 pesos.', evidenceRefs: ['E1'] },
+    confidence: 'medium', facts: ['E1'],
+    inferences: [], risks: [], recommendedActions: [],
+    missingData: ['Faltan fuentes verificadas.']
+  });
+  const provider = createNebiusProvider({ env, fetchImpl: async () => new Response(JSON.stringify(completion(badAnswer()))) });
+  await assert.rejects(provider.answerEngineeringQuestion({ context: f.context, question: '¿Qué revisar?' }), { code: 'INVALID_MODEL_OUTPUT' });
 });

@@ -170,3 +170,53 @@ test('Free-form with digits in prose is still rejected by grounding', async () =
   const provider = createNebiusProvider({ env, fetchImpl: async () => new Response(JSON.stringify(completion(badAnswer()))) });
   await assert.rejects(provider.answerEngineeringQuestion({ context: f.context, question: '¿Qué revisar?' }), { code: 'INVALID_MODEL_OUTPUT' });
 });
+
+test('Controlled repair regenerates grounded output without echoing rejected content', async () => {
+  const f = setup(); let calls = 0;
+  const provider = createNebiusProvider({ env, fetchImpl: async (_, options) => {
+    calls++; const sent = JSON.parse(options.body);
+    assert.ok(!options.body.includes('Inventado 999999'));
+    if (calls === 2) assert.match(sent.messages[0].content, /respuesta anterior no cumplió/);
+    const raw = rawAnswer(); if (calls === 1) raw.summary.text = 'Inventado 999999';
+    return new Response(JSON.stringify(completion(raw)));
+  } });
+  const result = await provider.answerEngineeringQuestion({ context: f.context, question: '¿Qué debo revisar?' });
+  assert.equal(calls, 2); assert.equal(result.attempts, 2);
+  assert.deepEqual(result.evidenceRefs.map(r => r.id), ['E1']);
+  assert.equal(result.summary.text, rawAnswer().summary.text);
+});
+test('Invalid refs and malformed JSON may recover only through fully validated retry', async () => {
+  for (const kind of ['refs', 'json']) {
+    let calls = 0;
+    const provider = createNebiusProvider({ env, fetchImpl: async () => {
+      calls++; const raw = rawAnswer(); raw.summary.evidenceRefs = ['E999999'];
+      return new Response(calls === 1 ? kind === 'json' ? 'broken' : JSON.stringify(completion(raw)) : JSON.stringify(completion(rawAnswer())));
+    } });
+    assert.equal((await provider.analyzeAPU({ context: setup().context })).attempts, 2);
+    assert.equal(calls, 2);
+  }
+});
+test('Provider failures do not consume repair attempts', async () => {
+  let calls = 0;
+  const p = createNebiusProvider({ env, fetchImpl: async () => { calls++; return new Response('private', { status: 503 }); } });
+  await assert.rejects(p.analyzeAPU({ context: setup().context }), { code: 'NEBIUS_API_ERROR' });
+  assert.equal(calls, 1);
+});
+test('One shared deadline aborts provider and prevents infinite repair', async () => {
+  let calls = 0;
+  const p = createNebiusProvider({ env, timeoutMs: 20, fetchImpl: async (_, { signal }) => {
+    calls++;
+    if (calls === 1) return new Response('malformed');
+    return new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('private')), { once: true }));
+  } });
+  await assert.rejects(p.answerEngineeringQuestion({ context: setup().context }), { code: 'NEBIUS_TIMEOUT' });
+  assert.equal(calls, 2);
+});
+test('Rejected output never escapes after maximum repair attempts', async () => {
+  for (const text of ['E12 demuestra riesgo', 'www.evil.test', '<b>riesgo</b>', 'Cumple ASTM inventada', '', 'Hay 25 hallazgos']) {
+    let calls = 0;
+    const p = createNebiusProvider({ env, fetchImpl: async () => { calls++; const raw = rawAnswer(); raw.summary.text = text; return new Response(JSON.stringify(completion(raw))); } });
+    await assert.rejects(p.answerEngineeringQuestion({ context: setup().context }), { code: 'INVALID_MODEL_OUTPUT' });
+    assert.equal(calls, 2);
+  }
+});

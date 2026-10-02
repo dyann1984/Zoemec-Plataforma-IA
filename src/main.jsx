@@ -2221,6 +2221,24 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
     if(skipMigrateIdRef.current === apu.id){ skipMigrateIdRef.current = null; return; }
     setApuV2(finalizeProfessionalAPU(migrateLegacyApuToV2(apu)));
   },[apu.id]);
+  // Workspace navigation must hydrate the editor, not only the review tray.
+  useEffect(() => {
+    if (!pendingOpenApuId) return;
+    const saved = apus.find(item => item.id === pendingOpenApuId);
+    if (!saved) return; // Wait for authoritative APUs to finish loading.
+    if (saved.schemaVersion === 2) {
+      const shim = { ...legacyShimFromV2(saved, saved.concept, saved.sourceFile || 'Guardado'), id: saved.id,
+        aiGenerated: Boolean(saved.aiGenerated), templateFallback: Boolean(saved.templateFallback), family: saved.family || 'APU generado con IA' };
+      skipMigrateIdRef.current = shim.id;
+      setApu(shim);
+      setApuV2({ ...saved, id: saved.id });
+    } else {
+      setApu(saved);
+    }
+    setStableApuId(saved.id);
+    setConcept(saved.concept || '');
+    onPendingOpenApuIdConsumed?.();
+  }, [pendingOpenApuId, apus, onPendingOpenApuIdConsumed]);
   const [showExecutive,setShowExecutive]=useState(false);
   const [aiOpen,setAiOpen]=useState(false);
   const [excelInfo,setExcelInfo]=useState(null);
@@ -3533,7 +3551,7 @@ function APU({company,user,usage,setUsage,apus,setApus,budgets,setBudgets,catalo
       </div>}
     </div>}
 
-    <RevisionBandeja apus={apus} user={user} onUpdateApu={saved => { if(!requireProject()) return; setApus([saved, ...apus.filter(x => x.id !== saved.id)]); if(saved.id===professionalApu.id) setApuV2(saved); }} initialOpenId={pendingOpenApuId} onInitialOpenIdConsumed={onPendingOpenApuIdConsumed} />
+    <RevisionBandeja apus={apus} user={user} onUpdateApu={saved => { if(!requireProject()) return; setApus([saved, ...apus.filter(x => x.id !== saved.id)]); if(saved.id===professionalApu.id) setApuV2(saved); }} />
 
     {hasApuContent && <>
       {/* A. Encabezado ejecutivo */}

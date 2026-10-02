@@ -32,17 +32,20 @@ try {
   await page.getByRole('button', { name: /Proyectos y clientes/i }).first().click({ timeout: 20000 });
   await page.getByRole('heading', { name: 'Residencial Las Palmas - Edificio A', exact: true }).waitFor();
   await page.getByRole('button', { name: /Abrir proyecto/i }).first().click();
-  await page.getByText('Analizar proyecto con IA · NVIDIA/Nebius', { exact: true }).click();
-  await page.getByText('Nebius no configurado', { exact: true }).waitFor();
-  assert.equal(await page.getByRole('button', { name: 'Analizar proyecto con IA', exact: true }).isDisabled(), true);
+  await page.getByRole('heading', { name: 'ZOEMEC AI · Copiloto de Ingeniería', exact: true }).waitFor();
   await page.screenshot({ path: '.tmp/nebius-ui/full-project-demo.png', fullPage: true });
   await page.getByRole('button', { name: /Costos/ }).last().click();
   await page.getByRole('button', { name: /Abrir APU/i }).first().click();
-  await page.getByText('ZOEMEC AI · Explicar este APU con evidencia', { exact: true }).click();
-  await page.getByText('Nebius no configurado', { exact: true }).waitFor();
+  await page.getByText('PRECIO UNITARIO SIN IVA', { exact: false }).waitFor();
+  assert.match(await page.locator('body').innerText(), /37\.51/);
+  assert.match(await page.locator('body').innerText(), /800\.00/);
+  for (const name of [/Confianza/, /Riesgo/, /Auditoría/]) { await page.getByRole('tab', { name }).click(); }
+  await page.getByRole('button', { name: /Más análisis|Mas analisis/i }).click();
+  await page.getByRole('tab', { name: 'Cuestionamientos', exact: true }).click();
+  await page.getByRole('heading', { name: 'ZOEMEC AI · Copiloto de Ingeniería', exact: true }).waitFor();
   await page.screenshot({ path: '.tmp/nebius-ui/full-apu-demo.png', fullPage: true });
   assert.deepEqual(errors, []);
-  console.log('PASS full app: emulator login → demo project → project workspace → authenticated Nebius not configured state. No real provider call.');
+  console.log('PASS full app: emulator login → demo project → project workspace → APU → confidence/risk/audit/challenges → additional analysis → Copilot. No real provider call.');
 } catch (error) {
   console.log((await page.locator('body').innerText()).slice(0, 7000));
   await page.screenshot({ path: '.tmp/nebius-ui/full-project-error.png', fullPage: true });

@@ -8,6 +8,12 @@ const { getAdminDb, getAdminAuth } = await import('../server/api-lib/_firebaseAd
 const { default: handler } = await import('../api/gateway.mjs');
 const db = getAdminDb(); const auth = getAdminAuth(); const tokens = {};
 const fixture = createNebiusDemo({ ownerUid: 'api-alice', organizationId: 'api-orgA' });
+// Keep API test data separate from the judge's persistent emulator fixture.
+fixture.project.id = 'nebius-api-test-project';
+fixture.apus[0].id = 'nebius-api-test-apu';
+fixture.apus[0].projectId = fixture.project.id;
+fixture.apus[0].snapshot.id = fixture.apus[0].id;
+fixture.apus[0].snapshot.projectId = fixture.project.id;
 before(async () => {
   for (const [uid, org, status, admin] of [['api-alice', 'api-orgA', 'active', false], ['api-bob', 'api-orgB', 'active', false], ['api-disabled', 'api-orgA', 'disabled', false], ['api-admin', null, 'active', true]]) {
     try { await auth.createUser({ uid, email: `${uid}@example.test`, password: 'Testing123!', emailVerified: true }); } catch (e) { if (e.code !== 'auth/uid-already-exists' && e.code !== 'auth/email-already-exists') throw e; }
